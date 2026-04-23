@@ -1,0 +1,287 @@
+import { ListView } from "std-widgets.slint";
+
+export struct ClipboardEntry {
+    id: int,
+    preview: string,
+    content-type: string,
+    time-label: string,
+}
+
+export component App inherits Window {
+    title: "Clippi";
+    preferred-width: 360px;
+    preferred-height: 600px;
+    no-frame: true;
+    always-on-top: true;
+    background: #f0f2f5;
+
+    in property <[ClipboardEntry]> clipboard-items: [];
+    in property <int> item-count: 0;
+
+    // 双击检测状态
+    in-out property <int> last-clicked-id: -1;
+    in-out property <bool> click-pending: false;
+
+    callback item-clicked(int);
+    callback copy-item(int);
+    callback paste-item(int);
+    callback clear-all();
+    callback move-window(float, float);
+    callback close-window();
+
+    // 双击检测定时器
+    double-click-timer := Timer {
+        interval: 300ms;
+        running: root.click-pending;
+        triggered => {
+            root.click-pending = false;
+            // 单击超时 → 执行复制（仅复制到剪贴板，不粘贴）
+            if (root.last-clicked-id >= 0) {
+                root.copy-item(root.last-clicked-id);
+                root.last-clicked-id = -1;
+            }
+        }
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // 自定义标题栏
+        Rectangle {
+            height: 42px;
+            background: #2b2d31;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 0px;
+                alignment: space-between;
+
+                // 左侧：标题
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: "Clippi";
+                        font-size: 14px;
+                        font-weight: 700;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // 右侧：关闭按钮
+                Rectangle {
+                    width: 46px;
+                    height: parent.height;
+
+                    close-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => {
+                            root.close-window();
+                        }
+                    }
+
+                    background: close-ta.has-hover ? #e81123 : transparent;
+
+                    Text {
+                        text: "X";
+                        font-size: 14px;
+                        color: #cccccc;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // 拖动区域
+            drag-ta := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width - 46px;
+                height: parent.height;
+                mouse-cursor: grab;
+
+                moved => {
+                    if (self.pressed) {
+                        root.move-window((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
+                    }
+                }
+            }
+        }
+
+        // 信息栏
+        Rectangle {
+            height: 44px;
+            background: #ffffff;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: space-between;
+
+                Text {
+                    text: "剪贴板历史";
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #555;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.item-count > 0 ? root.item-count + " 项" : "空";
+                    font-size: 12px;
+                    color: #999;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: #e5e5e5;
+            }
+        }
+
+        // 剪贴板列表
+        ListView {
+            for entry in root.clipboard-items: Rectangle {
+                height: 60px;
+                border-radius: 8px;
+                background: item-ta.pressed ? #e8ecf0 : item-ta.has-hover ? #f5f7fa : #ffffff;
+
+                item-ta := TouchArea {
+                    width: parent.width - 40px;
+                    height: parent.height;
+                    clicked => {
+                        if (root.click-pending && root.last-clicked-id == entry.id) {
+                            // 双击 → 快速粘贴
+                            root.click-pending = false;
+                            root.last-clicked-id = -1;
+                            root.paste-item(entry.id);
+                        } else {
+                            // 第一次点击，等待可能的第二次点击
+                            root.last-clicked-id = entry.id;
+                            root.click-pending = true;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    padding: 10px;
+                    padding-left: 12px;
+                    spacing: 10px;
+
+                    // 内容类型图标
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 8px;
+                        background: #eef1f5;
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: entry.content-type == "text" ? "T" : entry.content-type == "html" ? "H" : "I";
+                            font-size: 14px;
+                            font-weight: 700;
+                            color: #888;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+
+                        Text {
+                            text: entry.preview;
+                            font-size: 13px;
+                            color: #333;
+                            overflow: elide;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: entry.time-label;
+                            font-size: 11px;
+                            color: #aaa;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // 复制按钮
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 6px;
+                        background: copy-ta.has-hover ? #e8ecf0 : transparent;
+
+                        copy-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => {
+                                root.click-pending = false;
+                                root.last-clicked-id = -1;
+                                root.copy-item(entry.id);
+                            }
+                        }
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: "C";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: copy-ta.has-hover ? #333 : #999;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 底部操作栏
+        Rectangle {
+            height: 52px;
+            background: #ffffff;
+
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                background: #e5e5e5;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 12px;
+                padding-left: 14px;
+                padding-right: 14px;
+
+                Rectangle {
+                    width: 140px;
+                    height: 34px;
+                    border-radius: 6px;
+                    background: clear-ta.pressed ? #d13438 : clear-ta.has-hover ? #e81123 : #f3f4f6;
+
+                    clear-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => {
+                            root.clear-all();
+                        }
+                    }
+
+                    Text {
+                        text: "清空全部";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: clear-ta.has-hover || clear-ta.pressed ? #ffffff : #666;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

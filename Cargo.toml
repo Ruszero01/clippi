@@ -1,0 +1,16 @@
+[package]
+name = "clippi"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+slint = "1.15"
+clipboard-rs = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = "0.4"
+tray-icon = "0.19"
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
+
+[build-dependencies]
+slint-build = "1.15"
