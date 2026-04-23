@@ -1,6 +1,6 @@
 # Clippi
 
-一个轻量的 Windows 剪贴板管理器，使用 Rust + Slint 构建。
+一个轻量的 Windows（暂时，未来扩展跨平台） 剪贴板管理器，使用 Rust + Slint 构建。
 
 ## 功能
 
