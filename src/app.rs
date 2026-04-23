@@ -48,6 +48,11 @@ impl AppController {
         }
         slint_app.set_item_count(slint_model.row_count() as i32);
 
+        // 恢复主题设置
+        if let Ok(Some(val)) = db.borrow().get_setting("dark_mode") {
+            slint_app.set_dark_mode(val == "true");
+        }
+
         let (tx, rx) = mpsc::channel();
         let watcher = clipboard::start_watcher(tx).expect("Failed to start clipboard watcher");
 
@@ -58,6 +63,8 @@ impl AppController {
         let weak = slint_app.as_weak();
 
         let timer = slint::Timer::default();
+        let theme_db = db.clone();
+        let mut last_dark_mode = slint_app.get_dark_mode();
         timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -91,6 +98,13 @@ impl AppController {
 
             if let Some(app) = weak.upgrade() {
                 app.set_item_count(timer_model.row_count() as i32);
+
+                // 保存主题偏好
+                let dark = app.get_dark_mode();
+                if dark != last_dark_mode {
+                    last_dark_mode = dark;
+                    let _ = theme_db.borrow().set_setting("dark_mode", if dark { "true" } else { "false" });
+                }
             }
         });
 
@@ -215,3 +229,4 @@ fn format_relative_time(captured_at: &chrono::DateTime<chrono::Utc>) -> String {
         format!("{}h ago", secs / 3600)
     }
 }
+
