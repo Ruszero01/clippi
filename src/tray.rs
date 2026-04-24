@@ -42,15 +42,13 @@ impl TrayManager {
     }
 
     pub fn poll_events(&self) -> Option<TrayAction> {
-        // 处理托盘图标点击事件（双击左键显示窗口）
-        if let Ok(event) = TrayIconEvent::receiver().try_recv() {
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             if let TrayIconEvent::DoubleClick { .. } = event {
                 return Some(TrayAction::Show);
             }
         }
 
-        // 处理菜单事件
-        if let Ok(event) = MenuEvent::receiver().try_recv() {
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.show_id {
                 return Some(TrayAction::Show);
             }

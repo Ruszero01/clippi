@@ -60,5 +60,5 @@ fn get_process_name_by_pid(pid: u32) -> Option<String> {
 
 pub fn is_blacklisted(name: &str, blacklist: &HashSet<String>) -> bool {
     let lower = name.to_lowercase();
-    blacklist.iter().any(|item| lower.contains(&item.to_lowercase()))
+    blacklist.iter().any(|item| lower == item.to_lowercase())
 }
