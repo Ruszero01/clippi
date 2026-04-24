@@ -14,6 +14,7 @@ windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse",
 winreg = "0.56"
 rfd = "0.17"
 global-hotkey = "0.6"
+windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
 
 [build-dependencies]
 slint-build = "1.15"

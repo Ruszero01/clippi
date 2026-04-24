@@ -90,10 +90,18 @@ impl AppController {
         let (tx, rx) = mpsc::channel();
         let watcher = clipboard::start_watcher(tx).expect("Failed to start clipboard watcher");
 
-        // 初始化热键管理器
+        // 从数据库加载快捷键设置
+        let hotkey_str = db.borrow()
+            .get_setting("hotkey")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| crate::hotkey::DEFAULT_HOTKEY.to_string());
+
         let hotkey = Rc::new(RefCell::new(
-            HotkeyManager::new().expect("Failed to initialize hotkey")
+            HotkeyManager::new(&hotkey_str).expect("Failed to initialize hotkey")
         ));
+
+        slint_app.set_hotkey_display(SharedString::from(hotkey.borrow().current_display()));
 
         // 从数据库加载黑名单（逗号分隔的进程名）
         let blacklist: HashSet<String> = db.borrow()
@@ -115,6 +123,7 @@ impl AppController {
         let theme_db = db.clone();
         let mut last_dark_mode = slint_app.get_dark_mode();
         let mut last_focused_process: Option<String> = None;
+        let timer_hotkey_db = db.clone();
         timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -143,6 +152,29 @@ impl AppController {
 
                         timer_model.insert(0, entry);
                     }
+                }
+            }
+
+            // 录制模式：直接轮询 GetAsyncKeyState 检测按下的快捷键
+            {
+                let captured = {
+                    timer_hotkey.borrow().poll_recording_pressed()
+                };
+                if let Some(s) = captured {
+                    if !s.is_empty() {
+                        // 先更新
+                        let update_ok = timer_hotkey.borrow_mut().update_hotkey(&s).is_ok();
+                        if update_ok {
+                            let display = timer_hotkey.borrow().current_display();
+                            let _ = timer_hotkey_db.borrow().set_setting("hotkey", &s);
+                            if let Some(app) = weak.upgrade() {
+                                app.set_hotkey_display(SharedString::from(display));
+                                app.set_settings_error(SharedString::from(""));
+                                app.set_recording_hotkey(false);
+                            }
+                        }
+                    }
+                    timer_hotkey.borrow_mut().finish_recording();
                 }
             }
 
@@ -306,6 +338,40 @@ impl AppController {
                         }
                     }
                 }
+            }
+        });
+
+        // set-hotkey → 更新快捷键
+        let hotkey_inner = hotkey.clone();
+        let hotkey_weak = slint_app.as_weak();
+        let hotkey_db = db.clone();
+        slint_app.on_set_hotkey(move |hotkey_str: SharedString| {
+            let s = hotkey_str.as_str();
+            match hotkey_inner.borrow_mut().update_hotkey(s) {
+                Ok(()) => {
+                    let display = hotkey_inner.borrow().current_display();
+                    let _ = hotkey_db.borrow().set_setting("hotkey", s);
+                    if let Some(app) = hotkey_weak.upgrade() {
+                        app.set_hotkey_display(SharedString::from(display));
+                        app.set_settings_error(SharedString::from(""));
+                    }
+                }
+                Err(e) => {
+                    if let Some(app) = hotkey_weak.upgrade() {
+                        app.set_settings_error(SharedString::from(e));
+                    }
+                }
+            }
+        });
+
+        // start-recording-hotkey → 开始录制快捷键
+        let start_rec_weak = slint_app.as_weak();
+        let start_rec_hotkey = hotkey.clone();
+        slint_app.on_start_recording_hotkey(move || {
+            if let Some(app) = start_rec_weak.upgrade() {
+                app.window().show().ok();
+                app.set_recording_hotkey(true);
+                let _ = start_rec_hotkey.borrow_mut().start_recording();
             }
         });
 

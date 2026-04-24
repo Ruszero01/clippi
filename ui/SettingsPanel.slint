@@ -4,6 +4,8 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> auto-start: false;
     in property <string> db-path: "";
     in property <string> settings-error: "";
+    in property <string> hotkey-display: "";
+    in property <bool> recording-hotkey: false;
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -12,6 +14,8 @@ export component SettingsPanel inherits Rectangle {
     callback back();
     callback toggle-auto-start();
     callback pick-db-path();
+    callback set-hotkey(string);
+    callback start-recording-hotkey();
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #181a26 : #ffffff;
@@ -67,7 +71,7 @@ export component SettingsPanel inherits Rectangle {
         }
     }
 
-    // ========== 选项卡栏 ==========
+    // ========== 选项卡栏（3个） ==========
     HorizontalLayout {
         y: 52px;
         height: 36px;
@@ -76,14 +80,14 @@ export component SettingsPanel inherits Rectangle {
         spacing: 0px;
 
         Rectangle {
-            width: 50%;
+            width: 33.33%;
             height: 100%;
 
             HorizontalLayout {
                 alignment: center;
 
                 Text {
-                    text: "通用设置";
+                    text: "通用";
                     font-size: 12px;
                     font-weight: root.active-tab == 0 ? 700 : 400;
                     color: root.active-tab == 0 ? accent : text-2;
@@ -108,14 +112,14 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Rectangle {
-            width: 50%;
+            width: 33.33%;
             height: 100%;
 
             HorizontalLayout {
                 alignment: center;
 
                 Text {
-                    text: "数据设置";
+                    text: "快捷键";
                     font-size: 12px;
                     font-weight: root.active-tab == 1 ? 700 : 400;
                     color: root.active-tab == 1 ? accent : text-2;
@@ -133,6 +137,38 @@ export component SettingsPanel inherits Rectangle {
             Rectangle {
                 height: 2px;
                 background: root.active-tab == 1 ? accent : transparent;
+                y: parent.height - self.height;
+                width: parent.width;
+                animate background { duration: 200ms; easing: ease-out; }
+            }
+        }
+
+        Rectangle {
+            width: 33.33%;
+            height: 100%;
+
+            HorizontalLayout {
+                alignment: center;
+
+                Text {
+                    text: "数据";
+                    font-size: 12px;
+                    font-weight: root.active-tab == 2 ? 700 : 400;
+                    color: root.active-tab == 2 ? accent : text-2;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.active-tab = 2; }
+            }
+
+            Rectangle {
+                height: 2px;
+                background: root.active-tab == 2 ? accent : transparent;
                 y: parent.height - self.height;
                 width: parent.width;
                 animate background { duration: 200ms; easing: ease-out; }
@@ -205,6 +241,73 @@ export component SettingsPanel inherits Rectangle {
         }
     }
 
+    // ========== 快捷键设置 ==========
+    Rectangle {
+        y: 96px;
+        height: 66px;
+        x: 8px;
+        width: parent.width - 16px;
+        border-radius: 10px;
+        background: surface;
+        border-width: 1px;
+        border-color: root.recording-hotkey ? accent : divider;
+        visible: root.active-tab == 1;
+        opacity: root.active-tab == 1 ? 1 : 0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+
+        HorizontalLayout {
+            width: parent.width;
+            height: parent.height;
+            padding: 14px;
+            alignment: space-between;
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text: "呼出快捷键";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: text-1;
+                }
+
+                Text {
+                    text: root.recording-hotkey ? "请按下新的快捷键..." : "点击按钮开始录制";
+                    font-size: 10px;
+                    color: root.recording-hotkey ? accent : text-3;
+                }
+            }
+
+            Rectangle {
+                height: 28px;
+                width: 80px;
+                border-radius: 7px;
+                background: root.recording-hotkey ? accent-soft : (rec-ta.has-hover ? accent-soft : accent);
+                y: (parent.height - self.height) / 2;
+
+                rec-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => {
+                        if (!root.recording-hotkey) {
+                            root.start-recording-hotkey();
+                        }
+                    }
+                }
+
+                Text {
+                    text: root.hotkey-display;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: root.recording-hotkey ? accent : #ffffff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
     // ========== 数据设置 ==========
     Rectangle {
         y: 96px;
@@ -215,8 +318,8 @@ export component SettingsPanel inherits Rectangle {
         background: surface;
         border-width: 1px;
         border-color: divider;
-        visible: root.active-tab == 1;
-        opacity: root.active-tab == 1 ? 1 : 0;
+        visible: root.active-tab == 2;
+        opacity: root.active-tab == 2 ? 1 : 0;
         animate opacity { duration: 150ms; easing: ease-out; }
 
         VerticalLayout {
@@ -278,12 +381,15 @@ export component SettingsPanel inherits Rectangle {
 
     // ========== 错误提示 ==========
     if root.settings-error != "": Rectangle {
-        y: 180px;
+        y: 170px;
         height: 28px;
         x: 8px;
         width: parent.width - 16px;
         border-radius: 7px;
         background: surface;
+        visible: root.active-tab != 2;
+        opacity: root.active-tab != 2 ? 1 : 0;
+        animate opacity { duration: 150ms; easing: ease-out; }
 
         Text {
             text: root.settings-error;
