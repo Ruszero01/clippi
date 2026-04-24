@@ -41,15 +41,11 @@ impl ClipboardItem {
     pub fn new_text(id: i64, text: &str) -> Self {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
-        let preview = if text.len() > 200 {
-            &text[..200]
-        } else {
-            text
-        };
+        let preview: String = text.chars().take(200).collect();
         Self {
             id,
             content_type: ContentType::Text,
-            text_preview: preview.to_string(),
+            text_preview: preview,
             full_text: text.to_string(),
             content_hash: hasher.finish(),
             captured_at: Utc::now(),
