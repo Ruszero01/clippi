@@ -14,11 +14,20 @@
 
 | 组件 | 技术 |
 |------|------|
-| UI | [Slint](https://slint.dev/) 1.15 |
+| UI | [Slint](https://slint.dev/) 1.16 |
 | 剪贴板监听 | clipboard-rs |
 | 数据存储 | rusqlite (bundled SQLite) |
 | 系统托盘 | tray-icon |
 | 键盘模拟 | windows-sys |
+| 图标字体 | iconfont (运行时加载) |
+
+## 图标
+
+类型指示图标使用 iconfont 字体，位于 `assets/fonts/iconfont.ttf`。如需添加新图标：
+
+1. 在 [iconfont](https://www.iconfont.cn/) 上传/创建图标项目
+2. 下载字体文件并替换 `assets/fonts/iconfont.ttf`
+3. 在 `ClipboardList.slint` 中使用对应 unicode（格式：`\u{xxxx}`）
 
 ## 构建
 
