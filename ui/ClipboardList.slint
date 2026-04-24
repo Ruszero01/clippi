@@ -86,8 +86,8 @@ export component ClipboardList inherits Rectangle {
                     padding-left: 10px;
                     spacing: 8px;
 
-                    // 类型图标
-                    Rectangle {
+                    // 类型图标 - 文本 (使用 iconfont)
+                    if entry.content-type == "text": Rectangle {
                         width: 34px;
                         height: 34px;
                         border-radius: 9px;
@@ -96,9 +96,26 @@ export component ClipboardList inherits Rectangle {
                         Text {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            text: entry.content-type == "text" ? "T" : entry.content-type == "html" ? "H" : "I";
-                            font-size: 13px;
-                            font-weight: 700;
+                            text: "\u{e6e1}";
+                            font-family: "iconfont";
+                            font-size: 18px;
+                            color: accent;
+                        }
+                    }
+
+                    // 类型图标 - 图片 (使用 iconfont)
+                    if entry.content-type == "image": Rectangle {
+                        width: 34px;
+                        height: 34px;
+                        border-radius: 9px;
+                        background: accent-soft;
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: "\u{e602}";
+                            font-family: "iconfont";
+                            font-size: 18px;
                             color: accent;
                         }
                     }

@@ -5,7 +5,7 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-slint = "1.15"
+slint = { version = "1.15", features = ["unstable-fontique-08"] }
 clipboard-rs = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = "0.4"
