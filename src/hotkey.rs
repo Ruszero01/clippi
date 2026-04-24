@@ -81,10 +81,6 @@ impl HotkeyManager {
         self.is_recording = false;
     }
 
-    pub fn is_recording(&self) -> bool {
-        self.is_recording
-    }
-
     /// 录制模式下直接轮询 GetAsyncKeyState，返回按下的快捷键字符串
     pub fn poll_recording_pressed(&self) -> Option<String> {
         if !self.is_recording {
