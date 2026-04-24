@@ -1,12 +1,6 @@
-import { ListView } from "std-widgets.slint";
+import { ClipboardEntry } from "types.slint";
+import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
-
-export struct ClipboardEntry {
-    id: int,
-    preview: string,
-    content-type: string,
-    time-label: string,
-}
 
 export component App inherits Window {
     title: "Clippi";
@@ -256,130 +250,14 @@ export component App inherits Window {
         }
 
         // ========== 列表区域 ==========
-        if root.current-view == "clipboard": VerticalLayout {
-            padding-top: 4px;
-            padding-left: 8px;
-            padding-right: 8px;
-            padding-bottom: 8px;
-            spacing: 4px;
-
-            // 空状态
-            if root.item-count == 0: VerticalLayout {
-                alignment: center;
-                height: 200px;
-                spacing: 6px;
-
-                Text {
-                    text: "暂无剪贴板内容";
-                    font-size: 13px;
-                    color: text-2;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: "复制文本后将自动显示在这里";
-                    font-size: 11px;
-                    color: text-3;
-                    horizontal-alignment: center;
-                }
-            }
-
-            // 剪贴板列表
-            ListView {
-                for entry in root.clipboard-items: Rectangle {
-                    height: 52px;
-                    border-radius: 10px;
-                    background: item-ta.pressed ? surface-press : item-ta.has-hover ? surface-hover : surface;
-                    border-width: 1px;
-                    border-color: divider;
-
-                    item-ta := TouchArea {
-                        width: parent.width - 32px;
-                        height: parent.height;
-                        clicked => {
-                            if (root.click-pending && root.last-clicked-id == entry.id) {
-                                root.click-pending = false;
-                                root.last-clicked-id = -1;
-                                root.paste-item(entry.id);
-                            } else {
-                                root.last-clicked-id = entry.id;
-                                root.click-pending = true;
-                            }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding: 6px;
-                        padding-left: 10px;
-                        spacing: 8px;
-
-                        // 类型图标
-                        Rectangle {
-                            width: 34px;
-                            height: 34px;
-                            border-radius: 9px;
-                            background: accent-soft;
-
-                            Text {
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                text: entry.content-type == "text" ? "T" : entry.content-type == "html" ? "H" : "I";
-                                font-size: 13px;
-                                font-weight: 700;
-                                color: accent;
-                            }
-                        }
-
-                        VerticalLayout {
-                            spacing: 2px;
-
-                            Text {
-                                text: entry.preview;
-                                font-size: 12px;
-                                color: text-1;
-                                overflow: elide;
-                                horizontal-alignment: left;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: entry.time-label;
-                                font-size: 10px;
-                                color: text-3;
-                                horizontal-alignment: left;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        // 复制按钮
-                        Rectangle {
-                            width: 28px;
-                            height: 28px;
-                            border-radius: 7px;
-                            background: copy-ta.has-hover ? btn-hover : transparent;
-
-                            copy-ta := TouchArea {
-                                width: parent.width;
-                                height: parent.height;
-                                clicked => {
-                                    root.click-pending = false;
-                                    root.last-clicked-id = -1;
-                                    root.copy-item(entry.id);
-                                }
-                            }
-
-                            Text {
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                text: "C";
-                                font-size: 11px;
-                                font-weight: 700;
-                                color: copy-ta.has-hover ? accent : text-3;
-                            }
-                        }
-                    }
-                }
-            }
+        if root.current-view == "clipboard": ClipboardList {
+            dark-mode: root.dark-mode;
+            items: root.clipboard-items;
+            item-count: root.item-count;
+            last-clicked-id: root.last-clicked-id;
+            click-pending: root.click-pending;
+            copy-item(id) => { root.copy-item(id); }
+            paste-item(id) => { root.paste-item(id); }
         }
 
         // ========== 设置页面 ==========
