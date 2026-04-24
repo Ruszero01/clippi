@@ -9,6 +9,7 @@ use slint::{ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, Vec
 use crate::clipboard::{self, ClipboardEvent, ClipboardWatcherHandle};
 use crate::db::Database;
 use crate::history::ClipboardHistory;
+use crate::settings;
 use crate::tray::{TrayAction, TrayManager};
 use crate::types::ClipboardItem;
 use crate::{App, ClipboardEntry};
@@ -32,7 +33,31 @@ impl AppController {
         let slint_model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
         slint_app.set_clipboard_items(ModelRc::from(slint_model.clone()));
 
-        let db = Rc::new(RefCell::new(Database::open().expect("Failed to open database")));
+        // 确定数据库路径：优先从默认位置读取设置，再尝试自定义路径
+        let default_path = settings::get_default_db_path();
+        let db_path = {
+            let default_db = Database::open(&default_path.to_string_lossy())
+                .expect("Failed to open database");
+            let path = default_db.path().to_string();
+            if let Ok(Some(custom)) = default_db.get_setting("db_path") {
+                if !custom.is_empty() && std::path::Path::new(&custom).exists() {
+                    drop(default_db);
+                    // 尝试打开自定义路径，失败则回退到默认
+                    if Database::open(&custom).is_ok() {
+                        custom
+                    } else {
+                        default_path.to_string_lossy().to_string()
+                    }
+                } else {
+                    path
+                }
+            } else {
+                path
+            }
+        };
+        let db = Rc::new(RefCell::new(
+            Database::open(&db_path).expect("Failed to open database")
+        ));
 
         let history = Rc::new(RefCell::new(ClipboardHistory::new(100)));
         let seen_hashes = Rc::new(RefCell::new(HashSet::new()));
@@ -52,6 +77,11 @@ impl AppController {
         if let Ok(Some(val)) = db.borrow().get_setting("dark_mode") {
             slint_app.set_dark_mode(val == "true");
         }
+
+        // 恢复设置初始值
+        slint_app.set_auto_start(settings::is_auto_start_enabled());
+        slint_app.set_db_path(SharedString::from(db.borrow().path()));
+        slint_app.set_settings_error(SharedString::from(""));
 
         let (tx, rx) = mpsc::channel();
         let watcher = clipboard::start_watcher(tx).expect("Failed to start clipboard watcher");
@@ -167,11 +197,75 @@ impl AppController {
             }
         });
 
+        // resize-window
+        let resize_weak = slint_app.as_weak();
+        slint_app.on_resize_window(move |dw, dh| {
+            if let Some(app) = resize_weak.upgrade() {
+                let window = app.window();
+                let scale = window.scale_factor();
+                let size = window.size();
+                let min_w = 320i32;
+                let min_h = 480i32;
+                let new_w = (size.width as i32 + (dw * scale) as i32).max(min_w);
+                let new_h = (size.height as i32 + (dh * scale) as i32).max(min_h);
+                window.set_size(slint::PhysicalSize::new(new_w as u32, new_h as u32));
+            }
+        });
+
         // close-window → 隐藏窗口（不退出）
         let close_weak = slint_app.as_weak();
         slint_app.on_close_window(move || {
             if let Some(app) = close_weak.upgrade() {
                 app.window().hide().ok();
+            }
+        });
+
+        // toggle-auto-start → 切换开机自启
+        let autostart_weak = slint_app.as_weak();
+        let autostart_db = db.clone();
+        slint_app.on_toggle_auto_start(move || {
+            if let Some(app) = autostart_weak.upgrade() {
+                let current = app.get_auto_start();
+                let new_val = !current;
+                match settings::set_auto_start(new_val) {
+                    Ok(()) => {
+                        app.set_auto_start(new_val);
+                        let _ = autostart_db.borrow().set_setting(
+                            "auto_start",
+                            if new_val { "true" } else { "false" },
+                        );
+                    }
+                    Err(e) => {
+                        app.set_settings_error(SharedString::from(e));
+                    }
+                }
+            }
+        });
+
+        // pick-db-path → 选择新数据库路径并迁移
+        let pick_weak = slint_app.as_weak();
+        let pick_db = db.clone();
+        slint_app.on_pick_db_path(move || {
+            let old_path = std::path::PathBuf::from(pick_db.borrow().path());
+
+            if let Some(new_path) = rfd::FileDialog::new()
+                .set_file_name("clippi.db")
+                .save_file()
+            {
+                if let Some(app) = pick_weak.upgrade() {
+                    match settings::migrate_database(&old_path, &new_path) {
+                        Ok(()) => {
+                            let path_str = new_path.to_string_lossy().to_string();
+                            let _ = pick_db.borrow().set_setting("db_path", &path_str);
+                            // 重启应用
+                            settings::spawn_new_process();
+                            slint::quit_event_loop().ok();
+                        }
+                        Err(e) => {
+                            app.set_settings_error(SharedString::from(e));
+                        }
+                    }
+                }
             }
         });
 

@@ -1,4 +1,5 @@
 import { ListView } from "std-widgets.slint";
+import { SettingsPanel } from "SettingsPanel.slint";
 
 export struct ClipboardEntry {
     id: int,
@@ -15,9 +16,20 @@ export component App inherits Window {
     always-on-top: true;
     background: transparent;
 
+    // 窗口最小尺寸
+    min-width: 320px;
+    min-height: 480px;
+
     in property <[ClipboardEntry]> clipboard-items: [];
     in property <int> item-count: 0;
     in-out property <bool> dark-mode: false;
+
+    // 视图切换
+    in-out property <string> current-view: "clipboard";
+    in-out property <bool> auto-start: false;
+    in-out property <string> db-path: "";
+    in-out property <string> settings-error: "";
+    in-out property <int> active-tab: 0;
 
     // 双击检测
     in-out property <int> last-clicked-id: -1;
@@ -28,6 +40,9 @@ export component App inherits Window {
     callback clear-all();
     callback move-window(float, float);
     callback close-window();
+    callback toggle-auto-start();
+    callback pick-db-path();
+    callback resize-window(float, float);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -61,6 +76,52 @@ export component App inherits Window {
         border-radius: 12px;
         background: bg;
         clip: true;
+
+        // ========== 缩放手柄 ==========
+        // 右边缘
+        resize-right := TouchArea {
+            x: parent.width - 6px;
+            y: 12px;
+            width: 6px;
+            height: parent.height - 24px;
+            mouse-cursor: col-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.resize-window((self.mouse-x - self.pressed-x) / 1px, 0);
+                }
+            }
+        }
+
+        // 底边缘
+        resize-bottom := TouchArea {
+            x: 12px;
+            y: parent.height - 6px;
+            width: parent.width - 24px;
+            height: 6px;
+            mouse-cursor: row-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.resize-window(0, (self.mouse-y - self.pressed-y) / 1px);
+                }
+            }
+        }
+
+        // 右下角
+        resize-corner := TouchArea {
+            x: parent.width - 12px;
+            y: parent.height - 12px;
+            width: 12px;
+            height: 12px;
+            mouse-cursor: col-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.resize-window((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
+                }
+            }
+        }
 
         VerticalLayout {
             spacing: 0px;
@@ -100,6 +161,31 @@ export component App inherits Window {
                 HorizontalLayout {
                     spacing: 2px;
                     alignment: center;
+
+                    // 设置按钮
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 7px;
+                        background: settings-ta.has-hover ? btn-hover : transparent;
+
+                        settings-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => {
+                                root.current-view = "settings";
+                            }
+                        }
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: "G";
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: text-2;
+                        }
+                    }
 
                     // 主题切换
                     Rectangle {
@@ -157,7 +243,7 @@ export component App inherits Window {
             drag-ta := TouchArea {
                 x: 0px;
                 y: 0px;
-                width: parent.width - 62px;
+                width: parent.width - 92px;
                 height: parent.height;
                 mouse-cursor: grab;
 
@@ -170,7 +256,7 @@ export component App inherits Window {
         }
 
         // ========== 列表区域 ==========
-        VerticalLayout {
+        if root.current-view == "clipboard": VerticalLayout {
             padding-top: 4px;
             padding-left: 8px;
             padding-right: 8px;
@@ -294,6 +380,19 @@ export component App inherits Window {
                     }
                 }
             }
+        }
+
+        // ========== 设置页面 ==========
+        if root.current-view == "settings": SettingsPanel {
+            dark-mode: root.dark-mode;
+            auto-start: root.auto-start;
+            db-path: root.db-path;
+            settings-error: root.settings-error;
+            active-tab: root.active-tab;
+
+            back => { root.current-view = "clipboard"; }
+            toggle-auto-start => { root.toggle-auto-start(); }
+            pick-db-path => { root.pick-db-path(); }
         }
         }
     }

@@ -2,18 +2,21 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 use crate::types::{ClipboardItem, ContentType};
 
-const DEFAULT_DB_PATH: &str = "clippi.db";
-
 pub struct Database {
     conn: Connection,
+    path: String,
 }
 
 impl Database {
-    pub fn open() -> SqlResult<Self> {
-        let conn = Connection::open(DEFAULT_DB_PATH)?;
-        let db = Self { conn };
+    pub fn open(path: &str) -> SqlResult<Self> {
+        let conn = Connection::open(path)?;
+        let db = Self { conn, path: path.to_string() };
         db.init_schema()?;
         Ok(db)
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
     }
 
     fn init_schema(&self) -> SqlResult<()> {

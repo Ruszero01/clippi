@@ -5,6 +5,7 @@ mod clipboard;
 mod db;
 mod history;
 mod paste;
+mod settings;
 mod tray;
 mod types;
 
