@@ -1,9 +1,11 @@
 slint::include_modules!();
 
 mod app;
+mod blacklist;
 mod clipboard;
 mod db;
 mod history;
+mod hotkey;
 mod paste;
 mod settings;
 mod tray;

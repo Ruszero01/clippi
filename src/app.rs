@@ -6,9 +6,11 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, VecModel};
 
+use crate::blacklist::{get_focused_process_name, is_blacklisted};
 use crate::clipboard::{self, ClipboardEvent, ClipboardWatcherHandle};
 use crate::db::Database;
 use crate::history::ClipboardHistory;
+use crate::hotkey::HotkeyManager;
 use crate::settings;
 use crate::tray::{TrayAction, TrayManager};
 use crate::types::ClipboardItem;
@@ -26,6 +28,8 @@ pub struct AppController {
     tray: Rc<TrayManager>,
     #[allow(dead_code)]
     tray_timer: slint::Timer,
+    #[allow(dead_code)]
+    hotkey: Rc<RefCell<HotkeyManager>>,
 }
 
 impl AppController {
@@ -86,15 +90,31 @@ impl AppController {
         let (tx, rx) = mpsc::channel();
         let watcher = clipboard::start_watcher(tx).expect("Failed to start clipboard watcher");
 
+        // 初始化热键管理器
+        let hotkey = Rc::new(RefCell::new(
+            HotkeyManager::new().expect("Failed to initialize hotkey")
+        ));
+
+        // 从数据库加载黑名单（逗号分隔的进程名）
+        let blacklist: HashSet<String> = db.borrow()
+            .get_setting("blacklist")
+            .ok()
+            .flatten()
+            .map(|s| s.split(',').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default();
+
         let timer_model = slint_model.clone();
         let timer_history = history.clone();
         let timer_hashes = seen_hashes.clone();
         let timer_db = db.clone();
+        let timer_hotkey = hotkey.clone();
+        let timer_blacklist = Rc::new(RefCell::new(blacklist));
         let weak = slint_app.as_weak();
 
         let timer = slint::Timer::default();
         let theme_db = db.clone();
         let mut last_dark_mode = slint_app.get_dark_mode();
+        let mut last_focused_process: Option<String> = None;
         timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -122,6 +142,26 @@ impl AppController {
                         timer_history.borrow_mut().add(item);
 
                         timer_model.insert(0, entry);
+                    }
+                }
+            }
+
+            // 热键事件：按下时显示窗口
+            if timer_hotkey.borrow().poll_pressed() {
+                if let Some(app) = weak.upgrade() {
+                    app.window().show().ok();
+                }
+            }
+
+            // 动态管理热键注册：黑名单应用获得焦点时注销，离开时重新注册
+            if let Some(name) = get_focused_process_name() {
+                if Some(&name) != last_focused_process.as_ref() {
+                    last_focused_process = Some(name.clone());
+                    let bl = timer_blacklist.borrow();
+                    if is_blacklisted(&name, &bl) {
+                        let _ = timer_hotkey.borrow_mut().unregister();
+                    } else {
+                        let _ = timer_hotkey.borrow_mut().register();
                     }
                 }
             }
@@ -295,6 +335,7 @@ impl AppController {
             db,
             tray,
             tray_timer,
+            hotkey,
         }
     }
 
