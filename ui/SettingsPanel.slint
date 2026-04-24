@@ -103,6 +103,7 @@ export component SettingsPanel inherits Rectangle {
                 background: root.active-tab == 0 ? accent : transparent;
                 y: parent.height - self.height;
                 width: parent.width;
+                animate background { duration: 200ms; easing: ease-out; }
             }
         }
 
@@ -134,12 +135,13 @@ export component SettingsPanel inherits Rectangle {
                 background: root.active-tab == 1 ? accent : transparent;
                 y: parent.height - self.height;
                 width: parent.width;
+                animate background { duration: 200ms; easing: ease-out; }
             }
         }
     }
 
     // ========== 通用设置 ==========
-    if root.active-tab == 0: Rectangle {
+    Rectangle {
         y: 96px;
         height: 66px;
         x: 8px;
@@ -148,6 +150,9 @@ export component SettingsPanel inherits Rectangle {
         background: surface;
         border-width: 1px;
         border-color: divider;
+        visible: root.active-tab == 0;
+        opacity: root.active-tab == 0 ? 1 : 0;
+        animate opacity { duration: 150ms; easing: ease-out; }
 
         HorizontalLayout {
             width: parent.width;
@@ -178,6 +183,7 @@ export component SettingsPanel inherits Rectangle {
                 height: 22px;
                 border-radius: 11px;
                 background: root.auto-start ? accent : divider;
+                animate background { duration: 200ms; easing: ease-out; }
                 y: (parent.height - self.height) / 2;
 
                 Rectangle {
@@ -186,6 +192,7 @@ export component SettingsPanel inherits Rectangle {
                     border-radius: 9px;
                     background: #ffffff;
                     x: root.auto-start ? parent.width - self.width - 2px : 2px;
+                    animate x { duration: 200ms; easing: ease-out; }
                     y: (parent.height - self.height) / 2;
                 }
 
@@ -199,7 +206,7 @@ export component SettingsPanel inherits Rectangle {
     }
 
     // ========== 数据设置 ==========
-    if root.active-tab == 1: Rectangle {
+    Rectangle {
         y: 96px;
         height: 76px;
         x: 8px;
@@ -208,6 +215,9 @@ export component SettingsPanel inherits Rectangle {
         background: surface;
         border-width: 1px;
         border-color: divider;
+        visible: root.active-tab == 1;
+        opacity: root.active-tab == 1 ? 1 : 0;
+        animate opacity { duration: 150ms; easing: ease-out; }
 
         VerticalLayout {
             width: parent.width;

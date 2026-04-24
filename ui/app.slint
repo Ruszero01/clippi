@@ -249,28 +249,42 @@ export component App inherits Window {
             }
         }
 
-        // ========== 列表区域 ==========
-        if root.current-view == "clipboard": ClipboardList {
-            dark-mode: root.dark-mode;
-            items: root.clipboard-items;
-            item-count: root.item-count;
-            last-clicked-id: root.last-clicked-id;
-            click-pending: root.click-pending;
-            copy-item(id) => { root.copy-item(id); }
-            paste-item(id) => { root.paste-item(id); }
-        }
+        // ========== 内容区域 ==========
+        Rectangle {
+            // 两个视图重叠放置，通过 opacity 切换
+            ClipboardList {
+                visible: root.current-view == "clipboard";
+                opacity: root.current-view == "clipboard" ? 1 : 0;
+                x: root.current-view == "clipboard" ? 0 : -20px;
+                animate opacity { duration: 200ms; easing: ease-out; }
+                animate x { duration: 200ms; easing: ease-out; }
 
-        // ========== 设置页面 ==========
-        if root.current-view == "settings": SettingsPanel {
-            dark-mode: root.dark-mode;
-            auto-start: root.auto-start;
-            db-path: root.db-path;
-            settings-error: root.settings-error;
-            active-tab: root.active-tab;
+                dark-mode: root.dark-mode;
+                items: root.clipboard-items;
+                item-count: root.item-count;
+                last-clicked-id: root.last-clicked-id;
+                click-pending: root.click-pending;
+                copy-item(id) => { root.copy-item(id); }
+                paste-item(id) => { root.paste-item(id); }
+            }
 
-            back => { root.current-view = "clipboard"; }
-            toggle-auto-start => { root.toggle-auto-start(); }
-            pick-db-path => { root.pick-db-path(); }
+            SettingsPanel {
+                visible: root.current-view == "settings";
+                opacity: root.current-view == "settings" ? 1 : 0;
+                x: root.current-view == "settings" ? 0 : 20px;
+                animate opacity { duration: 200ms; easing: ease-out; }
+                animate x { duration: 200ms; easing: ease-out; }
+
+                dark-mode: root.dark-mode;
+                auto-start: root.auto-start;
+                db-path: root.db-path;
+                settings-error: root.settings-error;
+                active-tab: root.active-tab;
+
+                back => { root.current-view = "clipboard"; }
+                toggle-auto-start => { root.toggle-auto-start(); }
+                pick-db-path => { root.pick-db-path(); }
+            }
         }
         }
     }
