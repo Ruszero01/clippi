@@ -47,8 +47,6 @@ export component SettingsPanel inherits Rectangle {
         Rectangle {
             width: 28px;
             height: 28px;
-            border-radius: 7px;
-            background: back-ta.has-hover ? btn-hover : transparent;
             y: (parent.height - self.height) / 2;
 
             back-ta := TouchArea {
@@ -60,10 +58,10 @@ export component SettingsPanel inherits Rectangle {
             Text {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                text: "<";
-                font-size: 12px;
-                font-weight: 700;
-                color: text-2;
+                text: "\u{e62b}";
+                font-family: "iconfont";
+                font-size: 16px;
+                color: back-ta.has-hover ? accent : text-2;
             }
         }
 

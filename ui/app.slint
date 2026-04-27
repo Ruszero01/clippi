@@ -178,8 +178,6 @@ export component App inherits Window {
                         Rectangle {
                             width: 28px;
                             height: 28px;
-                            border-radius: 7px;
-                            background: pin-ta.has-hover ? btn-hover : transparent;
 
                             pin-ta := TouchArea {
                                 width: parent.width;
@@ -192,8 +190,8 @@ export component App inherits Window {
                                 y: (parent.height - self.height) / 2;
                                 text: "\u{e9ba}";
                                 font-family: "iconfont";
-                                font-size: 14px;
-                                color: pinned ? accent : text-2;
+                                font-size: 15px;
+                                color: pinned ? accent : (pin-ta.has-hover ? accent : text-2);
                                 transform-rotation: pinned ? 45deg : 0deg;
                                 animate transform-rotation { duration: 200ms; easing: ease-out; }
                             }
@@ -203,8 +201,6 @@ export component App inherits Window {
                         Rectangle {
                             width: 28px;
                             height: 28px;
-                            border-radius: 7px;
-                            background: settings-ta.has-hover ? btn-hover : transparent;
 
                             settings-ta := TouchArea {
                                 width: parent.width;
@@ -220,7 +216,7 @@ export component App inherits Window {
                                 text: "\u{e6b6}";
                                 font-family: "iconfont";
                                 font-size: 16px;
-                                color: text-2;
+                                color: settings-ta.has-hover ? accent : text-2;
                             }
                         }
 
@@ -228,8 +224,6 @@ export component App inherits Window {
                         Rectangle {
                             width: 28px;
                             height: 28px;
-                            border-radius: 7px;
-                            background: close-ta.has-hover ? danger : transparent;
 
                             close-ta := TouchArea {
                                 width: parent.width;
@@ -242,10 +236,10 @@ export component App inherits Window {
                             Text {
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
-                                text: "X";
-                                font-size: 10px;
-                                font-weight: 600;
-                                color: close-ta.has-hover ? #ffffff : text-2;
+                                text: "\u{e676}";
+                                font-family: "iconfont";
+                                font-size: 15px;
+                                color: close-ta.has-hover ? danger : text-2;
                             }
                         }
                     }
