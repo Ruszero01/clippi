@@ -4,6 +4,7 @@ mod app;
 mod blacklist;
 mod clipboard;
 mod db;
+mod focus;
 mod history;
 mod hotkey;
 mod paste;

@@ -17,6 +17,7 @@ pub struct AppSettings {
     pub theme: String,
     pub hotkey: String,
     pub auto_start: bool,
+    pub auto_hide: bool,
     pub blacklist: String,
     pub db_path: String,
 }
@@ -27,6 +28,7 @@ impl Default for AppSettings {
             theme: "system".to_string(),
             hotkey: crate::hotkey::DEFAULT_HOTKEY.to_string(),
             auto_start: false,
+            auto_hide: true,
             blacklist: String::new(),
             db_path: String::new(),
         }

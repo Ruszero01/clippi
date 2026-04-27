@@ -2,13 +2,16 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use slint::{ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, VecModel};
 
-use crate::blacklist::{get_focused_process_name, is_blacklisted};
+use crate::blacklist::{is_blacklisted, is_clippi_foreground};
 use crate::clipboard::{self, ClipboardEvent, ClipboardWatcherHandle};
 use crate::db::Database;
+use crate::focus;
 use crate::history::ClipboardHistory;
 use crate::hotkey::HotkeyManager;
 use crate::settings::{self, AppSettings};
@@ -30,6 +33,8 @@ pub struct AppController {
     tray_timer: slint::Timer,
     #[allow(dead_code)]
     hotkey: Rc<RefCell<HotkeyManager>>,
+    #[allow(dead_code)]
+    focus_watcher: focus::FocusWatcher,
 }
 
 impl AppController {
@@ -74,11 +79,15 @@ impl AppController {
 
         // 恢复设置初始值
         slint_app.set_auto_start(settings::is_auto_start_enabled());
+        slint_app.set_auto_hide(app_settings.borrow().auto_hide);
         slint_app.set_db_path(SharedString::from(db.borrow().path()));
         slint_app.set_settings_error(SharedString::from(""));
 
         let (tx, rx) = mpsc::channel();
         let watcher = clipboard::start_watcher(tx).expect("Failed to start clipboard watcher");
+
+        // 启动焦点事件监听
+        let (focus_watcher, focus_rx) = focus::start_focus_watcher().expect("Failed to start focus watcher");
 
         // 从配置加载快捷键设置
         let hotkey_str = app_settings.borrow().hotkey.clone();
@@ -108,8 +117,16 @@ impl AppController {
         let weak = slint_app.as_weak();
 
         let timer = slint::Timer::default();
-        let mut last_focused_process: Option<String> = None;
         let timer_hotkey_settings = app_settings.clone();
+        let timer_auto_hide = app_settings.clone();
+let timer_suppress_hide = Arc::new(AtomicBool::new(false));
+        let suppress_for_timer = timer_suppress_hide.clone();
+        let startup_guard = Arc::new(AtomicBool::new(true));
+        let startup_timer = startup_guard.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            startup_timer.store(false, Ordering::SeqCst);
+        });
         timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -172,14 +189,18 @@ impl AppController {
                 }
             }
 
-            // 动态管理热键注册：黑名单应用获得焦点时注销，离开时重新注册
-            if let Some(name) = get_focused_process_name() {
-                if Some(&name) != last_focused_process.as_ref() {
-                    last_focused_process = Some(name.clone());
-                    let bl = timer_blacklist.borrow();
-                    if is_blacklisted(&name, &bl) {
-                        let _ = timer_hotkey.borrow_mut().unregister();
-                    } else {
+            // 消费焦点事件：黑名单应用获得焦点时注销，离开时重新注册
+            if let Some(event) = focus::poll_focus_events(&focus_rx) {
+                match event {
+                    focus::FocusEvent::ForegroundChanged(Some(name)) => {
+                        let bl = timer_blacklist.borrow();
+                        if is_blacklisted(&name, &bl) {
+                            let _ = timer_hotkey.borrow_mut().unregister();
+                        } else {
+                            let _ = timer_hotkey.borrow_mut().register();
+                        }
+                    }
+                    focus::FocusEvent::ForegroundChanged(None) => {
                         let _ = timer_hotkey.borrow_mut().register();
                     }
                 }
@@ -187,6 +208,21 @@ impl AppController {
 
             if let Some(app) = weak.upgrade() {
                 app.set_item_count(timer_model.row_count() as i32);
+
+                // 失焦自动隐藏（仅剪贴板列表视图、窗口可见、功能开启时、且不在启动宽限期内）
+                if timer_auto_hide.borrow().auto_hide {
+                    if app.window().is_visible() {
+                        if app.get_current_view() == "clipboard" {
+                            if !suppress_for_timer.load(Ordering::SeqCst) {
+                                if !startup_guard.load(Ordering::SeqCst) {
+                                    if !is_clippi_foreground() {
+                                        app.window().hide().ok();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
 
@@ -264,10 +300,11 @@ impl AppController {
             }
         });
 
-        // close-window → 隐藏窗口（不退出）
+        // close-window → 隐藏窗口并重置到剪贴板视图
         let close_weak = slint_app.as_weak();
         slint_app.on_close_window(move || {
             if let Some(app) = close_weak.upgrade() {
+                app.set_current_view(SharedString::from("clipboard"));
                 app.window().hide().ok();
             }
         });
@@ -290,26 +327,41 @@ impl AppController {
                     }
                 }
             }
+});
+
+        // toggle-auto-hide → 切换失焦自动隐藏
+        let autohide_weak = slint_app.as_weak();
+        let autohide_settings = app_settings.clone();
+        slint_app.on_toggle_auto_hide(move || {
+            if let Some(app) = autohide_weak.upgrade() {
+                let current = app.get_auto_hide();
+                let new_val = !current;
+                app.set_auto_hide(new_val);
+                autohide_settings.borrow_mut().auto_hide = new_val;
+                autohide_settings.borrow().save();
+            }
         });
 
-        // pick-db-path → 选择新数据库路径并迁移
+// pick-db-path → 选择新数据库路径并迁移（对话框期间抑制自动隐藏）
         let pick_weak = slint_app.as_weak();
         let pick_db = db.clone();
         let pick_settings = app_settings.clone();
+        let pick_suppress = timer_suppress_hide.clone();
         slint_app.on_pick_db_path(move || {
+            pick_suppress.store(true, Ordering::SeqCst);
             let old_path = std::path::PathBuf::from(pick_db.borrow().path());
 
             if let Some(new_path) = rfd::FileDialog::new()
                 .set_file_name("clippi.db")
                 .save_file()
             {
+                pick_suppress.store(false, Ordering::SeqCst);
                 if let Some(app) = pick_weak.upgrade() {
                     match settings::migrate_database(&old_path, &new_path) {
                         Ok(()) => {
                             let path_str = new_path.to_string_lossy().to_string();
                             pick_settings.borrow_mut().db_path = path_str;
                             pick_settings.borrow().save();
-                            // 重启应用
                             settings::spawn_new_process();
                             slint::quit_event_loop().ok();
                         }
@@ -430,12 +482,14 @@ impl AppController {
             tray,
             tray_timer,
             hotkey,
+            focus_watcher,
         }
     }
 
     pub fn shutdown(mut self) {
         let _ = self.hotkey.borrow_mut().unregister();
         self.watcher.stop();
+        self.focus_watcher.stop();
     }
 }
 
