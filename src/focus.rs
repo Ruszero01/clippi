@@ -10,7 +10,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HWND, TRUE};
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW, TranslateMessage,
+    GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, TranslateMessage,
     DispatchMessageW, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
     MSG, PM_REMOVE, WM_QUIT,
 };
@@ -32,6 +32,8 @@ pub struct FocusWatcher {
     hook: HWINEVENTHOOK,
     #[cfg(target_os = "windows")]
     thread: Option<std::thread::JoinHandle<()>>,
+    #[cfg(target_os = "windows")]
+    thread_id: u32,
 }
 
 impl FocusWatcher {
@@ -39,6 +41,8 @@ impl FocusWatcher {
     #[cfg(target_os = "windows")]
     pub fn stop(&mut self) {
         unsafe { UnhookWinEvent(self.hook) };
+        // 发送 WM_QUIT 到消息循环线程，唤醒 PeekMessageW 并使其退出
+        unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0) };
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -52,8 +56,15 @@ impl FocusWatcher {
 pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>), String> {
     #[cfg(target_os = "windows")]
     {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU32;
+        use std::sync::atomic::Ordering;
+
         let (tx, rx) = mpsc::channel();
         unsafe { FOCUS_EVENT_TX = Some(tx) };
+
+        // 用于在线程内部获取 thread_id
+        let thread_id = Arc::new(AtomicU32::new(0));
 
         let hook = unsafe {
             let proc: WINEVENTPROC = Some(std::mem::transmute(win_event_proc as *const ()));
@@ -72,7 +83,10 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
             return Err("SetWinEventHook failed".to_string());
         }
 
+        let tid_clone = thread_id.clone();
         let thread = std::thread::spawn(move || {
+            let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+            tid_clone.store(tid, Ordering::SeqCst);
             let mut msg: MSG = unsafe { std::mem::zeroed() };
             loop {
                 let ret = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
@@ -88,7 +102,16 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
             }
         });
 
-        Ok((FocusWatcher { hook, thread: Some(thread) }, rx))
+        // 等待线程启动并设置 thread_id
+        let thread_id_val = loop {
+            let tid = thread_id.load(Ordering::SeqCst);
+            if tid != 0 {
+                break tid;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
+        Ok((FocusWatcher { hook, thread: Some(thread), thread_id: thread_id_val }, rx))
     }
 
     #[cfg(not(target_os = "windows"))]
