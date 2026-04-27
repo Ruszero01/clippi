@@ -98,7 +98,11 @@ impl AppController {
             .unwrap_or_else(|| crate::hotkey::DEFAULT_HOTKEY.to_string());
 
         let hotkey = Rc::new(RefCell::new(
-            HotkeyManager::new(&hotkey_str).expect("Failed to initialize hotkey")
+            HotkeyManager::new(&hotkey_str).unwrap_or_else(|e| {
+                eprintln!("Warning: {e}");
+                HotkeyManager::new(crate::hotkey::DEFAULT_HOTKEY)
+                    .expect("Failed to initialize fallback hotkey")
+            })
         ));
 
         slint_app.set_hotkey_display(SharedString::from(hotkey.borrow().current_display()));
@@ -406,6 +410,7 @@ impl AppController {
     }
 
     pub fn shutdown(mut self) {
+        let _ = self.hotkey.borrow_mut().unregister();
         self.watcher.stop();
     }
 }
