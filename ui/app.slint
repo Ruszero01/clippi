@@ -22,6 +22,7 @@ export component App inherits Window {
     // 视图切换
     in-out property <string> current-view: "clipboard";
     in-out property <bool> auto-start: false;
+    in-out property <bool> auto-hide: false;
     in-out property <string> db-path: "";
     in-out property <string> settings-error: "";
     in-out property <int> active-tab: 0;
@@ -38,6 +39,7 @@ export component App inherits Window {
     callback move-window(float, float);
     callback close-window();
     callback toggle-auto-start();
+    callback toggle-auto-hide();
     callback pick-db-path();
     callback reset-db-path();
     callback resize-window(float, float);
@@ -260,6 +262,7 @@ export component App inherits Window {
                 dark-mode: root.dark-mode;
                 theme-mode: root.theme-mode;
                 auto-start: root.auto-start;
+                auto-hide: root.auto-hide;
                 db-path: root.db-path;
                 settings-error: root.settings-error;
                 active-tab: root.active-tab;
@@ -268,6 +271,7 @@ export component App inherits Window {
 
                 back => { root.current-view = "clipboard"; }
                 toggle-auto-start => { root.toggle-auto-start(); }
+                toggle-auto-hide => { root.toggle-auto-hide(); }
                 pick-db-path => { root.pick-db-path(); }
                 reset-db-path => { root.reset-db-path(); }
                 set-hotkey(s) => { root.set-hotkey(s); }

@@ -59,12 +59,20 @@ export component ClipboardList inherits Rectangle {
 
         // 剪贴板列表
         ListView {
-            for entry in root.items: Rectangle {
-                height: 52px;
-                border-radius: 10px;
-                background: item-ta.pressed ? surface-press : item-ta.has-hover ? surface-hover : surface;
-                border-width: 1px;
-                border-color: divider;
+            for entry in root.items: VerticalLayout {
+                padding: 2px;
+
+                Rectangle {
+                    height: 68px;
+                    border-radius: 10px;
+                    background: item-ta.pressed ? surface-press : item-ta.has-hover ? surface-hover : surface;
+                    border-width: 1px;
+                    border-color: divider;
+                    clip: true;
+
+                    drop-shadow-blur: 4px;
+                    drop-shadow-color: dark-mode ? #00000040 : #00000012;
+                    drop-shadow-offset-y: 1px;
 
                 item-ta := TouchArea {
                     width: parent.width - 32px;
@@ -82,9 +90,8 @@ export component ClipboardList inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    padding: 6px;
-                    padding-left: 10px;
-                    spacing: 8px;
+                    padding: 10px;
+                    spacing: 10px;
 
                     // 类型图标 - 文本 (使用 iconfont)
                     if entry.content-type == "text": Rectangle {
@@ -120,25 +127,14 @@ export component ClipboardList inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
-                        spacing: 2px;
-
-                        Text {
-                            text: entry.preview;
-                            font-size: 12px;
-                            color: text-1;
-                            overflow: elide;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: entry.time-label;
-                            font-size: 10px;
-                            color: text-3;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                        }
+                    // 内容预览
+                    Text {
+                        text: entry.preview;
+                        font-size: 12px;
+                        color: text-1;
+                        overflow: elide;
+                        wrap: word-wrap;
+                        vertical-alignment: top;
                     }
 
                     // 复制按钮
@@ -165,6 +161,25 @@ export component ClipboardList inherits Rectangle {
                             font-size: 11px;
                             font-weight: 700;
                             color: copy-ta.has-hover ? accent : text-3;
+                        }
+                    }
+                    }
+
+                    // 悬浮时间标签 - 右下角（在最顶层）
+                    Rectangle {
+                        x: parent.width - self.width - 10px;
+                        y: parent.height - self.height - 6px;
+                        height: 18px;
+                        width: time-text.preferred-width + 14px;
+                        border-radius: 9px;
+                        background: dark-mode ? #ffffff18 : #0000000d;
+
+                        time-text := Text {
+                            text: entry.time-label;
+                            font-size: 9px;
+                            color: text-3;
+                            x: 7px;
+                            vertical-alignment: center;
                         }
                     }
                 }

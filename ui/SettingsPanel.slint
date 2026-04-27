@@ -3,6 +3,7 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <int> theme-mode: 0;  // 0=system, 1=dark, 2=light
     in property <bool> auto-start: false;
+    in property <bool> auto-hide: false;
     in property <string> db-path: "";
     in property <string> settings-error: "";
     in property <string> hotkey-display: "";
@@ -14,6 +15,7 @@ export component SettingsPanel inherits Rectangle {
     // ========== 回调 ==========
     callback back();
     callback toggle-auto-start();
+    callback toggle-auto-hide();
     callback pick-db-path();
     callback reset-db-path();
     callback set-hotkey(string);
@@ -244,9 +246,74 @@ export component SettingsPanel inherits Rectangle {
         }
     }
 
-    // ========== 主题设置 ==========
+    // ========== 失焦自动隐藏 ==========
     Rectangle {
         y: 170px;
+        height: 66px;
+        x: 8px;
+        width: parent.width - 16px;
+        border-radius: 10px;
+        background: surface;
+        border-width: 1px;
+        border-color: divider;
+        visible: root.active-tab == 0;
+        opacity: root.active-tab == 0 ? 1 : 0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+
+        HorizontalLayout {
+            width: parent.width;
+            height: parent.height;
+            padding: 14px;
+            alignment: space-between;
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text: "失焦自动隐藏";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: text-1;
+                }
+
+                Text {
+                    text: "点击窗口外部时自动隐藏";
+                    font-size: 10px;
+                    color: text-3;
+                }
+            }
+
+            Rectangle {
+                width: 40px;
+                height: 22px;
+                border-radius: 11px;
+                background: root.auto-hide ? accent : divider;
+                animate background { duration: 200ms; easing: ease-out; }
+                y: (parent.height - self.height) / 2;
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #ffffff;
+                    x: root.auto-hide ? parent.width - self.width - 2px : 2px;
+                    animate x { duration: 200ms; easing: ease-out; }
+                    y: (parent.height - self.height) / 2;
+                }
+
+                autohide-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.toggle-auto-hide(); }
+                }
+            }
+        }
+    }
+
+    // ========== 主题设置 ==========
+    Rectangle {
+        y: 244px;
         height: 66px;
         x: 8px;
         width: parent.width - 16px;
