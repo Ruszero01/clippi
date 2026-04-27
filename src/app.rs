@@ -11,7 +11,7 @@ use crate::clipboard::{self, ClipboardEvent, ClipboardWatcherHandle};
 use crate::db::Database;
 use crate::history::ClipboardHistory;
 use crate::hotkey::HotkeyManager;
-use crate::settings;
+use crate::settings::{self, AppSettings};
 use crate::tray::{TrayAction, TrayManager};
 use crate::types::ClipboardItem;
 use crate::{App, ClipboardEntry};
@@ -37,30 +37,11 @@ impl AppController {
         let slint_model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
         slint_app.set_clipboard_items(ModelRc::from(slint_model.clone()));
 
-        // 确定数据库路径：优先从默认位置读取设置，再尝试自定义路径
-        let default_path = settings::get_default_db_path();
-        let db_path = {
-            let default_db = Database::open(&default_path.to_string_lossy())
-                .expect("Failed to open database");
-            let path = default_db.path().to_string();
-            if let Ok(Some(custom)) = default_db.get_setting("db_path") {
-                if !custom.is_empty() && std::path::Path::new(&custom).exists() {
-                    drop(default_db);
-                    // 尝试打开自定义路径，失败则回退到默认
-                    if Database::open(&custom).is_ok() {
-                        custom
-                    } else {
-                        default_path.to_string_lossy().to_string()
-                    }
-                } else {
-                    path
-                }
-            } else {
-                path
-            }
-        };
+        // 加载配置，确定数据库路径
+        let app_settings = Rc::new(RefCell::new(AppSettings::load()));
+        let db_path = app_settings.borrow().resolve_db_path();
         let db = Rc::new(RefCell::new(
-            Database::open(&db_path).expect("Failed to open database")
+            Database::open(&db_path.to_string_lossy()).expect("Failed to open database")
         ));
 
         let history = Rc::new(RefCell::new(ClipboardHistory::new(100)));
@@ -78,9 +59,18 @@ impl AppController {
         slint_app.set_item_count(slint_model.row_count() as i32);
 
         // 恢复主题设置
-        if let Ok(Some(val)) = db.borrow().get_setting("dark_mode") {
-            slint_app.set_dark_mode(val == "true");
-        }
+        let theme = app_settings.borrow().theme.clone();
+        let is_dark = match theme.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => settings::is_system_dark_mode(),
+        };
+        slint_app.set_dark_mode(is_dark);
+        slint_app.set_theme_mode(match theme.as_str() {
+            "dark" => 1,
+            "light" => 2,
+            _ => 0,
+        });
 
         // 恢复设置初始值
         slint_app.set_auto_start(settings::is_auto_start_enabled());
@@ -90,12 +80,8 @@ impl AppController {
         let (tx, rx) = mpsc::channel();
         let watcher = clipboard::start_watcher(tx).expect("Failed to start clipboard watcher");
 
-        // 从数据库加载快捷键设置
-        let hotkey_str = db.borrow()
-            .get_setting("hotkey")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| crate::hotkey::DEFAULT_HOTKEY.to_string());
+        // 从配置加载快捷键设置
+        let hotkey_str = app_settings.borrow().hotkey.clone();
 
         let hotkey = Rc::new(RefCell::new(
             HotkeyManager::new(&hotkey_str).unwrap_or_else(|e| {
@@ -107,13 +93,11 @@ impl AppController {
 
         slint_app.set_hotkey_display(SharedString::from(hotkey.borrow().current_display()));
 
-        // 从数据库加载黑名单（逗号分隔的进程名）
-        let blacklist: HashSet<String> = db.borrow()
-            .get_setting("blacklist")
-            .ok()
-            .flatten()
-            .map(|s| s.split(',').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect())
-            .unwrap_or_default();
+        // 从配置加载黑名单（逗号分隔的进程名）
+        let blacklist: HashSet<String> = {
+            let bl = &app_settings.borrow().blacklist;
+            bl.split(',').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect()
+        };
 
         let timer_model = slint_model.clone();
         let timer_history = history.clone();
@@ -124,10 +108,8 @@ impl AppController {
         let weak = slint_app.as_weak();
 
         let timer = slint::Timer::default();
-        let theme_db = db.clone();
-        let mut last_dark_mode = slint_app.get_dark_mode();
         let mut last_focused_process: Option<String> = None;
-        let timer_hotkey_db = db.clone();
+        let timer_hotkey_settings = app_settings.clone();
         timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -170,7 +152,8 @@ impl AppController {
                         let update_ok = timer_hotkey.borrow_mut().update_hotkey(&s).is_ok();
                         if update_ok {
                             let display = timer_hotkey.borrow().current_display();
-                            let _ = timer_hotkey_db.borrow().set_setting("hotkey", &s);
+                            timer_hotkey_settings.borrow_mut().hotkey = s.to_string();
+                            timer_hotkey_settings.borrow().save();
                             if let Some(app) = weak.upgrade() {
                                 app.set_hotkey_display(SharedString::from(display));
                                 app.set_settings_error(SharedString::from(""));
@@ -204,13 +187,6 @@ impl AppController {
 
             if let Some(app) = weak.upgrade() {
                 app.set_item_count(timer_model.row_count() as i32);
-
-                // 保存主题偏好
-                let dark = app.get_dark_mode();
-                if dark != last_dark_mode {
-                    last_dark_mode = dark;
-                    let _ = theme_db.borrow().set_setting("dark_mode", if dark { "true" } else { "false" });
-                }
             }
         });
 
@@ -298,7 +274,7 @@ impl AppController {
 
         // toggle-auto-start → 切换开机自启
         let autostart_weak = slint_app.as_weak();
-        let autostart_db = db.clone();
+        let autostart_settings = app_settings.clone();
         slint_app.on_toggle_auto_start(move || {
             if let Some(app) = autostart_weak.upgrade() {
                 let current = app.get_auto_start();
@@ -306,10 +282,8 @@ impl AppController {
                 match settings::set_auto_start(new_val) {
                     Ok(()) => {
                         app.set_auto_start(new_val);
-                        let _ = autostart_db.borrow().set_setting(
-                            "auto_start",
-                            if new_val { "true" } else { "false" },
-                        );
+                        autostart_settings.borrow_mut().auto_start = new_val;
+                        autostart_settings.borrow().save();
                     }
                     Err(e) => {
                         app.set_settings_error(SharedString::from(e));
@@ -321,6 +295,7 @@ impl AppController {
         // pick-db-path → 选择新数据库路径并迁移
         let pick_weak = slint_app.as_weak();
         let pick_db = db.clone();
+        let pick_settings = app_settings.clone();
         slint_app.on_pick_db_path(move || {
             let old_path = std::path::PathBuf::from(pick_db.borrow().path());
 
@@ -332,7 +307,8 @@ impl AppController {
                     match settings::migrate_database(&old_path, &new_path) {
                         Ok(()) => {
                             let path_str = new_path.to_string_lossy().to_string();
-                            let _ = pick_db.borrow().set_setting("db_path", &path_str);
+                            pick_settings.borrow_mut().db_path = path_str;
+                            pick_settings.borrow().save();
                             // 重启应用
                             settings::spawn_new_process();
                             slint::quit_event_loop().ok();
@@ -345,16 +321,42 @@ impl AppController {
             }
         });
 
+        // reset-db-path → 重置数据库路径为默认
+        let reset_weak = slint_app.as_weak();
+        let reset_db = db.clone();
+        let reset_settings = app_settings.clone();
+        slint_app.on_reset_db_path(move || {
+            let old_path = std::path::PathBuf::from(reset_db.borrow().path());
+            let default_path = std::path::PathBuf::from("clippi.db");
+            if old_path == default_path {
+                return;
+            }
+            match settings::migrate_database(&old_path, &default_path) {
+                Ok(()) => {
+                    reset_settings.borrow_mut().db_path = String::new();
+                    reset_settings.borrow().save();
+                    settings::spawn_new_process();
+                    slint::quit_event_loop().ok();
+                }
+                Err(e) => {
+                    if let Some(app) = reset_weak.upgrade() {
+                        app.set_settings_error(SharedString::from(e));
+                    }
+                }
+            }
+        });
+
         // set-hotkey → 更新快捷键
         let hotkey_inner = hotkey.clone();
         let hotkey_weak = slint_app.as_weak();
-        let hotkey_db = db.clone();
+        let hotkey_settings = app_settings.clone();
         slint_app.on_set_hotkey(move |hotkey_str: SharedString| {
             let s = hotkey_str.as_str();
             match hotkey_inner.borrow_mut().update_hotkey(s) {
                 Ok(()) => {
                     let display = hotkey_inner.borrow().current_display();
-                    let _ = hotkey_db.borrow().set_setting("hotkey", s);
+                    hotkey_settings.borrow_mut().hotkey = s.to_string();
+                    hotkey_settings.borrow().save();
                     if let Some(app) = hotkey_weak.upgrade() {
                         app.set_hotkey_display(SharedString::from(display));
                         app.set_settings_error(SharedString::from(""));
@@ -376,6 +378,28 @@ impl AppController {
                 app.window().show().ok();
                 app.set_recording_hotkey(true);
                 let _ = start_rec_hotkey.borrow_mut().start_recording();
+            }
+        });
+
+        // set-theme → 切换主题模式
+        let theme_settings = app_settings.clone();
+        let theme_weak = slint_app.as_weak();
+        slint_app.on_set_theme(move |mode: i32| {
+            if let Some(app) = theme_weak.upgrade() {
+                app.set_theme_mode(mode);
+                let theme_str = match mode {
+                    1 => "dark",
+                    2 => "light",
+                    _ => "system",
+                };
+                let is_dark = match mode {
+                    1 => true,
+                    2 => false,
+                    _ => settings::is_system_dark_mode(),
+                };
+                app.set_dark_mode(is_dark);
+                theme_settings.borrow_mut().theme = theme_str.to_string();
+                theme_settings.borrow().save();
             }
         });
 

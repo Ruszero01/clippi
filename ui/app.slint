@@ -17,6 +17,7 @@ export component App inherits Window {
     in property <[ClipboardEntry]> clipboard-items: [];
     in property <int> item-count: 0;
     in-out property <bool> dark-mode: false;
+    in-out property <int> theme-mode: 0;  // 0=system, 1=dark, 2=light
 
     // 视图切换
     in-out property <string> current-view: "clipboard";
@@ -38,9 +39,11 @@ export component App inherits Window {
     callback close-window();
     callback toggle-auto-start();
     callback pick-db-path();
+    callback reset-db-path();
     callback resize-window(float, float);
     callback set-hotkey(string);
     callback start-recording-hotkey();
+    callback set-theme(int);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -50,8 +53,8 @@ export component App inherits Window {
     property <color> text-1:        dark-mode ? #e6e9f2 : #1a1c2e;
     property <color> text-2:        dark-mode ? #8a8ea8 : #7c809a;
     property <color> text-3:        dark-mode ? #555874 : #b4b9ca;
-    property <color> accent:        dark-mode ? #8b8eff : #5f5ff0;
-    property <color> accent-soft:   dark-mode ? #222440 : #eeeefd;
+    property <color> accent:        dark-mode ? #7ecba3 : #6ab890;
+    property <color> accent-soft:   dark-mode ? #1a2e24 : #e8f5ee;
     property <color> divider:       dark-mode ? #262840 : #e6e8f0;
     property <color> titlebar-bg:   dark-mode ? #12131c : #ffffff;
     property <color> btn-hover:     dark-mode ? #262840 : #f0f1f8;
@@ -178,34 +181,9 @@ export component App inherits Window {
                         Text {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            text: "G";
-                            font-size: 10px;
-                            font-weight: 700;
-                            color: text-2;
-                        }
-                    }
-
-                    // 主题切换
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 7px;
-                        background: theme-ta.has-hover ? btn-hover : transparent;
-
-                        theme-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => {
-                                root.dark-mode = !root.dark-mode;
-                            }
-                        }
-
-                        Text {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            text: dark-mode ? "S" : "M";
-                            font-size: 10px;
-                            font-weight: 700;
+                            text: "\u{e6b6}";
+                            font-family: "iconfont";
+                            font-size: 16px;
                             color: text-2;
                         }
                     }
@@ -280,6 +258,7 @@ export component App inherits Window {
                 animate x { duration: 200ms; easing: ease-out; }
 
                 dark-mode: root.dark-mode;
+                theme-mode: root.theme-mode;
                 auto-start: root.auto-start;
                 db-path: root.db-path;
                 settings-error: root.settings-error;
@@ -290,8 +269,10 @@ export component App inherits Window {
                 back => { root.current-view = "clipboard"; }
                 toggle-auto-start => { root.toggle-auto-start(); }
                 pick-db-path => { root.pick-db-path(); }
+                reset-db-path => { root.reset-db-path(); }
                 set-hotkey(s) => { root.set-hotkey(s); }
                 start-recording-hotkey => { root.start-recording-hotkey(); }
+                set-theme(mode) => { root.set-theme(mode); }
             }
         }
         }

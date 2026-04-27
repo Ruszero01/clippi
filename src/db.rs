@@ -30,11 +30,7 @@ impl Database {
                 captured_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
-            CREATE INDEX IF NOT EXISTS idx_captured ON clipboard_items(captured_at DESC);
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );",
+            CREATE INDEX IF NOT EXISTS idx_captured ON clipboard_items(captured_at DESC);",
         )
     }
 
@@ -91,22 +87,6 @@ impl Database {
 
     pub fn clear(&self) -> SqlResult<()> {
         self.conn.execute("DELETE FROM clipboard_items", [])?;
-        Ok(())
-    }
-
-    pub fn get_setting(&self, key: &str) -> SqlResult<Option<String>> {
-        self.conn.query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            params![key],
-            |row| row.get(0),
-        ).ok().map_or(Ok(None), |v| Ok(Some(v)))
-    }
-
-    pub fn set_setting(&self, key: &str, value: &str) -> SqlResult<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
         Ok(())
     }
 }
