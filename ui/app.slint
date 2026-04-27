@@ -23,6 +23,7 @@ export component App inherits Window {
     in-out property <string> current-view: "clipboard";
     in-out property <bool> auto-start: false;
     in-out property <bool> auto-hide: false;
+    in-out property <bool> pinned: false;
     in-out property <string> db-path: "";
     in-out property <string> settings-error: "";
     in-out property <int> active-tab: 0;
@@ -40,6 +41,7 @@ export component App inherits Window {
     callback close-window();
     callback toggle-auto-start();
     callback toggle-auto-hide();
+    callback toggle-pinned();
     callback pick-db-path();
     callback reset-db-path();
     callback resize-window(float, float);
@@ -164,6 +166,29 @@ export component App inherits Window {
                 HorizontalLayout {
                     spacing: 2px;
                     alignment: center;
+
+                    // 固定按钮（免打扰模式）
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 7px;
+                        background: pinned ? accent-soft : (pin-ta.has-hover ? btn-hover : transparent);
+
+                        pin-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.toggle-pinned(); }
+                        }
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: "\u{e668}";
+                            font-family: "iconfont";
+                            font-size: 14px;
+                            color: pinned ? accent : text-2;
+                        }
+                    }
 
                     // 设置按钮
                     Rectangle {

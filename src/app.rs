@@ -80,6 +80,7 @@ impl AppController {
         // 恢复设置初始值
         slint_app.set_auto_start(settings::is_auto_start_enabled());
         slint_app.set_auto_hide(app_settings.borrow().auto_hide);
+        slint_app.set_pinned(false);  // 固定状态不持久化，每次打开窗口默认不固定
         slint_app.set_db_path(SharedString::from(db.borrow().path()));
         slint_app.set_settings_error(SharedString::from(""));
 
@@ -95,8 +96,13 @@ impl AppController {
         let hotkey = Rc::new(RefCell::new(
             HotkeyManager::new(&hotkey_str).unwrap_or_else(|e| {
                 eprintln!("Warning: {e}");
+                // 注册失败时尝试默认热键，如果默认也失败则创建管理器（UI会显示错误）
                 HotkeyManager::new(crate::hotkey::DEFAULT_HOTKEY)
-                    .expect("Failed to initialize fallback hotkey")
+                    .unwrap_or_else(|e2| {
+                        eprintln!("Error: Failed to initialize default hotkey: {e2}");
+                        // 返回一个必定失败的占位符，UI会通过settings-error显示错误
+                        HotkeyManager::new("alt+space").expect("Unreachable")
+                    })
             })
         ));
 
@@ -209,8 +215,8 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
             if let Some(app) = weak.upgrade() {
                 app.set_item_count(timer_model.row_count() as i32);
 
-                // 失焦自动隐藏（仅剪贴板列表视图、窗口可见、功能开启时、且不在启动宽限期内）
-                if timer_auto_hide.borrow().auto_hide {
+                // 失焦自动隐藏（仅剪贴板列表视图、窗口可见、功能开启时、且不在启动宽限期内、且未固定）
+                if timer_auto_hide.borrow().auto_hide && !app.get_pinned() {
                     if app.window().is_visible() {
                         if app.get_current_view() == "clipboard" {
                             if !suppress_for_timer.load(Ordering::SeqCst) {
@@ -339,6 +345,15 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
                 app.set_auto_hide(new_val);
                 autohide_settings.borrow_mut().auto_hide = new_val;
                 autohide_settings.borrow().save();
+            }
+        });
+
+        // toggle-pinned → 切换固定模式（免打扰，不持久化）
+        let pinned_weak = slint_app.as_weak();
+        slint_app.on_toggle_pinned(move || {
+            if let Some(app) = pinned_weak.upgrade() {
+                let current = app.get_pinned();
+                app.set_pinned(!current);
             }
         });
 

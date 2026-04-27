@@ -30,15 +30,16 @@ impl HotkeyManager {
         if self.registered {
             return Ok(());
         }
+        // 先尝试注销，确保清理之前的状态
+        let _ = self.manager.unregister(self.hotkey);
+        // 等待一小段时间让系统释放热键
+        std::thread::sleep(std::time::Duration::from_millis(50));
         if let Err(e) = self.manager.register(self.hotkey) {
-            // 如果注册失败（如热键已被旧进程占用），尝试注销后重新注册
-            let _ = self.manager.unregister(self.hotkey);
-            self.manager
-                .register(self.hotkey)
-                .map_err(|e2| format!("注册快捷键失败: {e} (重试后仍失败: {e2})"))?;
+            Err(format!("注册快捷键失败: {e}"))
+        } else {
+            self.registered = true;
+            Ok(())
         }
-        self.registered = true;
-        Ok(())
     }
 
     pub fn unregister(&mut self) -> Result<(), String> {
