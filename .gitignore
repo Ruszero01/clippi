@@ -3,3 +3,4 @@ target/
 /target/
 *.db
 CLAUDE.md
+clippi.toml
