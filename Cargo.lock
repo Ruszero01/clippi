@@ -859,6 +859,7 @@ dependencies = [
  "chrono",
  "clipboard-rs",
  "global-hotkey",
+ "image",
  "rfd",
  "rusqlite",
  "serde",

@@ -22,6 +22,7 @@ fn main() {
         let mut collection = slint::fontique_08::shared_collection();
         let _fonts = collection.register_fonts(blob, None);
     }
+
     let tray = std::rc::Rc::new(tray::TrayManager::new());
     let controller = app::AppController::new(&slint_app, tray);
     slint_app.window().show().unwrap();

@@ -62,23 +62,9 @@ impl TrayManager {
 }
 
 fn create_icon() -> Icon {
-    let size = 32u32;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-
-    for y in 0..size {
-        for x in 0..size {
-            let in_board = x >= 6 && x < 26 && y >= 10 && y < 29;
-            let in_clip = x >= 11 && x < 21 && y >= 5 && y < 12;
-
-            if in_clip {
-                rgba.extend_from_slice(&[100, 100, 100, 255]);
-            } else if in_board {
-                rgba.extend_from_slice(&[59, 130, 246, 255]);
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-            }
-        }
-    }
-
-    Icon::from_rgba(rgba, size, size).unwrap()
+    let icon_bytes = include_bytes!("../assets/LOGO_notext.ico");
+    let img = image::load_from_memory(icon_bytes).expect("Failed to load logo icon");
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Icon::from_rgba(rgba.into_raw(), width, height).expect("Failed to create icon from RGBA")
 }

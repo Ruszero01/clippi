@@ -3,6 +3,7 @@ import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
 
 export component App inherits Window {
+    icon: @image-url("../assets/LOGO.ico");
     title: "Clippi";
     preferred-width: 320px;
     preferred-height: 480px;
@@ -132,178 +133,186 @@ export component App inherits Window {
             spacing: 0px;
 
             // ========== 标题栏 ==========
-        Rectangle {
-            height: 38px;
-            background: bg;
+            Rectangle {
+                height: 38px;
+                background: bg;
 
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 4px;
-                alignment: space-between;
-
-                // 应用名称
                 HorizontalLayout {
-                    spacing: 7px;
-                    alignment: center;
+                    padding-left: 12px;
+                    padding-right: 4px;
+                    alignment: LayoutAlignment.space-between;
 
-                    Rectangle {
-                        width: 7px;
-                        height: 7px;
-                        border-radius: 4px;
-                        background: accent;
-                    }
+                    // 应用名称 + LOGO
+                    HorizontalLayout {
+                        spacing: 7px;
+                        VerticalLayout {
+                            alignment: center;
 
-                    Text {
-                        text: "Clippi";
-                        font-size: 13px;
-                        font-weight: 700;
-                        color: text-1;
-                        vertical-alignment: center;
-                    }
-                }
+                            Rectangle {
+                                width: 20px;
+                                height: 20px;
 
-                // 右侧按钮组
-                HorizontalLayout {
-                    spacing: 2px;
-                    alignment: center;
-
-                    // 固定按钮（免打扰模式）
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 7px;
-                        background: pinned ? accent-soft : (pin-ta.has-hover ? btn-hover : transparent);
-
-                        pin-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => { root.toggle-pinned(); }
-                        }
-
-                        Text {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            text: "\u{e668}";
-                            font-family: "iconfont";
-                            font-size: 14px;
-                            color: pinned ? accent : text-2;
-                        }
-                    }
-
-                    // 设置按钮
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 7px;
-                        background: settings-ta.has-hover ? btn-hover : transparent;
-
-                        settings-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => {
-                                root.current-view = "settings";
+                                Image {
+                                    width: 20px;
+                                    height: 20px;
+                                    source: @image-url("../assets/LOGO_notext.ico");
+                                }
                             }
                         }
 
                         Text {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            text: "\u{e6b6}";
-                            font-family: "iconfont";
-                            font-size: 16px;
+                            text: "Clippi";
+                            font-size: 12px;
+                            font-weight: 700;
                             color: text-2;
+                            vertical-alignment: center;
                         }
                     }
 
-                    // 关闭按钮
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 7px;
-                        background: close-ta.has-hover ? danger : transparent;
+                    // 右侧按钮组
+                    HorizontalLayout {
+                        spacing: 2px;
+                        alignment: center;
 
-                        close-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => {
-                                root.close-window();
+                        // 固定按钮（免打扰模式）
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 7px;
+                            background: pin-ta.has-hover ? btn-hover : transparent;
+
+                            pin-ta := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => { root.toggle-pinned(); }
+                            }
+
+                            Text {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                text: "\u{e9ba}";
+                                font-family: "iconfont";
+                                font-size: 14px;
+                                color: pinned ? accent : text-2;
+                                transform-rotation: pinned ? 45deg : 0deg;
+                                animate transform-rotation { duration: 200ms; easing: ease-out; }
                             }
                         }
 
-                        Text {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            text: "X";
-                            font-size: 10px;
-                            font-weight: 600;
-                            color: close-ta.has-hover ? #ffffff : text-2;
+                        // 设置按钮
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 7px;
+                            background: settings-ta.has-hover ? btn-hover : transparent;
+
+                            settings-ta := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => {
+                                    root.current-view = "settings";
+                                }
+                            }
+
+                            Text {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                text: "\u{e6b6}";
+                                font-family: "iconfont";
+                                font-size: 16px;
+                                color: text-2;
+                            }
+                        }
+
+                        // 关闭按钮
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 7px;
+                            background: close-ta.has-hover ? danger : transparent;
+
+                            close-ta := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => {
+                                    root.close-window();
+                                }
+                            }
+
+                            Text {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                text: "X";
+                                font-size: 10px;
+                                font-weight: 600;
+                                color: close-ta.has-hover ? #ffffff : text-2;
+                            }
+                        }
+                    }
+                }
+
+                // 拖动区域
+                drag-ta := TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width - 92px;
+                    height: parent.height;
+                    mouse-cursor: grab;
+
+                    moved => {
+                        if (self.pressed) {
+                            root.move-window((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
                         }
                     }
                 }
             }
 
-            // 拖动区域
-            drag-ta := TouchArea {
-                x: 0px;
-                y: 0px;
-                width: parent.width - 92px;
-                height: parent.height;
-                mouse-cursor: grab;
+            // ========== 内容区域 ==========
+            Rectangle {
+                // 两个视图重叠放置，通过 opacity 切换
+                ClipboardList {
+                    visible: root.current-view == "clipboard";
+                    opacity: root.current-view == "clipboard" ? 1 : 0;
+                    x: root.current-view == "clipboard" ? 0 : -20px;
+                    animate opacity { duration: 200ms; easing: ease-out; }
+                    animate x { duration: 200ms; easing: ease-out; }
 
-                moved => {
-                    if (self.pressed) {
-                        root.move-window((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
-                    }
+                    dark-mode: root.dark-mode;
+                    items: root.clipboard-items;
+                    item-count: root.item-count;
+                    last-clicked-id: root.last-clicked-id;
+                    click-pending: root.click-pending;
+                    copy-item(id) => { root.copy-item(id); }
+                    paste-item(id) => { root.paste-item(id); }
+                }
+
+                SettingsPanel {
+                    visible: root.current-view == "settings";
+                    opacity: root.current-view == "settings" ? 1 : 0;
+                    x: root.current-view == "settings" ? 0 : 20px;
+                    animate opacity { duration: 200ms; easing: ease-out; }
+                    animate x { duration: 200ms; easing: ease-out; }
+
+                    dark-mode: root.dark-mode;
+                    theme-mode: root.theme-mode;
+                    auto-start: root.auto-start;
+                    auto-hide: root.auto-hide;
+                    db-path: root.db-path;
+                    settings-error: root.settings-error;
+                    active-tab: root.active-tab;
+                    hotkey-display: root.hotkey-display;
+                    recording-hotkey: root.recording-hotkey;
+
+                    back => { root.current-view = "clipboard"; }
+                    toggle-auto-start => { root.toggle-auto-start(); }
+                    toggle-auto-hide => { root.toggle-auto-hide(); }
+                    pick-db-path => { root.pick-db-path(); }
+                    reset-db-path => { root.reset-db-path(); }
+                    set-hotkey(s) => { root.set-hotkey(s); }
+                    start-recording-hotkey => { root.start-recording-hotkey(); }
+                    set-theme(mode) => { root.set-theme(mode); }
                 }
             }
-        }
-
-        // ========== 内容区域 ==========
-        Rectangle {
-            // 两个视图重叠放置，通过 opacity 切换
-            ClipboardList {
-                visible: root.current-view == "clipboard";
-                opacity: root.current-view == "clipboard" ? 1 : 0;
-                x: root.current-view == "clipboard" ? 0 : -20px;
-                animate opacity { duration: 200ms; easing: ease-out; }
-                animate x { duration: 200ms; easing: ease-out; }
-
-                dark-mode: root.dark-mode;
-                items: root.clipboard-items;
-                item-count: root.item-count;
-                last-clicked-id: root.last-clicked-id;
-                click-pending: root.click-pending;
-                copy-item(id) => { root.copy-item(id); }
-                paste-item(id) => { root.paste-item(id); }
-            }
-
-            SettingsPanel {
-                visible: root.current-view == "settings";
-                opacity: root.current-view == "settings" ? 1 : 0;
-                x: root.current-view == "settings" ? 0 : 20px;
-                animate opacity { duration: 200ms; easing: ease-out; }
-                animate x { duration: 200ms; easing: ease-out; }
-
-                dark-mode: root.dark-mode;
-                theme-mode: root.theme-mode;
-                auto-start: root.auto-start;
-                auto-hide: root.auto-hide;
-                db-path: root.db-path;
-                settings-error: root.settings-error;
-                active-tab: root.active-tab;
-                hotkey-display: root.hotkey-display;
-                recording-hotkey: root.recording-hotkey;
-
-                back => { root.current-view = "clipboard"; }
-                toggle-auto-start => { root.toggle-auto-start(); }
-                toggle-auto-hide => { root.toggle-auto-hide(); }
-                pick-db-path => { root.pick-db-path(); }
-                reset-db-path => { root.reset-db-path(); }
-                set-hotkey(s) => { root.set-hotkey(s); }
-                start-recording-hotkey => { root.start-recording-hotkey(); }
-                set-theme(mode) => { root.set-theme(mode); }
-            }
-        }
         }
     }
 }
