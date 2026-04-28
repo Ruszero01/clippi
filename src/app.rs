@@ -173,9 +173,9 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
                 };
                 if let Some(s) = captured {
                     if !s.is_empty() {
-                        // 先更新
-                        let update_ok = timer_hotkey.borrow_mut().update_hotkey(&s).is_ok();
-                        if update_ok {
+                        // 先尝试更新
+                        let update_result = timer_hotkey.borrow_mut().update_hotkey(&s);
+                        if let Ok(()) = update_result {
                             let display = timer_hotkey.borrow().current_display();
                             timer_hotkey_settings.borrow_mut().hotkey = s.to_string();
                             timer_hotkey_settings.borrow().save();
@@ -184,6 +184,13 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
                                 app.set_settings_error(SharedString::from(""));
                                 app.set_recording_hotkey(false);
                             }
+                        } else if let Some(app) = weak.upgrade() {
+                            // 更新失败，显示错误并停止录制
+                            app.set_settings_error(SharedString::from(format!(
+                                "快捷键 {} 被其他程序占用",
+                                timer_hotkey.borrow().current_display()
+                            )));
+                            app.set_recording_hotkey(false);
                         }
                     }
                     timer_hotkey.borrow_mut().finish_recording();
