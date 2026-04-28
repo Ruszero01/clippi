@@ -96,15 +96,17 @@ impl AppController {
         let hotkey = Rc::new(RefCell::new(
             HotkeyManager::new(&hotkey_str).unwrap_or_else(|e| {
                 eprintln!("Warning: {e}");
-                // 注册失败时尝试默认热键，如果默认也失败则创建管理器（UI会显示错误）
-                HotkeyManager::new(crate::hotkey::DEFAULT_HOTKEY)
-                    .unwrap_or_else(|e2| {
-                        eprintln!("Error: Failed to initialize default hotkey: {e2}");
-                        // 返回一个必定失败的占位符，UI会通过settings-error显示错误
-                        HotkeyManager::new("alt+space").expect("Unreachable")
-                    })
+                HotkeyManager::new("alt+space").expect("Unreachable")
             })
         ));
+
+        // 检查热键是否注册成功，失败则在UI显示错误
+        if !hotkey.borrow().is_registered() {
+            slint_app.set_settings_error(SharedString::from(format!(
+                "快捷键 {} 被其他程序占用，请在设置中更换快捷键",
+                hotkey.borrow().current_display()
+            )));
+        }
 
         slint_app.set_hotkey_display(SharedString::from(hotkey.borrow().current_display()));
 
