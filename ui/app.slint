@@ -35,6 +35,9 @@ export component App inherits Window {
     in-out property <int> last-clicked-id: -1;
     in-out property <bool> click-pending: false;
 
+    // 警告文字滚动
+    property <length> error-scroll: 0;
+
     callback copy-item(int);
     callback paste-item(int);
     callback clear-all();
@@ -129,6 +132,22 @@ export component App inherits Window {
             }
         }
 
+        // 滚动 Timer
+        error-scroll-timer := Timer {
+            interval: 50ms;
+            running: root.settings-error != "";
+            triggered => {
+                if (root.settings-error != "") {
+                    error-scroll += 1px;
+                    if (error-scroll > 500px) {
+                        error-scroll = 0px;
+                    }
+                } else {
+                    error-scroll = 0px;
+                }
+            }
+        }
+
         VerticalLayout {
             spacing: 0px;
 
@@ -140,7 +159,7 @@ export component App inherits Window {
                 HorizontalLayout {
                     padding-left: 12px;
                     padding-right: 4px;
-                    alignment: LayoutAlignment.space-between;
+                    spacing: 8px;
 
                     // 应用名称 + LOGO
                     HorizontalLayout {
@@ -165,6 +184,24 @@ export component App inherits Window {
                             font-size: 12px;
                             font-weight: 700;
                             color: text-2;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // 中间警告区域
+                    if (root.settings-error != "") : Rectangle {
+                        clip: true;
+                        width: 120px;
+
+                        Rectangle {
+                            width: 4px;
+                        }
+
+                        Text {
+                            x: 120px - error-scroll;
+                            text: root.settings-error;
+                            color: danger;
+                            font-size: 10px;
                             vertical-alignment: center;
                         }
                     }
