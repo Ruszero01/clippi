@@ -589,24 +589,4 @@ export component SettingsPanel inherits Rectangle {
         }
     }
 
-    // ========== 错误提示 ==========
-    if root.settings-error != "": Rectangle {
-        y: 170px;
-        height: 28px;
-        x: 8px;
-        width: parent.width - 16px;
-        border-radius: 7px;
-        background: surface;
-        visible: root.active-tab != 2;
-        opacity: root.active-tab != 2 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-
-        Text {
-            text: root.settings-error;
-            font-size: 10px;
-            color: danger;
-            vertical-alignment: center;
-            x: 10px;
-        }
-    }
 }
