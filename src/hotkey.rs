@@ -22,8 +22,13 @@ impl HotkeyManager {
             registered: false,
             is_recording: false,
         };
-        instance.register()?;
+        // 注册失败时仍返回实例，但 registered = false，由调用者决定如何处理
+        let _ = instance.register();
         Ok(instance)
+    }
+
+    pub fn is_registered(&self) -> bool {
+        self.registered
     }
 
     pub fn register(&mut self) -> Result<(), String> {
