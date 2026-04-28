@@ -188,8 +188,8 @@ export component App inherits Window {
                         }
                     }
 
-                    // 中间警告区域
-                    if (root.settings-error != "") : Rectangle {
+                    // 中间警告区域（始终占位，保持布局）
+                    Rectangle {
                         clip: true;
                         width: 120px;
 
@@ -197,7 +197,7 @@ export component App inherits Window {
                             width: 4px;
                         }
 
-                        Text {
+                        if (root.settings-error != "") : Text {
                             x: 120px - error-scroll;
                             text: root.settings-error;
                             color: danger;
