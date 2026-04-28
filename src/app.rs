@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
+
 use slint::{ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, VecModel};
 
 use crate::blacklist::{is_blacklisted, is_clippi_foreground};
@@ -209,6 +212,15 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
                 if let Some(app) = weak.upgrade() {
                     app.window().show().ok();
                     window_mgr.show();
+                    // 强制将窗口提升到前台
+                    #[cfg(target_os = "windows")]
+                    {
+                        let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
+                        let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
+                        if !hwnd.is_null() {
+                            unsafe { SetForegroundWindow(hwnd); }
+                        }
+                    }
                 }
             }
 
@@ -501,6 +513,15 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
                         if let Some(app) = tray_weak.upgrade() {
                             app.window().show().ok();
                             tray_window_mgr.show();
+                            // 强制将窗口提升到前台
+                            #[cfg(target_os = "windows")]
+                            {
+                                let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
+                                let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
+                                if !hwnd.is_null() {
+                                    unsafe { SetForegroundWindow(hwnd); }
+                                }
+                            }
                         }
                     }
                     TrayAction::Quit => {
