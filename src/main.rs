@@ -11,6 +11,7 @@ mod paste;
 mod settings;
 mod tray;
 mod types;
+mod window_manager;
 
 fn main() {
     let slint_app = App::new().unwrap();

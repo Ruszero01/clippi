@@ -17,6 +17,7 @@ use crate::hotkey::HotkeyManager;
 use crate::settings::{self, AppSettings};
 use crate::tray::{TrayAction, TrayManager};
 use crate::types::ClipboardItem;
+use crate::window_manager::WindowManager;
 use crate::{App, ClipboardEntry};
 
 pub struct AppController {
@@ -35,6 +36,8 @@ pub struct AppController {
     hotkey: Rc<RefCell<HotkeyManager>>,
     #[allow(dead_code)]
     focus_watcher: focus::FocusWatcher,
+    #[allow(dead_code)]
+    window_manager: WindowManager,
 }
 
 impl AppController {
@@ -110,6 +113,9 @@ impl AppController {
 
         slint_app.set_hotkey_display(SharedString::from(hotkey.borrow().current_display()));
 
+        // 创建窗口管理器
+        let window_manager = WindowManager::new();
+
         // 从配置加载黑名单（逗号分隔的进程名）
         let blacklist: HashSet<String> = {
             let bl = &app_settings.borrow().blacklist;
@@ -131,6 +137,7 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
         let suppress_for_timer = timer_suppress_hide.clone();
         let startup_guard = Arc::new(AtomicBool::new(true));
         let startup_timer = startup_guard.clone();
+        let window_mgr = window_manager.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(2));
             startup_timer.store(false, Ordering::SeqCst);
@@ -201,6 +208,7 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
             if timer_hotkey.borrow().poll_pressed() {
                 if let Some(app) = weak.upgrade() {
                     app.window().show().ok();
+                    window_mgr.show();
                 }
             }
 
@@ -224,14 +232,16 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
             if let Some(app) = weak.upgrade() {
                 app.set_item_count(timer_model.row_count() as i32);
 
-                // 失焦自动隐藏（仅剪贴板列表视图、窗口可见、功能开启时、且不在启动宽限期内、且未固定）
+                // 失焦自动隐藏（仅剪贴板列表视图、窗口可见、功能开启时、且不在启动宽限期内、且未固定、且不在 suppress 期间）
                 if timer_auto_hide.borrow().auto_hide && !app.get_pinned() {
                     if app.window().is_visible() {
                         if app.get_current_view() == "clipboard" {
                             if !suppress_for_timer.load(Ordering::SeqCst) {
                                 if !startup_guard.load(Ordering::SeqCst) {
-                                    if !is_clippi_foreground() {
-                                        app.window().hide().ok();
+                                    if !window_mgr.is_suppressed() {
+                                        if !is_clippi_foreground() {
+                                            app.window().hide().ok();
+                                        }
                                     }
                                 }
                             }
@@ -482,6 +492,7 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
         // 托盘事件轮询
         let tray_inner = tray.clone();
         let tray_weak = slint_app.as_weak();
+        let tray_window_mgr = window_manager.clone();
         let tray_timer = slint::Timer::default();
         tray_timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             while let Some(action) = tray_inner.poll_events() {
@@ -489,6 +500,7 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
                     TrayAction::Show => {
                         if let Some(app) = tray_weak.upgrade() {
                             app.window().show().ok();
+                            tray_window_mgr.show();
                         }
                     }
                     TrayAction::Quit => {
@@ -507,6 +519,7 @@ let timer_suppress_hide = Arc::new(AtomicBool::new(false));
             tray_timer,
             hotkey,
             focus_watcher,
+            window_manager: window_manager.clone(),
         }
     }
 
