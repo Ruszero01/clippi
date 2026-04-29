@@ -1,17 +1,8 @@
 slint::include_modules!();
 
 mod app;
-mod blacklist;
-mod clipboard;
-mod db;
-mod focus;
-mod history;
-mod hotkey;
-mod paste;
-mod settings;
-mod tray;
-mod types;
-mod window_manager;
+mod core;
+mod platform;
 
 fn main() {
     let slint_app = App::new().unwrap();
@@ -24,8 +15,7 @@ fn main() {
         let _fonts = collection.register_fonts(blob, None);
     }
 
-    let tray = std::rc::Rc::new(tray::TrayManager::new());
-    let controller = app::AppController::new(&slint_app, tray);
+    let controller = app::AppController::new(&slint_app).expect("Failed to init");
     slint_app.window().show().unwrap();
     slint::run_event_loop_until_quit().unwrap();
     controller.shutdown();

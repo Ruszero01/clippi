@@ -1,7 +1,10 @@
-use chrono::{DateTime, Utc};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+//! Core types - platform-agnostic
 
+use chrono::{DateTime, Utc};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+
+/// Content type of clipboard items
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
     Text,
@@ -27,6 +30,7 @@ impl ContentType {
     }
 }
 
+/// A clipboard item
 #[derive(Debug, Clone)]
 pub struct ClipboardItem {
     pub id: i64,
@@ -34,7 +38,8 @@ pub struct ClipboardItem {
     pub text_preview: String,
     pub full_text: String,
     pub content_hash: u64,
-    pub captured_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl ClipboardItem {
@@ -42,13 +47,18 @@ impl ClipboardItem {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
         let preview: String = text.chars().take(200).collect();
+        let now = Utc::now();
         Self {
             id,
             content_type: ContentType::Text,
             text_preview: preview,
             full_text: text.to_string(),
             content_hash: hasher.finish(),
-            captured_at: Utc::now(),
+            created_at: now,
+            updated_at: now,
         }
     }
 }
+
+unsafe impl Send for ClipboardItem {}
+unsafe impl Sync for ClipboardItem {}
