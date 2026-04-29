@@ -2,14 +2,16 @@
 
 use std::error::Error;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+/// Callback invoked on the main thread when hotkey is pressed
+pub type HotkeyCallback = Arc<Mutex<Box<dyn Fn() + Send>>>;
+
 /// Hotkey listener - platform-agnostic trait
 pub trait HotkeyListener: Send {
-    fn start(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
     fn stop(&mut self);
-    fn poll_pressed(&self) -> bool;
     fn current_display(&self) -> String;
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String>;
     fn start_recording(&mut self);
@@ -27,15 +29,9 @@ enum HotkeyCmd {
     Shutdown,
 }
 
-struct HotkeyThread {
+struct HotkeyInner {
     cmd_tx: Sender<HotkeyCmd>,
-    event_rx: Receiver<HotkeyEvent>,
     display_rx: Receiver<String>,
-}
-
-enum HotkeyEvent {
-    Pressed,
-    Recording(Option<String>),
 }
 
 #[cfg(target_os = "windows")]
@@ -44,35 +40,28 @@ mod windows {
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
     use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN,
     };
-    use std::time::Instant;
 
     const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
     pub struct WindowsHotkeyListener {
-        thread: Option<HotkeyThread>,
-        registered: Arc<AtomicBool>,
+        inner: Option<HotkeyInner>,
         is_recording: Arc<AtomicBool>,
-        last_pressed: Arc<AtomicBool>,
         current_display: Arc<Mutex<String>>,
     }
 
     impl WindowsHotkeyListener {
-        pub fn new(hotkey_str: &str) -> Result<Self, String> {
-            let registered = Arc::new(AtomicBool::new(false));
+        pub fn new(hotkey_str: &str, on_pressed: HotkeyCallback) -> Result<Self, String> {
             let is_recording = Arc::new(AtomicBool::new(false));
-            let last_pressed = Arc::new(AtomicBool::new(false));
             let current_display = Arc::new(Mutex::new(hotkey_str.to_string()));
 
             let (cmd_tx, cmd_rx) = channel();
-            let (event_tx, event_rx) = channel();
             let (display_tx, display_rx) = channel();
 
-            let registered_clone = registered.clone();
             let current_display_clone = current_display.clone();
+            let on_pressed_clone = on_pressed.clone();
 
             thread::spawn(move || {
                 let manager = match GlobalHotKeyManager::new() {
@@ -91,14 +80,11 @@ mod windows {
                         match cmd {
                             HotkeyCmd::Register(ref hs) => {
                                 if let Ok(new_hk) = parse_hotkey(hs) {
-                                    // Unregister old
                                     if let Some(ref old) = hotkey {
                                         let _ = manager.unregister(*old);
                                     }
-                                    // Register new
                                     if manager.register(new_hk).is_ok() {
                                         hotkey = Some(new_hk);
-                                        registered_clone.store(true, Ordering::SeqCst);
                                         *current_display_clone.lock().unwrap() = hs.clone();
                                     }
                                 }
@@ -108,7 +94,6 @@ mod windows {
                                     let _ = manager.unregister(*old);
                                 }
                                 hotkey = None;
-                                registered_clone.store(false, Ordering::SeqCst);
                             }
                             HotkeyCmd::Update(ref hs) => {
                                 if let Ok(new_hk) = parse_hotkey(hs) {
@@ -131,12 +116,13 @@ mod windows {
                         }
                     }
 
-                    // Check for hotkey events
+                    // Check for hotkey events - event-driven, no polling needed
                     if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
                         if event.state() == HotKeyState::Pressed {
                             if let Some(ref hk) = hotkey {
                                 if event.id() == hk.id() {
-                                    let _ = event_tx.send(HotkeyEvent::Pressed);
+                                    let cb = on_pressed_clone.lock().unwrap();
+                                    cb();
                                 }
                             }
                         }
@@ -150,49 +136,31 @@ mod windows {
             let _ = cmd_tx.send(HotkeyCmd::Register(hotkey_str.to_string()));
 
             Ok(Self {
-                thread: Some(HotkeyThread {
+                inner: Some(HotkeyInner {
                     cmd_tx,
-                    event_rx,
                     display_rx,
                 }),
-                registered,
                 is_recording,
-                last_pressed,
                 current_display,
             })
         }
 
         fn send_cmd(&self, cmd: HotkeyCmd) {
-            if let Some(ref t) = self.thread {
-                let _ = t.cmd_tx.send(cmd);
+            if let Some(ref inner) = self.inner {
+                let _ = inner.cmd_tx.send(cmd);
             }
         }
     }
 
     impl HotkeyListener for WindowsHotkeyListener {
-        fn start(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-            Ok(())
-        }
-
         fn stop(&mut self) {
             self.send_cmd(HotkeyCmd::Unregister);
         }
 
-        fn poll_pressed(&self) -> bool {
-            if let Some(ref t) = self.thread {
-                while let Ok(event) = t.event_rx.try_recv() {
-                    if let HotkeyEvent::Pressed = event {
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-
         fn current_display(&self) -> String {
             self.send_cmd(HotkeyCmd::GetDisplay);
-            if let Some(ref t) = self.thread {
-                if let Ok(display) = t.display_rx.recv_timeout(Duration::from_millis(100)) {
+            if let Some(ref inner) = self.inner {
+                if let Ok(display) = inner.display_rx.recv_timeout(Duration::from_millis(100)) {
                     return display;
                 }
             }
@@ -386,19 +354,13 @@ mod macos {
     pub struct MacosHotkeyListener;
 
     impl MacosHotkeyListener {
-        pub fn new(_hotkey_str: &str) -> Result<Self, String> {
+        pub fn new(_hotkey_str: &str, _on_pressed: HotkeyCallback) -> Result<Self, String> {
             Ok(Self)
         }
     }
 
     impl HotkeyListener for MacosHotkeyListener {
-        fn start(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-            todo!("macOS hotkey")
-        }
         fn stop(&mut self) {}
-        fn poll_pressed(&self) -> bool {
-            false
-        }
         fn current_display(&self) -> String {
             "".to_string()
         }
@@ -420,19 +382,13 @@ mod linux {
     pub struct LinuxHotkeyListener;
 
     impl LinuxHotkeyListener {
-        pub fn new(_hotkey_str: &str) -> Result<Self, String> {
+        pub fn new(_hotkey_str: &str, _on_pressed: HotkeyCallback) -> Result<Self, String> {
             Ok(Self)
         }
     }
 
     impl HotkeyListener for LinuxHotkeyListener {
-        fn start(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-            todo!("Linux hotkey")
-        }
         fn stop(&mut self) {}
-        fn poll_pressed(&self) -> bool {
-            false
-        }
         fn current_display(&self) -> String {
             "".to_string()
         }
@@ -456,18 +412,18 @@ pub use macos::MacosHotkeyListener;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHotkeyListener;
 
-pub fn create_hotkey_listener(hotkey_str: &str) -> Result<Box<dyn HotkeyListener>, String> {
+pub fn create_hotkey_listener(hotkey_str: &str, on_pressed: HotkeyCallback) -> Result<Box<dyn HotkeyListener>, String> {
     #[cfg(target_os = "windows")]
     {
-        Ok(Box::new(WindowsHotkeyListener::new(hotkey_str)?))
+        Ok(Box::new(WindowsHotkeyListener::new(hotkey_str, on_pressed)?))
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(Box::new(MacosHotkeyListener::new(hotkey_str)?))
+        Ok(Box::new(MacosHotkeyListener::new(hotkey_str, on_pressed)?))
     }
     #[cfg(target_os = "linux")]
     {
-        Ok(Box::new(LinuxHotkeyListener::new(hotkey_str)?))
+        Ok(Box::new(LinuxHotkeyListener::new(hotkey_str, on_pressed)?))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {

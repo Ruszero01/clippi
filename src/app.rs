@@ -15,7 +15,7 @@ pub struct AppController {
     frontend: Arc<Mutex<Frontend>>,
     app: slint::Weak<App>,
     listener: Option<Box<dyn crate::platform::clipboard::ClipboardListener>>,
-    hotkey: Option<Box<dyn crate::platform::hotkey::HotkeyListener>>,
+    hotkey: Arc<Mutex<Option<Box<dyn crate::platform::hotkey::HotkeyListener>>>>,
 }
 
 impl AppController {
@@ -79,14 +79,56 @@ impl AppController {
             }
         });
 
-        // Create hotkey listener
-        let hotkey = match create_hotkey_listener("Ctrl+Shift+V") {
+        // Create hotkey listener with event-driven callback
+        let fe_for_hk = frontend.clone();
+        let app_for_hk = app.clone();
+        let db_for_hk = db.clone();
+        let on_pressed = Arc::new(Mutex::new(Box::new(move || {
+            let fe = fe_for_hk.clone();
+            let app = app_for_hk.clone();
+            let db = db_for_hk.clone();
+            slint::invoke_from_event_loop(move || {
+                if let Ok(mut fe) = fe.lock() {
+                    fe.show();
+                }
+                if let Some(app) = app.upgrade() {
+                    if let Ok(db) = db.lock() {
+                        refresh_ui(&app, &db);
+                    }
+                }
+            }).ok();
+        }) as Box<dyn Fn() + Send>));
+
+        let hotkey = Arc::new(Mutex::new(match create_hotkey_listener("Ctrl+Shift+V", on_pressed) {
             Ok(h) => Some(h),
             Err(e) => {
                 eprintln!("Failed to create hotkey listener: {}", e);
                 None
             }
-        };
+        }));
+
+        // Bind hotkey callbacks
+        let hotkey_for_callback = hotkey.clone();
+        let frontend_for_callback = frontend.clone();
+        slint_app.on_set_hotkey(move |s: slint::SharedString| {
+            if let Ok(mut fe) = frontend_for_callback.lock() {
+                fe.show();
+            }
+            if let Ok(mut hk) = hotkey_for_callback.lock() {
+                if let Some(ref mut h) = *hk {
+                    h.update_hotkey(&s).ok();
+                }
+            }
+        });
+
+        let hotkey_for_recording = hotkey.clone();
+        slint_app.on_start_recording_hotkey(move || {
+            if let Ok(mut hk) = hotkey_for_recording.lock() {
+                if let Some(ref mut h) = *hk {
+                    h.start_recording();
+                }
+            }
+        });
 
         Ok(Self {
             db,
@@ -98,11 +140,13 @@ impl AppController {
     }
 
     pub fn shutdown(mut self) {
-        if let Some(ref mut listener) = self.listener {
+        if let Some(mut listener) = self.listener {
             listener.stop();
         }
-        if let Some(ref mut hotkey) = self.hotkey {
-            hotkey.stop();
+        if let Ok(mut hk) = self.hotkey.lock() {
+            if let Some(ref mut h) = *hk {
+                h.stop();
+            }
         }
     }
 }
