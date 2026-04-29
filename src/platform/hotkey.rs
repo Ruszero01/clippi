@@ -1,29 +1,27 @@
 //! Hotkey management - platform-agnostic trait and Windows implementation
 
-use std::error::Error;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-/// Callback invoked on the main thread when hotkey is pressed
+/// Callback invoked when hotkey is pressed
 pub type HotkeyCallback = Arc<Mutex<Box<dyn Fn() + Send>>>;
+/// Callback invoked when recording detects a new hotkey (None = cancel, Some = new hotkey)
+pub type RecordingCallback = Arc<Mutex<Box<dyn Fn(Option<String>) + Send>>>;
 
 /// Hotkey listener - platform-agnostic trait
 pub trait HotkeyListener: Send {
     fn stop(&mut self);
-    fn current_display(&self) -> String;
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String>;
     fn start_recording(&mut self);
     fn finish_recording(&mut self);
-    fn poll_recording_pressed(&self) -> Option<String>;
 }
 
 enum HotkeyCmd {
     Register(String),
     Unregister,
     Update(String),
-    GetDisplay,
     StartRecording,
     StopRecording,
     Shutdown,
@@ -31,7 +29,6 @@ enum HotkeyCmd {
 
 struct HotkeyInner {
     cmd_tx: Sender<HotkeyCmd>,
-    display_rx: Receiver<String>,
 }
 
 #[cfg(target_os = "windows")]
@@ -49,19 +46,21 @@ mod windows {
     pub struct WindowsHotkeyListener {
         inner: Option<HotkeyInner>,
         is_recording: Arc<AtomicBool>,
-        current_display: Arc<Mutex<String>>,
     }
 
     impl WindowsHotkeyListener {
-        pub fn new(hotkey_str: &str, on_pressed: HotkeyCallback) -> Result<Self, String> {
+        pub fn new(
+            hotkey_str: &str,
+            on_pressed: HotkeyCallback,
+            on_recording: Option<RecordingCallback>,
+        ) -> Result<Self, String> {
             let is_recording = Arc::new(AtomicBool::new(false));
-            let current_display = Arc::new(Mutex::new(hotkey_str.to_string()));
 
             let (cmd_tx, cmd_rx) = channel();
-            let (display_tx, display_rx) = channel();
 
-            let current_display_clone = current_display.clone();
             let on_pressed_clone = on_pressed.clone();
+            let is_recording_clone = is_recording.clone();
+            let on_recording_clone = on_recording.clone();
 
             thread::spawn(move || {
                 let manager = match GlobalHotKeyManager::new() {
@@ -73,6 +72,7 @@ mod windows {
                 };
 
                 let mut hotkey: Option<HotKey> = None;
+                let mut recording_active = false;
 
                 loop {
                     // Handle commands
@@ -85,7 +85,6 @@ mod windows {
                                     }
                                     if manager.register(new_hk).is_ok() {
                                         hotkey = Some(new_hk);
-                                        *current_display_clone.lock().unwrap() = hs.clone();
                                     }
                                 }
                             }
@@ -102,21 +101,22 @@ mod windows {
                                     }
                                     if manager.register(new_hk).is_ok() {
                                         hotkey = Some(new_hk);
-                                        *current_display_clone.lock().unwrap() = hs.clone();
                                     }
                                 }
                             }
-                            HotkeyCmd::GetDisplay => {
-                                let display = current_display_clone.lock().unwrap().clone();
-                                let _ = display_tx.send(display);
+                            HotkeyCmd::StartRecording => {
+                                recording_active = true;
+                                is_recording_clone.store(true, Ordering::SeqCst);
                             }
-                            HotkeyCmd::StartRecording => {}
-                            HotkeyCmd::StopRecording => {}
+                            HotkeyCmd::StopRecording => {
+                                recording_active = false;
+                                is_recording_clone.store(false, Ordering::SeqCst);
+                            }
                             HotkeyCmd::Shutdown => return,
                         }
                     }
 
-                    // Check for hotkey events - event-driven, no polling needed
+                    // Check for hotkey events (event-driven)
                     if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
                         if event.state() == HotKeyState::Pressed {
                             if let Some(ref hk) = hotkey {
@@ -124,6 +124,18 @@ mod windows {
                                     let cb = on_pressed_clone.lock().unwrap();
                                     cb();
                                 }
+                            }
+                        }
+                    }
+
+                    // Poll for recording detection
+                    if recording_active {
+                        if let Some(ref cb) = on_recording_clone {
+                            if let Some(new_hotkey) = detect_pressed_hotkey() {
+                                let cb = cb.lock().unwrap();
+                                cb(Some(new_hotkey));
+                                recording_active = false;
+                                is_recording_clone.store(false, Ordering::SeqCst);
                             }
                         }
                     }
@@ -136,12 +148,8 @@ mod windows {
             let _ = cmd_tx.send(HotkeyCmd::Register(hotkey_str.to_string()));
 
             Ok(Self {
-                inner: Some(HotkeyInner {
-                    cmd_tx,
-                    display_rx,
-                }),
+                inner: Some(HotkeyInner { cmd_tx }),
                 is_recording,
-                current_display,
             })
         }
 
@@ -157,37 +165,17 @@ mod windows {
             self.send_cmd(HotkeyCmd::Unregister);
         }
 
-        fn current_display(&self) -> String {
-            self.send_cmd(HotkeyCmd::GetDisplay);
-            if let Some(ref inner) = self.inner {
-                if let Ok(display) = inner.display_rx.recv_timeout(Duration::from_millis(100)) {
-                    return display;
-                }
-            }
-            self.current_display.lock().unwrap().clone()
-        }
-
         fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
             self.send_cmd(HotkeyCmd::Update(hotkey_str.to_string()));
-            *self.current_display.lock().unwrap() = hotkey_str.to_string();
             Ok(())
         }
 
         fn start_recording(&mut self) {
-            self.is_recording.store(true, Ordering::SeqCst);
             self.send_cmd(HotkeyCmd::StartRecording);
         }
 
         fn finish_recording(&mut self) {
-            self.is_recording.store(false, Ordering::SeqCst);
             self.send_cmd(HotkeyCmd::StopRecording);
-        }
-
-        fn poll_recording_pressed(&self) -> Option<String> {
-            if !self.is_recording.load(Ordering::SeqCst) {
-                return None;
-            }
-            detect_pressed_hotkey()
         }
     }
 
@@ -308,12 +296,6 @@ mod windows {
             "enter" | "return" => Some(Code::Enter),
             "esc" | "escape" => Some(Code::Escape),
             "backspace" => Some(Code::Backspace),
-            "insert" => Some(Code::Insert),
-            "delete" => Some(Code::Delete),
-            "home" => Some(Code::Home),
-            "end" => Some(Code::End),
-            "pageup" => Some(Code::PageUp),
-            "pagedown" => Some(Code::PageDown),
             _ => None,
         }
     }
@@ -339,9 +321,6 @@ mod windows {
             Code::F10 => "F10", Code::F11 => "F11", Code::F12 => "F12",
             Code::Space => "Space", Code::Tab => "Tab", Code::Enter => "Enter",
             Code::Escape => "Esc", Code::Backspace => "Backspace",
-            Code::Insert => "Insert", Code::Delete => "Delete",
-            Code::Home => "Home", Code::End => "End",
-            Code::PageUp => "PageUp", Code::PageDown => "PageDown",
             _ => "?",
         }
     }
@@ -354,24 +333,22 @@ mod macos {
     pub struct MacosHotkeyListener;
 
     impl MacosHotkeyListener {
-        pub fn new(_hotkey_str: &str, _on_pressed: HotkeyCallback) -> Result<Self, String> {
+        pub fn new(
+            _hotkey_str: &str,
+            _on_pressed: HotkeyCallback,
+            _on_recording: Option<RecordingCallback>,
+        ) -> Result<Self, String> {
             Ok(Self)
         }
     }
 
     impl HotkeyListener for MacosHotkeyListener {
         fn stop(&mut self) {}
-        fn current_display(&self) -> String {
-            "".to_string()
-        }
         fn update_hotkey(&mut self, _hotkey_str: &str) -> Result<(), String> {
             todo!()
         }
         fn start_recording(&mut self) {}
         fn finish_recording(&mut self) {}
-        fn poll_recording_pressed(&self) -> Option<String> {
-            None
-        }
     }
 }
 
@@ -382,24 +359,22 @@ mod linux {
     pub struct LinuxHotkeyListener;
 
     impl LinuxHotkeyListener {
-        pub fn new(_hotkey_str: &str, _on_pressed: HotkeyCallback) -> Result<Self, String> {
+        pub fn new(
+            _hotkey_str: &str,
+            _on_pressed: HotkeyCallback,
+            _on_recording: Option<RecordingCallback>,
+        ) -> Result<Self, String> {
             Ok(Self)
         }
     }
 
     impl HotkeyListener for LinuxHotkeyListener {
         fn stop(&mut self) {}
-        fn current_display(&self) -> String {
-            "".to_string()
-        }
         fn update_hotkey(&mut self, _hotkey_str: &str) -> Result<(), String> {
             todo!()
         }
         fn start_recording(&mut self) {}
         fn finish_recording(&mut self) {}
-        fn poll_recording_pressed(&self) -> Option<String> {
-            None
-        }
     }
 }
 
@@ -412,18 +387,26 @@ pub use macos::MacosHotkeyListener;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHotkeyListener;
 
-pub fn create_hotkey_listener(hotkey_str: &str, on_pressed: HotkeyCallback) -> Result<Box<dyn HotkeyListener>, String> {
+pub fn create_hotkey_listener(
+    hotkey_str: &str,
+    on_pressed: HotkeyCallback,
+    on_recording: Option<RecordingCallback>,
+) -> Result<Box<dyn HotkeyListener>, String> {
     #[cfg(target_os = "windows")]
     {
-        Ok(Box::new(WindowsHotkeyListener::new(hotkey_str, on_pressed)?))
+        Ok(Box::new(WindowsHotkeyListener::new(
+            hotkey_str,
+            on_pressed,
+            on_recording,
+        )?))
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(Box::new(MacosHotkeyListener::new(hotkey_str, on_pressed)?))
+        Ok(Box::new(MacosHotkeyListener::new(hotkey_str, on_pressed, on_recording)?))
     }
     #[cfg(target_os = "linux")]
     {
-        Ok(Box::new(LinuxHotkeyListener::new(hotkey_str, on_pressed)?))
+        Ok(Box::new(LinuxHotkeyListener::new(hotkey_str, on_pressed, on_recording)?))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {

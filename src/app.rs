@@ -43,12 +43,10 @@ impl AppController {
         let app_clone = app.clone();
 
         listener.start(Box::new(move |item: ClipboardItem| {
-            // Update database
             if let Ok(db) = db_clone.lock() {
                 let _ = db.upsert(&item);
             }
 
-            // Refresh UI if visible
             if let Ok(fe) = frontend_clone.lock() {
                 if fe.is_visible() {
                     let db_for_ui = db_clone.clone();
@@ -79,7 +77,7 @@ impl AppController {
             }
         });
 
-        // Create hotkey listener with event-driven callback
+        // Hotkey pressed callback
         let fe_for_hk = frontend.clone();
         let app_for_hk = app.clone();
         let db_for_hk = db.clone();
@@ -99,15 +97,45 @@ impl AppController {
             }).ok();
         }) as Box<dyn Fn() + Send>));
 
-        let hotkey = Arc::new(Mutex::new(match create_hotkey_listener("Alt+V", on_pressed) {
-            Ok(h) => Some(h),
-            Err(e) => {
-                eprintln!("Failed to create hotkey listener: {}", e);
-                None
-            }
-        }));
+        // Create hotkey Arc early so recording callback can capture it
+        let hotkey: Arc<Mutex<Option<Box<dyn crate::platform::hotkey::HotkeyListener>>>> =
+            Arc::new(Mutex::new(None));
 
-        // Bind hotkey callbacks
+        // Recording callback - invoked from hotkey thread when a key is detected
+        let app_for_recording = app.clone();
+        let hotkey_for_apply = hotkey.clone();
+        let on_recording = Arc::new(Mutex::new(Box::new(move |result: Option<String>| {
+            let app = app_for_recording.clone();
+            let hotkey = hotkey_for_apply.clone();
+            slint::invoke_from_event_loop(move || {
+                if let Some(app) = app.upgrade() {
+                    app.set_recording_hotkey(false);
+                    if let Some(new_hotkey) = result {
+                        app.set_hotkey_display(slint::SharedString::from(&new_hotkey));
+                        // Apply the new hotkey
+                        if let Ok(mut hk) = hotkey.lock() {
+                            if let Some(ref mut h) = *hk {
+                                h.finish_recording();
+                                if let Err(e) = h.update_hotkey(&new_hotkey) {
+                                    app.set_settings_error(slint::SharedString::from(e));
+                                }
+                            }
+                        }
+                    }
+                }
+            }).ok();
+        }) as Box<dyn Fn(Option<String>) + Send>));
+
+        // Create and store the actual hotkey listener
+        match create_hotkey_listener("Alt+V", on_pressed, Some(on_recording)) {
+            Ok(h) => *hotkey.lock().unwrap() = Some(h),
+            Err(e) => eprintln!("Failed to create hotkey listener: {}", e),
+        }
+
+        // Set initial hotkey display
+        slint_app.set_hotkey_display(slint::SharedString::from("Alt+V"));
+
+        // on_set_hotkey callback
         let hotkey_for_callback = hotkey.clone();
         let frontend_for_callback = frontend.clone();
         let app_for_error = app.clone();
@@ -137,6 +165,7 @@ impl AppController {
             }).ok();
         });
 
+        // on_start_recording_hotkey callback
         let hotkey_for_recording = hotkey.clone();
         slint_app.on_start_recording_hotkey(move || {
             if let Ok(mut hk) = hotkey_for_recording.lock() {
