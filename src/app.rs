@@ -99,7 +99,7 @@ impl AppController {
             }).ok();
         }) as Box<dyn Fn() + Send>));
 
-        let hotkey = Arc::new(Mutex::new(match create_hotkey_listener("Ctrl+Shift+V", on_pressed) {
+        let hotkey = Arc::new(Mutex::new(match create_hotkey_listener("Alt+V", on_pressed) {
             Ok(h) => Some(h),
             Err(e) => {
                 eprintln!("Failed to create hotkey listener: {}", e);
@@ -110,15 +110,31 @@ impl AppController {
         // Bind hotkey callbacks
         let hotkey_for_callback = hotkey.clone();
         let frontend_for_callback = frontend.clone();
+        let app_for_error = app.clone();
         slint_app.on_set_hotkey(move |s: slint::SharedString| {
             if let Ok(mut fe) = frontend_for_callback.lock() {
                 fe.show();
             }
-            if let Ok(mut hk) = hotkey_for_callback.lock() {
+
+            let err_msg = if let Ok(mut hk) = hotkey_for_callback.lock() {
                 if let Some(ref mut h) = *hk {
-                    h.update_hotkey(&s).ok();
+                    match h.update_hotkey(&s) {
+                        Ok(()) => None,
+                        Err(e) => Some(e),
+                    }
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
+
+            let app = app_for_error.clone();
+            slint::invoke_from_event_loop(move || {
+                if let Some(app) = app.upgrade() {
+                    app.set_settings_error(slint::SharedString::from(err_msg.unwrap_or_default()));
+                }
+            }).ok();
         });
 
         let hotkey_for_recording = hotkey.clone();
