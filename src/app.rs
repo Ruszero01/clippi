@@ -4,6 +4,7 @@ use crate::core::db::Database;
 use crate::core::frontend::Frontend;
 use crate::core::types::ClipboardItem;
 use crate::platform::clipboard::create_listener;
+use crate::platform::hotkey::create_hotkey_listener;
 use crate::{App, ClipboardEntry};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
@@ -14,6 +15,7 @@ pub struct AppController {
     frontend: Arc<Mutex<Frontend>>,
     app: slint::Weak<App>,
     listener: Option<Box<dyn crate::platform::clipboard::ClipboardListener>>,
+    hotkey: Option<Box<dyn crate::platform::hotkey::HotkeyListener>>,
 }
 
 impl AppController {
@@ -77,17 +79,30 @@ impl AppController {
             }
         });
 
+        // Create hotkey listener
+        let hotkey = match create_hotkey_listener("Ctrl+Shift+V") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                eprintln!("Failed to create hotkey listener: {}", e);
+                None
+            }
+        };
+
         Ok(Self {
             db,
             frontend,
             app,
             listener: Some(listener),
+            hotkey,
         })
     }
 
     pub fn shutdown(mut self) {
         if let Some(ref mut listener) = self.listener {
             listener.stop();
+        }
+        if let Some(ref mut hotkey) = self.hotkey {
+            hotkey.stop();
         }
     }
 }
