@@ -115,18 +115,22 @@ impl Pollable for ClipboardService {
                 if let Err(e) = db.upsert(item) {
                     eprintln!("[ERROR] ClipboardService: upsert error: {:?}", e);
                 } else {
-                    // Check if this item (by id) already exists in model
-                    let existing_idx = (0..self.model.row_count()).position(|i| {
-                        self.model.row_data(i).map(|e| e.id == item.id as i32).unwrap_or(false)
-                    });
+                    // Find existing item by content_hash to get actual DB id
+                    if let Ok(Some(existing)) = db.get_by_hash(item.content_hash) {
+                        // Remove existing item from model (by id)
+                        let existing_idx = (0..self.model.row_count()).position(|i| {
+                            self.model.row_data(i).map(|e| e.id as i64 == existing.id).unwrap_or(false)
+                        });
+                        if let Some(idx) = existing_idx {
+                            self.model.remove(idx);
+                        }
 
-                    if let Some(idx) = existing_idx {
-                        // Remove existing item (will re-insert at top with updated data)
-                        self.model.remove(idx);
+                        // Insert with correct DB id at beginning
+                        self.model.insert(0, item_to_entry(&existing));
+                    } else {
+                        // New item - insert with id from item (should match DB after upsert)
+                        self.model.insert(0, item_to_entry(item));
                     }
-
-                    // Insert at beginning (newest first)
-                    self.model.insert(0, item_to_entry(item));
                 }
             }
         }

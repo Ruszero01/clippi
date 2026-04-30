@@ -108,4 +108,28 @@ impl Database {
             Ok(None)
         }
     }
+
+    pub fn get_by_hash(&self, hash: u64) -> SqlResult<Option<ClipboardItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content_type, text_preview, full_text, content_hash, created_at, updated_at
+             FROM clipboard_items WHERE content_hash = ?1",
+        )?;
+        let mut rows = stmt.query(params![hash as i64])?;
+        if let Some(row) = rows.next()? {
+            let ct_str: String = row.get(1)?;
+            let created_str: String = row.get(5)?;
+            let updated_str: String = row.get(6)?;
+            Ok(Some(ClipboardItem {
+                id: row.get(0)?,
+                content_type: ContentType::from_str(&ct_str),
+                text_preview: row.get(2)?,
+                full_text: row.get(3)?,
+                content_hash: row.get::<_, i64>(4)? as u64,
+                created_at: created_str.parse().unwrap_or_default(),
+                updated_at: updated_str.parse().unwrap_or_default(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
 }
