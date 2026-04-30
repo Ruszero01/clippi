@@ -6,7 +6,6 @@ use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
 };
-use crate::core::types::format_relative_time;
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::paste::{paste_after_delay, restore_paste_target};
@@ -15,10 +14,9 @@ use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::tray::TrayService;
-use crate::{App, ClipboardEntry};
+use crate::App;
 use clipboard_rs::{Clipboard, ClipboardContext};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::rc::Rc;
+use slint::{ComponentHandle, SharedString};
 use std::sync::{Arc, Mutex};
 
 pub struct AppController {
@@ -41,29 +39,16 @@ impl AppController {
         // Initialize UI with settings
         init_ui_from_settings(slint_app, &settings);
 
-        // Set up initial UI model
-        let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
-        slint_app.set_clipboard_items(ModelRc::from(model.clone()));
-
-        // Load existing items from DB
-        {
-            let items = db.lock().unwrap().load_by_updated(100).unwrap_or_default();
-            for item in &items {
-                let entry = item_to_slint(item);
-                model.push(entry);
-            }
-            slint_app.set_item_count(model.row_count() as i32);
-        }
-
-        // Create clipboard service and platform listener
+        // Create clipboard service (sets up model in new())
         let clipboard_shared = ClipboardShared::new();
         let mut clipboard_service = ClipboardService::new(
             clipboard_shared,
             db.clone(),
-            frontend.clone(),
             app.clone(),
         );
-        // Apply initial sort setting
+        let clipboard_service_for_callbacks = clipboard_service.clone();
+        // Load initial data and apply sort setting
+        clipboard_service.load_initial();
         clipboard_service.set_sort_and_refresh(settings.sort_by_created);
 
         let mut listener = create_listener();
@@ -108,6 +93,7 @@ impl AppController {
 
         // Copy item to clipboard
         let db_for_copy = db.clone();
+        let cs_for_copy = clipboard_service_for_callbacks.clone();
         slint_app.on_copy_item(move |id| {
             if let Ok(db) = db_for_copy.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
@@ -116,6 +102,7 @@ impl AppController {
                     }
                 }
             }
+            cs_for_copy.refresh_row(id);
         });
 
         // Paste item - copy to clipboard, restore focus, then paste
@@ -348,13 +335,4 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_sort_by_created(settings.sort_by_created);
     app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
-}
-
-fn item_to_slint(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
-    ClipboardEntry {
-        id: item.id as i32,
-        preview: SharedString::from(item.text_preview.clone()),
-        content_type: SharedString::from(item.content_type.as_str()),
-        time_label: SharedString::from(format_relative_time(&item.updated_at)),
-    }
 }

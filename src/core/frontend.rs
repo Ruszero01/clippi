@@ -23,6 +23,7 @@ impl Frontend {
         use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
 
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+        self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.window().show().ok();
         }
@@ -54,10 +55,6 @@ impl Frontend {
             app.window().show().ok();
             self.visible = true;
         }
-    }
-
-    pub fn is_visible(&self) -> bool {
-        self.visible
     }
 
     pub fn is_suppressed(&self) -> bool {

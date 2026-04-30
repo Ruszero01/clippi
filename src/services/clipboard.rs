@@ -1,21 +1,21 @@
 //! Clipboard service - handles clipboard business logic
 
 use crate::core::db::Database;
-use crate::core::frontend::Frontend;
 use crate::core::types::format_relative_time;
 use crate::looper::Pollable;
 use crate::platform::clipboard::ClipboardShared;
 use crate::App;
 use crate::ClipboardEntry;
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct ClipboardService {
     shared: ClipboardShared,
     db: Arc<Mutex<Database>>,
-    frontend: Arc<Mutex<Frontend>>,
     app: slint::Weak<App>,
+    model: Rc<VecModel<ClipboardEntry>>,
     sort_by_created: bool,
 }
 
@@ -23,44 +23,69 @@ impl ClipboardService {
     pub fn new(
         shared: ClipboardShared,
         db: Arc<Mutex<Database>>,
-        frontend: Arc<Mutex<Frontend>>,
         app: slint::Weak<App>,
     ) -> Self {
-        Self {
+        let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
+        let service = Self {
             shared,
             db,
-            frontend,
             app,
+            model: model.clone(),
             sort_by_created: false,
+        };
+        // Set model to Slint (only once)
+        if let Some(app) = service.app.upgrade() {
+            app.set_clipboard_items(ModelRc::from(model));
+            app.set_item_count(0);
+        }
+        service
+    }
+
+    /// Set sort mode and refresh (full reload)
+    pub fn set_sort_and_refresh(&mut self, sort_by_created: bool) {
+        self.sort_by_created = sort_by_created;
+        self.model.clear();
+        let items = if sort_by_created {
+            self.db.lock().unwrap().load_by_created(100).unwrap_or_default()
+        } else {
+            self.db.lock().unwrap().load_by_updated(100).unwrap_or_default()
+        };
+        for item in items {
+            self.model.push(item_to_entry(&item));
+        }
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
         }
     }
 
-    /// Set sort mode and refresh UI
-    pub fn set_sort_and_refresh(&mut self, sort_by_created: bool) {
-        self.sort_by_created = sort_by_created;
-        self.refresh_ui();
+    /// Load initial items from database
+    pub fn load_initial(&self) {
+        let items = if self.sort_by_created {
+            self.db.lock().unwrap().load_by_created(100).unwrap_or_default()
+        } else {
+            self.db.lock().unwrap().load_by_updated(100).unwrap_or_default()
+        };
+        for item in items {
+            self.model.push(item_to_entry(&item));
+        }
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
+        }
     }
 
-    fn refresh_ui(&self) {
-        let Some(app) = self.app.upgrade() else { return };
+    /// Refresh a single row by id (e.g., after copying to update timestamp)
+    pub fn refresh_row(&self, id: i32) {
         if let Ok(db) = self.db.lock() {
-            let items = if self.sort_by_created {
-                db.load_by_created(100).unwrap_or_default()
-            } else {
-                db.load_by_updated(100).unwrap_or_default()
-            };
-            let model: VecModel<ClipboardEntry> = VecModel::from(
-                items.iter()
-                    .map(|item| ClipboardEntry {
-                        id: item.id as i32,
-                        preview: SharedString::from(item.text_preview.clone()),
-                        content_type: SharedString::from(item.content_type.as_str()),
-                        time_label: SharedString::from(format_relative_time(&item.updated_at)),
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            app.set_clipboard_items(ModelRc::from(Rc::new(model)));
-            app.set_item_count(items.len() as i32);
+            if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                for i in 0..self.model.row_count() {
+                    if let Some(entry) = self.model.row_data(i) {
+                        if entry.id == id {
+                            self.model.set_row_data(i, item_to_entry(&item));
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -82,19 +107,34 @@ impl Pollable for ClipboardService {
             return;
         }
 
-        // Upsert to database
+        // Upsert to database and add to model
         if let Ok(db) = self.db.lock() {
             for item in &pending {
-                let _ = db.upsert(item);
+                if let Err(e) = db.upsert(item) {
+                    eprintln!("[ERROR] ClipboardService: upsert error: {:?}", e);
+                } else {
+                    // Insert at beginning (newest first)
+                    self.model.insert(0, item_to_entry(item));
+                }
             }
         }
 
-        // Refresh UI if visible
-        if let Ok(fe) = self.frontend.lock() {
-            if fe.is_visible() {
-                drop(fe);
-                self.refresh_ui();
-            }
+        // Trim to 100 items
+        while self.model.row_count() > 100 {
+            self.model.remove(self.model.row_count() - 1);
         }
+
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
+        }
+    }
+}
+
+fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
+    ClipboardEntry {
+        id: item.id as i32,
+        preview: SharedString::from(item.text_preview.clone()),
+        content_type: SharedString::from(item.content_type.as_str()),
+        time_label: SharedString::from(format_relative_time(&item.updated_at)),
     }
 }

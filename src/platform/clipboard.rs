@@ -2,11 +2,12 @@
 
 use crate::core::types::ClipboardItem;
 use std::error::Error;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// Shared clipboard buffer for passing data to services
+#[derive(Clone)]
 pub struct ClipboardShared {
     pub pending: Arc<Mutex<Vec<ClipboardItem>>>,
 }
@@ -35,6 +36,7 @@ pub trait ClipboardListener: Send {
 mod windows {
     use super::*;
     use clipboard_rs::{Clipboard, ClipboardContext};
+    use std::time::Instant;
 
     pub struct WindowsClipboardListener {
         running: Arc<Mutex<bool>>,
@@ -53,9 +55,25 @@ mod windows {
             *self.running.lock().unwrap() = true;
             let running = self.running.clone();
             let pending = shared.pending.clone();
-            let next_id = Arc::new(AtomicI64::new(1));
             let last_hash = Arc::new(AtomicU64::new(0));
+            let startup_end = Arc::new(Mutex::new(Option::<Instant>::None));
 
+            // Capture baseline hash of current clipboard at startup
+            if let Ok(ctx) = ClipboardContext::new() {
+                if let Ok(text) = ctx.get_text() {
+                    if !text.is_empty() {
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        text.hash(&mut hasher);
+                        let baseline = hasher.finish();
+                        last_hash.store(baseline, Ordering::SeqCst);
+                        *startup_end.lock().unwrap() = Some(Instant::now());
+                    }
+                }
+            }
+
+            let startup_end_clone = startup_end.clone();
             thread::spawn(move || {
                 while *running.lock().unwrap() {
                     if let Ok(ctx) = ClipboardContext::new() {
@@ -67,11 +85,17 @@ mod windows {
                                 text.hash(&mut hasher);
                                 let hash = hasher.finish();
 
+                                // Only record if hash changed AND startup period is over
                                 if hash != last_hash.load(Ordering::SeqCst) {
-                                    last_hash.store(hash, Ordering::SeqCst);
-                                    let id = next_id.fetch_add(1, Ordering::SeqCst);
-                                    let item = ClipboardItem::new_text(id, &text);
-                                    pending.lock().unwrap().push(item);
+                                    let startup = startup_end_clone.lock().unwrap();
+                                    if startup.map_or(false, |end| end.elapsed().as_millis() > 500) {
+                                        last_hash.store(hash, Ordering::SeqCst);
+                                        let item = ClipboardItem::new_text(0, &text);
+                                        pending.lock().unwrap().push(item);
+                                    } else {
+                                        // Within startup period, just update hash but don't record
+                                        last_hash.store(hash, Ordering::SeqCst);
+                                    }
                                 }
                             }
                         }

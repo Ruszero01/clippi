@@ -18,7 +18,7 @@ impl Database {
     fn init_schema(&self) -> SqlResult<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS clipboard_items (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content_type TEXT NOT NULL DEFAULT 'text',
                 text_preview TEXT NOT NULL,
                 full_text TEXT NOT NULL,
@@ -38,10 +38,9 @@ impl Database {
         )?;
         if changed == 0 {
             self.conn.execute(
-                "INSERT INTO clipboard_items (id, content_type, text_preview, full_text, content_hash, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO clipboard_items (content_type, text_preview, full_text, content_hash, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
-                    item.id,
                     item.content_type.as_str(),
                     item.text_preview,
                     item.full_text,
