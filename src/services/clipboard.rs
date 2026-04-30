@@ -10,6 +10,9 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+/// Maximum items to keep in memory
+const MAX_ITEMS: usize = 100;
+
 #[derive(Clone)]
 pub struct ClipboardService {
     shared: ClipboardShared,
@@ -33,7 +36,6 @@ impl ClipboardService {
             model: model.clone(),
             sort_by_created: false,
         };
-        // Set model to Slint (only once)
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
             app.set_item_count(0);
@@ -46,9 +48,9 @@ impl ClipboardService {
         self.sort_by_created = sort_by_created;
         self.model.clear();
         let items = if sort_by_created {
-            self.db.lock().unwrap().load_by_created(100).unwrap_or_default()
+            self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
         } else {
-            self.db.lock().unwrap().load_by_updated(100).unwrap_or_default()
+            self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
         };
         for item in items {
             self.model.push(item_to_entry(&item));
@@ -61,9 +63,9 @@ impl ClipboardService {
     /// Load initial items from database
     pub fn load_initial(&self) {
         let items = if self.sort_by_created {
-            self.db.lock().unwrap().load_by_created(100).unwrap_or_default()
+            self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
         } else {
-            self.db.lock().unwrap().load_by_updated(100).unwrap_or_default()
+            self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
         };
         for item in items {
             self.model.push(item_to_entry(&item));
@@ -119,8 +121,8 @@ impl Pollable for ClipboardService {
             }
         }
 
-        // Trim to 100 items
-        while self.model.row_count() > 100 {
+        // Trim to MAX_ITEMS items
+        while self.model.row_count() > MAX_ITEMS {
             self.model.remove(self.model.row_count() - 1);
         }
 
