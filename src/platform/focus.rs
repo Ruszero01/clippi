@@ -145,6 +145,12 @@ pub fn get_last_non_clippi_window() -> Option<HWND> {
     }
 }
 
+/// Record a window as the paste target (called when showing Clippi)
+#[cfg(target_os = "windows")]
+pub fn record_paste_target_window(hwnd: HWND) {
+    LAST_NON_CLIPPI_WINDOW.store(hwnd as usize, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[cfg(target_os = "windows")]
 fn get_foreground_process_name() -> Option<String> {
     let hwnd = unsafe { GetForegroundWindow() };

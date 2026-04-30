@@ -28,7 +28,10 @@ impl Frontend {
     /// Show window with 200ms suppress period (to prevent immediate auto-hide)
     #[cfg(target_os = "windows")]
     pub fn show_and_focus(&mut self) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, SetForegroundWindow};
+
+        // Record current foreground window before bringing Clippi to front
+        let prev_hwnd = unsafe { GetForegroundWindow() };
 
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         if let Some(app) = self.app.upgrade() {
@@ -40,6 +43,11 @@ impl Frontend {
         let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
         if !hwnd.is_null() {
             unsafe { SetForegroundWindow(hwnd) };
+        }
+
+        // Record previous window as paste target (for quick paste)
+        if !prev_hwnd.is_null() {
+            crate::platform::focus::record_paste_target_window(prev_hwnd);
         }
     }
 
