@@ -18,7 +18,7 @@ pub struct FocusService {
 
 impl FocusService {
     pub fn new(frontend: Arc<Mutex<Frontend>>, app: slint::Weak<App>) -> Result<Self, String> {
-        let (watcher, _rx) = start_focus_watcher()?;
+        let watcher = start_focus_watcher()?;
         Ok(Self {
             watcher: Some(watcher),
             frontend,

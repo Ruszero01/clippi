@@ -1,8 +1,6 @@
 //! Focus event listener module
 //! Uses Win32 SetWinEventHook for event-driven focus monitoring
 
-use std::sync::mpsc;
-
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
@@ -16,12 +14,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-/// Foreground window changed event
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FocusEvent {
-    ForegroundChanged(Option<String>),
-}
 
 /// Track the previous foreground window (before Clippi took focus)
 #[cfg(target_os = "windows")]
@@ -59,52 +51,47 @@ impl FocusWatcher {
     pub fn stop(&mut self) {}
 }
 
-pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let (_tx, rx) = mpsc::channel();
+#[cfg(target_os = "windows")]
+pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
+    let hook = unsafe {
+        let proc: WINEVENTPROC = Some(std::mem::transmute(win_event_proc as *const ()));
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            0 as *mut std::ffi::c_void,
+            proc,
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
 
-        let hook = unsafe {
-            let proc: WINEVENTPROC = Some(std::mem::transmute(win_event_proc as *const ()));
-            SetWinEventHook(
-                EVENT_SYSTEM_FOREGROUND,
-                EVENT_SYSTEM_FOREGROUND,
-                0 as *mut std::ffi::c_void,
-                proc,
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT,
-            )
-        };
+    if hook.is_null() {
+        return Err("SetWinEventHook failed".to_string());
+    }
 
-        if hook.is_null() {
-            return Err("SetWinEventHook failed".to_string());
-        }
-
-        let thread = std::thread::spawn(move || {
-            let mut msg: MSG = unsafe { std::mem::zeroed() };
-            loop {
-                let ret = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
-                if ret == 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    continue;
-                }
-                if msg.message == WM_QUIT {
-                    break;
-                }
-                unsafe { TranslateMessage(&msg) };
-                unsafe { DispatchMessageW(&msg) };
+    let thread = std::thread::spawn(move || {
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
+        loop {
+            let ret = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
+            if ret == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
             }
-        });
+            if msg.message == WM_QUIT {
+                break;
+            }
+            unsafe { TranslateMessage(&msg) };
+            unsafe { DispatchMessageW(&msg) };
+        }
+    });
 
-        Ok((FocusWatcher { hook, thread: Some(thread), thread_id: 0 }, rx))
-    }
+    Ok(FocusWatcher { hook, thread: Some(thread), thread_id: 0 })
+}
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let (tx, rx) = mpsc::channel();
-        Ok((FocusWatcher {}, rx))
-    }
+#[cfg(not(target_os = "windows"))]
+pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
+    Ok(FocusWatcher {})
 }
 
 /// Get the paste target window handle

@@ -78,13 +78,6 @@ mod windows {
             }
             hash
         }
-
-        fn is_startup_done(&self) -> bool {
-            self.startup_end
-                .lock()
-                .unwrap()
-                .map_or(false, |end| end.elapsed().as_millis() > 500)
-        }
     }
 
     impl ClipboardListener for WindowsClipboardListener {
