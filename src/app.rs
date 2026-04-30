@@ -17,7 +17,6 @@ use crate::services::tray::TrayService;
 use crate::{App, ClipboardEntry};
 use clipboard_rs::{Clipboard, ClipboardContext};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -252,11 +251,11 @@ impl AppController {
         let app_for_reset_db = app.clone();
         slint_app.on_reset_db_path(move || {
             let old_path = settings_for_callbacks.resolve_db_path();
-            let default_path = PathBuf::from("clippi.db");
-            if old_path == default_path {
+            let default_db_path = AppSettings::default().resolve_db_path();
+            if old_path == default_db_path {
                 return;
             }
-            match migrate_database(&old_path, &default_path) {
+            match migrate_database(&old_path, &default_db_path) {
                 Ok(()) => {
                     let mut s = settings_for_callbacks.clone();
                     s.db_path = String::new();
