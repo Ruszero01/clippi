@@ -11,6 +11,7 @@ use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
+use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::tray::TrayService;
 use crate::{App, ClipboardEntry};
@@ -74,14 +75,26 @@ impl AppController {
             hotkey_service.set_hotkey(h);
         }
 
-        // Create tray service
-        let tray_service = TrayService::new(Frontend::new(slint_app));
+        // Create tray service (use shared frontend)
+        let tray_service = TrayService::new(frontend.clone());
+
+        // Create focus service
+        let mut focus_service = match FocusService::new(frontend.clone(), app.clone()) {
+            Ok(fs) => fs,
+            Err(e) => {
+                return Err(e.into());
+            }
+        };
+        // Apply initial focus settings
+        focus_service.set_auto_hide(settings.auto_hide);
+        focus_service.set_pinned(settings.pinned);
 
         // Create and start looper
         let mut looper = Looper::new();
         looper.add_service(Box::new(tray_service));
         looper.set_clipboard_service(clipboard_service);
         looper.set_hotkey_service(hotkey_service);
+        looper.set_focus_service(focus_service);
         looper.start();
 
         // ========== Bind Slint callbacks ==========
@@ -162,6 +175,7 @@ impl AppController {
 
         let settings_for_callbacks = settings.clone();
         let app_for_auto_hide = app.clone();
+        let looper_for_auto_hide = Arc::clone(&looper);
         slint_app.on_toggle_auto_hide(move || {
             if let Some(app) = app_for_auto_hide.upgrade() {
                 let new_val = !app.get_auto_hide();
@@ -169,11 +183,15 @@ impl AppController {
                 let mut s = settings_for_callbacks.clone();
                 s.auto_hide = new_val;
                 s.save();
+                let _ = looper_for_auto_hide.try_with_focus_service(|fs| {
+                    fs.set_auto_hide(new_val);
+                });
             }
         });
 
         let settings_for_callbacks = settings.clone();
         let app_for_pinned = app.clone();
+        let looper_for_pinned = Arc::clone(&looper);
         slint_app.on_toggle_pinned(move || {
             if let Some(app) = app_for_pinned.upgrade() {
                 let new_val = !app.get_pinned();
@@ -181,6 +199,9 @@ impl AppController {
                 let mut s = settings_for_callbacks.clone();
                 s.pinned = new_val;
                 s.save();
+                let _ = looper_for_pinned.try_with_focus_service(|fs| {
+                    fs.set_pinned(new_val);
+                });
             }
         });
 

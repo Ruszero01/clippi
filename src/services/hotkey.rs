@@ -52,7 +52,7 @@ impl Pollable for HotkeyService {
         if let Some(ref h) = self.hotkey {
             if h.poll_pressed() {
                 if let Ok(mut fe) = self.frontend.lock() {
-                    fe.show();
+                    fe.show_and_focus();
                 }
                 if let Ok(db) = crate::core::db::Database::open("clippi.db") {
                     let items = db.load_by_updated(100).unwrap_or_default();

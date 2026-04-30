@@ -1,6 +1,7 @@
 //! Looper - unified polling center using a single timer
 
 use crate::services::clipboard::ClipboardService;
+use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use slint::{Timer, TimerMode};
 use std::sync::{Arc, Mutex};
@@ -17,6 +18,7 @@ pub struct Looper {
     services: Vec<Box<dyn Pollable>>,
     clipboard_service: Arc<Mutex<Option<ClipboardService>>>,
     hotkey_service: Arc<Mutex<Option<HotkeyService>>>,
+    focus_service: Arc<Mutex<Option<FocusService>>>,
 }
 
 impl Looper {
@@ -26,6 +28,7 @@ impl Looper {
             services: Vec::new(),
             clipboard_service: Arc::new(Mutex::new(None)),
             hotkey_service: Arc::new(Mutex::new(None)),
+            focus_service: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -44,6 +47,11 @@ impl Looper {
         *self.hotkey_service.lock().unwrap() = Some(service);
     }
 
+    /// Register focus service (keeps concrete type for special methods)
+    pub fn set_focus_service(&mut self, service: FocusService) {
+        *self.focus_service.lock().unwrap() = Some(service);
+    }
+
     /// Try to access clipboard service
     pub fn try_with_clipboard_service<F, R>(&self, f: F) -> Result<R, ()>
     where
@@ -55,6 +63,22 @@ impl Looper {
         };
         if let Some(ref mut cs) = *cs {
             Ok(f(cs))
+        } else {
+            Err(())
+        }
+    }
+
+    /// Try to access focus service
+    pub fn try_with_focus_service<F, R>(&self, f: F) -> Result<R, ()>
+    where
+        F: FnOnce(&mut FocusService) -> R,
+    {
+        let mut fs = match self.focus_service.lock() {
+            Ok(fs) => fs,
+            Err(_) => return Err(()),
+        };
+        if let Some(ref mut fs) = *fs {
+            Ok(f(fs))
         } else {
             Err(())
         }
@@ -82,6 +106,7 @@ impl Looper {
 
         let cs = Arc::clone(&self.clipboard_service);
         let hk = Arc::clone(&self.hotkey_service);
+        let fs = Arc::clone(&self.focus_service);
 
         self.timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
             for svc in &mut services {
@@ -93,6 +118,9 @@ impl Looper {
             if let Some(ref mut hk) = *hk.lock().unwrap() {
                 hk.poll();
             }
+            if let Some(ref mut fs) = *fs.lock().unwrap() {
+                fs.poll();
+            }
         });
     }
 
@@ -103,6 +131,9 @@ impl Looper {
         }
         if let Some(ref mut hk) = *self.hotkey_service.lock().unwrap() {
             hk.stop();
+        }
+        if let Some(ref mut fs) = *self.focus_service.lock().unwrap() {
+            fs.stop();
         }
     }
 }
