@@ -16,6 +16,7 @@ pub struct ClipboardService {
     db: Arc<Mutex<Database>>,
     frontend: Arc<Mutex<Frontend>>,
     app: slint::Weak<App>,
+    sort_by_created: bool,
 }
 
 impl ClipboardService {
@@ -30,13 +31,24 @@ impl ClipboardService {
             db,
             frontend,
             app,
+            sort_by_created: false,
         }
+    }
+
+    /// Set sort mode and refresh UI
+    pub fn set_sort_and_refresh(&mut self, sort_by_created: bool) {
+        self.sort_by_created = sort_by_created;
+        self.refresh_ui();
     }
 
     fn refresh_ui(&self) {
         let Some(app) = self.app.upgrade() else { return };
         if let Ok(db) = self.db.lock() {
-            let items = db.load_by_updated(100).unwrap_or_default();
+            let items = if self.sort_by_created {
+                db.load_by_created(100).unwrap_or_default()
+            } else {
+                db.load_by_updated(100).unwrap_or_default()
+            };
             let model: VecModel<ClipboardEntry> = VecModel::from(
                 items.iter()
                     .map(|item| ClipboardEntry {

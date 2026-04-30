@@ -18,6 +18,7 @@ pub struct AppSettings {
     pub auto_hide: bool,
     pub pinned: bool,
     pub db_path: String,
+    pub sort_by_created: bool,  // true=按创建时间排序, false=按更新时间排序
 }
 
 impl Default for AppSettings {
@@ -29,6 +30,7 @@ impl Default for AppSettings {
             auto_hide: true,
             pinned: false,
             db_path: String::new(),
+            sort_by_created: false,
         }
     }
 }

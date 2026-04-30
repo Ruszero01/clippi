@@ -14,6 +14,7 @@ use crate::services::clipboard::ClipboardService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::tray::TrayService;
 use crate::{App, ClipboardEntry};
+use clipboard_rs::{Clipboard, ClipboardContext};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -55,12 +56,14 @@ impl AppController {
 
         // Create clipboard service and platform listener
         let clipboard_shared = ClipboardShared::new();
-        let clipboard_service = ClipboardService::new(
+        let mut clipboard_service = ClipboardService::new(
             clipboard_shared,
             db.clone(),
             frontend.clone(),
             app.clone(),
         );
+        // Apply initial sort setting
+        clipboard_service.set_sort_and_refresh(settings.sort_by_created);
 
         let mut listener = create_listener();
         listener.start(clipboard_service.shared())?;
@@ -76,8 +79,8 @@ impl AppController {
 
         // Create and start looper
         let mut looper = Looper::new();
-        looper.add_service(Box::new(clipboard_service));
         looper.add_service(Box::new(tray_service));
+        looper.set_clipboard_service(clipboard_service);
         looper.set_hotkey_service(hotkey_service);
         looper.start();
 
@@ -87,6 +90,18 @@ impl AppController {
         slint_app.on_move_window(move |dx, dy| {
             if let Ok(fe) = frontend_clone.lock() {
                 fe.move_window(dx, dy);
+            }
+        });
+
+        // Copy item to clipboard
+        let db_for_copy = db.clone();
+        slint_app.on_copy_item(move |id| {
+            if let Ok(db) = db_for_copy.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    if let Ok(ctx) = ClipboardContext::new() {
+                        let _ = Clipboard::set_text(&ctx, item.full_text.clone());
+                    }
+                }
             }
         });
 
@@ -166,6 +181,22 @@ impl AppController {
                 let mut s = settings_for_callbacks.clone();
                 s.pinned = new_val;
                 s.save();
+            }
+        });
+
+        let settings_for_callbacks = settings.clone();
+        let app_for_sort = app.clone();
+        let looper_for_sort = Arc::clone(&looper);
+        slint_app.on_toggle_sort_by_created(move || {
+            if let Some(app) = app_for_sort.upgrade() {
+                let new_val = !app.get_sort_by_created();
+                app.set_sort_by_created(new_val);
+                let mut s = settings_for_callbacks.clone();
+                s.sort_by_created = new_val;
+                s.save();
+                let _ = looper_for_sort.try_with_clipboard_service(|cs| {
+                    cs.set_sort_and_refresh(new_val);
+                });
             }
         });
 
@@ -275,6 +306,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_auto_start(settings.auto_start);
     app.set_auto_hide(settings.auto_hide);
     app.set_pinned(settings.pinned);
+    app.set_sort_by_created(settings.sort_by_created);
     app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
 }
