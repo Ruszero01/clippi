@@ -9,7 +9,7 @@ use crate::core::settings::{
 use crate::core::types::format_relative_time;
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
-use crate::platform::paste::{paste_after_delay, restore_previous_focus};
+use crate::platform::paste::{paste_after_delay, restore_paste_target};
 use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
@@ -131,7 +131,7 @@ impl AppController {
                 }
             }
             // Restore focus to previous window (FocusService handles auto-hide)
-            restore_previous_focus();
+            restore_paste_target();
             // Simulate Ctrl+V after delay (to paste to previously focused app)
             paste_after_delay();
         });

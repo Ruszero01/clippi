@@ -130,6 +130,21 @@ pub fn poll_focus_events(rx: &mpsc::Receiver<FocusEvent>) -> Option<FocusEvent> 
 #[cfg(target_os = "windows")]
 static mut FOCUS_EVENT_TX: Option<mpsc::Sender<FocusEvent>> = None;
 
+/// Track the last non-Clippi foreground window (for paste target)
+#[cfg(target_os = "windows")]
+static LAST_NON_CLIPPI_WINDOW: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Get the last non-Clippi foreground window handle
+#[cfg(target_os = "windows")]
+pub fn get_last_non_clippi_window() -> Option<HWND> {
+    let ptr = LAST_NON_CLIPPI_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr == 0 {
+        None
+    } else {
+        Some(ptr as HWND)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn get_foreground_process_name() -> Option<String> {
     let hwnd = unsafe { GetForegroundWindow() };
@@ -160,6 +175,18 @@ fn get_foreground_process_name() -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
+fn is_clippi_window(hwnd: HWND) -> bool {
+    let mut buffer: [u16; 256] = [0; 256];
+    let len = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, buffer.as_mut_ptr(), 256) };
+    if len > 0 {
+        let title = String::from_utf16_lossy(&buffer[..len as usize]);
+        title == "Clippi"
+    } else {
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn win_event_proc(
     _event: u32,
     hwnd: HWND,
@@ -172,10 +199,22 @@ unsafe extern "system" fn win_event_proc(
         return;
     }
 
+    // Check if the NEW foreground window is Clippi
+    let fg_window = GetForegroundWindow();
+    if !fg_window.is_null() && is_clippi_window(fg_window) {
+        // Clippi just became foreground, don't send event but it already happened
+        return;
+    }
+
     if let Some(name) = get_foreground_process_name() {
         // Filter out Clippi's own window focus events
         if name.contains("clippi") {
             return;
+        }
+
+        // Record this as the last non-Clippi foreground window (potential paste target)
+        if !hwnd.is_null() {
+            LAST_NON_CLIPPI_WINDOW.store(hwnd as usize, std::sync::atomic::Ordering::SeqCst);
         }
 
         if let Some(ref tx) = FOCUS_EVENT_TX {

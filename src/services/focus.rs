@@ -14,6 +14,7 @@ pub struct FocusService {
     app: slint::Weak<App>,
     auto_hide: bool,
     pinned: bool,
+    was_clippi_foreground: bool,
 }
 
 impl FocusService {
@@ -25,6 +26,7 @@ impl FocusService {
             app,
             auto_hide: true,
             pinned: false,
+            was_clippi_foreground: false,
         })
     }
 
@@ -43,6 +45,17 @@ impl Pollable for FocusService {
             Some(app) => app,
             None => return,
         };
+
+        let is_clippi = is_clippi_foreground();
+
+        // Detect when Clippi gains focus - record the previous window as paste target
+        if is_clippi && !self.was_clippi_foreground {
+            // Clippi just gained focus, record current foreground (which will be Clippi)
+            // but we need the previous one... actually GetForegroundWindow already returns Clippi
+            // So we need a different approach - record when we're about to lose focus
+            // But that requires knowing the future...
+        }
+        self.was_clippi_foreground = is_clippi;
 
         // Check if we should auto-hide
         if !self.auto_hide || self.pinned {
@@ -72,7 +85,7 @@ impl Pollable for FocusService {
         }
 
         // Check if Clippi is in foreground
-        if is_clippi_foreground() {
+        if is_clippi {
             return;
         }
 
