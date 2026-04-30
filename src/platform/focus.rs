@@ -23,6 +23,18 @@ pub enum FocusEvent {
     ForegroundChanged(Option<String>),
 }
 
+/// Track the previous foreground window (before Clippi took focus)
+#[cfg(target_os = "windows")]
+static PREVIOUS_FOREGROUND_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Last non-Clippi foreground window (paste target)
+#[cfg(target_os = "windows")]
+static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Temporary storage for window swapping
+#[cfg(target_os = "windows")]
+static TEMP_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
 /// FocusWatcher handle
 pub struct FocusWatcher {
     #[cfg(target_os = "windows")]
@@ -50,8 +62,7 @@ impl FocusWatcher {
 pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>), String> {
     #[cfg(target_os = "windows")]
     {
-        let (tx, rx) = mpsc::channel();
-        unsafe { FOCUS_EVENT_TX = Some(tx) };
+        let (_tx, rx) = mpsc::channel();
 
         let hook = unsafe {
             let proc: WINEVENTPROC = Some(std::mem::transmute(win_event_proc as *const ()));
@@ -62,7 +73,7 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
                 proc,
                 0,
                 0,
-                WINEVENT_OUTOFCONTEXT,  // 移除 SKIPOWNPROCESS 以接收所有事件
+                WINEVENT_OUTOFCONTEXT,
             )
         };
 
@@ -70,8 +81,7 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
             return Err("SetWinEventHook failed".to_string());
         }
 
-        let thread_id = std::thread::spawn(move || {
-            let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        let thread = std::thread::spawn(move || {
             let mut msg: MSG = unsafe { std::mem::zeroed() };
             loop {
                 let ret = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
@@ -87,7 +97,7 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
             }
         });
 
-        Ok((FocusWatcher { hook, thread: Some(thread_id), thread_id: 0 }, rx))
+        Ok((FocusWatcher { hook, thread: Some(thread), thread_id: 0 }, rx))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -96,25 +106,6 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
         Ok((FocusWatcher {}, rx))
     }
 }
-
-// ============================================================================
-// Windows implementation
-// ============================================================================
-
-#[cfg(target_os = "windows")]
-static mut FOCUS_EVENT_TX: Option<mpsc::Sender<FocusEvent>> = None;
-
-/// Track the previous foreground window (before Clippi took focus)
-#[cfg(target_os = "windows")]
-static PREVIOUS_FOREGROUND_WINDOW: AtomicUsize = AtomicUsize::new(0);
-
-/// Track the last non-Clippi foreground window (paste target)
-#[cfg(target_os = "windows")]
-static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
-
-/// Temporary storage for swapping
-#[cfg(target_os = "windows")]
-static TEMP_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
 /// Get the paste target window handle
 #[cfg(target_os = "windows")]
@@ -126,7 +117,6 @@ pub fn get_last_non_clippi_window() -> Option<HWND> {
         Some(ptr as HWND)
     }
 }
-
 
 #[cfg(target_os = "windows")]
 fn is_clippi_window(hwnd: HWND) -> bool {
@@ -157,7 +147,6 @@ unsafe extern "system" fn win_event_proc(
     let is_clippi_now = is_clippi_window(current_fg);
 
     if is_clippi_now {
-        // Clippi gained focus - use TEMP which was set to PREV before this event
         let prev = TEMP_WINDOW.load(Ordering::SeqCst);
         LAST_NON_CLIPPI_WINDOW.store(prev, Ordering::SeqCst);
         return;
