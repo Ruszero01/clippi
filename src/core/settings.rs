@@ -16,7 +16,6 @@ pub struct AppSettings {
     pub hotkey: String,
     pub auto_start: bool,
     pub auto_hide: bool,
-    pub pinned: bool,
     pub db_path: String,
     pub sort_by_created: bool,  // true=按创建时间排序, false=按更新时间排序
 }
@@ -28,7 +27,6 @@ impl Default for AppSettings {
             hotkey: "Alt+V".to_string(),
             auto_start: false,
             auto_hide: true,
-            pinned: false,
             db_path: String::new(),
             sort_by_created: false,
         }

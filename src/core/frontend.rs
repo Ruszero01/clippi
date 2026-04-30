@@ -25,6 +25,7 @@ impl Frontend {
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
+            app.set_pinned(false);
             app.window().show().ok();
         }
 
@@ -39,6 +40,9 @@ impl Frontend {
     pub fn show_and_focus(&mut self) {
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
+        if let Some(app) = self.app.upgrade() {
+            app.set_pinned(false);
+        }
     }
 
     pub fn hide(&mut self) {

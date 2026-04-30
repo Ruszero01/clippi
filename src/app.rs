@@ -72,7 +72,6 @@ impl AppController {
         };
         // Apply initial focus settings
         focus_service.set_auto_hide(settings.auto_hide);
-        focus_service.set_pinned(settings.pinned);
 
         // Create and start looper
         let mut looper = Looper::new();
@@ -123,8 +122,12 @@ impl AppController {
             paste_after_delay();
         });
 
+        let app_for_close = app.clone();
         let frontend_close = frontend.clone();
         slint_app.on_close_window(move || {
+            if let Some(app) = app_for_close.upgrade() {
+                app.set_pinned(false);
+            }
             if let Ok(mut fe) = frontend_close.lock() {
                 fe.hide();
             }
@@ -194,16 +197,12 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
         let app_for_pinned = app.clone();
         let looper_for_pinned = Arc::clone(&looper);
         slint_app.on_toggle_pinned(move || {
             if let Some(app) = app_for_pinned.upgrade() {
                 let new_val = !app.get_pinned();
                 app.set_pinned(new_val);
-                let mut s = settings_for_callbacks.clone();
-                s.pinned = new_val;
-                s.save();
                 let _ = looper_for_pinned.try_with_focus_service(|fs| {
                     fs.set_pinned(new_val);
                 });
@@ -331,7 +330,6 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_theme_mode(theme_mode);
     app.set_auto_start(settings.auto_start);
     app.set_auto_hide(settings.auto_hide);
-    app.set_pinned(settings.pinned);
     app.set_sort_by_created(settings.sort_by_created);
     app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
