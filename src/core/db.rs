@@ -75,9 +75,4 @@ impl Database {
         })?;
         items.collect()
     }
-
-    pub fn clear(&self) -> SqlResult<()> {
-        self.conn.execute("DELETE FROM clipboard_items", [])?;
-        Ok(())
-    }
 }

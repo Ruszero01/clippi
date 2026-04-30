@@ -62,3 +62,16 @@ impl ClipboardItem {
 
 unsafe impl Send for ClipboardItem {}
 unsafe impl Sync for ClipboardItem {}
+
+/// Format elapsed time as human-readable string
+pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
+    let elapsed = Utc::now().signed_duration_since(*captured_at);
+    let secs = elapsed.num_seconds();
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else {
+        format!("{}h ago", secs / 3600)
+    }
+}

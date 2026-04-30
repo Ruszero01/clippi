@@ -1,31 +1,47 @@
-//! AppController - ties together all components
+//! AppController - assembles all services and sets up the application
 
 use crate::core::db::Database;
 use crate::core::frontend::Frontend;
-use crate::core::types::ClipboardItem;
-use crate::platform::clipboard::create_listener;
+use crate::core::settings::{
+    is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
+    AppSettings,
+};
+use crate::core::types::format_relative_time;
+use crate::looper::Looper;
+use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::hotkey::create_hotkey_listener;
+use crate::services::clipboard::ClipboardService;
+use crate::services::hotkey::HotkeyService;
+use crate::services::tray::TrayService;
 use crate::{App, ClipboardEntry};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub struct AppController {
-    db: Arc<Mutex<Database>>,
-    frontend: Arc<Mutex<Frontend>>,
-    app: slint::Weak<App>,
+    looper: Arc<Looper>,
     listener: Option<Box<dyn crate::platform::clipboard::ClipboardListener>>,
-    hotkey: Arc<Mutex<Option<Box<dyn crate::platform::hotkey::HotkeyListener>>>>,
+    _settings: AppSettings,
 }
 
 impl AppController {
     pub fn new(slint_app: &App) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
-        slint_app.set_clipboard_items(ModelRc::from(model.clone()));
+        // Load settings
+        let settings = AppSettings::load();
+
+        // Initialize shared state
+        let db_path = settings.resolve_db_path();
+        let db = Arc::new(Mutex::new(Database::open(db_path.to_str().unwrap())?));
+        let frontend = Arc::new(Mutex::new(Frontend::new(slint_app)));
         let app = slint_app.as_weak();
 
-        let db = Arc::new(Mutex::new(Database::open("clippi.db")?));
-        let frontend = Arc::new(Mutex::new(Frontend::new(slint_app)));
+        // Initialize UI with settings
+        init_ui_from_settings(slint_app, &settings);
+
+        // Set up initial UI model
+        let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
+        slint_app.set_clipboard_items(ModelRc::from(model.clone()));
 
         // Load existing items from DB
         {
@@ -37,191 +53,237 @@ impl AppController {
             slint_app.set_item_count(model.row_count() as i32);
         }
 
+        // Create clipboard service and platform listener
+        let clipboard_shared = ClipboardShared::new();
+        let clipboard_service = ClipboardService::new(
+            clipboard_shared,
+            db.clone(),
+            frontend.clone(),
+            app.clone(),
+        );
+
         let mut listener = create_listener();
-        let db_clone = db.clone();
+        listener.start(clipboard_service.shared())?;
+
+        // Create hotkey service
+        let mut hotkey_service = HotkeyService::new(frontend.clone(), app.clone());
+        if let Ok(h) = create_hotkey_listener(&settings.hotkey) {
+            hotkey_service.set_hotkey(h);
+        }
+
+        // Create tray service
+        let tray_service = TrayService::new(Frontend::new(slint_app));
+
+        // Create and start looper
+        let mut looper = Looper::new();
+        looper.add_service(Box::new(clipboard_service));
+        looper.add_service(Box::new(tray_service));
+        looper.set_hotkey_service(hotkey_service);
+        looper.start();
+
+        // ========== Bind Slint callbacks ==========
+
         let frontend_clone = frontend.clone();
-        let app_clone = app.clone();
-
-        listener.start(Box::new(move |item: ClipboardItem| {
-            if let Ok(db) = db_clone.lock() {
-                let _ = db.upsert(&item);
-            }
-
-            if let Ok(fe) = frontend_clone.lock() {
-                if fe.is_visible() {
-                    let db_for_ui = db_clone.clone();
-                    let app_for_ui = app_clone.clone();
-                    slint::invoke_from_event_loop(move || {
-                        if let Some(app) = app_for_ui.upgrade() {
-                            if let Ok(db) = db_for_ui.lock() {
-                                refresh_ui(&app, &db);
-                            }
-                        }
-                    }).ok();
-                }
-            }
-        }))?;
-
-        // Bind Slint callbacks
-        let fe_move = frontend.clone();
         slint_app.on_move_window(move |dx, dy| {
-            if let Ok(fe) = fe_move.lock() {
+            if let Ok(fe) = frontend_clone.lock() {
                 fe.move_window(dx, dy);
             }
         });
 
-        let fe_close = frontend.clone();
+        let frontend_close = frontend.clone();
         slint_app.on_close_window(move || {
-            if let Ok(mut fe) = fe_close.lock() {
+            if let Ok(mut fe) = frontend_close.lock() {
                 fe.hide();
             }
         });
 
-        // Hotkey pressed callback
-        let fe_for_hk = frontend.clone();
-        let app_for_hk = app.clone();
-        let db_for_hk = db.clone();
-        let on_pressed = Arc::new(Mutex::new(Box::new(move || {
-            let fe = fe_for_hk.clone();
-            let app = app_for_hk.clone();
-            let db = db_for_hk.clone();
-            slint::invoke_from_event_loop(move || {
-                if let Ok(mut fe) = fe.lock() {
-                    fe.show();
-                }
-                if let Some(app) = app.upgrade() {
-                    if let Ok(db) = db.lock() {
-                        refresh_ui(&app, &db);
+        // Hotkey callbacks
+        let looper = Arc::new(looper);
+        let looper_for_set = Arc::clone(&looper);
+        let looper_for_recording = Arc::clone(&looper);
+        let app_for_set_hotkey = app.clone();
+        let app_for_recording = app.clone();
+
+        slint_app.on_set_hotkey(move |s: SharedString| {
+            let looper = Arc::clone(&looper_for_set);
+            let _ = looper.try_with_hotkey_service(|hk| {
+                if let Err(e) = hk.update_hotkey(&s) {
+                    if let Some(app) = app_for_set_hotkey.upgrade() {
+                        app.set_settings_error(SharedString::from(e));
                     }
                 }
-            }).ok();
-        }) as Box<dyn Fn() + Send>));
+            });
+        });
 
-        // Create hotkey Arc early so recording callback can capture it
-        let hotkey: Arc<Mutex<Option<Box<dyn crate::platform::hotkey::HotkeyListener>>>> =
-            Arc::new(Mutex::new(None));
+        slint_app.on_start_recording_hotkey(move || {
+            let looper = Arc::clone(&looper_for_recording);
+            let _ = looper.try_with_hotkey_service(|hk| {
+                hk.start_recording();
+                if let Some(app) = app_for_recording.upgrade() {
+                    app.set_recording_hotkey(true);
+                }
+            });
+        });
 
-        // Recording callback - invoked from hotkey thread when a key is detected
-        let app_for_recording = app.clone();
-        let hotkey_for_apply = hotkey.clone();
-        let on_recording = Arc::new(Mutex::new(Box::new(move |result: Option<String>| {
-            let app = app_for_recording.clone();
-            let hotkey = hotkey_for_apply.clone();
-            slint::invoke_from_event_loop(move || {
-                if let Some(app) = app.upgrade() {
-                    app.set_recording_hotkey(false);
-                    if let Some(new_hotkey) = result {
-                        app.set_hotkey_display(slint::SharedString::from(&new_hotkey));
-                        // Apply the new hotkey
-                        if let Ok(mut hk) = hotkey.lock() {
-                            if let Some(ref mut h) = *hk {
-                                h.finish_recording();
-                                if let Err(e) = h.update_hotkey(&new_hotkey) {
-                                    app.set_settings_error(slint::SharedString::from(e));
-                                }
-                            }
+        // Settings callbacks
+        let settings_for_callbacks = settings.clone();
+        let app_for_auto_start = app.clone();
+        slint_app.on_toggle_auto_start(move || {
+            if let Some(app) = app_for_auto_start.upgrade() {
+                let new_val = !app.get_auto_start();
+                match set_auto_start(new_val) {
+                    Ok(()) => {
+                        app.set_auto_start(new_val);
+                        let mut s = settings_for_callbacks.clone();
+                        s.auto_start = new_val;
+                        s.save();
+                    }
+                    Err(e) => {
+                        app.set_settings_error(SharedString::from(e));
+                    }
+                }
+            }
+        });
+
+        let settings_for_callbacks = settings.clone();
+        let app_for_auto_hide = app.clone();
+        slint_app.on_toggle_auto_hide(move || {
+            if let Some(app) = app_for_auto_hide.upgrade() {
+                let new_val = !app.get_auto_hide();
+                app.set_auto_hide(new_val);
+                let mut s = settings_for_callbacks.clone();
+                s.auto_hide = new_val;
+                s.save();
+            }
+        });
+
+        let settings_for_callbacks = settings.clone();
+        let app_for_pinned = app.clone();
+        slint_app.on_toggle_pinned(move || {
+            if let Some(app) = app_for_pinned.upgrade() {
+                let new_val = !app.get_pinned();
+                app.set_pinned(new_val);
+                let mut s = settings_for_callbacks.clone();
+                s.pinned = new_val;
+                s.save();
+            }
+        });
+
+        let settings_for_callbacks = settings.clone();
+        let app_for_pick_db = app.clone();
+        slint_app.on_pick_db_path(move || {
+            let result = rfd::FileDialog::new()
+                .set_file_name("clippi.db")
+                .save_file();
+
+            if let Some(new_path) = result {
+                if let Some(app) = app_for_pick_db.upgrade() {
+                    let old_path = settings_for_callbacks.resolve_db_path();
+                    match migrate_database(&old_path, &new_path) {
+                        Ok(()) => {
+                            let path_str = new_path.to_string_lossy().to_string();
+                            let mut s = settings_for_callbacks.clone();
+                            s.db_path = path_str;
+                            s.save();
+                            spawn_new_process();
+                            slint::quit_event_loop().ok();
+                        }
+                        Err(e) => {
+                            app.set_settings_error(SharedString::from(e));
                         }
                     }
                 }
-            }).ok();
-        }) as Box<dyn Fn(Option<String>) + Send>));
-
-        // Create and store the actual hotkey listener
-        match create_hotkey_listener("Alt+V", on_pressed, Some(on_recording)) {
-            Ok(h) => *hotkey.lock().unwrap() = Some(h),
-            Err(e) => eprintln!("Failed to create hotkey listener: {}", e),
-        }
-
-        // Set initial hotkey display
-        slint_app.set_hotkey_display(slint::SharedString::from("Alt+V"));
-
-        // on_set_hotkey callback
-        let hotkey_for_callback = hotkey.clone();
-        let frontend_for_callback = frontend.clone();
-        let app_for_error = app.clone();
-        slint_app.on_set_hotkey(move |s: slint::SharedString| {
-            if let Ok(mut fe) = frontend_for_callback.lock() {
-                fe.show();
             }
-
-            let err_msg = if let Ok(mut hk) = hotkey_for_callback.lock() {
-                if let Some(ref mut h) = *hk {
-                    match h.update_hotkey(&s) {
-                        Ok(()) => None,
-                        Err(e) => Some(e),
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let app = app_for_error.clone();
-            slint::invoke_from_event_loop(move || {
-                if let Some(app) = app.upgrade() {
-                    app.set_settings_error(slint::SharedString::from(err_msg.unwrap_or_default()));
-                }
-            }).ok();
         });
 
-        // on_start_recording_hotkey callback
-        let hotkey_for_recording = hotkey.clone();
-        slint_app.on_start_recording_hotkey(move || {
-            if let Ok(mut hk) = hotkey_for_recording.lock() {
-                if let Some(ref mut h) = *hk {
-                    h.start_recording();
+        let settings_for_callbacks = settings.clone();
+        let app_for_reset_db = app.clone();
+        slint_app.on_reset_db_path(move || {
+            let old_path = settings_for_callbacks.resolve_db_path();
+            let default_path = PathBuf::from("clippi.db");
+            if old_path == default_path {
+                return;
+            }
+            match migrate_database(&old_path, &default_path) {
+                Ok(()) => {
+                    let mut s = settings_for_callbacks.clone();
+                    s.db_path = String::new();
+                    s.save();
+                    spawn_new_process();
+                    slint::quit_event_loop().ok();
                 }
+                Err(e) => {
+                    if let Some(app) = app_for_reset_db.upgrade() {
+                        app.set_settings_error(SharedString::from(e));
+                    }
+                }
+            }
+        });
+
+        let settings_for_callbacks = settings.clone();
+        let app_for_set_theme = app.clone();
+        slint_app.on_set_theme(move |mode: i32| {
+            if let Some(app) = app_for_set_theme.upgrade() {
+                let is_dark = match mode {
+                    1 => true,
+                    2 => false,
+                    _ => is_system_dark_mode(),
+                };
+                app.set_theme_mode(mode);
+                app.set_dark_mode(is_dark);
+                let mut s = settings_for_callbacks.clone();
+                s.theme = match mode {
+                    1 => "dark".to_string(),
+                    2 => "light".to_string(),
+                    _ => "system".to_string(),
+                };
+                s.save();
             }
         });
 
         Ok(Self {
-            db,
-            frontend,
-            app,
+            looper,
             listener: Some(listener),
-            hotkey,
+            _settings: settings,
         })
     }
 
     pub fn shutdown(mut self) {
-        if let Some(mut listener) = self.listener {
+        if let Some(mut listener) = self.listener.take() {
             listener.stop();
         }
-        if let Ok(mut hk) = self.hotkey.lock() {
-            if let Some(ref mut h) = *hk {
-                h.stop();
-            }
+        if let Ok(mut looper) = Arc::try_unwrap(self.looper) {
+            looper.stop();
         }
     }
 }
 
-fn refresh_ui(app: &App, db: &Database) {
-    let items = db.load_by_updated(100).unwrap_or_default();
-    let model: VecModel<ClipboardEntry> = VecModel::from(
-        items.iter().map(item_to_slint).collect::<Vec<_>>()
-    );
-    app.set_clipboard_items(ModelRc::from(Rc::new(model)));
-    app.set_item_count(items.len() as i32);
+fn init_ui_from_settings(app: &App, settings: &AppSettings) {
+    let is_dark = match settings.theme.as_str() {
+        "dark" => true,
+        "light" => false,
+        _ => is_system_dark_mode(),
+    };
+    let theme_mode = match settings.theme.as_str() {
+        "dark" => 1,
+        "light" => 2,
+        _ => 0,
+    };
+
+    app.set_dark_mode(is_dark);
+    app.set_theme_mode(theme_mode);
+    app.set_auto_start(settings.auto_start);
+    app.set_auto_hide(settings.auto_hide);
+    app.set_pinned(settings.pinned);
+    app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
+    app.set_hotkey_display(SharedString::from(&settings.hotkey));
 }
 
-fn item_to_slint(item: &ClipboardItem) -> ClipboardEntry {
+fn item_to_slint(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.text_preview.clone()),
         content_type: SharedString::from(item.content_type.as_str()),
         time_label: SharedString::from(format_relative_time(&item.updated_at)),
-    }
-}
-
-fn format_relative_time(captured_at: &chrono::DateTime<chrono::Utc>) -> String {
-    let elapsed = chrono::Utc::now().signed_duration_since(*captured_at);
-    let secs = elapsed.num_seconds();
-    if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else {
-        format!("{}h ago", secs / 3600)
     }
 }

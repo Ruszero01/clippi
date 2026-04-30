@@ -2,7 +2,9 @@ slint::include_modules!();
 
 mod app;
 mod core;
+mod looper;
 mod platform;
+mod services;
 
 fn main() {
     let slint_app = App::new().unwrap();

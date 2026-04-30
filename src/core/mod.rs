@@ -2,8 +2,5 @@
 
 pub mod db;
 pub mod frontend;
+pub mod settings;
 pub mod types;
-
-pub use db::Database;
-pub use frontend::Frontend;
-pub use types::{ClipboardItem, ContentType};

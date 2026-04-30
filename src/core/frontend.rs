@@ -30,6 +30,14 @@ impl Frontend {
         }
     }
 
+    pub fn show_settings(&mut self) {
+        if let Some(app) = self.app.upgrade() {
+            app.set_current_view(slint::SharedString::from("settings"));
+            app.window().show().ok();
+            self.visible = true;
+        }
+    }
+
     pub fn is_visible(&self) -> bool {
         self.visible
     }
