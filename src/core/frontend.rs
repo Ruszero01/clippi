@@ -18,13 +18,6 @@ impl Frontend {
         }
     }
 
-    fn show(&mut self) {
-        self.visible = true;
-        if let Some(app) = self.app.upgrade() {
-            app.window().show().ok();
-        }
-    }
-
     #[cfg(target_os = "windows")]
     pub fn show_and_focus(&mut self) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
@@ -44,7 +37,7 @@ impl Frontend {
     #[cfg(not(target_os = "windows"))]
     pub fn show_and_focus(&mut self) {
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
-        self.show();
+        self.visible = true;
     }
 
     pub fn hide(&mut self) {

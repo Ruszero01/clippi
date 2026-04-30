@@ -10,7 +10,7 @@ use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWI
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, PeekMessageW, PostThreadMessageW, TranslateMessage,
-    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
     MSG, PM_REMOVE, WM_QUIT,
 };
 
@@ -62,7 +62,7 @@ pub fn start_focus_watcher() -> Result<(FocusWatcher, mpsc::Receiver<FocusEvent>
                 proc,
                 0,
                 0,
-                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+                WINEVENT_OUTOFCONTEXT,  // 移除 SKIPOWNPROCESS 以接收所有事件
             )
         };
 
@@ -112,6 +112,10 @@ static PREVIOUS_FOREGROUND_WINDOW: AtomicUsize = AtomicUsize::new(0);
 #[cfg(target_os = "windows")]
 static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
+/// Temporary storage for swapping
+#[cfg(target_os = "windows")]
+static TEMP_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
 /// Get the paste target window handle
 #[cfg(target_os = "windows")]
 pub fn get_last_non_clippi_window() -> Option<HWND> {
@@ -139,36 +143,28 @@ fn is_clippi_window(hwnd: HWND) -> bool {
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn win_event_proc(
     _event: u32,
-    hwnd: HWND,
+    _hwnd: HWND,
     _id_object: i32,
     _id_child: i32,
     _thread_id: u32,
     _timestamp: u32,
 ) {
-    if hwnd.is_null() {
-        return;
-    }
-
-    // Record the current foreground as "previous" before it changes
     let current_fg = GetForegroundWindow();
-    if !current_fg.is_null() {
-        PREVIOUS_FOREGROUND_WINDOW.store(current_fg as usize, Ordering::SeqCst);
-    }
-
-    // Check if Clippi just became foreground
-    if is_clippi_window(hwnd) {
-        // Record the previous foreground window as paste target
-        let prev = PREVIOUS_FOREGROUND_WINDOW.load(Ordering::SeqCst);
-        if prev != 0 && prev != hwnd as usize {
-            LAST_NON_CLIPPI_WINDOW.store(prev, Ordering::SeqCst);
-        }
+    if current_fg.is_null() {
         return;
     }
 
-    // Clippi is not the new foreground, record this window
-    LAST_NON_CLIPPI_WINDOW.store(hwnd as usize, Ordering::SeqCst);
+    let is_clippi_now = is_clippi_window(current_fg);
 
-    if let Some(ref tx) = FOCUS_EVENT_TX {
-        let _ = tx.send(FocusEvent::ForegroundChanged(Some(String::new())));
+    if is_clippi_now {
+        // Clippi gained focus - use TEMP which was set to PREV before this event
+        let prev = TEMP_WINDOW.load(Ordering::SeqCst);
+        LAST_NON_CLIPPI_WINDOW.store(prev, Ordering::SeqCst);
+        return;
     }
+
+    // Not Clippi - save current PREV to TEMP, then update PREV to current
+    TEMP_WINDOW.store(PREVIOUS_FOREGROUND_WINDOW.load(Ordering::SeqCst), Ordering::SeqCst);
+    PREVIOUS_FOREGROUND_WINDOW.store(current_fg as usize, Ordering::SeqCst);
+    LAST_NON_CLIPPI_WINDOW.store(current_fg as usize, Ordering::SeqCst);
 }

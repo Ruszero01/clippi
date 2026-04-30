@@ -54,10 +54,6 @@ impl Pollable for HotkeyService {
                 if let Ok(mut fe) = self.frontend.lock() {
                     fe.show_and_focus();
                 }
-                if let Ok(db) = crate::core::db::Database::open("clippi.db") {
-                    let items = db.load_by_updated(100).unwrap_or_default();
-                    app.set_item_count(items.len() as i32);
-                }
             }
         }
 
