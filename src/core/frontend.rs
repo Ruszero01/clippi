@@ -1,4 +1,4 @@
-//! Frontend management - window visibility and UI operations (pure, no platform code)
+//! Frontend management - window visibility and UI operations
 
 use crate::App;
 use slint::{ComponentHandle, PhysicalPosition};
@@ -25,29 +25,19 @@ impl Frontend {
         }
     }
 
-    /// Show window with 200ms suppress period (to prevent immediate auto-hide)
     #[cfg(target_os = "windows")]
     pub fn show_and_focus(&mut self) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, SetForegroundWindow};
-
-        // Record current foreground window before bringing Clippi to front
-        let prev_hwnd = unsafe { GetForegroundWindow() };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
 
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         if let Some(app) = self.app.upgrade() {
             app.window().show().ok();
         }
 
-        // Bring to foreground
         let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
         let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
         if !hwnd.is_null() {
             unsafe { SetForegroundWindow(hwnd) };
-        }
-
-        // Record previous window as paste target (for quick paste)
-        if !prev_hwnd.is_null() {
-            crate::platform::focus::record_paste_target_window(prev_hwnd);
         }
     }
 
@@ -77,7 +67,6 @@ impl Frontend {
         self.visible
     }
 
-    /// Check if auto-hide is currently suppressed
     pub fn is_suppressed(&self) -> bool {
         if let Some(until) = self.suppress_until {
             if std::time::Instant::now() < until {

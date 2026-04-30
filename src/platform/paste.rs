@@ -3,7 +3,7 @@
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_CONTROL, VK_V};
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
 
 #[cfg(target_os = "windows")]
 const SLEEP_MS: u64 = 50;
@@ -12,7 +12,9 @@ const SLEEP_MS: u64 = 50;
 #[cfg(target_os = "windows")]
 pub fn restore_paste_target() {
     if let Some(hwnd) = crate::platform::focus::get_last_non_clippi_window() {
-        unsafe { SetForegroundWindow(hwnd) };
+        if unsafe { IsWindow(hwnd) } != 0 {
+            unsafe { SetForegroundWindow(hwnd) };
+        }
     }
 }
 
@@ -24,13 +26,9 @@ pub fn paste_after_delay() {
         unsafe {
             let vk_ctrl = VK_CONTROL as u8;
             let vk_v = VK_V as u8;
-            // Press Ctrl
             keybd_event(vk_ctrl, 0, 0, 0);
-            // Press V
             keybd_event(vk_v, 0, 0, 0);
-            // Release V
             keybd_event(vk_v, 0, 2, 0);
-            // Release Ctrl
             keybd_event(vk_ctrl, 0, 2, 0);
         }
     });
