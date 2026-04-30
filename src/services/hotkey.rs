@@ -3,6 +3,7 @@
 use crate::core::frontend::Frontend;
 use crate::looper::Pollable;
 use crate::platform::hotkey::HotkeyListener;
+use crate::platform::paste::record_previous_window;
 use crate::App;
 use slint::SharedString;
 use std::sync::{Arc, Mutex};
@@ -51,6 +52,8 @@ impl Pollable for HotkeyService {
         // Poll hotkey press
         if let Some(ref h) = self.hotkey {
             if h.poll_pressed() {
+                // Record the window we're about to leave
+                record_previous_window();
                 if let Ok(mut fe) = self.frontend.lock() {
                     fe.show_and_focus();
                 }

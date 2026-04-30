@@ -9,6 +9,7 @@ use crate::core::settings::{
 use crate::core::types::format_relative_time;
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
+use crate::platform::paste::{paste_after_delay, restore_previous_focus};
 use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
@@ -115,6 +116,24 @@ impl AppController {
                     }
                 }
             }
+        });
+
+        // Paste item - copy to clipboard, restore focus, then paste
+        // FocusService will auto-hide if not pinned
+        let db_for_paste = db.clone();
+        slint_app.on_paste_item(move |id| {
+            // Copy to clipboard
+            if let Ok(db) = db_for_paste.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    if let Ok(ctx) = ClipboardContext::new() {
+                        let _ = Clipboard::set_text(&ctx, item.full_text.clone());
+                    }
+                }
+            }
+            // Restore focus to previous window (FocusService handles auto-hide)
+            restore_previous_focus();
+            // Simulate Ctrl+V after delay (to paste to previously focused app)
+            paste_after_delay();
         });
 
         let frontend_close = frontend.clone();

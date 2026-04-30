@@ -2,6 +2,7 @@
 
 use crate::core::frontend::Frontend;
 use crate::looper::Pollable;
+use crate::platform::paste::record_previous_window;
 use crate::platform::tray::{TrayAction, TrayManager};
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +25,8 @@ impl Pollable for TrayService {
         if let Some(action) = self.tray.poll() {
             match action {
                 TrayAction::Show => {
+                    // Record the window before showing clippi
+                    record_previous_window();
                     if let Ok(mut fe) = self.frontend.lock() {
                         fe.show_and_focus();
                     }
