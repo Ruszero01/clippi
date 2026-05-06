@@ -1,0 +1,112 @@
+export component SettingsTabData inherits Rectangle {
+    in property <bool> dark-mode: false;
+    in property <string> db-path: "";
+    in property <string> settings-error: "";
+
+    callback pick-db-path();
+    callback reset-db-path();
+
+    property <color> surface:       dark-mode ? #181a26 : #ffffff;
+    property <color> text-1:       dark-mode ? #e6e9f2 : #1a1c2e;
+    property <color> text-2:       dark-mode ? #8a8ea8 : #7c809a;
+    property <color> text-3:       dark-mode ? #555874 : #b4b9ca;
+    property <color> accent:       dark-mode ? #7ecba3 : #6ab890;
+    property <color> accent-soft:  dark-mode ? #1a2e24 : #e8f5ee;
+    property <color> divider:      dark-mode ? #262840 : #e6e8f0;
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 12px;
+        padding-top: 8px;
+
+        // 数据库路径
+        Rectangle {
+            height: 76px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                spacing: 6px;
+
+                Text {
+                    text: "数据库路径";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: text-1;
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    Rectangle {
+                        height: 28px;
+                        border-radius: 7px;
+                        background: dark-mode ? #12131c : #f2f3f8;
+
+                        Text {
+                            text: root.db-path;
+                            font-size: 10px;
+                            color: text-2;
+                            vertical-alignment: center;
+                            x: 10px;
+                            overflow: elide;
+                            width: parent.width - 20px;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 28px;
+                        width: 52px;
+                        border-radius: 7px;
+                        background: change-ta.has-hover ? accent-soft : accent;
+
+                        change-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.pick-db-path(); }
+                        }
+
+                        Text {
+                            text: "更改";
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: change-ta.has-hover ? accent : #ffffff;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 28px;
+                        width: 52px;
+                        border-radius: 7px;
+                        background: reset-ta.has-hover ? surface : transparent;
+                        border-width: 1px;
+                        border-color: text-3;
+
+                        reset-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.reset-db-path(); }
+                        }
+
+                        Text {
+                            text: "重置";
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: reset-ta.has-hover ? text-1 : text-3;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

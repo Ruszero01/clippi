@@ -1,7 +1,12 @@
+import { SettingsTabGeneral } from "SettingsTabGeneral.slint";
+import { SettingsTabClipboard } from "SettingsTabClipboard.slint";
+import { SettingsTabHotkey } from "SettingsTabHotkey.slint";
+import { SettingsTabData } from "SettingsTabData.slint";
+
 export component SettingsPanel inherits Rectangle {
     // ========== 输入属性 ==========
     in property <bool> dark-mode: false;
-    in property <int> theme-mode: 0;  // 0=system, 1=dark, 2=light
+    in property <int> theme-mode: 0;
     in property <bool> auto-start: false;
     in property <bool> auto-hide: false;
     in property <bool> sort-by-created: false;
@@ -25,15 +30,8 @@ export component SettingsPanel inherits Rectangle {
     callback set-theme(int);
 
     // ========== 主题色板 ==========
-    property <color> surface:       dark-mode ? #181a26 : #ffffff;
-    property <color> text-1:        dark-mode ? #e6e9f2 : #1a1c2e;
     property <color> text-2:        dark-mode ? #8a8ea8 : #7c809a;
-    property <color> text-3:        dark-mode ? #555874 : #b4b9ca;
     property <color> accent:        dark-mode ? #7ecba3 : #6ab890;
-    property <color> accent-soft:   dark-mode ? #1a2e24 : #e8f5ee;
-    property <color> divider:       dark-mode ? #262840 : #e6e8f0;
-    property <color> btn-hover:     dark-mode ? #262840 : #f0f1f8;
-    property <color> danger:        #ff5f57;
 
     background: transparent;
 
@@ -71,12 +69,12 @@ export component SettingsPanel inherits Rectangle {
             text: "设置";
             font-size: 14px;
             font-weight: 700;
-            color: text-1;
+            color: dark-mode ? #e6e9f2 : #1a1c2e;
             vertical-alignment: center;
         }
     }
 
-    // ========== 选项卡栏（3个） ==========
+    // ========== 选项卡栏（4个） ==========
     HorizontalLayout {
         y: 52px;
         height: 36px;
@@ -85,7 +83,7 @@ export component SettingsPanel inherits Rectangle {
         spacing: 0px;
 
         Rectangle {
-            width: 33.33%;
+            width: 25%;
             height: 100%;
 
             HorizontalLayout {
@@ -117,14 +115,14 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Rectangle {
-            width: 33.33%;
+            width: 25%;
             height: 100%;
 
             HorizontalLayout {
                 alignment: center;
 
                 Text {
-                    text: "快捷键";
+                    text: "剪贴板";
                     font-size: 12px;
                     font-weight: root.active-tab == 1 ? 700 : 400;
                     color: root.active-tab == 1 ? accent : text-2;
@@ -149,14 +147,14 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Rectangle {
-            width: 33.33%;
+            width: 25%;
             height: 100%;
 
             HorizontalLayout {
                 alignment: center;
 
                 Text {
-                    text: "数据";
+                    text: "快捷键";
                     font-size: 12px;
                     font-weight: root.active-tab == 2 ? 700 : 400;
                     color: root.active-tab == 2 ? accent : text-2;
@@ -179,481 +177,76 @@ export component SettingsPanel inherits Rectangle {
                 animate background { duration: 200ms; easing: ease-out; }
             }
         }
-    }
 
-    // ========== 通用设置 ==========
-    Rectangle {
-        y: 96px;
-        height: 66px;
-        x: 8px;
-        width: parent.width - 16px;
-        border-radius: 10px;
-        background: surface;
-        border-width: 1px;
-        border-color: divider;
-        visible: root.active-tab == 0;
-        opacity: root.active-tab == 0 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-
-        HorizontalLayout {
-            width: parent.width;
-            height: parent.height;
-            padding: 14px;
-            alignment: space-between;
-
-            VerticalLayout {
-                spacing: 2px;
-                alignment: center;
-
-                Text {
-                    text: "开机自启动";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: text-1;
-                }
-
-                Text {
-                    text: "系统启动时自动运行 Clippi";
-                    font-size: 10px;
-                    color: text-3;
-                }
-            }
-
-            Rectangle {
-                width: 40px;
-                height: 22px;
-                border-radius: 11px;
-                background: root.auto-start ? accent : divider;
-                animate background { duration: 200ms; easing: ease-out; }
-                y: (parent.height - self.height) / 2;
-
-                Rectangle {
-                    width: 18px;
-                    height: 18px;
-                    border-radius: 9px;
-                    background: #ffffff;
-                    x: root.auto-start ? parent.width - self.width - 2px : 2px;
-                    animate x { duration: 200ms; easing: ease-out; }
-                    y: (parent.height - self.height) / 2;
-                }
-
-                toggle-ta := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    clicked => { root.toggle-auto-start(); }
-                }
-            }
-        }
-    }
-
-    // ========== 失焦自动隐藏 ==========
-    Rectangle {
-        y: 170px;
-        height: 66px;
-        x: 8px;
-        width: parent.width - 16px;
-        border-radius: 10px;
-        background: surface;
-        border-width: 1px;
-        border-color: divider;
-        visible: root.active-tab == 0;
-        opacity: root.active-tab == 0 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-
-        HorizontalLayout {
-            width: parent.width;
-            height: parent.height;
-            padding: 14px;
-            alignment: space-between;
-
-            VerticalLayout {
-                spacing: 2px;
-                alignment: center;
-
-                Text {
-                    text: "失焦自动隐藏";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: text-1;
-                }
-
-                Text {
-                    text: "点击窗口外部时自动隐藏";
-                    font-size: 10px;
-                    color: text-3;
-                }
-            }
-
-            Rectangle {
-                width: 40px;
-                height: 22px;
-                border-radius: 11px;
-                background: root.auto-hide ? accent : divider;
-                animate background { duration: 200ms; easing: ease-out; }
-                y: (parent.height - self.height) / 2;
-
-                Rectangle {
-                    width: 18px;
-                    height: 18px;
-                    border-radius: 9px;
-                    background: #ffffff;
-                    x: root.auto-hide ? parent.width - self.width - 2px : 2px;
-                    animate x { duration: 200ms; easing: ease-out; }
-                    y: (parent.height - self.height) / 2;
-                }
-
-                autohide-ta := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    clicked => { root.toggle-auto-hide(); }
-                }
-            }
-        }
-    }
-
-    // ========== 按创建时间排序 ==========
-    Rectangle {
-        y: 244px;
-        height: 66px;
-        x: 8px;
-        width: parent.width - 16px;
-        border-radius: 10px;
-        background: surface;
-        border-width: 1px;
-        border-color: divider;
-        visible: root.active-tab == 0;
-        opacity: root.active-tab == 0 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-
-        HorizontalLayout {
-            width: parent.width;
-            height: parent.height;
-            padding: 14px;
-            alignment: space-between;
-
-            VerticalLayout {
-                spacing: 2px;
-                alignment: center;
-
-                Text {
-                    text: "按创建时间排序";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: text-1;
-                }
-
-                Text {
-                    text: root.sort-by-created ? "首次创建时间排序" : "最后修改时间排序";
-                    font-size: 10px;
-                    color: text-3;
-                }
-            }
-
-            Rectangle {
-                width: 40px;
-                height: 22px;
-                border-radius: 11px;
-                background: root.sort-by-created ? accent : divider;
-                animate background { duration: 200ms; easing: ease-out; }
-                y: (parent.height - self.height) / 2;
-
-                Rectangle {
-                    width: 18px;
-                    height: 18px;
-                    border-radius: 9px;
-                    background: #ffffff;
-                    x: root.sort-by-created ? parent.width - self.width - 2px : 2px;
-                    animate x { duration: 200ms; easing: ease-out; }
-                    y: (parent.height - self.height) / 2;
-                }
-
-                sortcreated-ta := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    clicked => { root.toggle-sort-by-created(); }
-                }
-            }
-        }
-    }
-
-    // ========== 主题设置 ==========
-    Rectangle {
-        y: 318px;
-        height: 66px;
-        x: 8px;
-        width: parent.width - 16px;
-        border-radius: 10px;
-        background: surface;
-        border-width: 1px;
-        border-color: divider;
-        visible: root.active-tab == 0;
-        opacity: root.active-tab == 0 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-
-        HorizontalLayout {
-            width: parent.width;
-            height: parent.height;
-            padding: 14px;
-            alignment: space-between;
-
-            VerticalLayout {
-                spacing: 2px;
-                alignment: center;
-
-                Text {
-                    text: "外观";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: text-1;
-                }
-
-                Text {
-                    text: "选择应用的主题模式";
-                    font-size: 10px;
-                    color: text-3;
-                }
-            }
+        Rectangle {
+            width: 25%;
+            height: 100%;
 
             HorizontalLayout {
-                spacing: 4px;
-                alignment: center;
-                y: (parent.height - self.height) / 2;
-
-                Rectangle {
-                    width: 56px;
-                    height: 26px;
-                    border-radius: 7px;
-                    background: root.theme-mode == 0 ? accent-soft : transparent;
-                    border-width: 1px;
-                    border-color: root.theme-mode == 0 ? accent : divider;
-
-                    sys-ta := TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-                        clicked => { root.set-theme(0); }
-                    }
-
-                    Text {
-                        text: "跟随系统";
-                        font-size: 9px;
-                        font-weight: 600;
-                        color: root.theme-mode == 0 ? accent : text-3;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                Rectangle {
-                    width: 40px;
-                    height: 26px;
-                    border-radius: 7px;
-                    background: root.theme-mode == 2 ? accent-soft : transparent;
-                    border-width: 1px;
-                    border-color: root.theme-mode == 2 ? accent : divider;
-
-                    light-ta := TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-                        clicked => { root.set-theme(2); }
-                    }
-
-                    Text {
-                        text: "亮色";
-                        font-size: 9px;
-                        font-weight: 600;
-                        color: root.theme-mode == 2 ? accent : text-3;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                Rectangle {
-                    width: 40px;
-                    height: 26px;
-                    border-radius: 7px;
-                    background: root.theme-mode == 1 ? accent-soft : transparent;
-                    border-width: 1px;
-                    border-color: root.theme-mode == 1 ? accent : divider;
-
-                    dark-ta := TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-                        clicked => { root.set-theme(1); }
-                    }
-
-                    Text {
-                        text: "暗色";
-                        font-size: 9px;
-                        font-weight: 600;
-                        color: root.theme-mode == 1 ? accent : text-3;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-    }
-
-    // ========== 快捷键设置 ==========
-    Rectangle {
-        y: 96px;
-        height: 66px;
-        x: 8px;
-        width: parent.width - 16px;
-        border-radius: 10px;
-        background: surface;
-        border-width: 1px;
-        border-color: root.recording-hotkey ? accent : divider;
-        visible: root.active-tab == 1;
-        opacity: root.active-tab == 1 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-
-        HorizontalLayout {
-            width: parent.width;
-            height: parent.height;
-            padding: 14px;
-            alignment: space-between;
-
-            VerticalLayout {
-                spacing: 2px;
                 alignment: center;
 
                 Text {
-                    text: "呼出快捷键";
+                    text: "数据";
                     font-size: 12px;
-                    font-weight: 600;
-                    color: text-1;
-                }
-
-                Text {
-                    text: root.recording-hotkey ? "请按下新的快捷键..." : "点击按钮开始录制";
-                    font-size: 10px;
-                    color: root.recording-hotkey ? accent : text-3;
-                }
-            }
-
-            Rectangle {
-                height: 28px;
-                width: 80px;
-                border-radius: 7px;
-                background: root.recording-hotkey ? accent-soft : (rec-ta.has-hover ? accent-soft : accent);
-                y: (parent.height - self.height) / 2;
-
-                rec-ta := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    clicked => {
-                        if (!root.recording-hotkey) {
-                            root.start-recording-hotkey();
-                        }
-                    }
-                }
-
-                Text {
-                    text: root.hotkey-display;
-                    font-size: 11px;
-                    font-weight: 600;
-                    color: root.recording-hotkey ? accent : #ffffff;
-                    horizontal-alignment: center;
+                    font-weight: root.active-tab == 3 ? 700 : 400;
+                    color: root.active-tab == 3 ? accent : text-2;
                     vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
+            }
+
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.active-tab = 3; }
+            }
+
+            Rectangle {
+                height: 2px;
+                background: root.active-tab == 3 ? accent : transparent;
+                y: parent.height - self.height;
+                width: parent.width;
+                animate background { duration: 200ms; easing: ease-out; }
             }
         }
     }
 
-    // ========== 数据设置 ==========
-    Rectangle {
+    // ========== 选项卡内容 ==========
+    VerticalLayout {
         y: 96px;
-        height: 76px;
+        height: parent.height - 104px;
         x: 8px;
         width: parent.width - 16px;
-        border-radius: 10px;
-        background: surface;
-        border-width: 1px;
-        border-color: divider;
-        visible: root.active-tab == 2;
-        opacity: root.active-tab == 2 ? 1 : 0;
-        animate opacity { duration: 150ms; easing: ease-out; }
 
-        VerticalLayout {
-            width: parent.width;
-            height: parent.height;
-            padding: 14px;
-            spacing: 6px;
+        if (root.active-tab == 0) : SettingsTabGeneral {
+            dark-mode: root.dark-mode;
+            theme-mode: root.theme-mode;
+            auto-start: root.auto-start;
+            auto-hide: root.auto-hide;
+            toggle-auto-start => { root.toggle-auto-start(); }
+            toggle-auto-hide => { root.toggle-auto-hide(); }
+            set-theme(int) => { root.set-theme(int); }
+        }
 
-            Text {
-                text: "数据库路径";
-                font-size: 12px;
-                font-weight: 600;
-                color: text-1;
-            }
+        if (root.active-tab == 1) : SettingsTabClipboard {
+            dark-mode: root.dark-mode;
+            sort-by-created: root.sort-by-created;
+            toggle-sort-by-created => { root.toggle-sort-by-created(); }
+        }
 
-            HorizontalLayout {
-                spacing: 6px;
+        if (root.active-tab == 2) : SettingsTabHotkey {
+            dark-mode: root.dark-mode;
+            hotkey-display: root.hotkey-display;
+            recording-hotkey: root.recording-hotkey;
+            start-recording-hotkey => { root.start-recording-hotkey(); }
+        }
 
-                Rectangle {
-                    height: 28px;
-                    border-radius: 7px;
-                    background: dark-mode ? #12131c : #f2f3f8;
-
-                    Text {
-                        text: root.db-path;
-                        font-size: 10px;
-                        color: text-2;
-                        vertical-alignment: center;
-                        x: 10px;
-                        overflow: elide;
-                        width: parent.width - 20px;
-                    }
-                }
-
-                Rectangle {
-                    height: 28px;
-                    width: 52px;
-                    border-radius: 7px;
-                    background: change-ta.has-hover ? accent-soft : accent;
-
-                    change-ta := TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-                        clicked => { root.pick-db-path(); }
-                    }
-
-                    Text {
-                        text: "更改";
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: change-ta.has-hover ? accent : #ffffff;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                Rectangle {
-                    height: 28px;
-                    width: 52px;
-                    border-radius: 7px;
-                    background: reset-ta.has-hover ? surface : transparent;
-                    border-width: 1px;
-                    border-color: text-3;
-
-                    reset-ta := TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-                        clicked => { root.reset-db-path(); }
-                    }
-
-                    Text {
-                        text: "重置";
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: reset-ta.has-hover ? text-1 : text-3;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-            }
+        if (root.active-tab == 3) : SettingsTabData {
+            dark-mode: root.dark-mode;
+            db-path: root.db-path;
+            settings-error: root.settings-error;
+            pick-db-path => { root.pick-db-path(); }
+            reset-db-path => { root.reset-db-path(); }
         }
     }
-
 }
