@@ -5,7 +5,7 @@ use crate::looper::Pollable;
 use crate::platform::blacklist::is_clippi_foreground;
 use crate::platform::focus::{start_focus_watcher, FocusWatcher};
 use crate::App;
-use slint::{ComponentHandle, SharedString};
+use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 
 pub struct FocusService {
@@ -56,10 +56,10 @@ impl Pollable for FocusService {
             return;
         }
 
-        // Must be in clipboard view (not settings)
-        if app.get_current_view() != SharedString::from("clipboard") {
-            return;
-        }
+        // Must be in clipboard view (not settings) - removed to allow all views to auto-hide
+        // if app.get_current_view() != SharedString::from("clipboard") {
+        //     return;
+        // }
 
         // Check suppress (200ms after show)
         let is_suppressed = {
