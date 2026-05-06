@@ -18,6 +18,9 @@ pub struct AppSettings {
     pub auto_hide: bool,
     pub db_path: String,
     pub sort_by_created: bool,  // true=按创建时间排序, false=按更新时间排序
+    pub window_position_mode: String, // "center" | "follow" | "remember"
+    pub saved_window_x: i32,
+    pub saved_window_y: i32,
 }
 
 impl Default for AppSettings {
@@ -29,6 +32,9 @@ impl Default for AppSettings {
             auto_hide: true,
             db_path: String::new(),
             sort_by_created: false,
+            window_position_mode: "center".to_string(),
+            saved_window_x: -1,
+            saved_window_y: -1,
         }
     }
 }

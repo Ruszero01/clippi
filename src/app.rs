@@ -1,7 +1,7 @@
 //! AppController - assembles all services and sets up the application
 
 use crate::core::db::Database;
-use crate::core::frontend::Frontend;
+use crate::core::frontend::{Frontend, PositionMode};
 use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 pub struct AppController {
     looper: Arc<Looper>,
     listener: Option<Box<dyn crate::platform::clipboard::ClipboardListener>>,
+    frontend: Arc<Mutex<Frontend>>,
     _settings: AppSettings,
 }
 
@@ -33,7 +34,10 @@ impl AppController {
         // Initialize shared state
         let db_path = settings.resolve_db_path();
         let db = Arc::new(Mutex::new(Database::open(db_path.to_str().unwrap())?));
-        let frontend = Arc::new(Mutex::new(Frontend::new(slint_app)));
+        let mut frontend = Frontend::new(slint_app);
+        frontend.set_position_mode(PositionMode::from_str(&settings.window_position_mode));
+        frontend.set_saved_position(settings.saved_window_x, settings.saved_window_y);
+        let frontend = Arc::new(Mutex::new(frontend));
         let app = slint_app.as_weak();
 
         // Initialize UI with settings
@@ -124,12 +128,16 @@ impl AppController {
 
         let app_for_close = app.clone();
         let frontend_close = frontend.clone();
+        let settings_for_close = settings.clone();
         slint_app.on_close_window(move || {
             if let Some(app) = app_for_close.upgrade() {
                 app.set_pinned(false);
             }
             if let Ok(mut fe) = frontend_close.lock() {
                 fe.hide();
+                let mut s = settings_for_close.clone();
+                fe.apply_saved_position_to_settings(&mut s);
+                s.save();
             }
         });
 
@@ -297,14 +305,45 @@ impl AppController {
             }
         });
 
+        let settings_for_callbacks = settings.clone();
+        let app_for_pos = app.clone();
+        let frontend_for_pos = frontend.clone();
+        slint_app.on_set_position_mode(move |mode: i32| {
+            let mode_str = match mode {
+                1 => "follow",
+                2 => "remember",
+                _ => "center",
+            };
+            if let Some(app) = app_for_pos.upgrade() {
+                app.set_position_mode(mode);
+            }
+            if let Ok(mut fe) = frontend_for_pos.lock() {
+                fe.set_position_mode(PositionMode::from_int(mode));
+            }
+            let mut s = settings_for_callbacks.clone();
+            s.window_position_mode = mode_str.to_string();
+            s.save();
+        });
+
+        // Apply initial window position before first show
+        if let Ok(fe) = frontend.lock() {
+            fe.apply_position();
+        }
+
         Ok(Self {
             looper,
             listener: Some(listener),
             _settings: settings,
+            frontend,
         })
     }
 
     pub fn shutdown(mut self) {
+        if let Ok(fe) = self.frontend.lock() {
+            let mut s = self._settings.clone();
+            fe.apply_saved_position_to_settings(&mut s);
+            s.save();
+        }
         if let Some(mut listener) = self.listener.take() {
             listener.stop();
         }
@@ -333,4 +372,5 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_sort_by_created(settings.sort_by_created);
     app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
+    app.set_position_mode(PositionMode::from_str(&settings.window_position_mode).to_int());
 }

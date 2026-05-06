@@ -11,7 +11,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 image = "0.25"
 chrono = "0.4"
 tray-icon = "0.19"
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus"] }
 winreg = "0.56"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }

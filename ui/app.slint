@@ -31,6 +31,7 @@ export component App inherits Window {
     in-out property <int> active-tab: 0;
     in-out property <string> hotkey-display: "";
     in-out property <bool> recording-hotkey: false;
+    in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
 
     // 双击检测
     in-out property <int> last-clicked-id: -1;
@@ -54,6 +55,7 @@ export component App inherits Window {
     callback set-hotkey(string);
     callback start-recording-hotkey();
     callback set-theme(int);
+    callback set-position-mode(int);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -313,6 +315,7 @@ export component App inherits Window {
                     active-tab: root.active-tab;
                     hotkey-display: root.hotkey-display;
                     recording-hotkey: root.recording-hotkey;
+                    position-mode: root.position-mode;
 
                     back => { root.current-view = "clipboard"; }
                     toggle-auto-start => { root.toggle-auto-start(); }
@@ -323,6 +326,7 @@ export component App inherits Window {
                     set-hotkey(s) => { root.set-hotkey(s); }
                     start-recording-hotkey => { root.start-recording-hotkey(); }
                     set-theme(mode) => { root.set-theme(mode); }
+                    set-position-mode(mode) => { root.set-position-mode(mode); }
                 }
             }
         }
