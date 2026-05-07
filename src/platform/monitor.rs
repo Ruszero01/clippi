@@ -27,7 +27,18 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn get_cursor_pos() -> Option<(i32, i32)> {
+    let event = core_graphics::event::CGEvent::new(
+        core_graphics::event_source::CGEventSource::new(
+            core_graphics::event_source::CGEventSourceStateID::HIDSystemState
+        ).ok()?
+    ).ok()?;
+    let loc = event.location();
+    Some((loc.x as i32, loc.y as i32))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
     None
 }
@@ -55,7 +66,42 @@ pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
+    unsafe {
+        let mtm = objc2::MainThreadMarker::new_unchecked();
+        let screens = objc2_app_kit::NSScreen::screens(mtm);
+        let count = screens.count();
+        let mut target_screen = None;
+        for i in 0..count {
+            let screen = screens.objectAtIndex(i);
+            let frame = screen.frame();
+            let fx = frame.origin.x as i32;
+            let fy = frame.origin.y as i32;
+            let fw = frame.size.width as i32;
+            let fh = frame.size.height as i32;
+            if x >= fx && x < fx + fw && y >= fy && y < fy + fh {
+                target_screen = Some(screen);
+                break;
+            }
+        }
+
+        let screen = target_screen?;
+        let visible = screen.visibleFrame();
+        // macOS coordinate system: Y starts from bottom, need to convert to top-left
+        let main_height = objc2_app_kit::NSScreen::mainScreen(mtm)
+            .map(|s| s.frame().size.height as i32)
+            .unwrap_or(0);
+        Some(MonitorRect {
+            x: visible.origin.x as i32,
+            y: main_height - (visible.origin.y as i32) - (visible.size.height as i32),
+            width: visible.size.width as i32,
+            height: visible.size.height as i32,
+        })
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn get_monitor_work_area(_x: i32, _y: i32) -> Option<MonitorRect> {
     None
 }
@@ -71,7 +117,28 @@ pub fn is_point_on_monitor(x: i32, y: i32) -> bool {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn is_point_on_monitor(x: i32, y: i32) -> bool {
+    unsafe {
+        let mtm = objc2::MainThreadMarker::new_unchecked();
+        let screens = objc2_app_kit::NSScreen::screens(mtm);
+        let count = screens.count();
+        for i in 0..count {
+            let screen = screens.objectAtIndex(i);
+            let frame = screen.frame();
+            let fx = frame.origin.x as i32;
+            let fy = frame.origin.y as i32;
+            let fw = frame.size.width as i32;
+            let fh = frame.size.height as i32;
+            if x >= fx && x < fx + fw && y >= fy && y < fy + fh {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn is_point_on_monitor(_x: i32, _y: i32) -> bool {
     false
 }

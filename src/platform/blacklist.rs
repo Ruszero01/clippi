@@ -28,7 +28,18 @@ pub fn is_clippi_foreground() -> bool {
     false
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn is_clippi_foreground() -> bool {
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    if let Some(app) = workspace.frontmostApplication() {
+        if let Some(name) = app.localizedName() {
+            return name.to_string() == "Clippi";
+        }
+    }
+    false
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn is_clippi_foreground() -> bool {
     true
 }

@@ -142,25 +142,81 @@ mod windows {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use clipboard_rs::{Clipboard, ClipboardContext};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Instant;
 
     pub struct MacosClipboardListener {
         running: Arc<AtomicBool>,
+        startup_end: Arc<Mutex<Option<Instant>>>,
     }
 
     impl MacosClipboardListener {
         pub fn new() -> Self {
             Self {
                 running: Arc::new(AtomicBool::new(false)),
+                startup_end: Arc::new(Mutex::new(None)),
             }
+        }
+
+        fn capture_baseline(&self) -> AtomicU64 {
+            let hash = AtomicU64::new(0);
+            if let Ok(ctx) = ClipboardContext::new() {
+                if let Ok(text) = ctx.get_text() {
+                    if !text.is_empty() {
+                        let mut hasher = DefaultHasher::new();
+                        text.hash(&mut hasher);
+                        hash.store(hasher.finish(), Ordering::SeqCst);
+                        *self.startup_end.lock().unwrap() = Some(Instant::now());
+                    }
+                }
+            }
+            hash
         }
     }
 
     impl ClipboardListener for MacosClipboardListener {
-        fn start(&mut self, _shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
+        fn start(&mut self, shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
             self.running.store(true, Ordering::SeqCst);
-            // TODO: macOS - use NSPasteboard change notifications
-            // Consider using macos-notification-state or similar crate
+
+            let last_hash = Arc::new(self.capture_baseline());
+            let running = self.running.clone();
+            let startup_end = self.startup_end.clone();
+            let pending = shared.pending.clone();
+
+            thread::spawn(move || {
+                while running.load(Ordering::SeqCst) {
+                    let startup_done = startup_end
+                        .lock()
+                        .unwrap()
+                        .map_or(false, |end| end.elapsed().as_millis() > 500);
+
+                    if let Ok(ctx) = ClipboardContext::new() {
+                        if let Ok(text) = ctx.get_text() {
+                            if !text.is_empty() {
+                                let mut hasher = DefaultHasher::new();
+                                text.hash(&mut hasher);
+                                let hash = hasher.finish();
+
+                                if hash != last_hash.load(Ordering::SeqCst) {
+                                    if startup_done {
+                                        last_hash.store(hash, Ordering::SeqCst);
+                                        let item = ClipboardItem::new_text(0, &text);
+                                        pending.lock().unwrap().push(item);
+                                    } else {
+                                        last_hash.store(hash, Ordering::SeqCst);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    thread::sleep(std::time::Duration::from_millis(50));
+                }
+            });
+
             Ok(())
         }
 
