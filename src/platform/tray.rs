@@ -79,7 +79,13 @@ impl TrayManager {
 }
 
 fn create_icon() -> Icon {
+    #[cfg(target_os = "windows")]
     let icon_bytes = include_bytes!("../../assets/LOGO_notext.ico");
+    #[cfg(target_os = "macos")]
+    let icon_bytes = include_bytes!("../../assets/LOGO_notext.png");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let icon_bytes = include_bytes!("../../assets/LOGO_notext.png");
+
     let img = image::load_from_memory(icon_bytes).expect("Failed to load logo icon");
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();

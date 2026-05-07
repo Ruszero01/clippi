@@ -149,7 +149,22 @@ impl Frontend {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    #[allow(deprecated)]
+    pub fn show_and_focus(&mut self) {
+        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+        self.visible = true;
+        if let Some(app) = self.app.upgrade() {
+            app.set_pinned(false);
+            self.apply_position();
+            app.window().show().ok();
+            let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+            let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            ns_app.activateIgnoringOtherApps(true);
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn show_and_focus(&mut self) {
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
