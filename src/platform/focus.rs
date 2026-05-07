@@ -1,5 +1,6 @@
 //! Focus event listener module
 //! Uses Win32 SetWinEventHook for event-driven focus monitoring
+//! Uses NSWorkspace notification for macOS focus monitoring
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::HWND;
@@ -15,6 +16,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicI32, Ordering};
+
 /// Track the previous foreground window (before Clippi took focus)
 #[cfg(target_os = "windows")]
 static PREVIOUS_FOREGROUND_WINDOW: AtomicUsize = AtomicUsize::new(0);
@@ -27,6 +31,18 @@ static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
 #[cfg(target_os = "windows")]
 static TEMP_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
+/// Track the previous foreground PID (before Clippi took focus)
+#[cfg(target_os = "macos")]
+static PREVIOUS_FOREGROUND_PID: AtomicI32 = AtomicI32::new(0);
+
+/// Last non-Clippi foreground PID (paste target)
+#[cfg(target_os = "macos")]
+static LAST_NON_CLIPPI_PID: AtomicI32 = AtomicI32::new(0);
+
+/// Temporary storage for PID swapping
+#[cfg(target_os = "macos")]
+static TEMP_PID: AtomicI32 = AtomicI32::new(0);
+
 /// FocusWatcher handle
 pub struct FocusWatcher {
     #[cfg(target_os = "windows")]
@@ -35,6 +51,8 @@ pub struct FocusWatcher {
     thread: Option<std::thread::JoinHandle<()>>,
     #[cfg(target_os = "windows")]
     thread_id: u32,
+    #[cfg(target_os = "macos")]
+    observer: Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_foundation::NSObjectProtocol>>>,
 }
 
 impl FocusWatcher {
@@ -47,7 +65,18 @@ impl FocusWatcher {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    pub fn stop(&mut self) {
+        if let Some(observer) = self.observer.take() {
+            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+            let center = workspace.notificationCenter();
+            unsafe {
+                center.removeObserver(observer.as_ref());
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn stop(&mut self) {}
 }
 
@@ -89,7 +118,46 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
     Ok(FocusWatcher { hook, thread: Some(thread), thread_id: 0 })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
+    use objc2_foundation::NSNotification;
+
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let center = workspace.notificationCenter();
+
+    let block = block2::RcBlock::new(|_notification: std::ptr::NonNull<NSNotification>| {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        if let Some(app) = workspace.frontmostApplication() {
+            let pid = app.processIdentifier();
+            let my_pid = std::process::id() as i32;
+
+            if pid == my_pid {
+                let prev = TEMP_PID.load(Ordering::SeqCst);
+                LAST_NON_CLIPPI_PID.store(prev, Ordering::SeqCst);
+                return;
+            }
+
+            TEMP_PID.store(PREVIOUS_FOREGROUND_PID.load(Ordering::SeqCst), Ordering::SeqCst);
+            PREVIOUS_FOREGROUND_PID.store(pid, Ordering::SeqCst);
+            LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
+        }
+    });
+
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(objc2_app_kit::NSWorkspaceDidActivateApplicationNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+
+    Ok(FocusWatcher {
+        observer: Some(observer),
+    })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
     Ok(FocusWatcher {})
 }
@@ -103,6 +171,13 @@ pub fn get_last_non_clippi_window() -> Option<HWND> {
     } else {
         Some(ptr as HWND)
     }
+}
+
+/// Get the paste target PID
+#[cfg(target_os = "macos")]
+pub fn get_last_non_clippi_pid() -> Option<i32> {
+    let pid = LAST_NON_CLIPPI_PID.load(Ordering::SeqCst);
+    if pid == 0 { None } else { Some(pid) }
 }
 
 #[cfg(target_os = "windows")]
