@@ -21,20 +21,30 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 image = "0.25"
 chrono = "0.4"
 tray-icon = "0.19"
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus"] }
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 global-hotkey = "0.6"
-windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
 dirs = "6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus"] }
+windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
 winreg = "0.56"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSBundle", "NSDictionary", "NSArray", "NSThread"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow"] }
+core-graphics = "0.25"
+core-foundation = "0.10"
+block2 = "0.6"
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
 
 [build-dependencies]
 slint-build = "1.15"
-winresource = "0.1"
 
 [profile.release]
 opt-level = "s"
