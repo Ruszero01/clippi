@@ -206,6 +206,11 @@ impl Frontend {
         false
     }
 
+    /// Set suppress for initial window show to prevent immediate auto-hide
+    pub fn set_initial_suppress(&mut self) {
+        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+    }
+
     pub fn move_window(&self, dx: f32, dy: f32) {
         if let Some(app) = self.app.upgrade() {
             let window = app.window();

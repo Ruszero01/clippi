@@ -9,6 +9,19 @@ mod platform;
 mod services;
 
 fn main() {
+    // On macOS, disable Slint's default menu bar to avoid muda class name conflict
+    // with tray-icon. Both Slint and tray-icon depend on muda (different versions)
+    // which register the same ObjC class "MudaMenuItem", causing a crash.
+    #[cfg(target_os = "macos")]
+    {
+        let backend = i_slint_backend_winit::Backend::builder()
+            .with_default_menu_bar(false)
+            .build()
+            .expect("Failed to create Slint backend");
+        slint::platform::set_platform(Box::new(backend))
+            .expect("Failed to set Slint platform");
+    }
+
     let slint_app = App::new().unwrap();
 
     // Register iconfont after app is initialized
@@ -20,7 +33,20 @@ fn main() {
     }
 
     let controller = app::AppController::new(&slint_app).expect("Failed to init");
-    slint_app.window().show().unwrap();
+
+    // Show and activate the window
+    #[cfg(target_os = "macos")]
+    {
+        slint_app.window().show().unwrap();
+        let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+        let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        ns_app.activateIgnoringOtherApps(true);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        slint_app.window().show().unwrap();
+    }
+
     slint::run_event_loop_until_quit().unwrap();
     controller.shutdown();
 }

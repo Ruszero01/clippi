@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "clippi"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "block2 0.6.2",
  "chrono",
@@ -863,6 +863,7 @@ dependencies = [
  "core-graphics 0.25.0",
  "dirs",
  "global-hotkey",
+ "i-slint-backend-winit",
  "image",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

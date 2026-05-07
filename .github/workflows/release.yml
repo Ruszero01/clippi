@@ -144,6 +144,16 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      - name: Build macOS .dmg
+        if: runner.os == 'macOS'
+        run: |
+          cargo install cargo-bundle
+          cargo bundle --release --target aarch64-apple-darwin
+          APP_PATH="target/aarch64-apple-darwin/release/bundle/osx/Clippi.app"
+          DMG_PATH="target/distrib/Clippi_aarch64.dmg"
+          mkdir -p target/distrib
+          hdiutil create -volname "Clippi" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+          echo "Built macOS .dmg: $DMG_PATH"
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
@@ -164,6 +174,7 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
+            target/distrib/*.dmg
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:

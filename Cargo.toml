@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
@@ -13,6 +13,17 @@ upgrade-guid = "66941EB2-9E76-47FE-93C4-E29C1CE863C8"
 path-guid = "DFAC08E5-F4EF-4907-9424-79708970616D"
 license = false
 eula = false
+
+[package.metadata.bundle]
+name = "Clippi"
+identifier = "com.clippi.app"
+icon = ["assets/LOGO.icns"]
+version = "0.1.0"
+copyright= "Copyright © 2025 Rains. MIT license."
+category = "Utility"
+short_description = "A lightweight clipboard manager"
+long_description = "Clippi is a lightweight clipboard manager that helps you manage your clipboard history with ease."
+osx_minimum_system_version = "12.0"
 
 [dependencies]
 slint = { version = "1.15", features = ["unstable-fontique-08"] }
@@ -39,6 +50,7 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplic
 core-graphics = "0.25"
 core-foundation = "0.10"
 block2 = "0.6"
+i-slint-backend-winit = { version = "1.16", features = ["renderer-femtovg", "accessibility"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"

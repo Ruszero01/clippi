@@ -32,9 +32,7 @@ pub fn is_clippi_foreground() -> bool {
 pub fn is_clippi_foreground() -> bool {
     let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
     if let Some(app) = workspace.frontmostApplication() {
-        if let Some(name) = app.localizedName() {
-            return name.to_string() == "Clippi";
-        }
+        return app.processIdentifier() == std::process::id() as i32;
     }
     false
 }

@@ -328,9 +328,10 @@ impl AppController {
             s.save();
         });
 
-        // Apply initial window position before first show
-        if let Ok(fe) = frontend.lock() {
+        // Apply initial window position and suppress auto-hide before first show
+        if let Ok(mut fe) = frontend.lock() {
             fe.apply_position();
+            fe.set_initial_suppress();
         }
 
         Ok(Self {

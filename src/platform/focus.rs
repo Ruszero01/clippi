@@ -17,7 +17,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 
 /// Track the previous foreground window (before Clippi took focus)
 #[cfg(target_os = "windows")]
@@ -52,7 +54,9 @@ pub struct FocusWatcher {
     #[cfg(target_os = "windows")]
     thread_id: u32,
     #[cfg(target_os = "macos")]
-    observer: Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_foundation::NSObjectProtocol>>>,
+    running: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FocusWatcher {
@@ -67,12 +71,9 @@ impl FocusWatcher {
 
     #[cfg(target_os = "macos")]
     pub fn stop(&mut self) {
-        if let Some(observer) = self.observer.take() {
-            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-            let center = workspace.notificationCenter();
-            unsafe {
-                center.removeObserver(observer.as_ref());
-            }
+        self.running.store(false, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
         }
     }
 
@@ -120,40 +121,33 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
 
 #[cfg(target_os = "macos")]
 pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
-    use objc2_foundation::NSNotification;
+    let running = Arc::new(AtomicBool::new(true));
+    let running_clone = running.clone();
+    let my_pid = std::process::id() as i32;
 
-    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-    let center = workspace.notificationCenter();
+    let thread = std::thread::spawn(move || {
+        while running_clone.load(Ordering::SeqCst) {
+            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+            if let Some(app) = workspace.frontmostApplication() {
+                let pid = app.processIdentifier();
 
-    let block = block2::RcBlock::new(|_notification: std::ptr::NonNull<NSNotification>| {
-        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-        if let Some(app) = workspace.frontmostApplication() {
-            let pid = app.processIdentifier();
-            let my_pid = std::process::id() as i32;
-
-            if pid == my_pid {
-                let prev = TEMP_PID.load(Ordering::SeqCst);
-                LAST_NON_CLIPPI_PID.store(prev, Ordering::SeqCst);
-                return;
+                if pid == my_pid {
+                    let prev = TEMP_PID.load(Ordering::SeqCst);
+                    LAST_NON_CLIPPI_PID.store(prev, Ordering::SeqCst);
+                } else {
+                    TEMP_PID.store(PREVIOUS_FOREGROUND_PID.load(Ordering::SeqCst), Ordering::SeqCst);
+                    PREVIOUS_FOREGROUND_PID.store(pid, Ordering::SeqCst);
+                    LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
+                }
             }
 
-            TEMP_PID.store(PREVIOUS_FOREGROUND_PID.load(Ordering::SeqCst), Ordering::SeqCst);
-            PREVIOUS_FOREGROUND_PID.store(pid, Ordering::SeqCst);
-            LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
     });
 
-    let observer = unsafe {
-        center.addObserverForName_object_queue_usingBlock(
-            Some(objc2_app_kit::NSWorkspaceDidActivateApplicationNotification),
-            None,
-            None,
-            &block,
-        )
-    };
-
     Ok(FocusWatcher {
-        observer: Some(observer),
+        running,
+        thread: Some(thread),
     })
 }
 
