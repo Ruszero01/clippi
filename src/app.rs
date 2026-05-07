@@ -28,6 +28,9 @@ pub struct AppController {
 
 impl AppController {
     pub fn new(slint_app: &App) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Migrate legacy files from exe dir to platform data dir
+        crate::core::paths::migrate_legacy_files();
+
         // Load settings
         let settings = AppSettings::load();
 

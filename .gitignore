@@ -1,6 +1,15 @@
-.claude/
+# Build artifacts
 target/
-/target/
+dist/
+
+# Runtime data
 *.db
-CLAUDE.md
 clippi.toml
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+CLAUDE.md

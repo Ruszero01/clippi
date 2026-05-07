@@ -1,14 +1,16 @@
-//! Settings persistence - loads and saves app settings to clippi.toml
+//! Settings persistence - loads and saves app settings
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+
+#[cfg(target_os = "windows")]
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+#[cfg(target_os = "windows")]
 use winreg::RegKey;
 
 const AUTOSTART_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const APP_NAME: &str = "Clippi";
-const CONFIG_FILE: &str = "clippi.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -53,27 +55,23 @@ impl AppSettings {
     pub fn save(&self) {
         let path = Self::config_path();
         if let Ok(content) = toml::to_string_pretty(self) {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             let _ = std::fs::write(&path, content);
         }
     }
 
     fn config_path() -> PathBuf {
-        PathBuf::from(CONFIG_FILE)
+        super::paths::config_path()
     }
 
     pub fn resolve_db_path(&self) -> PathBuf {
-        if self.db_path.is_empty() {
-            if let Ok(exe) = std::env::current_exe() {
-                exe.parent().unwrap_or(&std::path::Path::new(".")).join("clippi.db")
-            } else {
-                PathBuf::from("clippi.db")
-            }
-        } else {
-            PathBuf::from(&self.db_path)
-        }
+        super::paths::resolve_db_path(&self.db_path)
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn is_system_dark_mode() -> bool {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(key) = hkcu.open_subkey_with_flags(
@@ -85,6 +83,12 @@ pub fn is_system_dark_mode() -> bool {
     key.get_value::<u32, _>("AppsUseLightTheme").ok() == Some(0)
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn is_system_dark_mode() -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
 pub fn set_auto_start(enable: bool) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
@@ -98,6 +102,11 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
     } else {
         let _ = key.delete_value(APP_NAME);
     }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_auto_start(_enable: bool) -> Result<(), String> {
     Ok(())
 }
 

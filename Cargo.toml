@@ -1,8 +1,18 @@
 [package]
 name = "clippi"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
+description = "A lightweight clipboard manager"
+authors = ["Rains"]
+repository = "https://github.com/Ruszero01/clippi"
+license = "MIT"
 edition = "2021"
 build = "build.rs"
+
+[package.metadata.wix]
+upgrade-guid = "66941EB2-9E76-47FE-93C4-E29C1CE863C8"
+path-guid = "DFAC08E5-F4EF-4907-9424-79708970616D"
+license = false
+eula = false
 
 [dependencies]
 slint = { version = "1.15", features = ["unstable-fontique-08"] }
@@ -12,12 +22,27 @@ image = "0.25"
 chrono = "0.4"
 tray-icon = "0.19"
 windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus"] }
-winreg = "0.56"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 global-hotkey = "0.6"
 windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
+dirs = "6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56"
 
 [build-dependencies]
 slint-build = "1.15"
+winresource = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
