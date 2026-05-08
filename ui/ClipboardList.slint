@@ -21,6 +21,7 @@ export component ClipboardList inherits Rectangle {
     callback copy-item(int);
     callback paste-item(int);
     callback toggle-filter(string);
+    callback clear-filters();
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #181a26 : #ffffff;

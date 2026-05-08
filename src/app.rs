@@ -344,6 +344,20 @@ impl AppController {
             });
         });
 
+        let looper_for_clear = Arc::clone(&looper);
+        let app_for_clear = app.clone();
+        slint_app.on_clear_filters(move || {
+            let _ = looper_for_clear.try_with_clipboard_service(|cs| {
+                cs.clear_filters();
+                if let Some(app) = app_for_clear.upgrade() {
+                    app.set_filter_plain_text(false);
+                    app.set_filter_rich_text(false);
+                    app.set_filter_image(false);
+                    app.set_filter_link(false);
+                }
+            });
+        });
+
         // Apply initial window position and suppress auto-hide before first show
         if let Ok(mut fe) = frontend.lock() {
             fe.apply_position();

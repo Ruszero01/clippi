@@ -1,6 +1,7 @@
 //! Clipboard service - handles clipboard business logic
 
 use crate::core::db::Database;
+use crate::core::filters::ClipboardFilters;
 use crate::core::types::format_relative_time;
 use crate::looper::Pollable;
 use crate::platform::clipboard::ClipboardShared;
@@ -20,7 +21,7 @@ pub struct ClipboardService {
     app: slint::Weak<App>,
     model: Rc<VecModel<ClipboardEntry>>,
     sort_by_created: bool,
-    active_filters: Vec<String>,
+    filters: ClipboardFilters,
 }
 
 impl ClipboardService {
@@ -36,7 +37,7 @@ impl ClipboardService {
             app,
             model: model.clone(),
             sort_by_created: false,
-            active_filters: Vec::new(),
+            filters: ClipboardFilters::default(),
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -47,29 +48,22 @@ impl ClipboardService {
 
     /// Toggle a content type filter and reload from database
     pub fn toggle_filter_and_refresh(&mut self, filter_type: &str) {
-        if let Some(pos) = self.active_filters.iter().position(|f| f == filter_type) {
-            self.active_filters.remove(pos);
-        } else {
-            self.active_filters.push(filter_type.to_string());
-        }
+        self.filters.toggle_type(filter_type);
+        self.refresh_with_current_filter();
+    }
+
+    /// Clear all filters and reload
+    pub fn clear_filters(&mut self) {
+        self.filters.clear_all();
         self.refresh_with_current_filter();
     }
 
     fn refresh_with_current_filter(&mut self) {
         self.model.clear();
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
-        let items = if self.active_filters.is_empty() {
-            if self.sort_by_created {
-                self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
-            } else {
-                self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
-            }
-        } else {
-            let types: Vec<&str> = self.active_filters.iter().map(|s| s.as_str()).collect();
-            self.db.lock().unwrap()
-                .load_by_types(&types, MAX_ITEMS, order_by)
-                .unwrap_or_default()
-        };
+        let items = self.db.lock().unwrap()
+            .load_filtered(&self.filters, MAX_ITEMS, order_by)
+            .unwrap_or_default();
         for item in items {
             self.model.push(item_to_entry(&item));
         }
@@ -86,11 +80,10 @@ impl ClipboardService {
 
     /// Load initial items from database
     pub fn load_initial(&self) {
-        let items = if self.sort_by_created {
-            self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
-        } else {
-            self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
-        };
+        let items = self.db.lock().unwrap()
+            .load_filtered(&self.filters, MAX_ITEMS,
+                if self.sort_by_created { "created_at" } else { "updated_at" })
+            .unwrap_or_default();
         for item in items {
             self.model.push(item_to_entry(&item));
         }
@@ -117,7 +110,12 @@ impl ClipboardService {
 
     /// Check if a filter type is active
     pub fn is_filter_active(&self, filter_type: &str) -> bool {
-        self.active_filters.iter().any(|f| f == filter_type)
+        self.filters.is_type_active(filter_type)
+    }
+
+    /// Check if any filters are active
+    pub fn has_active_filters(&self) -> bool {
+        !self.filters.is_empty()
     }
 
     /// Get reference to shared buffer for platform layer
@@ -145,12 +143,7 @@ impl Pollable for ClipboardService {
                 }
 
                 // Check if item matches current filters
-                let matches_filter = if self.active_filters.is_empty() {
-                    true
-                } else {
-                    self.active_filters.iter().any(|f| item.content_type.as_str() == f.as_str())
-                };
-                if !matches_filter {
+                if !self.filters.matches_item(item) {
                     continue;
                 }
 

@@ -1,5 +1,6 @@
 //! Database persistence for clipboard items
 
+use crate::core::filters::ClipboardFilters;
 use crate::core::types::{ClipboardItem, ContentType};
 use rusqlite::{params, Connection, Result as SqlResult};
 
@@ -55,70 +56,23 @@ impl Database {
         Ok(())
     }
 
-    pub fn load_by_updated(&self, limit: usize) -> SqlResult<Vec<ClipboardItem>> {
-        self.load_items(limit, "updated_at")
-    }
-
-    pub fn load_by_created(&self, limit: usize) -> SqlResult<Vec<ClipboardItem>> {
-        self.load_items(limit, "created_at")
-    }
-
-    pub fn load_by_types(&self, content_types: &[&str], limit: usize, order_by: &str) -> SqlResult<Vec<ClipboardItem>> {
-        if content_types.is_empty() {
-            return self.load_items(limit, order_by);
-        }
-        let placeholders: Vec<&str> = content_types.iter().map(|_| "?").collect();
+    /// Load items with unified filter support.
+    /// Uses ClipboardFilters to build WHERE clause with AND logic across all filter dimensions.
+    pub fn load_filtered(
+        &self,
+        filters: &ClipboardFilters,
+        limit: usize,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        let (where_clause, mut filter_params) = filters.db_where();
         let query = format!(
             "SELECT id, content_type, text_preview, full_text, content_hash, created_at, updated_at, image_path
-             FROM clipboard_items WHERE content_type IN ({}) ORDER BY {} DESC LIMIT ?",
-            placeholders.join(", "),
-            order_by
+             FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
+            where_clause, order_by
         );
+        filter_params.push((limit as i64).into());
         let mut stmt = self.conn.prepare(&query)?;
-        let mut params_vec: Vec<rusqlite::types::Value> = content_types.iter().map(|s| s.to_string().into()).collect();
-        params_vec.push((limit as i64).into());
-        let items = stmt.query_map(rusqlite::params_from_iter(params_vec), |row| {
-            let ct_str: String = row.get(1)?;
-            let created_str: String = row.get(5)?;
-            let updated_str: String = row.get(6)?;
-            let image_path: String = row.get(7).unwrap_or_default();
-            Ok(ClipboardItem {
-                id: row.get(0)?,
-                content_type: ContentType::from_str(&ct_str),
-                text_preview: row.get(2)?,
-                full_text: row.get(3)?,
-                content_hash: row.get::<_, i64>(4)? as u64,
-                created_at: created_str.parse().unwrap_or_default(),
-                updated_at: updated_str.parse().unwrap_or_default(),
-                image_path,
-            })
-        })?;
-        items.collect()
-    }
-
-    fn load_items(&self, limit: usize, order_by: &str) -> SqlResult<Vec<ClipboardItem>> {
-        let query = format!(
-            "SELECT id, content_type, text_preview, full_text, content_hash, created_at, updated_at, image_path
-             FROM clipboard_items ORDER BY {} DESC LIMIT ?1",
-            order_by
-        );
-        let mut stmt = self.conn.prepare(&query)?;
-        let items = stmt.query_map(params![limit as i64], |row| {
-            let ct_str: String = row.get(1)?;
-            let created_str: String = row.get(5)?;
-            let updated_str: String = row.get(6)?;
-            let image_path: String = row.get(7).unwrap_or_default();
-            Ok(ClipboardItem {
-                id: row.get(0)?,
-                content_type: ContentType::from_str(&ct_str),
-                text_preview: row.get(2)?,
-                full_text: row.get(3)?,
-                content_hash: row.get::<_, i64>(4)? as u64,
-                created_at: created_str.parse().unwrap_or_default(),
-                updated_at: updated_str.parse().unwrap_or_default(),
-                image_path,
-            })
-        })?;
+        let items = stmt.query_map(rusqlite::params_from_iter(filter_params), row_to_item)?;
         items.collect()
     }
 
@@ -129,20 +83,7 @@ impl Database {
         )?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
-            let ct_str: String = row.get(1)?;
-            let created_str: String = row.get(5)?;
-            let updated_str: String = row.get(6)?;
-            let image_path: String = row.get(7).unwrap_or_default();
-            Ok(Some(ClipboardItem {
-                id: row.get(0)?,
-                content_type: ContentType::from_str(&ct_str),
-                text_preview: row.get(2)?,
-                full_text: row.get(3)?,
-                content_hash: row.get::<_, i64>(4)? as u64,
-                created_at: created_str.parse().unwrap_or_default(),
-                updated_at: updated_str.parse().unwrap_or_default(),
-                image_path,
-            }))
+            Ok(Some(row_to_item(row)?))
         } else {
             Ok(None)
         }
@@ -155,22 +96,26 @@ impl Database {
         )?;
         let mut rows = stmt.query(params![hash as i64])?;
         if let Some(row) = rows.next()? {
-            let ct_str: String = row.get(1)?;
-            let created_str: String = row.get(5)?;
-            let updated_str: String = row.get(6)?;
-            let image_path: String = row.get(7).unwrap_or_default();
-            Ok(Some(ClipboardItem {
-                id: row.get(0)?,
-                content_type: ContentType::from_str(&ct_str),
-                text_preview: row.get(2)?,
-                full_text: row.get(3)?,
-                content_hash: row.get::<_, i64>(4)? as u64,
-                created_at: created_str.parse().unwrap_or_default(),
-                updated_at: updated_str.parse().unwrap_or_default(),
-                image_path,
-            }))
+            Ok(Some(row_to_item(row)?))
         } else {
             Ok(None)
         }
     }
+}
+
+fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
+    let ct_str: String = row.get(1)?;
+    let created_str: String = row.get(5)?;
+    let updated_str: String = row.get(6)?;
+    let image_path: String = row.get(7).unwrap_or_default();
+    Ok(ClipboardItem {
+        id: row.get(0)?,
+        content_type: ContentType::from_str(&ct_str),
+        text_preview: row.get(2)?,
+        full_text: row.get(3)?,
+        content_hash: row.get::<_, i64>(4)? as u64,
+        created_at: created_str.parse().unwrap_or_default(),
+        updated_at: updated_str.parse().unwrap_or_default(),
+        image_path,
+    })
 }

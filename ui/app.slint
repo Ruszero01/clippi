@@ -63,6 +63,7 @@ export component App inherits Window {
     callback set-theme(int);
     callback set-position-mode(int);
     callback toggle-filter(string);
+    callback clear-filters();
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -308,6 +309,7 @@ export component App inherits Window {
                     filter-image: root.filter-image;
                     filter-link: root.filter-link;
                     toggle-filter(type) => { root.toggle-filter(type); }
+                    clear-filters => { root.clear-filters(); }
                     copy-item(id) => { root.copy-item(id); }
                     paste-item(id) => { root.paste-item(id); }
                 }
