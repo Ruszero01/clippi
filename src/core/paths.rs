@@ -25,6 +25,14 @@ pub fn resolve_db_path(db_setting: &str) -> PathBuf {
     }
 }
 
+pub fn images_dir() -> PathBuf {
+    let dir = app_data_dir().join("images");
+    if !dir.exists() {
+        let _ = fs::create_dir_all(&dir);
+    }
+    dir
+}
+
 fn ensure_app_data_dir() -> std::io::Result<()> {
     let dir = app_data_dir();
     if !dir.exists() {

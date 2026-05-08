@@ -328,6 +328,19 @@ impl AppController {
             s.save();
         });
 
+        // Filter callbacks
+        let looper_for_filter = Arc::clone(&looper);
+        let app_for_filter = app.clone();
+        slint_app.on_set_filter(move |filter: SharedString| {
+            let filter_opt = if filter == "all" { None } else { Some(filter.to_string()) };
+            let _ = looper_for_filter.try_with_clipboard_service(|cs| {
+                cs.set_filter_and_refresh(filter_opt);
+            });
+            if let Some(app) = app_for_filter.upgrade() {
+                app.set_active_filter(filter);
+            }
+        });
+
         // Apply initial window position and suppress auto-hide before first show
         if let Ok(mut fe) = frontend.lock() {
             fe.apply_position();

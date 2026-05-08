@@ -6,7 +6,7 @@ use crate::looper::Pollable;
 use crate::platform::clipboard::ClipboardShared;
 use crate::App;
 use crate::ClipboardEntry;
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +20,7 @@ pub struct ClipboardService {
     app: slint::Weak<App>,
     model: Rc<VecModel<ClipboardEntry>>,
     sort_by_created: bool,
+    active_filter: Option<String>,
 }
 
 impl ClipboardService {
@@ -35,6 +36,7 @@ impl ClipboardService {
             app,
             model: model.clone(),
             sort_by_created: false,
+            active_filter: None,
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -43,14 +45,47 @@ impl ClipboardService {
         service
     }
 
+    /// Set content type filter and reload from database
+    pub fn set_filter_and_refresh(&mut self, filter: Option<String>) {
+        self.active_filter = filter;
+        self.model.clear();
+        let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
+        let items = match &self.active_filter {
+            Some(ct) => self.db.lock().unwrap()
+                .load_by_type(ct, MAX_ITEMS, order_by)
+                .unwrap_or_default(),
+            None => {
+                if self.sort_by_created {
+                    self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
+                } else {
+                    self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
+                }
+            }
+        };
+        for item in items {
+            self.model.push(item_to_entry(&item));
+        }
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
+        }
+    }
+
     /// Set sort mode and refresh (full reload)
     pub fn set_sort_and_refresh(&mut self, sort_by_created: bool) {
         self.sort_by_created = sort_by_created;
         self.model.clear();
-        let items = if sort_by_created {
-            self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
-        } else {
-            self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
+        let order_by = if sort_by_created { "created_at" } else { "updated_at" };
+        let items = match &self.active_filter {
+            Some(ct) => self.db.lock().unwrap()
+                .load_by_type(ct, MAX_ITEMS, order_by)
+                .unwrap_or_default(),
+            None => {
+                if sort_by_created {
+                    self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
+                } else {
+                    self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
+                }
+            }
         };
         for item in items {
             self.model.push(item_to_entry(&item));
@@ -99,7 +134,6 @@ impl ClipboardService {
 
 impl Pollable for ClipboardService {
     fn poll(&mut self) {
-        // Take all pending items
         let pending = {
             let mut p = self.shared.pending.lock().unwrap();
             p.drain(..).collect::<Vec<_>>()
@@ -109,33 +143,36 @@ impl Pollable for ClipboardService {
             return;
         }
 
-        // Upsert to database and add to model
         if let Ok(db) = self.db.lock() {
             for item in &pending {
                 if let Err(e) = db.upsert(item) {
                     eprintln!("[ERROR] ClipboardService: upsert error: {:?}", e);
-                } else {
-                    // Find existing item by content_hash to get actual DB id
-                    if let Ok(Some(existing)) = db.get_by_hash(item.content_hash) {
-                        // Remove existing item from model (by id)
-                        let existing_idx = (0..self.model.row_count()).position(|i| {
-                            self.model.row_data(i).map(|e| e.id as i64 == existing.id).unwrap_or(false)
-                        });
-                        if let Some(idx) = existing_idx {
-                            self.model.remove(idx);
-                        }
+                    continue;
+                }
 
-                        // Insert with correct DB id at beginning
-                        self.model.insert(0, item_to_entry(&existing));
-                    } else {
-                        // New item - insert with id from item (should match DB after upsert)
-                        self.model.insert(0, item_to_entry(item));
+                // Check if item matches current filter
+                let matches_filter = match &self.active_filter {
+                    None => true,
+                    Some(f) => item.content_type.as_str() == f.as_str(),
+                };
+                if !matches_filter {
+                    continue;
+                }
+
+                if let Ok(Some(existing)) = db.get_by_hash(item.content_hash) {
+                    let existing_idx = (0..self.model.row_count()).position(|i| {
+                        self.model.row_data(i).map(|e| e.id as i64 == existing.id).unwrap_or(false)
+                    });
+                    if let Some(idx) = existing_idx {
+                        self.model.remove(idx);
                     }
+                    self.model.insert(0, item_to_entry(&existing));
+                } else {
+                    self.model.insert(0, item_to_entry(item));
                 }
             }
         }
 
-        // Trim to MAX_ITEMS items
         while self.model.row_count() > MAX_ITEMS {
             self.model.remove(self.model.row_count() - 1);
         }
@@ -147,10 +184,17 @@ impl Pollable for ClipboardService {
 }
 
 fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
+    let thumbnail = if !item.image_path.is_empty() {
+        Image::load_from_path(std::path::Path::new(&item.image_path)).unwrap_or_default()
+    } else {
+        Image::default()
+    };
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.text_preview.clone()),
         content_type: SharedString::from(item.content_type.as_str()),
         time_label: SharedString::from(format_relative_time(&item.updated_at)),
+        image_path: SharedString::from(item.image_path.clone()),
+        thumbnail,
     }
 }

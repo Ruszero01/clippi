@@ -7,25 +7,29 @@ use std::collections::hash_map::DefaultHasher;
 /// Content type of clipboard items
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
-    Text,
-    Html,
+    PlainText,
+    RichText,
     Image,
+    Link,
 }
 
 impl ContentType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ContentType::Text => "text",
-            ContentType::Html => "html",
+            ContentType::PlainText => "plain_text",
+            ContentType::RichText => "rich_text",
             ContentType::Image => "image",
+            ContentType::Link => "link",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            "html" => ContentType::Html,
+            "plain_text" | "text" => ContentType::PlainText,
+            "rich_text" | "html" => ContentType::RichText,
             "image" => ContentType::Image,
-            _ => ContentType::Text,
+            "link" => ContentType::Link,
+            _ => ContentType::PlainText,
         }
     }
 }
@@ -40,22 +44,38 @@ pub struct ClipboardItem {
     pub content_hash: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub image_path: String,
 }
 
 impl ClipboardItem {
-    pub fn new_text(id: i64, text: &str) -> Self {
+    pub fn new_text(id: i64, text: &str, content_type: ContentType) -> Self {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
         let preview: String = text.chars().take(200).collect();
         let now = Utc::now();
         Self {
             id,
-            content_type: ContentType::Text,
+            content_type,
             text_preview: preview,
             full_text: text.to_string(),
             content_hash: hasher.finish(),
             created_at: now,
             updated_at: now,
+            image_path: String::new(),
+        }
+    }
+
+    pub fn new_image(id: i64, image_path: &str, hash: u64) -> Self {
+        let now = Utc::now();
+        Self {
+            id,
+            content_type: ContentType::Image,
+            text_preview: "(图片)".to_string(),
+            full_text: image_path.to_string(),
+            content_hash: hash,
+            created_at: now,
+            updated_at: now,
+            image_path: image_path.to_string(),
         }
     }
 }
@@ -74,4 +94,12 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     } else {
         format!("{}h ago", secs / 3600)
     }
+}
+
+/// Check if text is a URL (http/https)
+pub fn is_url(text: &str) -> bool {
+    let text = text.trim();
+    (text.starts_with("http://") || text.starts_with("https://"))
+        && !text.contains('\n')
+        && text.len() > 10
 }

@@ -33,6 +33,9 @@ export component App inherits Window {
     in-out property <bool> recording-hotkey: false;
     in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
 
+    // 分类筛选
+    in-out property <string> active-filter: "all";
+
     // 双击检测
     in-out property <int> last-clicked-id: -1;
     in-out property <bool> click-pending: false;
@@ -56,6 +59,7 @@ export component App inherits Window {
     callback start-recording-hotkey();
     callback set-theme(int);
     callback set-position-mode(int);
+    callback set-filter(string);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -296,6 +300,8 @@ export component App inherits Window {
                     item-count: root.item-count;
                     last-clicked-id: root.last-clicked-id;
                     click-pending: root.click-pending;
+                    active-filter: root.active-filter;
+                    set-filter(type) => { root.set-filter(type); }
                     copy-item(id) => { root.copy-item(id); }
                     paste-item(id) => { root.paste-item(id); }
                 }
