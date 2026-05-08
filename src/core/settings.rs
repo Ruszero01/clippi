@@ -28,6 +28,7 @@ pub struct AppSettings {
     pub window_position_mode: String, // "center" | "follow" | "remember"
     pub saved_window_x: i32,
     pub saved_window_y: i32,
+    pub card_height_mode: String, // "low" | "medium" | "high" | "auto"
 }
 
 impl Default for AppSettings {
@@ -42,6 +43,7 @@ impl Default for AppSettings {
             window_position_mode: "center".to_string(),
             saved_window_x: -1,
             saved_window_y: -1,
+            card_height_mode: "medium".to_string(),
         }
     }
 }
