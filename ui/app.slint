@@ -32,6 +32,7 @@ export component App inherits Window {
     in-out property <string> hotkey-display: "";
     in-out property <bool> recording-hotkey: false;
     in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
+    in-out property <string> card-height-mode: "medium";
 
     // 分类筛选
     in-out property <bool> filter-plain-text: false;
@@ -62,6 +63,7 @@ export component App inherits Window {
     callback start-recording-hotkey();
     callback set-theme(int);
     callback set-position-mode(int);
+    callback set-card-height-mode(string);
     callback toggle-filter(string);
     callback clear-filters();
     callback search-keyword(string);
@@ -309,6 +311,7 @@ export component App inherits Window {
                     filter-rich-text: root.filter-rich-text;
                     filter-image: root.filter-image;
                     filter-link: root.filter-link;
+                    card-height-mode: root.card-height-mode;
                     toggle-filter(type) => { root.toggle-filter(type); }
                     clear-filters => { root.clear-filters(); }
                     search-keyword(keyword) => { root.search-keyword(keyword); }
@@ -334,6 +337,7 @@ export component App inherits Window {
                     hotkey-display: root.hotkey-display;
                     recording-hotkey: root.recording-hotkey;
                     position-mode: root.position-mode;
+                    card-height-mode: root.card-height-mode;
 
                     back => { root.current-view = "clipboard"; }
                     toggle-auto-start => { root.toggle-auto-start(); }
@@ -345,6 +349,7 @@ export component App inherits Window {
                     start-recording-hotkey => { root.start-recording-hotkey(); }
                     set-theme(mode) => { root.set-theme(mode); }
                     set-position-mode(mode) => { root.set-position-mode(mode); }
+                    set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
                 }
             }
         }

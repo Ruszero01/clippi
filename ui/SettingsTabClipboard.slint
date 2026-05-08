@@ -1,8 +1,10 @@
 export component SettingsTabClipboard inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <bool> sort-by-created: false;
+    in property <string> card-height-mode: "medium";
 
     callback toggle-sort-by-created();
+    callback set-card-height-mode(string);
 
     property <color> surface:       dark-mode ? #181a26 : #ffffff;
     property <color> text-1:       dark-mode ? #e6e9f2 : #1a1c2e;
@@ -71,6 +73,132 @@ export component SettingsTabClipboard inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         clicked => { root.toggle-sort-by-created(); }
+                    }
+                }
+            }
+        }
+
+        // 卡片高度
+        Rectangle {
+            height: 88px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            VerticalLayout {
+                width: parent.width;
+                padding: 14px;
+                spacing: 10px;
+
+                Text {
+                    text: "卡片高度";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: text-1;
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    // 高
+                    Rectangle {
+                        height: 28px;
+                        width: ch-text.preferred-width + 16px;
+                        border-radius: 5px;
+                        background: root.card-height-mode == "high" ? accent : transparent;
+                        border-width: root.card-height-mode == "high" ? 0px : 1px;
+                        border-color: divider;
+
+                        ch-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-card-height-mode("high"); }
+                        }
+
+                        ch-text := Text {
+                            text: "高";
+                            font-size: 11px;
+                            font-weight: root.card-height-mode == "high" ? 600 : 400;
+                            color: root.card-height-mode == "high" ? #ffffff : text-2;
+                            x: 8px;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    // 中
+                    Rectangle {
+                        height: 28px;
+                        width: cm-text.preferred-width + 16px;
+                        border-radius: 5px;
+                        background: root.card-height-mode == "medium" ? accent : transparent;
+                        border-width: root.card-height-mode == "medium" ? 0px : 1px;
+                        border-color: divider;
+
+                        cm-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-card-height-mode("medium"); }
+                        }
+
+                        cm-text := Text {
+                            text: "中";
+                            font-size: 11px;
+                            font-weight: root.card-height-mode == "medium" ? 600 : 400;
+                            color: root.card-height-mode == "medium" ? #ffffff : text-2;
+                            x: 8px;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    // 低
+                    Rectangle {
+                        height: 28px;
+                        width: cl-text.preferred-width + 16px;
+                        border-radius: 5px;
+                        background: root.card-height-mode == "low" ? accent : transparent;
+                        border-width: root.card-height-mode == "low" ? 0px : 1px;
+                        border-color: divider;
+
+                        cl-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-card-height-mode("low"); }
+                        }
+
+                        cl-text := Text {
+                            text: "低";
+                            font-size: 11px;
+                            font-weight: root.card-height-mode == "low" ? 600 : 400;
+                            color: root.card-height-mode == "low" ? #ffffff : text-2;
+                            x: 8px;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    // 自动
+                    Rectangle {
+                        height: 28px;
+                        width: ca-text.preferred-width + 16px;
+                        border-radius: 5px;
+                        background: root.card-height-mode == "auto" ? accent : transparent;
+                        border-width: root.card-height-mode == "auto" ? 0px : 1px;
+                        border-color: divider;
+
+                        ca-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-card-height-mode("auto"); }
+                        }
+
+                        ca-text := Text {
+                            text: "自动";
+                            font-size: 11px;
+                            font-weight: root.card-height-mode == "auto" ? 600 : 400;
+                            color: root.card-height-mode == "auto" ? #ffffff : text-2;
+                            x: 8px;
+                            y: (parent.height - self.height) / 2;
+                        }
                     }
                 }
             }

@@ -15,6 +15,7 @@ export component SettingsPanel inherits Rectangle {
     in property <string> hotkey-display: "";
     in property <bool> recording-hotkey: false;
     in property <int> position-mode: 0;
+    in property <string> card-height-mode: "medium";
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -30,6 +31,7 @@ export component SettingsPanel inherits Rectangle {
     callback start-recording-hotkey();
     callback set-theme(int);
     callback set-position-mode(int);
+    callback set-card-height-mode(string);
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #8a8ea8 : #7c809a;
@@ -235,7 +237,9 @@ export component SettingsPanel inherits Rectangle {
         if (root.active-tab == 1) : SettingsTabClipboard {
             dark-mode: root.dark-mode;
             sort-by-created: root.sort-by-created;
+            card-height-mode: root.card-height-mode;
             toggle-sort-by-created => { root.toggle-sort-by-created(); }
+            set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
         }
 
         if (root.active-tab == 2) : SettingsTabHotkey {
