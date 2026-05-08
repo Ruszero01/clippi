@@ -79,8 +79,6 @@ impl ClipboardItem {
     }
 }
 
-unsafe impl Send for ClipboardItem {}
-unsafe impl Sync for ClipboardItem {}
 
 /// Format elapsed time as human-readable string
 pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {

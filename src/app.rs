@@ -361,12 +361,11 @@ impl AppController {
         // Search callback
         let looper_for_search = Arc::clone(&looper);
         slint_app.on_search_keyword(move |keyword: SharedString| {
-            let kw = keyword.to_string();
             let _ = looper_for_search.try_with_clipboard_service(|cs| {
-                if kw.is_empty() {
+                if keyword.is_empty() {
                     cs.clear_keyword();
                 } else {
-                    cs.set_keyword(&kw);
+                    cs.set_keyword(keyword.as_str());
                 }
             });
         });

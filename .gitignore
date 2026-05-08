@@ -10,6 +10,9 @@ clippi.toml
 .vscode/
 .idea/
 
+# macOS
+.DS_Store
+
 # Claude Code
 .claude/
 CLAUDE.md

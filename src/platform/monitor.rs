@@ -88,13 +88,13 @@ pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
 
         let screen = target_screen?;
         let visible = screen.visibleFrame();
-        // macOS coordinate system: Y starts from bottom, need to convert to top-left
-        let main_height = objc2_app_kit::NSScreen::mainScreen(mtm)
-            .map(|s| s.frame().size.height as i32)
-            .unwrap_or(0);
+        // macOS coordinate system: Y starts from bottom, need to convert to top-left.
+        // Use the matched screen's own frame height (not mainScreen), in case
+        // multiple monitors have different resolutions.
+        let screen_height = screen.frame().size.height as i32;
         Some(MonitorRect {
             x: visible.origin.x as i32,
-            y: main_height - (visible.origin.y as i32) - (visible.size.height as i32),
+            y: screen_height - (visible.origin.y as i32) - (visible.size.height as i32),
             width: visible.size.width as i32,
             height: visible.size.height as i32,
         })

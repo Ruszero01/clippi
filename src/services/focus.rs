@@ -56,11 +56,6 @@ impl Pollable for FocusService {
             return;
         }
 
-        // Must be in clipboard view (not settings) - removed to allow all views to auto-hide
-        // if app.get_current_view() != SharedString::from("clipboard") {
-        //     return;
-        // }
-
         // Check suppress (200ms after show)
         let is_suppressed = {
             if let Ok(fe) = self.frontend.lock() {

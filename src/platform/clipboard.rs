@@ -5,7 +5,11 @@
 
 use crate::core::types::{is_url, ClipboardItem, ContentType};
 use crate::core::paths::images_dir;
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
+use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -36,6 +40,55 @@ pub trait ClipboardListener: Send {
     fn stop(&mut self);
 }
 
+/// Shared clipboard content detection (platform-agnostic).
+/// Priority: Image > Link > RichText > PlainText
+fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
+    if ctx.has(ContentFormat::Image) {
+        if let Ok(img) = ctx.get_image() {
+            if !img.is_empty() {
+                let png_bytes = img.to_png().ok()?;
+                let mut hasher = DefaultHasher::new();
+                hasher.write(png_bytes.get_bytes());
+                let hash = hasher.finish();
+
+                let img_dir = images_dir();
+                let file_name = format!("{:016x}.png", hash);
+                let file_path = img_dir.join(&file_name);
+
+                if !file_path.exists() {
+                    if png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err() {
+                        return None;
+                    }
+                }
+
+                return Some(ClipboardItem::new_image(
+                    0,
+                    file_path.to_str().unwrap_or(""),
+                    hash,
+                ));
+            }
+        }
+    }
+
+    if let Ok(text) = ctx.get_text() {
+        if text.is_empty() {
+            return None;
+        }
+
+        if is_url(&text) {
+            return Some(ClipboardItem::new_text(0, &text, ContentType::Link));
+        }
+
+        if ctx.has(ContentFormat::Html) {
+            return Some(ClipboardItem::new_text(0, &text, ContentType::RichText));
+        }
+
+        return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText));
+    }
+
+    None
+}
+
 // ============================================================================
 // Windows Implementation - Multi-format detection
 // ============================================================================
@@ -43,10 +96,6 @@ pub trait ClipboardListener: Send {
 #[cfg(target_os = "windows")]
 mod windows {
     use super::*;
-    use clipboard_rs::common::RustImage;
-    use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
@@ -79,55 +128,6 @@ mod windows {
             }
             hasher.finish()
         }
-    }
-
-    fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
-        // Priority: Image > Link > RichText > PlainText
-
-        if ctx.has(ContentFormat::Image) {
-            if let Ok(img) = ctx.get_image() {
-                if !img.is_empty() {
-                    let png_bytes = img.to_png().ok()?;
-                    let mut hasher = DefaultHasher::new();
-                    hasher.write(png_bytes.get_bytes());
-                    let hash = hasher.finish();
-
-                    let img_dir = images_dir();
-                    let file_name = format!("{:016x}.png", hash);
-                    let file_path = img_dir.join(&file_name);
-
-                    if !file_path.exists() {
-                        if png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err() {
-                            return None;
-                        }
-                    }
-
-                    return Some(ClipboardItem::new_image(
-                        0,
-                        file_path.to_str().unwrap_or(""),
-                        hash,
-                    ));
-                }
-            }
-        }
-
-        if let Ok(text) = ctx.get_text() {
-            if text.is_empty() {
-                return None;
-            }
-
-            if is_url(&text) {
-                return Some(ClipboardItem::new_text(0, &text, ContentType::Link));
-            }
-
-            if ctx.has(ContentFormat::Html) {
-                return Some(ClipboardItem::new_text(0, &text, ContentType::RichText));
-            }
-
-            return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText));
-        }
-
-        None
     }
 
     impl ClipboardListener for WindowsClipboardListener {
@@ -202,10 +202,6 @@ mod windows {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
-    use clipboard_rs::common::RustImage;
-    use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
@@ -238,55 +234,6 @@ mod macos {
             }
             hasher.finish()
         }
-    }
-
-    fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
-        // Priority: Image > Link > RichText > PlainText
-
-        if ctx.has(ContentFormat::Image) {
-            if let Ok(img) = ctx.get_image() {
-                if !img.is_empty() {
-                    let png_bytes = img.to_png().ok()?;
-                    let mut hasher = DefaultHasher::new();
-                    hasher.write(png_bytes.get_bytes());
-                    let hash = hasher.finish();
-
-                    let img_dir = images_dir();
-                    let file_name = format!("{:016x}.png", hash);
-                    let file_path = img_dir.join(&file_name);
-
-                    if !file_path.exists() {
-                        if png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err() {
-                            return None;
-                        }
-                    }
-
-                    return Some(ClipboardItem::new_image(
-                        0,
-                        file_path.to_str().unwrap_or(""),
-                        hash,
-                    ));
-                }
-            }
-        }
-
-        if let Ok(text) = ctx.get_text() {
-            if text.is_empty() {
-                return None;
-            }
-
-            if is_url(&text) {
-                return Some(ClipboardItem::new_text(0, &text, ContentType::Link));
-            }
-
-            if ctx.has(ContentFormat::Html) {
-                return Some(ClipboardItem::new_text(0, &text, ContentType::RichText));
-            }
-
-            return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText));
-        }
-
-        None
     }
 
     impl ClipboardListener for MacosClipboardListener {

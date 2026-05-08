@@ -1,11 +1,13 @@
 //! Focus event listener module
 //! Uses Win32 SetWinEventHook for event-driven focus monitoring
-//! Uses NSWorkspace notification for macOS focus monitoring
+//! Uses NSWorkspace polling for macOS focus monitoring
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, PeekMessageW, PostThreadMessageW, TranslateMessage,
@@ -100,7 +102,12 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
         return Err("SetWinEventHook failed".to_string());
     }
 
+    // Channel to retrieve the actual thread ID from inside the message pump thread
+    let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(0);
+
     let thread = std::thread::spawn(move || {
+        let tid = unsafe { GetCurrentThreadId() };
+        let _ = tx.send(tid); // blocks until receiver reads — ensures tid is available
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
             let ret = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
@@ -116,7 +123,9 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
         }
     });
 
-    Ok(FocusWatcher { hook, thread: Some(thread), thread_id: 0 })
+    let thread_id = rx.recv().unwrap_or(0);
+
+    Ok(FocusWatcher { hook, thread: Some(thread), thread_id })
 }
 
 #[cfg(target_os = "macos")]

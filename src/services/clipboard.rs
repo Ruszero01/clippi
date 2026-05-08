@@ -70,11 +70,6 @@ impl ClipboardService {
         self.refresh_with_current_filter();
     }
 
-    /// Check if keyword search is active
-    pub fn has_keyword(&self) -> bool {
-        self.filters.has_keyword()
-    }
-
     fn refresh_with_current_filter(&mut self) {
         self.model.clear();
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
@@ -95,18 +90,9 @@ impl ClipboardService {
         self.refresh_with_current_filter();
     }
 
-    /// Load initial items from database
-    pub fn load_initial(&self) {
-        let items = self.db.lock().unwrap()
-            .load_filtered(&self.filters, MAX_ITEMS,
-                if self.sort_by_created { "created_at" } else { "updated_at" })
-            .unwrap_or_default();
-        for item in items {
-            self.model.push(item_to_entry(&item));
-        }
-        if let Some(app) = self.app.upgrade() {
-            app.set_item_count(self.model.row_count() as i32);
-        }
+    /// Load initial items from database (model starts empty; delegate to unified refresh)
+    pub fn load_initial(&mut self) {
+        self.refresh_with_current_filter();
     }
 
     /// Refresh a single row by id (e.g., after copying to update timestamp)
@@ -128,11 +114,6 @@ impl ClipboardService {
     /// Check if a filter type is active
     pub fn is_filter_active(&self, filter_type: &str) -> bool {
         self.filters.is_type_active(filter_type)
-    }
-
-    /// Check if any filters are active
-    pub fn has_active_filters(&self) -> bool {
-        !self.filters.is_empty()
     }
 
     /// Get reference to shared buffer for platform layer

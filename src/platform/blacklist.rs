@@ -1,7 +1,6 @@
-//! Blacklist module - checks if current foreground process is blacklisted
+//! Blacklist module — detects whether Clippi is the foreground application.
 //!
-//! This module is reserved for future blacklist functionality.
-//! Currently not used by FocusService.
+//! Used by FocusService to decide when to auto-hide the window.
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;

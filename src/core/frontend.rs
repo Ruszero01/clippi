@@ -150,7 +150,7 @@ impl Frontend {
     }
 
     #[cfg(target_os = "macos")]
-    #[allow(deprecated)]
+    #[allow(deprecated)] // TODO: migrate to NSApp.activate once objc2 binding is available
     pub fn show_and_focus(&mut self) {
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;

@@ -45,19 +45,9 @@ impl ClipboardFilters {
         self.keyword = None;
     }
 
-    /// Returns true when no filters are active
-    pub fn is_empty(&self) -> bool {
-        self.type_filters.is_empty() && self.keyword.is_none()
-    }
-
     /// Check if a specific type filter is active
     pub fn is_type_active(&self, type_name: &str) -> bool {
         self.type_filters.iter().any(|t| t == type_name)
-    }
-
-    /// Check if keyword search is active
-    pub fn has_keyword(&self) -> bool {
-        self.keyword.is_some()
     }
 
     /// Check if an in-memory item matches all active filters (AND logic).

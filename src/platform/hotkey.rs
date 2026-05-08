@@ -146,6 +146,18 @@ mod windows {
             (0x79, Code::F10), (0x7A, Code::F11), (0x7B, Code::F12),
             (0x20, Code::Space), (0x09, Code::Tab), (0x0D, Code::Enter),
             (0x1B, Code::Escape), (0x08, Code::Backspace),
+            // Symbol keys (match macOS coverage)
+            (0xBB, Code::Equal),    // VK_OEM_PLUS
+            (0xBD, Code::Minus),    // VK_OEM_MINUS
+            (0xDB, Code::BracketLeft),  // VK_OEM_4
+            (0xDD, Code::BracketRight), // VK_OEM_6
+            (0xDE, Code::Quote),    // VK_OEM_7
+            (0xBA, Code::Semicolon), // VK_OEM_1
+            (0xDC, Code::Backslash), // VK_OEM_5
+            (0xBC, Code::Comma),    // VK_OEM_COMMA
+            (0xBE, Code::Period),   // VK_OEM_PERIOD
+            (0xBF, Code::Slash),    // VK_OEM_2
+            (0xC0, Code::Backquote), // VK_OEM_3
         ];
 
         for (vk, code) in vk_map {
