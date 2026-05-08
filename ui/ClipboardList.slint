@@ -271,7 +271,21 @@ export component ClipboardList inherits Rectangle {
                         padding: 2px;
 
                         Rectangle {
-                            height: 68px;
+                            height: root.card-height-mode == "auto" ?
+                                (entry.content-type == "image" ?
+                                    (entry.image-width > 0 && entry.image-height > 0 ?
+                                        (parent.width * entry.image-height / entry.image-width < 68px ? 68px :
+                                         parent.width * entry.image-height / entry.image-width > 200px ? 200px :
+                                         parent.width * entry.image-height / entry.image-width) :
+                                        96px) :
+                                    (entry.preview-length <= 50 ? 60px :
+                                     entry.preview-length <= 150 ? 80px :
+                                     entry.preview-length <= 300 ? 104px :
+                                     entry.preview-length <= 500 ? 130px :
+                                     200px)) :
+                                root.card-height-mode == "low" ? 68px :
+                                root.card-height-mode == "high" ? 128px :
+                                96px;
                             border-radius: 10px;
                             background: item-ta.pressed ? surface-press : item-ta.has-hover ? surface-hover : surface;
                             border-width: 1px;
@@ -298,7 +312,62 @@ export component ClipboardList inherits Rectangle {
                             }
                         }
 
-                        HorizontalLayout {
+                        // ── 图片类型：内容区铺满缩略图 ──
+                        if entry.content-type == "image" && entry.image-path != "" : Rectangle {
+                            x: 6px;
+                            y: 6px;
+                            width: parent.width - 44px;
+                            height: parent.height - 12px;
+                            border-radius: 6px;
+                            clip: true;
+                            background: accent-soft;
+
+                            Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: entry.thumbnail;
+                                image-fit: cover;
+                            }
+
+                            Rectangle {
+                                x: parent.width - self.width - 6px;
+                                y: parent.height - self.height - 6px;
+                                height: 18px;
+                                width: img-time-text.preferred-width + 14px;
+                                border-radius: 9px;
+                                background: dark-mode ? #00000080 : #00000040;
+
+                                img-time-text := Text {
+                                    text: entry.time-label;
+                                    font-size: 9px;
+                                    color: #ffffffff;
+                                    x: 7px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // 图片回退图标（无路径）
+                        if entry.content-type == "image" && entry.image-path == "" : Rectangle {
+                            x: 6px;
+                            y: 6px;
+                            width: parent.width - 44px;
+                            height: parent.height - 12px;
+                            border-radius: 6px;
+                            background: accent-soft;
+
+                            Text {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                text: "\u{e626}";
+                                font-family: "iconfont";
+                                font-size: 24px;
+                                color: accent;
+                            }
+                        }
+
+                        // ── 非图片类型：图标 + 文本 + 复制按钮 ──
+                        if entry.content-type != "image" : HorizontalLayout {
                             padding: 10px;
                             spacing: 10px;
 
@@ -330,39 +399,6 @@ export component ClipboardList inherits Rectangle {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                     text: "\u{e6ae}";
-                                    font-family: "iconfont";
-                                    font-size: 18px;
-                                    color: accent;
-                                }
-                            }
-
-                            // 图片缩略图
-                            if entry.content-type == "image" && entry.image-path != "": Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 9px;
-                                clip: true;
-                                background: accent-soft;
-
-                                Image {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    source: entry.thumbnail;
-                                    image-fit: contain;
-                                }
-                            }
-
-                            // 图片图标 (无路径回退)
-                            if entry.content-type == "image" && entry.image-path == "": Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 9px;
-                                background: accent-soft;
-
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e626}";
                                     font-family: "iconfont";
                                     font-size: 18px;
                                     color: accent;
@@ -423,24 +459,24 @@ export component ClipboardList inherits Rectangle {
                             }
                             }
 
-                            // 悬浮时间标签
-                            Rectangle {
-                                x: parent.width - self.width - 10px;
-                                y: parent.height - self.height - 6px;
-                                height: 18px;
-                                width: time-text.preferred-width + 14px;
-                                border-radius: 9px;
-                                background: dark-mode ? #ffffff18 : #0000000d;
+                        // 悬浮时间标签（仅非图片类型）
+                        if entry.content-type != "image" : Rectangle {
+                            x: parent.width - self.width - 10px;
+                            y: parent.height - self.height - 6px;
+                            height: 18px;
+                            width: time-text.preferred-width + 14px;
+                            border-radius: 9px;
+                            background: dark-mode ? #ffffff18 : #0000000d;
 
-                                time-text := Text {
-                                    text: entry.time-label;
-                                    font-size: 9px;
-                                    color: text-3;
-                                    x: 7px;
-                                    vertical-alignment: center;
-                                }
+                            time-text := Text {
+                                text: entry.time-label;
+                                font-size: 9px;
+                                color: text-3;
+                                x: 7px;
+                                vertical-alignment: center;
                             }
                         }
+                    }
                     }
                 }
         }
