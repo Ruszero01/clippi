@@ -39,8 +39,8 @@ impl ContentType {
 pub struct ClipboardItem {
     pub id: i64,
     pub content_type: ContentType,
-    pub text_preview: String,
     pub full_text: String,
+    pub searchable_text: String,
     pub content_hash: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -51,13 +51,12 @@ impl ClipboardItem {
     pub fn new_text(id: i64, text: &str, content_type: ContentType) -> Self {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
-        let preview: String = text.chars().take(200).collect();
         let now = Utc::now();
         Self {
             id,
             content_type,
-            text_preview: preview,
             full_text: text.to_string(),
+            searchable_text: text.to_string(),
             content_hash: hasher.finish(),
             created_at: now,
             updated_at: now,
@@ -70,8 +69,8 @@ impl ClipboardItem {
         Self {
             id,
             content_type: ContentType::Image,
-            text_preview: "(图片)".to_string(),
             full_text: image_path.to_string(),
+            searchable_text: String::new(),
             content_hash: hash,
             created_at: now,
             updated_at: now,
