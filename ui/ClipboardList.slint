@@ -92,40 +92,41 @@ export component ClipboardList inherits Rectangle {
         VerticalLayout {
                 // ========== 筛选按钮栏 ==========
                 HorizontalLayout {
-                    spacing: 4px;
-                    height: 28px;
+                    spacing: 6px;
+                    height: 22px;
 
                     // 文本
                     Rectangle {
-                        width: txt-inner.preferred-width + 28px;
-                        height: 28px;
-                        border-radius: 14px;
-                        background: root.filter-plain-text ? accent : (txt-ta.has-hover ? btn-hover : transparent);
+                        width: ft-inner.preferred-width + 14px;
+                        height: 22px;
+                        border-radius: 5px;
+                        background: root.filter-plain-text ? (dark-mode ? #7ecba322 : #6ab89022) : (ft-ta.has-hover ? btn-hover : transparent);
 
-                        txt-ta := TouchArea {
+                        ft-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
                             clicked => { search-input.clear-focus(); root.toggle-filter("plain_text"); }
                         }
 
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 4px;
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 3px;
                             alignment: center;
 
                             Text {
                                 text: "\u{e60e}";
                                 font-family: "iconfont";
-                                font-size: 12px;
-                                color: root.filter-plain-text ? #ffffff : text-2;
+                                font-size: 11px;
+                                color: root.filter-plain-text ? accent : text-2;
                                 vertical-alignment: center;
                             }
 
-                            txt-inner := Text {
+                            ft-inner := Text {
                                 text: "文本";
                                 font-size: 11px;
-                                color: root.filter-plain-text ? #ffffff : text-2;
+                                font-weight: root.filter-plain-text ? 600 : 400;
+                                color: root.filter-plain-text ? accent : text-2;
                                 vertical-alignment: center;
                             }
                         }
@@ -133,35 +134,36 @@ export component ClipboardList inherits Rectangle {
 
                     // 格式
                     Rectangle {
-                        width: rich-inner.preferred-width + 28px;
-                        height: 28px;
-                        border-radius: 14px;
-                        background: root.filter-rich-text ? accent : (rich-ta.has-hover ? btn-hover : transparent);
+                        width: fr-inner.preferred-width + 14px;
+                        height: 22px;
+                        border-radius: 5px;
+                        background: root.filter-rich-text ? (dark-mode ? #7ecba322 : #6ab89022) : (fr-ta.has-hover ? btn-hover : transparent);
 
-                        rich-ta := TouchArea {
+                        fr-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
                             clicked => { search-input.clear-focus(); root.toggle-filter("rich_text"); }
                         }
 
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 4px;
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 3px;
                             alignment: center;
 
                             Text {
                                 text: "\u{e6ae}";
                                 font-family: "iconfont";
-                                font-size: 13px;
-                                color: root.filter-rich-text ? #ffffff : text-2;
+                                font-size: 12px;
+                                color: root.filter-rich-text ? accent : text-2;
                                 vertical-alignment: center;
                             }
 
-                            rich-inner := Text {
+                            fr-inner := Text {
                                 text: "格式";
                                 font-size: 11px;
-                                color: root.filter-rich-text ? #ffffff : text-2;
+                                font-weight: root.filter-rich-text ? 600 : 400;
+                                color: root.filter-rich-text ? accent : text-2;
                                 vertical-alignment: center;
                             }
                         }
@@ -169,35 +171,36 @@ export component ClipboardList inherits Rectangle {
 
                     // 图片
                     Rectangle {
-                        width: img-inner.preferred-width + 28px;
-                        height: 28px;
-                        border-radius: 14px;
-                        background: root.filter-image ? accent : (img-ta.has-hover ? btn-hover : transparent);
+                        width: fi-inner.preferred-width + 14px;
+                        height: 22px;
+                        border-radius: 5px;
+                        background: root.filter-image ? (dark-mode ? #7ecba322 : #6ab89022) : (fi-ta.has-hover ? btn-hover : transparent);
 
-                        img-ta := TouchArea {
+                        fi-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
                             clicked => { search-input.clear-focus(); root.toggle-filter("image"); }
                         }
 
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 4px;
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 3px;
                             alignment: center;
 
                             Text {
                                 text: "\u{e626}";
                                 font-family: "iconfont";
-                                font-size: 12px;
-                                color: root.filter-image ? #ffffff : text-2;
+                                font-size: 11px;
+                                color: root.filter-image ? accent : text-2;
                                 vertical-alignment: center;
                             }
 
-                            img-inner := Text {
+                            fi-inner := Text {
                                 text: "图片";
                                 font-size: 11px;
-                                color: root.filter-image ? #ffffff : text-2;
+                                font-weight: root.filter-image ? 600 : 400;
+                                color: root.filter-image ? accent : text-2;
                                 vertical-alignment: center;
                             }
                         }
@@ -205,35 +208,36 @@ export component ClipboardList inherits Rectangle {
 
                     // 链接
                     Rectangle {
-                        width: link-inner.preferred-width + 28px;
-                        height: 28px;
-                        border-radius: 14px;
-                        background: root.filter-link ? accent : (link-ta.has-hover ? btn-hover : transparent);
+                        width: fl-inner.preferred-width + 14px;
+                        height: 22px;
+                        border-radius: 5px;
+                        background: root.filter-link ? (dark-mode ? #7ecba322 : #6ab89022) : (fl-ta.has-hover ? btn-hover : transparent);
 
-                        link-ta := TouchArea {
+                        fl-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
                             clicked => { search-input.clear-focus(); root.toggle-filter("link"); }
                         }
 
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 4px;
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 3px;
                             alignment: center;
 
                             Text {
                                 text: "\u{e6d7}";
                                 font-family: "iconfont";
-                                font-size: 12px;
-                                color: root.filter-link ? #ffffff : text-2;
+                                font-size: 11px;
+                                color: root.filter-link ? accent : text-2;
                                 vertical-alignment: center;
                             }
 
-                            link-inner := Text {
+                            fl-inner := Text {
                                 text: "链接";
                                 font-size: 11px;
-                                color: root.filter-link ? #ffffff : text-2;
+                                font-weight: root.filter-link ? 600 : 400;
+                                color: root.filter-link ? accent : text-2;
                                 vertical-alignment: center;
                             }
                         }
