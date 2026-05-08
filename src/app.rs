@@ -358,6 +358,19 @@ impl AppController {
             });
         });
 
+        // Search callback
+        let looper_for_search = Arc::clone(&looper);
+        slint_app.on_search_keyword(move |keyword: SharedString| {
+            let kw = keyword.to_string();
+            let _ = looper_for_search.try_with_clipboard_service(|cs| {
+                if kw.is_empty() {
+                    cs.clear_keyword();
+                } else {
+                    cs.set_keyword(&kw);
+                }
+            });
+        });
+
         // Apply initial window position and suppress auto-hide before first show
         if let Ok(mut fe) = frontend.lock() {
             fe.apply_position();

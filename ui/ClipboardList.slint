@@ -1,4 +1,4 @@
-import { ListView } from "std-widgets.slint";
+import { LineEdit, ListView } from "std-widgets.slint";
 import { ClipboardEntry } from "types.slint";
 
 export component ClipboardList inherits Rectangle {
@@ -50,10 +50,10 @@ export component ClipboardList inherits Rectangle {
             height: 32px;
             border-radius: 8px;
             background: dark-mode ? #1e2038 : #f0f1f7;
-            padding-left: 8px;
-            padding-right: 8px;
 
             HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
                 spacing: 6px;
                 alignment: center;
 
@@ -65,15 +65,10 @@ export component ClipboardList inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                search-input := TextInput {
-                    font-size: 12px;
-                    color: text-1;
+                search-input := LineEdit {
                     placeholder-text: "搜索剪贴板内容...";
-                    placeholder-color: text-3;
-                    background: transparent;
-                    border-width: 0px;
-                    vertical-alignment: center;
-                    changed(text) => {
+                    font-size: 12px;
+                    edited(text) => {
                         root.search-keyword(text);
                     }
                 }
