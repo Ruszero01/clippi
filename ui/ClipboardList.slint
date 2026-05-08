@@ -1,4 +1,4 @@
-import { LineEdit, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 import { ClipboardEntry } from "types.slint";
 
 export component ClipboardList inherits Rectangle {
@@ -6,6 +6,9 @@ export component ClipboardList inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <[ClipboardEntry]> items: [];
     in property <int> item-count: 0;
+
+    // ========== 搜索 ==========
+    in-out property <string> search-text: "";
 
     // ========== 筛选 ==========
     in-out property <bool> filter-plain-text: false;
@@ -46,45 +49,46 @@ export component ClipboardList inherits Rectangle {
         spacing: 4px;
 
         // ========== 搜索框 ==========
-        search-scope := FocusScope {
-            forward-focus: search-input;
+        Rectangle {
+            height: 28px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
 
-            Rectangle {
-                height: 32px;
-                border-radius: 10px;
-                background: surface;
-                border-width: 1px;
-                border-color: search-scope.has-focus ? accent : divider;
+            search-icon := Text {
+                x: 10px;
+                y: (parent.height - self.height) / 2;
+                text: "\u{e688}";
+                font-family: "iconfont";
+                font-size: 14px;
+                color: text-3;
+            }
 
-                HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    spacing: 8px;
-                    alignment: center;
-
-                    Text {
-                        text: "\u{e613}";
-                        font-family: "iconfont";
-                        font-size: 14px;
-                        color: search-scope.has-focus ? accent : text-3;
-                        vertical-alignment: center;
-                    }
-
-                    search-input := LineEdit {
-                        placeholder-text: "搜索剪贴板内容...";
-                        font-size: 12px;
-                        enabled: true;
-                        edited(text) => {
-                            root.search-keyword(text);
-                        }
-                    }
+            search-input := TextInput {
+                x: 32px;
+                width: parent.width - 44px;
+                y: (parent.height - self.preferred-height) / 2;
+                font-size: 12px;
+                color: text-1;
+                single-line: true;
+                text <=> root.search-text;
+                edited => {
+                    root.search-keyword(root.search-text);
                 }
+            }
+
+            if root.search-text == "" : Text {
+                x: 32px;
+                y: (parent.height - self.height) / 2;
+                text: "搜索剪贴板内容...";
+                font-size: 12px;
+                color: text-3;
             }
         }
 
         // ========== 筛选按钮栏 + 列表 ==========
-        content-scope := FocusScope {
-            VerticalLayout {
+        VerticalLayout {
                 // ========== 筛选按钮栏 ==========
                 HorizontalLayout {
                     spacing: 4px;
@@ -100,7 +104,7 @@ export component ClipboardList inherits Rectangle {
                         txt-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { content-scope.focus(); root.toggle-filter("plain_text"); }
+                            clicked => { search-input.clear-focus(); root.toggle-filter("plain_text"); }
                         }
 
                         HorizontalLayout {
@@ -136,7 +140,7 @@ export component ClipboardList inherits Rectangle {
                         rich-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { content-scope.focus(); root.toggle-filter("rich_text"); }
+                            clicked => { search-input.clear-focus(); root.toggle-filter("rich_text"); }
                         }
 
                         HorizontalLayout {
@@ -146,7 +150,8 @@ export component ClipboardList inherits Rectangle {
                             alignment: center;
 
                             Text {
-                                text: "¶";
+                                text: "\u{e6ae}";
+                                font-family: "iconfont";
                                 font-size: 13px;
                                 color: root.filter-rich-text ? #ffffff : text-2;
                                 vertical-alignment: center;
@@ -171,7 +176,7 @@ export component ClipboardList inherits Rectangle {
                         img-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { content-scope.focus(); root.toggle-filter("image"); }
+                            clicked => { search-input.clear-focus(); root.toggle-filter("image"); }
                         }
 
                         HorizontalLayout {
@@ -207,7 +212,7 @@ export component ClipboardList inherits Rectangle {
                         link-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { content-scope.focus(); root.toggle-filter("link"); }
+                            clicked => { search-input.clear-focus(); root.toggle-filter("link"); }
                         }
 
                         HorizontalLayout {
@@ -217,7 +222,7 @@ export component ClipboardList inherits Rectangle {
                             alignment: center;
 
                             Text {
-                                text: "\u{e6c5}";
+                                text: "\u{e6d7}";
                                 font-family: "iconfont";
                                 font-size: 12px;
                                 color: root.filter-link ? #ffffff : text-2;
@@ -276,7 +281,7 @@ export component ClipboardList inherits Rectangle {
                             width: parent.width - 32px;
                             height: parent.height;
                             clicked => {
-                                content-scope.focus();
+                                search-input.clear-focus();
                                 if (root.click-pending && root.last-clicked-id == entry.id) {
                                     root.click-pending = false;
                                     root.last-clicked-id = -1;
@@ -319,7 +324,8 @@ export component ClipboardList inherits Rectangle {
                                 Text {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
-                                    text: "¶";
+                                    text: "\u{e6ae}";
+                                    font-family: "iconfont";
                                     font-size: 18px;
                                     color: accent;
                                 }
@@ -368,7 +374,7 @@ export component ClipboardList inherits Rectangle {
                                 Text {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
-                                    text: "\u{e6c5}";
+                                    text: "\u{e6d7}";
                                     font-family: "iconfont";
                                     font-size: 18px;
                                     color: accent;
@@ -394,7 +400,7 @@ export component ClipboardList inherits Rectangle {
                                     width: parent.width;
                                     height: parent.height;
                                     clicked => {
-                                        content-scope.focus();
+                                        search-input.clear-focus();
                                         root.click-pending = false;
                                         root.last-clicked-id = -1;
                                         root.copy-item(entry.id);
@@ -432,8 +438,7 @@ export component ClipboardList inherits Rectangle {
                         }
                     }
                 }
-            }
-        } // end inner VerticalLayout
-    } // end content-scope
+        }
     }
+}
 
