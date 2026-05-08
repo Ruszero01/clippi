@@ -35,7 +35,7 @@ pub fn paste_after_delay() {
 }
 
 #[cfg(target_os = "macos")]
-const SLEEP_MS: u64 = 50;
+const SLEEP_MS: u64 = 100;
 
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
@@ -64,16 +64,21 @@ pub fn paste_after_delay() {
         );
         let Ok(source) = source else { return };
 
+        let cmd_flag = core_graphics::event::CGEventFlags::CGEventFlagCommand;
+
         // Cmd down
         if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true) {
+            event.set_flags(cmd_flag);
             event.post(core_graphics::event::CGEventTapLocation::HID);
         }
-        // V down
+        // V down (with Cmd flag)
         if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true) {
+            event.set_flags(cmd_flag);
             event.post(core_graphics::event::CGEventTapLocation::HID);
         }
-        // V up
+        // V up (with Cmd flag)
         if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false) {
+            event.set_flags(cmd_flag);
             event.post(core_graphics::event::CGEventTapLocation::HID);
         }
         // Cmd up

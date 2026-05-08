@@ -40,7 +40,7 @@ fn main() {
         slint_app.window().show().unwrap();
         let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
         let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-        ns_app.activateIgnoringOtherApps(true);
+        ns_app.activate();
     }
     #[cfg(not(target_os = "macos"))]
     {
