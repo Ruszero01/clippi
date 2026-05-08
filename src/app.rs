@@ -331,14 +331,17 @@ impl AppController {
         // Filter callbacks
         let looper_for_filter = Arc::clone(&looper);
         let app_for_filter = app.clone();
-        slint_app.on_set_filter(move |filter: SharedString| {
-            let filter_opt = if filter == "all" { None } else { Some(filter.to_string()) };
+        slint_app.on_toggle_filter(move |filter: SharedString| {
+            let ft = filter.to_string();
             let _ = looper_for_filter.try_with_clipboard_service(|cs| {
-                cs.set_filter_and_refresh(filter_opt);
+                cs.toggle_filter_and_refresh(&ft);
+                if let Some(app) = app_for_filter.upgrade() {
+                    app.set_filter_plain_text(cs.is_filter_active("plain_text"));
+                    app.set_filter_rich_text(cs.is_filter_active("rich_text"));
+                    app.set_filter_image(cs.is_filter_active("image"));
+                    app.set_filter_link(cs.is_filter_active("link"));
+                }
             });
-            if let Some(app) = app_for_filter.upgrade() {
-                app.set_active_filter(filter);
-            }
         });
 
         // Apply initial window position and suppress auto-hide before first show

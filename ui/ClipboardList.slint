@@ -8,7 +8,10 @@ export component ClipboardList inherits Rectangle {
     in property <int> item-count: 0;
 
     // ========== 筛选 ==========
-    in-out property <string> active-filter: "all";
+    in-out property <bool> filter-plain-text: false;
+    in-out property <bool> filter-rich-text: false;
+    in-out property <bool> filter-image: false;
+    in-out property <bool> filter-link: false;
 
     // ========== 双击检测 ==========
     in-out property <int> last-clicked-id: -1;
@@ -17,7 +20,7 @@ export component ClipboardList inherits Rectangle {
     // ========== 回调 ==========
     callback copy-item(int);
     callback paste-item(int);
-    callback set-filter(string);
+    callback toggle-filter(string);
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #181a26 : #ffffff;
@@ -45,40 +48,17 @@ export component ClipboardList inherits Rectangle {
             spacing: 4px;
             height: 28px;
 
-            // 全部
-            Rectangle {
-                width: all-txt.preferred-width + 16px;
-                height: 28px;
-                border-radius: 14px;
-                background: root.active-filter == "all" ? accent : (all-ta.has-hover ? btn-hover : transparent);
-
-                all-ta := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    clicked => { root.set-filter("all"); }
-                }
-
-                all-txt := Text {
-                    text: "全部";
-                    font-size: 11px;
-                    color: root.active-filter == "all" ? #ffffff : text-2;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    x: (parent.width - self.width) / 2;
-                }
-            }
-
             // 文本
             Rectangle {
                 width: txt-inner.preferred-width + 28px;
                 height: 28px;
                 border-radius: 14px;
-                background: root.active-filter == "plain_text" ? accent : (txt-ta.has-hover ? btn-hover : transparent);
+                background: root.filter-plain-text ? accent : (txt-ta.has-hover ? btn-hover : transparent);
 
                 txt-ta := TouchArea {
                     width: parent.width;
                     height: parent.height;
-                    clicked => { root.set-filter("plain_text"); }
+                    clicked => { root.toggle-filter("plain_text"); }
                 }
 
                 HorizontalLayout {
@@ -91,14 +71,14 @@ export component ClipboardList inherits Rectangle {
                         text: "\u{e60e}";
                         font-family: "iconfont";
                         font-size: 12px;
-                        color: root.active-filter == "plain_text" ? #ffffff : text-2;
+                        color: root.filter-plain-text ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
 
                     txt-inner := Text {
                         text: "文本";
                         font-size: 11px;
-                        color: root.active-filter == "plain_text" ? #ffffff : text-2;
+                        color: root.filter-plain-text ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
                 }
@@ -109,12 +89,12 @@ export component ClipboardList inherits Rectangle {
                 width: rich-inner.preferred-width + 28px;
                 height: 28px;
                 border-radius: 14px;
-                background: root.active-filter == "rich_text" ? accent : (rich-ta.has-hover ? btn-hover : transparent);
+                background: root.filter-rich-text ? accent : (rich-ta.has-hover ? btn-hover : transparent);
 
                 rich-ta := TouchArea {
                     width: parent.width;
                     height: parent.height;
-                    clicked => { root.set-filter("rich_text"); }
+                    clicked => { root.toggle-filter("rich_text"); }
                 }
 
                 HorizontalLayout {
@@ -126,14 +106,14 @@ export component ClipboardList inherits Rectangle {
                     Text {
                         text: "¶";
                         font-size: 13px;
-                        color: root.active-filter == "rich_text" ? #ffffff : text-2;
+                        color: root.filter-rich-text ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
 
                     rich-inner := Text {
                         text: "格式";
                         font-size: 11px;
-                        color: root.active-filter == "rich_text" ? #ffffff : text-2;
+                        color: root.filter-rich-text ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
                 }
@@ -144,12 +124,12 @@ export component ClipboardList inherits Rectangle {
                 width: img-inner.preferred-width + 28px;
                 height: 28px;
                 border-radius: 14px;
-                background: root.active-filter == "image" ? accent : (img-ta.has-hover ? btn-hover : transparent);
+                background: root.filter-image ? accent : (img-ta.has-hover ? btn-hover : transparent);
 
                 img-ta := TouchArea {
                     width: parent.width;
                     height: parent.height;
-                    clicked => { root.set-filter("image"); }
+                    clicked => { root.toggle-filter("image"); }
                 }
 
                 HorizontalLayout {
@@ -162,14 +142,14 @@ export component ClipboardList inherits Rectangle {
                         text: "\u{e626}";
                         font-family: "iconfont";
                         font-size: 12px;
-                        color: root.active-filter == "image" ? #ffffff : text-2;
+                        color: root.filter-image ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
 
                     img-inner := Text {
                         text: "图片";
                         font-size: 11px;
-                        color: root.active-filter == "image" ? #ffffff : text-2;
+                        color: root.filter-image ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
                 }
@@ -180,12 +160,12 @@ export component ClipboardList inherits Rectangle {
                 width: link-inner.preferred-width + 28px;
                 height: 28px;
                 border-radius: 14px;
-                background: root.active-filter == "link" ? accent : (link-ta.has-hover ? btn-hover : transparent);
+                background: root.filter-link ? accent : (link-ta.has-hover ? btn-hover : transparent);
 
                 link-ta := TouchArea {
                     width: parent.width;
                     height: parent.height;
-                    clicked => { root.set-filter("link"); }
+                    clicked => { root.toggle-filter("link"); }
                 }
 
                 HorizontalLayout {
@@ -198,14 +178,14 @@ export component ClipboardList inherits Rectangle {
                         text: "\u{e6c5}";
                         font-family: "iconfont";
                         font-size: 12px;
-                        color: root.active-filter == "link" ? #ffffff : text-2;
+                        color: root.filter-link ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
 
                     link-inner := Text {
                         text: "链接";
                         font-size: 11px;
-                        color: root.active-filter == "link" ? #ffffff : text-2;
+                        color: root.filter-link ? #ffffff : text-2;
                         vertical-alignment: center;
                     }
                 }

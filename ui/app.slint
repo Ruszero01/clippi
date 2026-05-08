@@ -34,7 +34,10 @@ export component App inherits Window {
     in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
 
     // 分类筛选
-    in-out property <string> active-filter: "all";
+    in-out property <bool> filter-plain-text: false;
+    in-out property <bool> filter-rich-text: false;
+    in-out property <bool> filter-image: false;
+    in-out property <bool> filter-link: false;
 
     // 双击检测
     in-out property <int> last-clicked-id: -1;
@@ -59,7 +62,7 @@ export component App inherits Window {
     callback start-recording-hotkey();
     callback set-theme(int);
     callback set-position-mode(int);
-    callback set-filter(string);
+    callback toggle-filter(string);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -300,8 +303,11 @@ export component App inherits Window {
                     item-count: root.item-count;
                     last-clicked-id: root.last-clicked-id;
                     click-pending: root.click-pending;
-                    active-filter: root.active-filter;
-                    set-filter(type) => { root.set-filter(type); }
+                    filter-plain-text: root.filter-plain-text;
+                    filter-rich-text: root.filter-rich-text;
+                    filter-image: root.filter-image;
+                    filter-link: root.filter-link;
+                    toggle-filter(type) => { root.toggle-filter(type); }
                     copy-item(id) => { root.copy-item(id); }
                     paste-item(id) => { root.paste-item(id); }
                 }

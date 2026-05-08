@@ -20,7 +20,7 @@ pub struct ClipboardService {
     app: slint::Weak<App>,
     model: Rc<VecModel<ClipboardEntry>>,
     sort_by_created: bool,
-    active_filter: Option<String>,
+    active_filters: Vec<String>,
 }
 
 impl ClipboardService {
@@ -36,7 +36,7 @@ impl ClipboardService {
             app,
             model: model.clone(),
             sort_by_created: false,
-            active_filter: None,
+            active_filters: Vec::new(),
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -45,22 +45,30 @@ impl ClipboardService {
         service
     }
 
-    /// Set content type filter and reload from database
-    pub fn set_filter_and_refresh(&mut self, filter: Option<String>) {
-        self.active_filter = filter;
+    /// Toggle a content type filter and reload from database
+    pub fn toggle_filter_and_refresh(&mut self, filter_type: &str) {
+        if let Some(pos) = self.active_filters.iter().position(|f| f == filter_type) {
+            self.active_filters.remove(pos);
+        } else {
+            self.active_filters.push(filter_type.to_string());
+        }
+        self.refresh_with_current_filter();
+    }
+
+    fn refresh_with_current_filter(&mut self) {
         self.model.clear();
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
-        let items = match &self.active_filter {
-            Some(ct) => self.db.lock().unwrap()
-                .load_by_type(ct, MAX_ITEMS, order_by)
-                .unwrap_or_default(),
-            None => {
-                if self.sort_by_created {
-                    self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
-                } else {
-                    self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
-                }
+        let items = if self.active_filters.is_empty() {
+            if self.sort_by_created {
+                self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
+            } else {
+                self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
             }
+        } else {
+            let types: Vec<&str> = self.active_filters.iter().map(|s| s.as_str()).collect();
+            self.db.lock().unwrap()
+                .load_by_types(&types, MAX_ITEMS, order_by)
+                .unwrap_or_default()
         };
         for item in items {
             self.model.push(item_to_entry(&item));
@@ -73,26 +81,7 @@ impl ClipboardService {
     /// Set sort mode and refresh (full reload)
     pub fn set_sort_and_refresh(&mut self, sort_by_created: bool) {
         self.sort_by_created = sort_by_created;
-        self.model.clear();
-        let order_by = if sort_by_created { "created_at" } else { "updated_at" };
-        let items = match &self.active_filter {
-            Some(ct) => self.db.lock().unwrap()
-                .load_by_type(ct, MAX_ITEMS, order_by)
-                .unwrap_or_default(),
-            None => {
-                if sort_by_created {
-                    self.db.lock().unwrap().load_by_created(MAX_ITEMS).unwrap_or_default()
-                } else {
-                    self.db.lock().unwrap().load_by_updated(MAX_ITEMS).unwrap_or_default()
-                }
-            }
-        };
-        for item in items {
-            self.model.push(item_to_entry(&item));
-        }
-        if let Some(app) = self.app.upgrade() {
-            app.set_item_count(self.model.row_count() as i32);
-        }
+        self.refresh_with_current_filter();
     }
 
     /// Load initial items from database
@@ -126,6 +115,11 @@ impl ClipboardService {
         }
     }
 
+    /// Check if a filter type is active
+    pub fn is_filter_active(&self, filter_type: &str) -> bool {
+        self.active_filters.iter().any(|f| f == filter_type)
+    }
+
     /// Get reference to shared buffer for platform layer
     pub fn shared(&self) -> &ClipboardShared {
         &self.shared
@@ -150,10 +144,11 @@ impl Pollable for ClipboardService {
                     continue;
                 }
 
-                // Check if item matches current filter
-                let matches_filter = match &self.active_filter {
-                    None => true,
-                    Some(f) => item.content_type.as_str() == f.as_str(),
+                // Check if item matches current filters
+                let matches_filter = if self.active_filters.is_empty() {
+                    true
+                } else {
+                    self.active_filters.iter().any(|f| item.content_type.as_str() == f.as_str())
                 };
                 if !matches_filter {
                     continue;

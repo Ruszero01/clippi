@@ -63,14 +63,21 @@ impl Database {
         self.load_items(limit, "created_at")
     }
 
-    pub fn load_by_type(&self, content_type: &str, limit: usize, order_by: &str) -> SqlResult<Vec<ClipboardItem>> {
+    pub fn load_by_types(&self, content_types: &[&str], limit: usize, order_by: &str) -> SqlResult<Vec<ClipboardItem>> {
+        if content_types.is_empty() {
+            return self.load_items(limit, order_by);
+        }
+        let placeholders: Vec<&str> = content_types.iter().map(|_| "?").collect();
         let query = format!(
             "SELECT id, content_type, text_preview, full_text, content_hash, created_at, updated_at, image_path
-             FROM clipboard_items WHERE content_type = ?1 ORDER BY {} DESC LIMIT ?2",
+             FROM clipboard_items WHERE content_type IN ({}) ORDER BY {} DESC LIMIT ?",
+            placeholders.join(", "),
             order_by
         );
         let mut stmt = self.conn.prepare(&query)?;
-        let items = stmt.query_map(params![content_type, limit as i64], |row| {
+        let mut params_vec: Vec<rusqlite::types::Value> = content_types.iter().map(|s| s.to_string().into()).collect();
+        params_vec.push((limit as i64).into());
+        let items = stmt.query_map(rusqlite::params_from_iter(params_vec), |row| {
             let ct_str: String = row.get(1)?;
             let created_str: String = row.get(5)?;
             let updated_str: String = row.get(6)?;
