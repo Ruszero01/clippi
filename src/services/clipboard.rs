@@ -175,6 +175,11 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
     } else {
         Image::default()
     };
+    let (img_w, img_h) = if !item.image_path.is_empty() {
+        image::image_dimensions(&item.image_path).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.full_text.clone()),
@@ -182,5 +187,8 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         time_label: SharedString::from(format_relative_time(&item.updated_at)),
         image_path: SharedString::from(item.image_path.clone()),
         thumbnail,
+        preview_length: item.full_text.len() as i32,
+        image_width: img_w as i32,
+        image_height: img_h as i32,
     }
 }
