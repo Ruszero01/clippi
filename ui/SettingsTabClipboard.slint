@@ -80,26 +80,38 @@ export component SettingsTabClipboard inherits Rectangle {
 
         // 卡片高度
         Rectangle {
-            height: 88px;
+            height: 66px;
             border-radius: 10px;
             background: surface;
             border-width: 1px;
             border-color: divider;
 
-            VerticalLayout {
+            HorizontalLayout {
                 width: parent.width;
+                height: parent.height;
                 padding: 14px;
-                spacing: 10px;
+                alignment: space-between;
 
-                Text {
-                    text: "卡片高度";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: text-1;
+                VerticalLayout {
+                    spacing: 2px;
+
+                    Text {
+                        text: "卡片高度";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: "调整列表卡片的高度";
+                        font-size: 10px;
+                        color: text-3;
+                    }
                 }
 
                 HorizontalLayout {
                     spacing: 6px;
+                    y: (parent.height - self.preferred-height) / 2;
 
                     // 高
                     Rectangle {

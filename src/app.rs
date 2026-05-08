@@ -23,7 +23,7 @@ pub struct AppController {
     looper: Arc<Looper>,
     listener: Option<Box<dyn crate::platform::clipboard::ClipboardListener>>,
     frontend: Arc<Mutex<Frontend>>,
-    _settings: AppSettings,
+    shared_settings: Arc<Mutex<AppSettings>>,
 }
 
 impl AppController {
@@ -46,6 +46,12 @@ impl AppController {
         // Initialize UI with settings
         init_ui_from_settings(slint_app, &settings);
 
+        // Wrap in Arc<Mutex<>> so callbacks and shutdown share live settings
+        let auto_hide_setting = settings.auto_hide;
+        let hotkey_str = settings.hotkey.clone();
+        let sort_by_created_setting = settings.sort_by_created;
+        let shared_settings = Arc::new(Mutex::new(settings));
+
         // Create clipboard service (sets up model in new())
         let clipboard_shared = ClipboardShared::new();
         let mut clipboard_service = ClipboardService::new(
@@ -56,14 +62,14 @@ impl AppController {
         let clipboard_service_for_callbacks = clipboard_service.clone();
         // Load initial data and apply sort setting
         clipboard_service.load_initial();
-        clipboard_service.set_sort_and_refresh(settings.sort_by_created);
+        clipboard_service.set_sort_and_refresh(sort_by_created_setting);
 
         let mut listener = create_listener();
         listener.start(clipboard_service.shared())?;
 
         // Create hotkey service
         let mut hotkey_service = HotkeyService::new(frontend.clone(), app.clone());
-        if let Ok(h) = create_hotkey_listener(&settings.hotkey) {
+        if let Ok(h) = create_hotkey_listener(&hotkey_str) {
             hotkey_service.set_hotkey(h);
         }
 
@@ -78,7 +84,7 @@ impl AppController {
             }
         };
         // Apply initial focus settings
-        focus_service.set_auto_hide(settings.auto_hide);
+        focus_service.set_auto_hide(auto_hide_setting);
 
         // Create and start looper
         let mut looper = Looper::new();
@@ -131,14 +137,14 @@ impl AppController {
 
         let app_for_close = app.clone();
         let frontend_close = frontend.clone();
-        let settings_for_close = settings.clone();
+        let settings_for_close = Arc::clone(&shared_settings);
         slint_app.on_close_window(move || {
             if let Some(app) = app_for_close.upgrade() {
                 app.set_pinned(false);
             }
             if let Ok(mut fe) = frontend_close.lock() {
                 fe.hide();
-                let mut s = settings_for_close.clone();
+                let mut s = settings_for_close.lock().unwrap();
                 fe.apply_saved_position_to_settings(&mut s);
                 s.save();
             }
@@ -173,7 +179,7 @@ impl AppController {
         });
 
         // Settings callbacks
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_auto_start = app.clone();
         slint_app.on_toggle_auto_start(move || {
             if let Some(app) = app_for_auto_start.upgrade() {
@@ -181,7 +187,7 @@ impl AppController {
                 match set_auto_start(new_val) {
                     Ok(()) => {
                         app.set_auto_start(new_val);
-                        let mut s = settings_for_callbacks.clone();
+                        let mut s = settings_for_callbacks.lock().unwrap();
                         s.auto_start = new_val;
                         s.save();
                     }
@@ -192,14 +198,14 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_auto_hide = app.clone();
         let looper_for_auto_hide = Arc::clone(&looper);
         slint_app.on_toggle_auto_hide(move || {
             if let Some(app) = app_for_auto_hide.upgrade() {
                 let new_val = !app.get_auto_hide();
                 app.set_auto_hide(new_val);
-                let mut s = settings_for_callbacks.clone();
+                let mut s = settings_for_callbacks.lock().unwrap();
                 s.auto_hide = new_val;
                 s.save();
                 let _ = looper_for_auto_hide.try_with_focus_service(|fs| {
@@ -220,14 +226,14 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_sort = app.clone();
         let looper_for_sort = Arc::clone(&looper);
         slint_app.on_toggle_sort_by_created(move || {
             if let Some(app) = app_for_sort.upgrade() {
                 let new_val = !app.get_sort_by_created();
                 app.set_sort_by_created(new_val);
-                let mut s = settings_for_callbacks.clone();
+                let mut s = settings_for_callbacks.lock().unwrap();
                 s.sort_by_created = new_val;
                 s.save();
                 let _ = looper_for_sort.try_with_clipboard_service(|cs| {
@@ -236,7 +242,7 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_pick_db = app.clone();
         slint_app.on_pick_db_path(move || {
             let result = rfd::FileDialog::new()
@@ -245,11 +251,11 @@ impl AppController {
 
             if let Some(new_path) = result {
                 if let Some(app) = app_for_pick_db.upgrade() {
-                    let old_path = settings_for_callbacks.resolve_db_path();
+                    let old_path = settings_for_callbacks.lock().unwrap().resolve_db_path();
                     match migrate_database(&old_path, &new_path) {
                         Ok(()) => {
                             let path_str = new_path.to_string_lossy().to_string();
-                            let mut s = settings_for_callbacks.clone();
+                            let mut s = settings_for_callbacks.lock().unwrap();
                             s.db_path = path_str;
                             s.save();
                             spawn_new_process();
@@ -263,17 +269,17 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_reset_db = app.clone();
         slint_app.on_reset_db_path(move || {
-            let old_path = settings_for_callbacks.resolve_db_path();
+            let old_path = settings_for_callbacks.lock().unwrap().resolve_db_path();
             let default_db_path = AppSettings::default().resolve_db_path();
             if old_path == default_db_path {
                 return;
             }
             match migrate_database(&old_path, &default_db_path) {
                 Ok(()) => {
-                    let mut s = settings_for_callbacks.clone();
+                    let mut s = settings_for_callbacks.lock().unwrap();
                     s.db_path = String::new();
                     s.save();
                     spawn_new_process();
@@ -287,7 +293,7 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_set_theme = app.clone();
         slint_app.on_set_theme(move |mode: i32| {
             if let Some(app) = app_for_set_theme.upgrade() {
@@ -298,7 +304,7 @@ impl AppController {
                 };
                 app.set_theme_mode(mode);
                 app.set_dark_mode(is_dark);
-                let mut s = settings_for_callbacks.clone();
+                let mut s = settings_for_callbacks.lock().unwrap();
                 s.theme = match mode {
                     1 => "dark".to_string(),
                     2 => "light".to_string(),
@@ -308,7 +314,7 @@ impl AppController {
             }
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_pos = app.clone();
         let frontend_for_pos = frontend.clone();
         slint_app.on_set_position_mode(move |mode: i32| {
@@ -323,18 +329,18 @@ impl AppController {
             if let Ok(mut fe) = frontend_for_pos.lock() {
                 fe.set_position_mode(PositionMode::from_int(mode));
             }
-            let mut s = settings_for_callbacks.clone();
+            let mut s = settings_for_callbacks.lock().unwrap();
             s.window_position_mode = mode_str.to_string();
             s.save();
         });
 
-        let settings_for_callbacks = settings.clone();
+        let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_chm = app.clone();
         slint_app.on_set_card_height_mode(move |mode: SharedString| {
             if let Some(app) = app_for_chm.upgrade() {
                 app.set_card_height_mode(mode.clone());
             }
-            let mut s = settings_for_callbacks.clone();
+            let mut s = settings_for_callbacks.lock().unwrap();
             s.card_height_mode = mode.to_string();
             s.save();
         });
@@ -390,14 +396,14 @@ impl AppController {
         Ok(Self {
             looper,
             listener: Some(listener),
-            _settings: settings,
+            shared_settings,
             frontend,
         })
     }
 
     pub fn shutdown(mut self) {
         if let Ok(fe) = self.frontend.lock() {
-            let mut s = self._settings.clone();
+            let mut s = self.shared_settings.lock().unwrap();
             fe.apply_saved_position_to_settings(&mut s);
             s.save();
         }
