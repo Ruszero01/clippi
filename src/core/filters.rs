@@ -8,7 +8,6 @@ use crate::core::types::ClipboardItem;
 /// Unified filter state for clipboard queries.
 ///
 /// Future dimensions can be added as new fields:
-/// - `keyword: Option<String>` for search
 /// - `tags: Vec<String>` for custom tags
 /// - `favorite: bool` for starred items
 ///
@@ -17,6 +16,8 @@ use crate::core::types::ClipboardItem;
 pub struct ClipboardFilters {
     /// Content type filter: empty = all types, non-empty = any of these types
     type_filters: Vec<String>,
+    /// Keyword search: None = no filter, Some = LIKE %keyword% on searchable_text
+    keyword: Option<String>,
 }
 
 impl ClipboardFilters {
@@ -29,19 +30,34 @@ impl ClipboardFilters {
         }
     }
 
+    /// Set keyword search filter
+    pub fn set_keyword(&mut self, keyword: &str) {
+        self.keyword = if keyword.is_empty() {
+            None
+        } else {
+            Some(keyword.to_string())
+        };
+    }
+
     /// Clear all filters across all dimensions
     pub fn clear_all(&mut self) {
         self.type_filters.clear();
+        self.keyword = None;
     }
 
     /// Returns true when no filters are active
     pub fn is_empty(&self) -> bool {
-        self.type_filters.is_empty()
+        self.type_filters.is_empty() && self.keyword.is_none()
     }
 
     /// Check if a specific type filter is active
     pub fn is_type_active(&self, type_name: &str) -> bool {
         self.type_filters.iter().any(|t| t == type_name)
+    }
+
+    /// Check if keyword search is active
+    pub fn has_keyword(&self) -> bool {
+        self.keyword.is_some()
     }
 
     /// Check if an in-memory item matches all active filters (AND logic).
@@ -54,7 +70,17 @@ impl ClipboardFilters {
                 return false;
             }
         }
-        // Future filter dimensions go here with && logic
+        // Keyword filter: match against full_text for text types, skip images
+        if let Some(ref kw) = self.keyword {
+            match item.content_type {
+                crate::core::types::ContentType::Image => return false,
+                _ => {
+                    if !item.full_text.to_lowercase().contains(&kw.to_lowercase()) {
+                        return false;
+                    }
+                }
+            }
+        }
         true
     }
 
@@ -78,7 +104,11 @@ impl ClipboardFilters {
             }
         }
 
-        // Future filter dimensions add more conditions + params here
+        // Keyword filter
+        if let Some(ref kw) = self.keyword {
+            conditions.push("searchable_text LIKE ?".to_string());
+            params.push(format!("%{}%", kw).into());
+        }
 
         if conditions.is_empty() {
             (String::new(), params)
