@@ -24,25 +24,12 @@ impl Database {
                 full_text TEXT NOT NULL,
                 content_hash INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                image_path TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
-            CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);
-            "
-        )?;
-
-        // Migration: add image_path column if missing
-        let has_image_path: bool = self.conn
-            .prepare("SELECT image_path FROM clipboard_items LIMIT 0")
-            .is_ok();
-        if !has_image_path {
-            self.conn.execute(
-                "ALTER TABLE clipboard_items ADD COLUMN image_path TEXT NOT NULL DEFAULT ''",
-                [],
-            )?;
-        }
-
-        Ok(())
+            CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
+        )
     }
 
     pub fn upsert(&self, item: &ClipboardItem) -> SqlResult<()> {

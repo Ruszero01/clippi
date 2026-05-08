@@ -84,7 +84,6 @@ mod windows {
     fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         // Priority: Image > Link > RichText > PlainText
 
-        // 1. Check for image data (screenshots, copied images)
         if ctx.has(ContentFormat::Image) {
             if let Ok(img) = ctx.get_image() {
                 if !img.is_empty() {
@@ -112,23 +111,19 @@ mod windows {
             }
         }
 
-        // 2. Check text content for URL / RichText / PlainText
         if let Ok(text) = ctx.get_text() {
             if text.is_empty() {
                 return None;
             }
 
-            // Check for URL
             if is_url(&text) {
                 return Some(ClipboardItem::new_text(0, &text, ContentType::Link));
             }
 
-            // Check for HTML rich text
             if ctx.has(ContentFormat::Html) {
                 return Some(ClipboardItem::new_text(0, &text, ContentType::RichText));
             }
 
-            // Plain text fallback
             return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText));
         }
 
@@ -162,7 +157,6 @@ mod windows {
                             }
                         }
 
-                        // Also hash image presence to detect image-only changes
                         if ctx.has(ContentFormat::Image) {
                             hasher.write(b"[img]");
                             has_content = true;
