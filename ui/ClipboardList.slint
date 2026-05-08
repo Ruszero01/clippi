@@ -22,6 +22,7 @@ export component ClipboardList inherits Rectangle {
     callback paste-item(int);
     callback toggle-filter(string);
     callback clear-filters();
+    callback search-keyword(string);
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #181a26 : #ffffff;
@@ -43,6 +44,41 @@ export component ClipboardList inherits Rectangle {
         padding-right: 8px;
         padding-bottom: 8px;
         spacing: 4px;
+
+        // ========== 搜索框 ==========
+        Rectangle {
+            height: 32px;
+            border-radius: 8px;
+            background: dark-mode ? #1e2038 : #f0f1f7;
+            padding-left: 8px;
+            padding-right: 8px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: center;
+
+                Text {
+                    text: "\u{e613}";
+                    font-family: "iconfont";
+                    font-size: 14px;
+                    color: text-3;
+                    vertical-alignment: center;
+                }
+
+                search-input := TextInput {
+                    font-size: 12px;
+                    color: text-1;
+                    placeholder-text: "搜索剪贴板内容...";
+                    placeholder-color: text-3;
+                    background: transparent;
+                    border-width: 0px;
+                    vertical-alignment: center;
+                    changed(text) => {
+                        root.search-keyword(text);
+                    }
+                }
+            }
+        }
 
         // ========== 筛选按钮栏 ==========
         HorizontalLayout {
