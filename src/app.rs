@@ -328,6 +328,17 @@ impl AppController {
             s.save();
         });
 
+        let settings_for_callbacks = settings.clone();
+        let app_for_chm = app.clone();
+        slint_app.on_set_card_height_mode(move |mode: SharedString| {
+            if let Some(app) = app_for_chm.upgrade() {
+                app.set_card_height_mode(mode.clone());
+            }
+            let mut s = settings_for_callbacks.clone();
+            s.card_height_mode = mode.to_string();
+            s.save();
+        });
+
         // Filter callbacks
         let looper_for_filter = Arc::clone(&looper);
         let app_for_filter = app.clone();
@@ -419,4 +430,5 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
     app.set_position_mode(PositionMode::from_str(&settings.window_position_mode).to_int());
+    app.set_card_height_mode(SharedString::from(&settings.card_height_mode));
 }
