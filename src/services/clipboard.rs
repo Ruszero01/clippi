@@ -58,6 +58,23 @@ impl ClipboardService {
         self.refresh_with_current_filter();
     }
 
+    /// Set keyword search and reload from database
+    pub fn set_keyword(&mut self, keyword: &str) {
+        self.filters.set_keyword(keyword);
+        self.refresh_with_current_filter();
+    }
+
+    /// Clear keyword search and reload
+    pub fn clear_keyword(&mut self) {
+        self.filters.set_keyword("");
+        self.refresh_with_current_filter();
+    }
+
+    /// Check if keyword search is active
+    pub fn has_keyword(&self) -> bool {
+        self.filters.has_keyword()
+    }
+
     fn refresh_with_current_filter(&mut self) {
         self.model.clear();
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
@@ -179,7 +196,7 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
     };
     ClipboardEntry {
         id: item.id as i32,
-        preview: SharedString::from(item.text_preview.clone()),
+        preview: SharedString::from(item.full_text.clone()),
         content_type: SharedString::from(item.content_type.as_str()),
         time_label: SharedString::from(format_relative_time(&item.updated_at)),
         image_path: SharedString::from(item.image_path.clone()),
