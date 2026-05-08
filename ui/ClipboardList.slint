@@ -51,26 +51,29 @@ export component ClipboardList inherits Rectangle {
 
             Rectangle {
                 height: 32px;
-                border-radius: 8px;
-                background: dark-mode ? #1e2038 : #f0f1f7;
+                border-radius: 10px;
+                background: surface;
+                border-width: 1px;
+                border-color: search-scope.has-focus ? accent : divider;
 
                 HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    spacing: 6px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 8px;
                     alignment: center;
 
                     Text {
                         text: "\u{e613}";
                         font-family: "iconfont";
                         font-size: 14px;
-                        color: text-3;
+                        color: search-scope.has-focus ? accent : text-3;
                         vertical-alignment: center;
                     }
 
                     search-input := LineEdit {
                         placeholder-text: "搜索剪贴板内容...";
                         font-size: 12px;
+                        enabled: true;
                         edited(text) => {
                             root.search-keyword(text);
                         }
