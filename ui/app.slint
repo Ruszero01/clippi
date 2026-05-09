@@ -1,6 +1,7 @@
 import { ClipboardEntry } from "types.slint";
 import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
+import { Palette } from "std-widgets.slint";
 
 export component App inherits Window {
     icon: @image-url("../assets/LOGO.ico");
@@ -88,6 +89,14 @@ export component App inherits Window {
     property <color> titlebar-bg:   dark-mode ? #191a1b : #ffffff;
     property <color> btn-hover:     dark-mode ? #2b2c2d : #f0f1f8;
     property <color> danger:        #ff5f57;
+
+    // 同步 Slint 原生组件（滚动条等）的颜色方案
+    init => {
+        Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark-mode => {
+        Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
+    }
 
     // 双击检测定时器
     double-click-timer := Timer {
