@@ -1,3 +1,4 @@
+import { ScrollView } from "std-widgets.slint";
 import { SettingsTabGeneral } from "SettingsTabGeneral.slint";
 import { SettingsTabClipboard } from "SettingsTabClipboard.slint";
 import { SettingsTabHotkey } from "SettingsTabHotkey.slint";
@@ -218,12 +219,13 @@ export component SettingsPanel inherits Rectangle {
     }
 
     // ========== 选项卡内容 ==========
-    VerticalLayout {
+    ScrollView {
         y: 96px;
         height: parent.height - 104px;
         x: 8px;
         width: parent.width - 16px;
 
+        VerticalLayout {
         if (root.active-tab == 0) : SettingsTabGeneral {
             dark-mode: root.dark-mode;
             theme-mode: root.theme-mode;
@@ -259,6 +261,7 @@ export component SettingsPanel inherits Rectangle {
             settings-error: root.settings-error;
             pick-db-path => { root.pick-db-path(); }
             reset-db-path => { root.reset-db-path(); }
+        }
         }
     }
 }
