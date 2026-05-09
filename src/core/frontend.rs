@@ -2,7 +2,7 @@
 
 use crate::platform::monitor;
 use crate::App;
-use slint::{ComponentHandle, PhysicalPosition};
+use slint::{ComponentHandle, LogicalSize, PhysicalPosition};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum PositionMode {
@@ -138,8 +138,10 @@ impl Frontend {
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.set_pinned(false);
+            let window = app.window();
+            window.show().ok();
+            window.set_size(LogicalSize::new(320.0, 480.0));
             self.apply_position();
-            app.window().show().ok();
         }
 
         let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
@@ -156,8 +158,10 @@ impl Frontend {
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.set_pinned(false);
+            let window = app.window();
+            window.show().ok();
+            window.set_size(LogicalSize::new(320.0, 480.0));
             self.apply_position();
-            app.window().show().ok();
             let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
             let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             ns_app.activateIgnoringOtherApps(true);
@@ -191,8 +195,10 @@ impl Frontend {
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         if let Some(app) = self.app.upgrade() {
             app.set_current_view(slint::SharedString::from("settings"));
+            let window = app.window();
+            window.show().ok();
+            window.set_size(LogicalSize::new(320.0, 480.0));
             self.apply_position();
-            app.window().show().ok();
             self.visible = true;
         }
     }

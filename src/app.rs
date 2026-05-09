@@ -16,7 +16,7 @@ use crate::services::hotkey::HotkeyService;
 use crate::services::tray::TrayService;
 use crate::App;
 use clipboard_rs::{Clipboard, ClipboardContext};
-use slint::{ComponentHandle, PhysicalSize, SharedString};
+use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::sync::{Arc, Mutex};
 
 pub struct AppController {
@@ -108,10 +108,13 @@ impl AppController {
         slint_app.on_resize_window(move |dx, dy| {
             if let Some(app) = app_for_resize.upgrade() {
                 let window = app.window();
+                let scale = window.scale_factor();
                 let s = window.size();
-                let new_w = (s.width as f32 + dx).max(320.0);
-                let new_h = (s.height as f32 + dy).max(480.0);
-                window.set_size(PhysicalSize::new(new_w as u32, new_h as u32));
+                let w = s.width as f32 / scale;
+                let h = s.height as f32 / scale;
+                let new_w = (w + dx).max(320.0);
+                let new_h = (h + dy).max(480.0);
+                window.set_size(LogicalSize::new(new_w, new_h));
             }
         });
 

@@ -2,6 +2,8 @@
 
 slint::include_modules!();
 
+use slint::{ComponentHandle, LogicalSize};
+
 mod app;
 mod core;
 mod looper;
@@ -34,11 +36,13 @@ fn main() {
 
     let controller = app::AppController::new(&slint_app).expect("Failed to init");
 
-    // Show window first to initialize layout, then hide immediately if silent start.
-    // The event loop hasn't started yet, so no visible flash occurs.
+    // Show window first to initialize layout, then apply physical-pixel sizing
+    // to prevent DPI-scaling from inflating the window (logical px * scale factor).
+    // This runs before the event loop, so no visible flash occurs.
     #[cfg(target_os = "macos")]
     {
         slint_app.window().show().unwrap();
+        slint_app.window().set_size(LogicalSize::new(320.0, 480.0));
         let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
         let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
         ns_app.activate();
@@ -46,6 +50,7 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     {
         slint_app.window().show().unwrap();
+        slint_app.window().set_size(LogicalSize::new(320.0, 480.0));
     }
     if slint_app.get_silent_start() {
         slint_app.window().hide().unwrap();
