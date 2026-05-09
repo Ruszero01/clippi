@@ -79,7 +79,7 @@ impl ClipboardService {
     fn refresh_with_current_filter(&mut self) {
         self.model.clear();
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
-        let items = self.db.lock().unwrap()
+        let items = self.db.lock().expect("db lock poisoned")
             .load_filtered(&self.filters, MAX_ITEMS, order_by)
             .unwrap_or_default();
         for item in items {
@@ -169,7 +169,7 @@ impl ClipboardService {
 impl Pollable for ClipboardService {
     fn poll(&mut self) {
         let pending = {
-            let mut p = self.shared.pending.lock().unwrap();
+            let mut p = self.shared.pending.lock().expect("clipboard pending lock poisoned");
             p.drain(..).collect::<Vec<_>>()
         };
 

@@ -39,17 +39,17 @@ impl Looper {
 
     /// Register clipboard service (keeps concrete type for special methods)
     pub fn set_clipboard_service(&mut self, service: ClipboardService) {
-        *self.clipboard_service.lock().unwrap() = Some(service);
+        *self.clipboard_service.lock().expect("clipboard service lock poisoned") = Some(service);
     }
 
     /// Register hotkey service (keeps concrete type for special methods)
     pub fn set_hotkey_service(&mut self, service: HotkeyService) {
-        *self.hotkey_service.lock().unwrap() = Some(service);
+        *self.hotkey_service.lock().expect("hotkey service lock poisoned") = Some(service);
     }
 
     /// Register focus service (keeps concrete type for special methods)
     pub fn set_focus_service(&mut self, service: FocusService) {
-        *self.focus_service.lock().unwrap() = Some(service);
+        *self.focus_service.lock().expect("focus service lock poisoned") = Some(service);
     }
 
     /// Try to access clipboard service
@@ -112,13 +112,13 @@ impl Looper {
             for svc in &mut services {
                 svc.poll();
             }
-            if let Some(ref mut cs) = *cs.lock().unwrap() {
+            if let Some(ref mut cs) = *cs.lock().expect("clipboard service lock poisoned") {
                 cs.poll();
             }
-            if let Some(ref mut hk) = *hk.lock().unwrap() {
+            if let Some(ref mut hk) = *hk.lock().expect("hotkey service lock poisoned") {
                 hk.poll();
             }
-            if let Some(ref mut fs) = *fs.lock().unwrap() {
+            if let Some(ref mut fs) = *fs.lock().expect("focus service lock poisoned") {
                 fs.poll();
             }
         });
@@ -126,13 +126,13 @@ impl Looper {
 
     pub fn stop(&mut self) {
         self.timer.stop();
-        if let Some(ref mut cs) = *self.clipboard_service.lock().unwrap() {
+        if let Some(ref mut cs) = *self.clipboard_service.lock().expect("clipboard service lock poisoned") {
             cs.stop();
         }
-        if let Some(ref mut hk) = *self.hotkey_service.lock().unwrap() {
+        if let Some(ref mut hk) = *self.hotkey_service.lock().expect("hotkey service lock poisoned") {
             hk.stop();
         }
-        if let Some(ref mut fs) = *self.focus_service.lock().unwrap() {
+        if let Some(ref mut fs) = *self.focus_service.lock().expect("focus service lock poisoned") {
             fs.stop();
         }
     }

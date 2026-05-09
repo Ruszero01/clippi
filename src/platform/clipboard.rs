@@ -11,7 +11,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 /// Shared clipboard buffer for passing data to services
 #[derive(Clone)]
@@ -90,219 +92,108 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
 }
 
 // ============================================================================
-// Windows Implementation - Multi-format detection
+// Generic Polling Listener (used by both Windows and macOS)
 // ============================================================================
 
-#[cfg(target_os = "windows")]
-mod windows {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Instant;
+/// Generic clipboard listener that polls at a fixed interval.
+/// Works on any platform supported by `clipboard-rs`.
+struct PollingClipboardListener {
+    running: Arc<AtomicBool>,
+    startup_end: Arc<Mutex<Option<Instant>>>,
+}
 
-    pub struct WindowsClipboardListener {
-        running: Arc<AtomicBool>,
-        startup_end: Arc<Mutex<Option<Instant>>>,
+impl PollingClipboardListener {
+    fn new() -> Self {
+        Self {
+            running: Arc::new(AtomicBool::new(false)),
+            startup_end: Arc::new(Mutex::new(None)),
+        }
     }
 
-    impl WindowsClipboardListener {
-        pub fn new() -> Self {
-            Self {
-                running: Arc::new(AtomicBool::new(false)),
-                startup_end: Arc::new(Mutex::new(None)),
-            }
-        }
-
-        fn capture_baseline(&self) -> u64 {
-            let mut hasher = DefaultHasher::new();
-            if let Ok(ctx) = ClipboardContext::new() {
-                if let Ok(text) = ctx.get_text() {
-                    if !text.is_empty() {
-                        text.hash(&mut hasher);
-                        *self.startup_end.lock().unwrap() = Some(Instant::now());
-                    }
-                }
-                if ctx.has(ContentFormat::Image) {
-                    hasher.write(b"[img]");
+    fn capture_baseline(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        if let Ok(ctx) = ClipboardContext::new() {
+            if let Ok(text) = ctx.get_text() {
+                if !text.is_empty() {
+                    text.hash(&mut hasher);
                     *self.startup_end.lock().unwrap() = Some(Instant::now());
                 }
             }
-            hasher.finish()
+            if ctx.has(ContentFormat::Image) {
+                hasher.write(b"[img]");
+                *self.startup_end.lock().unwrap() = Some(Instant::now());
+            }
         }
+        hasher.finish()
     }
+}
 
-    impl ClipboardListener for WindowsClipboardListener {
-        fn start(&mut self, shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
-            self.running.store(true, Ordering::SeqCst);
+impl ClipboardListener for PollingClipboardListener {
+    fn start(&mut self, shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.running.store(true, Ordering::SeqCst);
 
-            let last_hash = Arc::new(Mutex::new(self.capture_baseline()));
-            let running = self.running.clone();
-            let startup_end = self.startup_end.clone();
-            let pending = shared.pending.clone();
+        let last_hash = Arc::new(Mutex::new(self.capture_baseline()));
+        let running = self.running.clone();
+        let startup_end = self.startup_end.clone();
+        let pending = shared.pending.clone();
 
-            thread::spawn(move || {
-                while running.load(Ordering::SeqCst) {
-                    let startup_done = startup_end
-                        .lock()
-                        .unwrap()
-                        .map_or(false, |end| end.elapsed().as_millis() > 500);
+        thread::spawn(move || {
+            while running.load(Ordering::SeqCst) {
+                let startup_done = startup_end
+                    .lock()
+                    .unwrap()
+                    .map_or(false, |end| end.elapsed().as_millis() > 500);
 
-                    if let Ok(ctx) = ClipboardContext::new() {
-                        let mut hasher = DefaultHasher::new();
-                        let mut has_content = false;
+                if let Ok(ctx) = ClipboardContext::new() {
+                    let mut hasher = DefaultHasher::new();
+                    let mut has_content = false;
 
-                        if let Ok(text) = ctx.get_text() {
-                            if !text.is_empty() {
-                                text.hash(&mut hasher);
-                                has_content = true;
-                            }
-                        }
-
-                        if ctx.has(ContentFormat::Image) {
-                            hasher.write(b"[img]");
+                    if let Ok(text) = ctx.get_text() {
+                        if !text.is_empty() {
+                            text.hash(&mut hasher);
                             has_content = true;
-                        }
-
-                        if has_content {
-                            let hash = hasher.finish();
-                            let changed = {
-                                let mut last = last_hash.lock().unwrap();
-                                if hash != *last {
-                                    *last = hash;
-                                    true
-                                } else {
-                                    false
-                                }
-                            };
-
-                            if changed && startup_done {
-                                if let Some(item) = detect_clipboard_content(&ctx) {
-                                    pending.lock().unwrap().push(item);
-                                }
-                            }
                         }
                     }
 
-                    thread::sleep(std::time::Duration::from_millis(50));
+                    if ctx.has(ContentFormat::Image) {
+                        hasher.write(b"[img]");
+                        has_content = true;
+                    }
+
+                    if has_content {
+                        let hash = hasher.finish();
+                        let changed = {
+                            let mut last = last_hash.lock().unwrap();
+                            if hash != *last {
+                                *last = hash;
+                                true
+                            } else {
+                                false
+                            }
+                        };
+
+                        if changed && startup_done {
+                            if let Some(item) = detect_clipboard_content(&ctx) {
+                                pending.lock().unwrap().push(item);
+                            }
+                        }
+                    }
                 }
-            });
 
-            Ok(())
-        }
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
 
-        fn stop(&mut self) {
-            self.running.store(false, Ordering::SeqCst);
-        }
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
     }
 }
 
 // ============================================================================
-// macOS Implementation - Multi-format detection
-// ============================================================================
-
-#[cfg(target_os = "macos")]
-mod macos {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Instant;
-
-    pub struct MacosClipboardListener {
-        running: Arc<AtomicBool>,
-        startup_end: Arc<Mutex<Option<Instant>>>,
-    }
-
-    impl MacosClipboardListener {
-        pub fn new() -> Self {
-            Self {
-                running: Arc::new(AtomicBool::new(false)),
-                startup_end: Arc::new(Mutex::new(None)),
-            }
-        }
-
-        fn capture_baseline(&self) -> u64 {
-            let mut hasher = DefaultHasher::new();
-            if let Ok(ctx) = ClipboardContext::new() {
-                if let Ok(text) = ctx.get_text() {
-                    if !text.is_empty() {
-                        text.hash(&mut hasher);
-                        *self.startup_end.lock().unwrap() = Some(Instant::now());
-                    }
-                }
-                if ctx.has(ContentFormat::Image) {
-                    hasher.write(b"[img]");
-                    *self.startup_end.lock().unwrap() = Some(Instant::now());
-                }
-            }
-            hasher.finish()
-        }
-    }
-
-    impl ClipboardListener for MacosClipboardListener {
-        fn start(&mut self, shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
-            self.running.store(true, Ordering::SeqCst);
-
-            let last_hash = Arc::new(Mutex::new(self.capture_baseline()));
-            let running = self.running.clone();
-            let startup_end = self.startup_end.clone();
-            let pending = shared.pending.clone();
-
-            thread::spawn(move || {
-                while running.load(Ordering::SeqCst) {
-                    let startup_done = startup_end
-                        .lock()
-                        .unwrap()
-                        .map_or(false, |end| end.elapsed().as_millis() > 500);
-
-                    if let Ok(ctx) = ClipboardContext::new() {
-                        let mut hasher = DefaultHasher::new();
-                        let mut has_content = false;
-
-                        if let Ok(text) = ctx.get_text() {
-                            if !text.is_empty() {
-                                text.hash(&mut hasher);
-                                has_content = true;
-                            }
-                        }
-
-                        if ctx.has(ContentFormat::Image) {
-                            hasher.write(b"[img]");
-                            has_content = true;
-                        }
-
-                        if has_content {
-                            let hash = hasher.finish();
-                            let changed = {
-                                let mut last = last_hash.lock().unwrap();
-                                if hash != *last {
-                                    *last = hash;
-                                    true
-                                } else {
-                                    false
-                                }
-                            };
-
-                            if changed && startup_done {
-                                if let Some(item) = detect_clipboard_content(&ctx) {
-                                    pending.lock().unwrap().push(item);
-                                }
-                            }
-                        }
-                    }
-
-                    thread::sleep(std::time::Duration::from_millis(50));
-                }
-            });
-
-            Ok(())
-        }
-
-        fn stop(&mut self) {
-            self.running.store(false, Ordering::SeqCst);
-        }
-    }
-}
-
-// ============================================================================
-// Linux Implementation
+// Linux Stub
 // ============================================================================
 
 #[cfg(target_os = "linux")]
@@ -335,35 +226,17 @@ mod linux {
     }
 }
 
-// ============================================================================
-// Public exports
-// ============================================================================
-
-#[cfg(target_os = "windows")]
-pub use windows::WindowsClipboardListener;
-
-#[cfg(target_os = "macos")]
-pub use macos::MacosClipboardListener;
-
 #[cfg(target_os = "linux")]
 pub use linux::LinuxClipboardListener;
 
 /// Create a platform-specific clipboard listener
 pub fn create_listener() -> Box<dyn ClipboardListener> {
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "linux"))]
     {
-        Box::new(WindowsClipboardListener::new())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Box::new(MacosClipboardListener::new())
+        Box::new(PollingClipboardListener::new())
     }
     #[cfg(target_os = "linux")]
     {
         Box::new(LinuxClipboardListener::new())
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        panic!("Unsupported platform")
     }
 }

@@ -144,7 +144,7 @@ impl AppController {
             }
             if let Ok(mut fe) = frontend_close.lock() {
                 fe.hide();
-                let mut s = settings_for_close.lock().unwrap();
+                let mut s = settings_for_close.lock().expect("settings lock poisoned");
                 fe.apply_saved_position_to_settings(&mut s);
                 s.save();
             }
@@ -187,7 +187,7 @@ impl AppController {
                 match set_auto_start(new_val) {
                     Ok(()) => {
                         app.set_auto_start(new_val);
-                        let mut s = settings_for_callbacks.lock().unwrap();
+                        let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
                         s.auto_start = new_val;
                         s.save();
                     }
@@ -205,7 +205,7 @@ impl AppController {
             if let Some(app) = app_for_auto_hide.upgrade() {
                 let new_val = !app.get_auto_hide();
                 app.set_auto_hide(new_val);
-                let mut s = settings_for_callbacks.lock().unwrap();
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
                 s.auto_hide = new_val;
                 s.save();
                 let _ = looper_for_auto_hide.try_with_focus_service(|fs| {
@@ -233,7 +233,7 @@ impl AppController {
             if let Some(app) = app_for_sort.upgrade() {
                 let new_val = !app.get_sort_by_created();
                 app.set_sort_by_created(new_val);
-                let mut s = settings_for_callbacks.lock().unwrap();
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
                 s.sort_by_created = new_val;
                 s.save();
                 let _ = looper_for_sort.try_with_clipboard_service(|cs| {
@@ -251,11 +251,11 @@ impl AppController {
 
             if let Some(new_path) = result {
                 if let Some(app) = app_for_pick_db.upgrade() {
-                    let old_path = settings_for_callbacks.lock().unwrap().resolve_db_path();
+                    let old_path = settings_for_callbacks.lock().expect("settings lock poisoned").resolve_db_path();
                     match migrate_database(&old_path, &new_path) {
                         Ok(()) => {
                             let path_str = new_path.to_string_lossy().to_string();
-                            let mut s = settings_for_callbacks.lock().unwrap();
+                            let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
                             s.db_path = path_str;
                             s.save();
                             spawn_new_process();
@@ -272,14 +272,14 @@ impl AppController {
         let settings_for_callbacks = Arc::clone(&shared_settings);
         let app_for_reset_db = app.clone();
         slint_app.on_reset_db_path(move || {
-            let old_path = settings_for_callbacks.lock().unwrap().resolve_db_path();
+            let old_path = settings_for_callbacks.lock().expect("settings lock poisoned").resolve_db_path();
             let default_db_path = AppSettings::default().resolve_db_path();
             if old_path == default_db_path {
                 return;
             }
             match migrate_database(&old_path, &default_db_path) {
                 Ok(()) => {
-                    let mut s = settings_for_callbacks.lock().unwrap();
+                    let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
                     s.db_path = String::new();
                     s.save();
                     spawn_new_process();
@@ -304,7 +304,7 @@ impl AppController {
                 };
                 app.set_theme_mode(mode);
                 app.set_dark_mode(is_dark);
-                let mut s = settings_for_callbacks.lock().unwrap();
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
                 s.theme = match mode {
                     1 => "dark".to_string(),
                     2 => "light".to_string(),
@@ -329,7 +329,7 @@ impl AppController {
             if let Ok(mut fe) = frontend_for_pos.lock() {
                 fe.set_position_mode(PositionMode::from_int(mode));
             }
-            let mut s = settings_for_callbacks.lock().unwrap();
+            let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
             s.window_position_mode = mode_str.to_string();
             s.save();
         });
@@ -340,7 +340,7 @@ impl AppController {
             if let Some(app) = app_for_chm.upgrade() {
                 app.set_card_height_mode(mode.clone());
             }
-            let mut s = settings_for_callbacks.lock().unwrap();
+            let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
             s.card_height_mode = mode.to_string();
             s.save();
         });
@@ -432,7 +432,7 @@ impl AppController {
 
     pub fn shutdown(mut self) {
         if let Ok(fe) = self.frontend.lock() {
-            let mut s = self.shared_settings.lock().unwrap();
+            let mut s = self.shared_settings.lock().expect("settings lock poisoned");
             fe.apply_saved_position_to_settings(&mut s);
             s.save();
         }

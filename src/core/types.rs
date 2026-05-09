@@ -91,8 +91,12 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
         "刚刚".to_string()
     } else if secs < 3600 {
         format!("{}分钟前", secs / 60)
-    } else {
+    } else if secs < 86400 {
         format!("{}小时前", secs / 3600)
+    } else if secs < 604800 {
+        format!("{}天前", secs / 86400)
+    } else {
+        format!("{}周前", secs / 604800)
     }
 }
 
