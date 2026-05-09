@@ -16,6 +16,7 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> recording-hotkey: false;
     in property <int> position-mode: 0;
     in property <string> card-height-mode: "medium";
+    in property <bool> silent-start: true;
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -32,6 +33,7 @@ export component SettingsPanel inherits Rectangle {
     callback set-theme(int);
     callback set-position-mode(int);
     callback set-card-height-mode(string);
+    callback toggle-silent-start();
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #919496 : #7c809a;
@@ -228,10 +230,12 @@ export component SettingsPanel inherits Rectangle {
             auto-start: root.auto-start;
             auto-hide: root.auto-hide;
             position-mode: root.position-mode;
+            silent-start: root.silent-start;
             toggle-auto-start => { root.toggle-auto-start(); }
             toggle-auto-hide => { root.toggle-auto-hide(); }
             set-theme(int) => { root.set-theme(int); }
             set-position-mode(int) => { root.set-position-mode(int); }
+            toggle-silent-start => { root.toggle-silent-start(); }
         }
 
         if (root.active-tab == 1) : SettingsTabClipboard {

@@ -214,6 +214,18 @@ impl AppController {
             }
         });
 
+        let settings_for_callbacks = Arc::clone(&shared_settings);
+        let app_for_silent_start = app.clone();
+        slint_app.on_toggle_silent_start(move || {
+            if let Some(app) = app_for_silent_start.upgrade() {
+                let new_val = !app.get_silent_start();
+                app.set_silent_start(new_val);
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
+                s.silent_start = new_val;
+                s.save();
+            }
+        });
+
         let app_for_pinned = app.clone();
         let looper_for_pinned = Arc::clone(&looper);
         slint_app.on_toggle_pinned(move || {
@@ -466,4 +478,5 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
     app.set_position_mode(PositionMode::from_str(&settings.window_position_mode).to_int());
     app.set_card_height_mode(SharedString::from(&settings.card_height_mode));
+    app.set_silent_start(settings.silent_start);
 }

@@ -33,6 +33,7 @@ export component App inherits Window {
     in-out property <bool> recording-hotkey: false;
     in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
     in-out property <string> card-height-mode: "medium";
+    in-out property <bool> silent-start: true;
 
     // 分类筛选
     in-out property <bool> filter-plain-text: false;
@@ -71,6 +72,7 @@ export component App inherits Window {
     callback toggle-favorites-filter();
     callback toggle-favorite(int);
     callback delete-item(int);
+    callback toggle-silent-start();
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -365,6 +367,7 @@ export component App inherits Window {
                     recording-hotkey: root.recording-hotkey;
                     position-mode: root.position-mode;
                     card-height-mode: root.card-height-mode;
+                    silent-start: root.silent-start;
 
                     back => { root.current-view = "clipboard"; }
                     toggle-auto-start => { root.toggle-auto-start(); }
@@ -377,6 +380,7 @@ export component App inherits Window {
                     set-theme(mode) => { root.set-theme(mode); }
                     set-position-mode(mode) => { root.set-position-mode(mode); }
                     set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
+                    toggle-silent-start => { root.toggle-silent-start(); }
                 }
             }
         }
