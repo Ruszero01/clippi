@@ -1,12 +1,18 @@
 //! Paste simulation - simulates Ctrl+V to paste content and restore focus
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_CONTROL, VK_V};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_V,
+};
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
 
 #[cfg(target_os = "windows")]
-const SLEEP_MS: u64 = 50;
+const BASE_DELAY_MS: u64 = 50;
+#[cfg(target_os = "windows")]
+const FOCUS_CHECK_INTERVAL_MS: u64 = 10;
+#[cfg(target_os = "windows")]
+const FOCUS_TIMEOUT_MS: u64 = 500;
 
 /// Restore focus to the last non-Clippi foreground window (paste target)
 #[cfg(target_os = "windows")]
@@ -18,18 +24,84 @@ pub fn restore_paste_target() {
     }
 }
 
-/// Simulate Ctrl+V using keybd_event after a short delay
+/// Simulate Ctrl+V using SendInput after verifying target window has focus.
+///
+/// Uses `SendInput` (replaces deprecated `keybd_event`) to send all 4 key
+/// events atomically, preventing interleaving with real user input.
+/// Before sending, polls `GetForegroundWindow` until the target window is
+/// actually in the foreground (up to `FOCUS_TIMEOUT_MS`).
 #[cfg(target_os = "windows")]
 pub fn paste_after_delay() {
+    let target_hwnd: Option<usize> = crate::platform::focus::get_last_non_clippi_window()
+        .map(|h| h as usize);
+
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(SLEEP_MS));
+        // Initial delay for SetForegroundWindow to take effect
+        std::thread::sleep(std::time::Duration::from_millis(BASE_DELAY_MS));
+
+        // Verify target window is actually foreground before pasting
+        if let Some(hwnd) = target_hwnd {
+            let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+            if unsafe { IsWindow(hwnd) } != 0 {
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+                loop {
+                    if unsafe { GetForegroundWindow() } == hwnd {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
+                }
+            }
+        }
+
+        // Send Ctrl+V atomically via SendInput
         unsafe {
-            let vk_ctrl = VK_CONTROL as u8;
-            let vk_v = VK_V as u8;
-            keybd_event(vk_ctrl, 0, 0, 0);
-            keybd_event(vk_v, 0, 0, 0);
-            keybd_event(vk_v, 0, 2, 0);
-            keybd_event(vk_ctrl, 0, 2, 0);
+            let mut inputs: [INPUT; 4] = std::mem::zeroed();
+
+            // Ctrl down
+            inputs[0].r#type = INPUT_KEYBOARD;
+            inputs[0].Anonymous.ki = KEYBDINPUT {
+                wVk: VK_CONTROL as u16,
+                wScan: 0,
+                dwFlags: 0,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+
+            // V down
+            inputs[1].r#type = INPUT_KEYBOARD;
+            inputs[1].Anonymous.ki = KEYBDINPUT {
+                wVk: VK_V as u16,
+                wScan: 0,
+                dwFlags: 0,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+
+            // V up
+            inputs[2].r#type = INPUT_KEYBOARD;
+            inputs[2].Anonymous.ki = KEYBDINPUT {
+                wVk: VK_V as u16,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+
+            // Ctrl up
+            inputs[3].r#type = INPUT_KEYBOARD;
+            inputs[3].Anonymous.ki = KEYBDINPUT {
+                wVk: VK_CONTROL as u16,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+
+            SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
         }
     });
 }

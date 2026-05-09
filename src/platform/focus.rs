@@ -19,33 +19,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
-
-/// Track the previous foreground window (before Clippi took focus)
-#[cfg(target_os = "windows")]
-static PREVIOUS_FOREGROUND_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
 /// Last non-Clippi foreground window (paste target)
 #[cfg(target_os = "windows")]
 static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
-/// Temporary storage for window swapping
-#[cfg(target_os = "windows")]
-static TEMP_WINDOW: AtomicUsize = AtomicUsize::new(0);
-
-/// Track the previous foreground PID (before Clippi took focus)
-#[cfg(target_os = "macos")]
-static PREVIOUS_FOREGROUND_PID: AtomicI32 = AtomicI32::new(0);
-
 /// Last non-Clippi foreground PID (paste target)
 #[cfg(target_os = "macos")]
 static LAST_NON_CLIPPI_PID: AtomicI32 = AtomicI32::new(0);
-
-/// Temporary storage for PID swapping
-#[cfg(target_os = "macos")]
-static TEMP_PID: AtomicI32 = AtomicI32::new(0);
 
 /// FocusWatcher handle
 pub struct FocusWatcher {
@@ -141,11 +125,8 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
                 let pid = app.processIdentifier();
 
                 if pid == my_pid {
-                    let prev = TEMP_PID.load(Ordering::SeqCst);
-                    LAST_NON_CLIPPI_PID.store(prev, Ordering::SeqCst);
+                    // LAST_NON_CLIPPI_PID already holds the correct paste target.
                 } else {
-                    TEMP_PID.store(PREVIOUS_FOREGROUND_PID.load(Ordering::SeqCst), Ordering::SeqCst);
-                    PREVIOUS_FOREGROUND_PID.store(pid, Ordering::SeqCst);
                     LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
                 }
             }
@@ -212,13 +193,10 @@ unsafe extern "system" fn win_event_proc(
     let is_clippi_now = is_clippi_window(current_fg);
 
     if is_clippi_now {
-        let prev = TEMP_WINDOW.load(Ordering::SeqCst);
-        LAST_NON_CLIPPI_WINDOW.store(prev, Ordering::SeqCst);
+        // LAST_NON_CLIPPI_WINDOW already holds the correct paste target from
+        // the most recent non-Clippi focus event. Do not overwrite it.
         return;
     }
 
-    // Not Clippi - save current PREV to TEMP, then update PREV to current
-    TEMP_WINDOW.store(PREVIOUS_FOREGROUND_WINDOW.load(Ordering::SeqCst), Ordering::SeqCst);
-    PREVIOUS_FOREGROUND_WINDOW.store(current_fg as usize, Ordering::SeqCst);
     LAST_NON_CLIPPI_WINDOW.store(current_fg as usize, Ordering::SeqCst);
 }
