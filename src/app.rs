@@ -371,7 +371,36 @@ impl AppController {
                     app.set_filter_rich_text(false);
                     app.set_filter_image(false);
                     app.set_filter_link(false);
+                    app.set_filter_favorites(false);
                 }
+            });
+        });
+
+        // Favorites filter callback
+        let looper_for_fav_filter = Arc::clone(&looper);
+        let app_for_fav_filter = app.clone();
+        slint_app.on_toggle_favorites_filter(move || {
+            let _ = looper_for_fav_filter.try_with_clipboard_service(|cs| {
+                cs.toggle_favorites_filter_and_refresh();
+                if let Some(app) = app_for_fav_filter.upgrade() {
+                    app.set_filter_favorites(cs.is_favorites_filter_active());
+                }
+            });
+        });
+
+        // Toggle favorite on a single item
+        let looper_for_fav = Arc::clone(&looper);
+        slint_app.on_toggle_favorite(move |id| {
+            let _ = looper_for_fav.try_with_clipboard_service(|cs| {
+                cs.toggle_favorite(id);
+            });
+        });
+
+        // Delete item
+        let looper_for_del = Arc::clone(&looper);
+        slint_app.on_delete_item(move |id| {
+            let _ = looper_for_del.try_with_clipboard_service(|cs| {
+                cs.delete_item(id);
             });
         });
 

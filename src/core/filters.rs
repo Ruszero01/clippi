@@ -1,15 +1,11 @@
 //! Extensible filter system for clipboard items
 //!
-//! Each filter dimension (type, keyword, custom tag, etc.) is a separate field.
+//! Each filter dimension (type, keyword, favorites, etc.) is a separate field.
 //! Multiple filters combine with AND logic.
 
 use crate::core::types::ClipboardItem;
 
 /// Unified filter state for clipboard queries.
-///
-/// Future dimensions can be added as new fields:
-/// - `tags: Vec<String>` for custom tags
-/// - `favorite: bool` for starred items
 ///
 /// All active dimensions combine with AND logic.
 #[derive(Debug, Clone, Default)]
@@ -18,6 +14,8 @@ pub struct ClipboardFilters {
     type_filters: Vec<String>,
     /// Keyword search: None = no filter, Some = LIKE %keyword% on searchable_text
     keyword: Option<String>,
+    /// Favorites filter: true = show only favorites
+    favorites_only: bool,
 }
 
 impl ClipboardFilters {
@@ -39,10 +37,16 @@ impl ClipboardFilters {
         };
     }
 
+    /// Toggle favorites-only filter
+    pub fn toggle_favorites_only(&mut self) {
+        self.favorites_only = !self.favorites_only;
+    }
+
     /// Clear all filters across all dimensions
     pub fn clear_all(&mut self) {
         self.type_filters.clear();
         self.keyword = None;
+        self.favorites_only = false;
     }
 
     /// Check if a specific type filter is active
@@ -50,9 +54,18 @@ impl ClipboardFilters {
         self.type_filters.iter().any(|t| t == type_name)
     }
 
+    /// Check if favorites filter is active
+    pub fn is_favorites_active(&self) -> bool {
+        self.favorites_only
+    }
+
     /// Check if an in-memory item matches all active filters (AND logic).
     /// Used during poll() for real-time filtering of incoming items.
     pub fn matches_item(&self, item: &ClipboardItem) -> bool {
+        // Favorites filter dimension
+        if self.favorites_only && !item.is_favorite {
+            return false;
+        }
         // Type filter dimension
         if !self.type_filters.is_empty() {
             let type_str = item.content_type.as_str();
@@ -76,11 +89,14 @@ impl ClipboardFilters {
 
     /// Build SQL WHERE clause and params for database queries.
     /// Returns (sql_fragment, params) where sql_fragment may be empty string if no filters.
-    ///
-    /// The caller is responsible for combining this with other WHERE conditions.
     pub fn db_where(&self) -> (String, Vec<rusqlite::types::Value>) {
         let mut conditions = Vec::new();
         let mut params = Vec::new();
+
+        // Favorites filter
+        if self.favorites_only {
+            conditions.push("is_favorite = 1".to_string());
+        }
 
         // Type filter
         if !self.type_filters.is_empty() {

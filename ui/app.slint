@@ -39,6 +39,7 @@ export component App inherits Window {
     in-out property <bool> filter-rich-text: false;
     in-out property <bool> filter-image: false;
     in-out property <bool> filter-link: false;
+    in-out property <bool> filter-favorites: false;
 
     // 双击检测
     in-out property <int> last-clicked-id: -1;
@@ -67,6 +68,9 @@ export component App inherits Window {
     callback toggle-filter(string);
     callback clear-filters();
     callback search-keyword(string);
+    callback toggle-favorites-filter();
+    callback toggle-favorite(int);
+    callback delete-item(int);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #0e1018 : #f2f3f8;
@@ -228,6 +232,27 @@ export component App inherits Window {
                         spacing: 2px;
                         alignment: end;
 
+                        // 收藏筛选按钮
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+
+                            fav-filter-ta := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => { root.toggle-favorites-filter(); }
+                            }
+
+                            Text {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                text: "\u{e630}";
+                                font-family: "iconfont";
+                                font-size: 15px;
+                                color: filter-favorites ? accent : (fav-filter-ta.has-hover ? accent : text-2);
+                            }
+                        }
+
                         // 固定按钮（免打扰模式）
                         Rectangle {
                             width: 28px;
@@ -242,7 +267,7 @@ export component App inherits Window {
                             Text {
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
-                                text: "\u{e9ba}";
+                                text: "\u{e633}";
                                 font-family: "iconfont";
                                 font-size: 15px;
                                 color: pinned ? accent : (pin-ta.has-hover ? accent : text-2);
@@ -317,6 +342,8 @@ export component App inherits Window {
                     search-keyword(keyword) => { root.search-keyword(keyword); }
                     copy-item(id) => { root.copy-item(id); }
                     paste-item(id) => { root.paste-item(id); }
+                    toggle-favorite(id) => { root.toggle-favorite(id); }
+                    delete-item(id) => { root.delete-item(id); }
                 }
 
                 SettingsPanel {

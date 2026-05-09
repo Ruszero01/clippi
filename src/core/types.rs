@@ -45,6 +45,7 @@ pub struct ClipboardItem {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub image_path: String,
+    pub is_favorite: bool,
 }
 
 impl ClipboardItem {
@@ -61,6 +62,7 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: String::new(),
+            is_favorite: false,
         }
     }
 
@@ -75,6 +77,7 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: image_path.to_string(),
+            is_favorite: false,
         }
     }
 }
@@ -85,11 +88,11 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     let elapsed = Utc::now().signed_duration_since(*captured_at);
     let secs = elapsed.num_seconds();
     if secs < 60 {
-        "just now".to_string()
+        "刚刚".to_string()
     } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
+        format!("{}分钟前", secs / 60)
     } else {
-        format!("{}h ago", secs / 3600)
+        format!("{}小时前", secs / 3600)
     }
 }
 

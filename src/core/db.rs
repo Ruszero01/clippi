@@ -26,7 +26,8 @@ impl Database {
                 content_hash INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                image_path TEXT NOT NULL DEFAULT ''
+                image_path TEXT NOT NULL DEFAULT '',
+                is_favorite INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
             CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
@@ -66,7 +67,7 @@ impl Database {
     ) -> SqlResult<Vec<ClipboardItem>> {
         let (where_clause, mut filter_params) = filters.db_where();
         let query = format!(
-            "SELECT id, content_type, full_text, searchable_text, content_hash, created_at, updated_at, image_path
+            "SELECT id, content_type, full_text, searchable_text, content_hash, created_at, updated_at, image_path, is_favorite
              FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
             where_clause, order_by
         );
@@ -78,7 +79,7 @@ impl Database {
 
     pub fn get_by_id(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, searchable_text, content_hash, created_at, updated_at, image_path
+            "SELECT id, content_type, full_text, searchable_text, content_hash, created_at, updated_at, image_path, is_favorite
              FROM clipboard_items WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -91,7 +92,7 @@ impl Database {
 
     pub fn get_by_hash(&self, hash: u64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, searchable_text, content_hash, created_at, updated_at, image_path
+            "SELECT id, content_type, full_text, searchable_text, content_hash, created_at, updated_at, image_path, is_favorite
              FROM clipboard_items WHERE content_hash = ?1",
         )?;
         let mut rows = stmt.query(params![hash as i64])?;
@@ -101,6 +102,22 @@ impl Database {
             Ok(None)
         }
     }
+
+    pub fn toggle_favorite(&self, id: i64) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET is_favorite = CASE WHEN is_favorite = 0 THEN 1 ELSE 0 END WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_item(&self, id: i64) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM clipboard_items WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
@@ -108,6 +125,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let created_str: String = row.get(5)?;
     let updated_str: String = row.get(6)?;
     let image_path: String = row.get(7).unwrap_or_default();
+    let is_favorite: i32 = row.get(8).unwrap_or(0);
     Ok(ClipboardItem {
         id: row.get(0)?,
         content_type: ContentType::from_str(&ct_str),
@@ -117,5 +135,6 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         created_at: created_str.parse().unwrap_or_default(),
         updated_at: updated_str.parse().unwrap_or_default(),
         image_path,
+        is_favorite: is_favorite != 0,
     })
 }

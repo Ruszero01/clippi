@@ -52,6 +52,12 @@ impl ClipboardService {
         self.refresh_with_current_filter();
     }
 
+    /// Toggle favorites filter and reload from database
+    pub fn toggle_favorites_filter_and_refresh(&mut self) {
+        self.filters.toggle_favorites_only();
+        self.refresh_with_current_filter();
+    }
+
     /// Clear all filters and reload
     pub fn clear_filters(&mut self) {
         self.filters.clear_all();
@@ -114,6 +120,44 @@ impl ClipboardService {
     /// Check if a filter type is active
     pub fn is_filter_active(&self, filter_type: &str) -> bool {
         self.filters.is_type_active(filter_type)
+    }
+
+    /// Check if favorites filter is active
+    pub fn is_favorites_filter_active(&self) -> bool {
+        self.filters.is_favorites_active()
+    }
+
+    /// Toggle favorite status for an item and refresh that row
+    pub fn toggle_favorite(&mut self, id: i32) {
+        let needs_full_refresh = self.filters.is_favorites_active();
+        {
+            if let Ok(db) = self.db.lock() {
+                let _ = db.toggle_favorite(id as i64);
+            }
+        }
+        if needs_full_refresh {
+            self.refresh_with_current_filter();
+        } else {
+            self.refresh_row(id);
+        }
+    }
+
+    /// Delete an item from database and remove from model
+    pub fn delete_item(&mut self, id: i32) {
+        if let Ok(db) = self.db.lock() {
+            let _ = db.delete_item(id as i64);
+        }
+        for i in 0..self.model.row_count() {
+            if let Some(entry) = self.model.row_data(i) {
+                if entry.id == id {
+                    self.model.remove(i);
+                    break;
+                }
+            }
+        }
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
+        }
     }
 
     /// Get reference to shared buffer for platform layer
@@ -190,5 +234,6 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         preview_length: item.full_text.len() as i32,
         image_width: img_w as i32,
         image_height: img_h as i32,
+        is_favorite: item.is_favorite,
     }
 }

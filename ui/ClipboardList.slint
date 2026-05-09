@@ -27,6 +27,8 @@ export component ClipboardList inherits Rectangle {
     callback toggle-filter(string);
     callback clear-filters();
     callback search-keyword(string);
+    callback toggle-favorite(int);
+    callback delete-item(int);
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #181a26 : #ffffff;
@@ -39,6 +41,7 @@ export component ClipboardList inherits Rectangle {
     property <color> accent-soft:   dark-mode ? #1a2e24 : #e8f5ee;
     property <color> divider:       dark-mode ? #262840 : #e6e8f0;
     property <color> btn-hover:     dark-mode ? #262840 : #f0f1f8;
+    property <color> danger:        #ff5f57;
 
     background: transparent;
 
@@ -297,7 +300,7 @@ export component ClipboardList inherits Rectangle {
                             drop-shadow-offset-y: 1px;
 
                         item-ta := TouchArea {
-                            width: parent.width - 32px;
+                            width: parent.width;
                             height: parent.height;
                             clicked => {
                                 search-input.clear-focus();
@@ -310,191 +313,237 @@ export component ClipboardList inherits Rectangle {
                                     root.click-pending = true;
                                 }
                             }
-                        }
 
-                        // ── 图片类型：图标 + 缩略图 + 复制按钮 ──
-                        if entry.content-type == "image" : HorizontalLayout {
-                            padding: 10px;
-                            spacing: 10px;
+                            // ── 图片类型：图标 + 缩略图 ──
+                            if entry.content-type == "image" : HorizontalLayout {
+                                padding: 10px;
+                                spacing: 10px;
 
-                            // 图片类型图标
-                            Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 9px;
-                                background: accent-soft;
+                                // 图片类型图标
+                                Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 9px;
+                                    background: accent-soft;
 
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e626}";
-                                    font-family: "iconfont";
-                                    font-size: 18px;
-                                    color: accent;
+                                    Text {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "\u{e626}";
+                                        font-family: "iconfont";
+                                        font-size: 18px;
+                                        color: accent;
+                                    }
+                                }
+
+                                // 图片预览
+                                Rectangle {
+                                    border-radius: 6px;
+                                    clip: true;
+                                    background: accent-soft;
+
+                                    if entry.image-path != "" : Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: entry.thumbnail;
+                                        image-fit: cover;
+                                    }
+
+                                    if entry.image-path == "" : Text {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "\u{e626}";
+                                        font-family: "iconfont";
+                                        font-size: 20px;
+                                        color: accent;
+                                    }
                                 }
                             }
 
-                            // 图片预览
-                            Rectangle {
+                            // ── 非图片类型：图标 + 文本 ──
+                            if entry.content-type != "image" : HorizontalLayout {
+                                padding: 10px;
+                                spacing: 10px;
+
+                                // 纯文本图标
+                                if entry.content-type == "plain_text": Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 9px;
+                                    background: accent-soft;
+
+                                    Text {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "\u{e60e}";
+                                        font-family: "iconfont";
+                                        font-size: 18px;
+                                        color: accent;
+                                    }
+                                }
+
+                                // 格式文本图标
+                                if entry.content-type == "rich_text": Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 9px;
+                                    background: accent-soft;
+
+                                    Text {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "\u{e6ae}";
+                                        font-family: "iconfont";
+                                        font-size: 18px;
+                                        color: accent;
+                                    }
+                                }
+
+                                // 链接图标
+                                if entry.content-type == "link": Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 9px;
+                                    background: accent-soft;
+
+                                    Text {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "\u{e6d7}";
+                                        font-family: "iconfont";
+                                        font-size: 18px;
+                                        color: accent;
+                                    }
+                                }
+
+                                // 内容预览
+                                Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    color: text-1;
+                                    overflow: elide;
+                                    wrap: word-wrap;
+                                    vertical-alignment: top;
+                                }
+                            }
+
+                            // ── 悬浮工具栏 ──
+                            if item-ta.has-hover : Rectangle {
+                                x: parent.width - self.width - 4px;
+                                y: 3px;
+                                height: 22px;
+                                width: tb-inner.preferred-width + 10px;
                                 border-radius: 6px;
-                                clip: true;
-                                background: accent-soft;
+                                background: dark-mode ? #181a26e8 : #ffffffe8;
+                                border-width: 1px;
+                                border-color: dark-mode ? #ffffff20 : #0000000c;
 
-                                if entry.image-path != "" : Image {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    source: entry.thumbnail;
-                                    image-fit: cover;
-                                }
-
-                                if entry.image-path == "" : Text {
-                                    x: (parent.width - self.width) / 2;
+                                tb-inner := HorizontalLayout {
+                                    x: 5px;
                                     y: (parent.height - self.height) / 2;
-                                    text: "\u{e626}";
-                                    font-family: "iconfont";
-                                    font-size: 20px;
-                                    color: accent;
+                                    spacing: 2px;
+
+                                    // 收藏按钮
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        fav-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -1;
+                                                root.toggle-favorite(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: entry.is-favorite ? "\u{e630}" : "\u{e68d}";
+                                            font-family: "iconfont";
+                                            font-size: 11px;
+                                            color: entry.is-favorite ? accent : (fav-ta.has-hover ? accent : (dark-mode ? text-2 : text-2));
+                                        }
+                                    }
+
+                                    // 复制按钮
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        tb-copy-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -1;
+                                                root.copy-item(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e600}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: tb-copy-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 删除按钮
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        del-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -1;
+                                                root.delete-item(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e8b6}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: del-ta.has-hover ? danger : text-2;
+                                        }
+                                    }
                                 }
                             }
 
-                            // 复制按钮
+                            // 悬浮时间标签
                             Rectangle {
-                                width: 28px;
-                                height: 28px;
+                                x: parent.width - self.width - 10px;
+                                y: parent.height - self.height - 6px;
+                                height: 18px;
+                                width: time-text.preferred-width + 14px;
+                                border-radius: 9px;
+                                background: dark-mode ? #181a26e8 : #ffffffe8;
+                                border-width: 1px;
+                                border-color: dark-mode ? #ffffff20 : #0000000c;
 
-                                img-copy-ta := TouchArea {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    clicked => {
-                                        search-input.clear-focus();
-                                        root.click-pending = false;
-                                        root.last-clicked-id = -1;
-                                        root.copy-item(entry.id);
-                                    }
-                                }
-
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e6c5}";
-                                    font-family: "iconfont";
-                                    font-size: 14px;
-                                    color: img-copy-ta.has-hover ? accent : text-3;
+                                time-text := Text {
+                                    text: entry.time-label;
+                                    font-size: 9px;
+                                    color: text-2;
+                                    x: 7px;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
-
-                        // ── 非图片类型：图标 + 文本 + 复制按钮 ──
-                        if entry.content-type != "image" : HorizontalLayout {
-                            padding: 10px;
-                            spacing: 10px;
-
-                            // 纯文本图标
-                            if entry.content-type == "plain_text": Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 9px;
-                                background: accent-soft;
-
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e60e}";
-                                    font-family: "iconfont";
-                                    font-size: 18px;
-                                    color: accent;
-                                }
-                            }
-
-                            // 格式文本图标
-                            if entry.content-type == "rich_text": Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 9px;
-                                background: accent-soft;
-
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e6ae}";
-                                    font-family: "iconfont";
-                                    font-size: 18px;
-                                    color: accent;
-                                }
-                            }
-
-                            // 链接图标
-                            if entry.content-type == "link": Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 9px;
-                                background: accent-soft;
-
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e6d7}";
-                                    font-family: "iconfont";
-                                    font-size: 18px;
-                                    color: accent;
-                                }
-                            }
-
-                            // 内容预览
-                            Text {
-                                text: entry.preview;
-                                font-size: 12px;
-                                color: text-1;
-                                overflow: elide;
-                                wrap: word-wrap;
-                                vertical-alignment: top;
-                            }
-
-                            // 复制按钮
-                            Rectangle {
-                                width: 28px;
-                                height: 28px;
-
-                                copy-ta := TouchArea {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    clicked => {
-                                        search-input.clear-focus();
-                                        root.click-pending = false;
-                                        root.last-clicked-id = -1;
-                                        root.copy-item(entry.id);
-                                    }
-                                }
-
-                                Text {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    text: "\u{e6c5}";
-                                    font-family: "iconfont";
-                                    font-size: 14px;
-                                    color: copy-ta.has-hover ? accent : text-3;
-                                }
-                            }
-                            }
-
-                        // 悬浮时间标签
-                        Rectangle {
-                            x: parent.width - self.width - 10px;
-                            y: parent.height - self.height - 6px;
-                            height: 18px;
-                            width: time-text.preferred-width + 14px;
-                            border-radius: 9px;
-                            background: dark-mode ? #ffffff18 : #0000000d;
-
-                            time-text := Text {
-                                text: entry.time-label;
-                                font-size: 9px;
-                                color: text-3;
-                                x: 7px;
-                                vertical-alignment: center;
-                            }
                         }
-                    }
                     }
                 }
         }
