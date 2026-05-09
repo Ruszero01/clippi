@@ -34,19 +34,21 @@ fn main() {
 
     let controller = app::AppController::new(&slint_app).expect("Failed to init");
 
-    // Show and activate the window unless silent start is enabled
-    if !slint_app.get_silent_start() {
-        #[cfg(target_os = "macos")]
-        {
-            slint_app.window().show().unwrap();
-            let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
-            let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-            ns_app.activate();
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            slint_app.window().show().unwrap();
-        }
+    // Show window first to initialize layout, then hide immediately if silent start.
+    // The event loop hasn't started yet, so no visible flash occurs.
+    #[cfg(target_os = "macos")]
+    {
+        slint_app.window().show().unwrap();
+        let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+        let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        ns_app.activate();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        slint_app.window().show().unwrap();
+    }
+    if slint_app.get_silent_start() {
+        slint_app.window().hide().unwrap();
     }
 
     slint::run_event_loop_until_quit().unwrap();
