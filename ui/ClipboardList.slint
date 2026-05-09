@@ -31,16 +31,16 @@ export component ClipboardList inherits Rectangle {
     callback delete-item(int);
 
     // ========== 主题色板 ==========
-    property <color> surface:       dark-mode ? #181a26 : #ffffff;
-    property <color> surface-hover: dark-mode ? #22243a : #f4f5fb;
-    property <color> surface-press: dark-mode ? #2c2e4a : #ebedf5;
-    property <color> text-1:        dark-mode ? #e6e9f2 : #1a1c2e;
-    property <color> text-2:        dark-mode ? #8a8ea8 : #7c809a;
-    property <color> text-3:        dark-mode ? #555874 : #b4b9ca;
+    property <color> surface:       dark-mode ? #232425 : #ffffff;
+    property <color> surface-hover: dark-mode ? #303132 : #f4f5fb;
+    property <color> surface-press: dark-mode ? #3a3b3c : #ebedf5;
+    property <color> text-1:        dark-mode ? #eaebec : #1a1c2e;
+    property <color> text-2:        dark-mode ? #919496 : #7c809a;
+    property <color> text-3:        dark-mode ? #5f6264 : #b4b9ca;
     property <color> accent:        dark-mode ? #7ecba3 : #6ab890;
     property <color> accent-soft:   dark-mode ? #1a2e24 : #e8f5ee;
-    property <color> divider:       dark-mode ? #262840 : #e6e8f0;
-    property <color> btn-hover:     dark-mode ? #262840 : #f0f1f8;
+    property <color> divider:       dark-mode ? #2b2c2d : #e6e8f0;
+    property <color> btn-hover:     dark-mode ? #2b2c2d : #f0f1f8;
     property <color> danger:        #ff5f57;
 
     background: transparent;
@@ -434,7 +434,7 @@ export component ClipboardList inherits Rectangle {
                                 height: 22px;
                                 width: tb-inner.preferred-width + 10px;
                                 border-radius: 6px;
-                                background: dark-mode ? #181a26e8 : #ffffffe8;
+                                background: dark-mode ? #232425e8 : #ffffffe8;
                                 border-width: 1px;
                                 border-color: dark-mode ? #ffffff20 : #0000000c;
 
@@ -530,7 +530,7 @@ export component ClipboardList inherits Rectangle {
                                 height: 18px;
                                 width: time-text.preferred-width + 14px;
                                 border-radius: 9px;
-                                background: dark-mode ? #181a26e8 : #ffffffe8;
+                                background: dark-mode ? #232425e8 : #ffffffe8;
                                 border-width: 1px;
                                 border-color: dark-mode ? #ffffff20 : #0000000c;
 
