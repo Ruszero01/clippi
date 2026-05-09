@@ -275,9 +275,8 @@ export component ClipboardList inherits Rectangle {
                             height: root.card-height-mode == "auto" ?
                                 (entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
-                                        (parent.width * entry.image-height / entry.image-width < 68px ? 68px :
-                                         parent.width * entry.image-height / entry.image-width > 200px ? 200px :
-                                         parent.width * entry.image-height / entry.image-width) :
+                                        (parent.width * entry.image-height / entry.image-width <= 82px ? 68px :
+                                         parent.width * entry.image-height / entry.image-width <= 112px ? 96px : 128px) :
                                         96px) :
                                     (entry.preview-length <= 50 ? 60px :
                                      entry.preview-length <= 150 ? 80px :
@@ -313,57 +312,75 @@ export component ClipboardList inherits Rectangle {
                             }
                         }
 
-                        // ── 图片类型：内容区铺满缩略图 ──
-                        if entry.content-type == "image" && entry.image-path != "" : Rectangle {
-                            x: 6px;
-                            y: 6px;
-                            width: parent.width - 44px;
-                            height: parent.height - 12px;
-                            border-radius: 6px;
-                            clip: true;
-                            background: accent-soft;
+                        // ── 图片类型：图标 + 缩略图 + 复制按钮 ──
+                        if entry.content-type == "image" : HorizontalLayout {
+                            padding: 10px;
+                            spacing: 10px;
 
-                            Image {
-                                width: parent.width;
-                                height: parent.height;
-                                source: entry.thumbnail;
-                                image-fit: cover;
-                            }
-
+                            // 图片类型图标
                             Rectangle {
-                                x: parent.width - self.width - 6px;
-                                y: parent.height - self.height - 6px;
-                                height: 18px;
-                                width: img-time-text.preferred-width + 14px;
+                                width: 34px;
+                                height: 34px;
                                 border-radius: 9px;
-                                background: dark-mode ? #00000080 : #00000040;
+                                background: accent-soft;
 
-                                img-time-text := Text {
-                                    text: entry.time-label;
-                                    font-size: 9px;
-                                    color: #ffffffff;
-                                    x: 7px;
-                                    vertical-alignment: center;
+                                Text {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    text: "\u{e626}";
+                                    font-family: "iconfont";
+                                    font-size: 18px;
+                                    color: accent;
                                 }
                             }
-                        }
 
-                        // 图片回退图标（无路径）
-                        if entry.content-type == "image" && entry.image-path == "" : Rectangle {
-                            x: 6px;
-                            y: 6px;
-                            width: parent.width - 44px;
-                            height: parent.height - 12px;
-                            border-radius: 6px;
-                            background: accent-soft;
+                            // 图片预览
+                            Rectangle {
+                                border-radius: 6px;
+                                clip: true;
+                                background: accent-soft;
 
-                            Text {
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                text: "\u{e626}";
-                                font-family: "iconfont";
-                                font-size: 24px;
-                                color: accent;
+                                if entry.image-path != "" : Image {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    source: entry.thumbnail;
+                                    image-fit: cover;
+                                }
+
+                                if entry.image-path == "" : Text {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    text: "\u{e626}";
+                                    font-family: "iconfont";
+                                    font-size: 20px;
+                                    color: accent;
+                                }
+                            }
+
+                            // 复制按钮
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+
+                                img-copy-ta := TouchArea {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    clicked => {
+                                        search-input.clear-focus();
+                                        root.click-pending = false;
+                                        root.last-clicked-id = -1;
+                                        root.copy-item(entry.id);
+                                    }
+                                }
+
+                                Text {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    text: "\u{e6c5}";
+                                    font-family: "iconfont";
+                                    font-size: 14px;
+                                    color: img-copy-ta.has-hover ? accent : text-3;
+                                }
                             }
                         }
 
@@ -460,8 +477,8 @@ export component ClipboardList inherits Rectangle {
                             }
                             }
 
-                        // 悬浮时间标签（仅非图片类型）
-                        if entry.content-type != "image" : Rectangle {
+                        // 悬浮时间标签
+                        Rectangle {
                             x: parent.width - self.width - 10px;
                             y: parent.height - self.height - 6px;
                             height: 18px;
