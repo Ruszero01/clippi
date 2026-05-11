@@ -11,6 +11,7 @@ export component App inherits Window {
     no-frame: true;
     always-on-top: true;
     background: transparent;
+    forward-focus: key-handler;
 
     // 窗口最小尺寸
     min-width: 320px;
@@ -118,12 +119,21 @@ export component App inherits Window {
         }
     }
 
-    Rectangle {
-        border-radius: 12px;
-        background: bg;
-        border-width: 1px;
-        border-color: dark-mode ? #3a3b3c : #d0d2de;
-        clip: true;
+    key-handler := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.close-window();
+                return accept;
+            }
+            reject
+        }
+
+        Rectangle {
+            border-radius: 12px;
+            background: bg;
+            border-width: 1px;
+            border-color: dark-mode ? #3a3b3c : #d0d2de;
+            clip: true;
 
         // ========== 缩放手柄 ==========
         // 右边缘
@@ -409,5 +419,6 @@ export component App inherits Window {
                 }
             }
         }
+    }
     }
 }
