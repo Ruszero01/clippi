@@ -3,7 +3,7 @@
 //! Provides multi-format clipboard monitoring with detection priority:
 //! Image > Link > RichText > PlainText
 
-use crate::core::types::{is_url, ClipboardItem, ContentType, RichData};
+use crate::core::types::{is_url_or_path, ClipboardItem, ContentType, RichData};
 use crate::core::paths::images_dir;
 use crate::platform::source;
 use clipboard_rs::common::RustImage;
@@ -82,7 +82,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             return None;
         }
 
-        if is_url(&text) {
+        if is_url_or_path(&text) {
             return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref(), None));
         }
 

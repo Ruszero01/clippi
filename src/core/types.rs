@@ -135,10 +135,28 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     }
 }
 
-/// Check if text is a URL (http/https)
-pub fn is_url(text: &str) -> bool {
+/// Check if text is a URL or file path (local or network/NAS).
+/// Recognizes: http/https URLs, Windows absolute paths (C:\...), UNC paths (\\server\...)
+pub fn is_url_or_path(text: &str) -> bool {
     let text = text.trim();
-    (text.starts_with("http://") || text.starts_with("https://"))
-        && !text.contains('\n')
-        && text.len() > 10
+    if text.contains('\n') {
+        return false;
+    }
+    // http/https URL
+    if (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10 {
+        return true;
+    }
+    // Windows absolute path: C:\..., D:/...
+    if text.len() >= 3
+        && text.as_bytes()[0].is_ascii_alphabetic()
+        && text.as_bytes()[1] == b':'
+        && (text.as_bytes()[2] == b'\\' || text.as_bytes()[2] == b'/')
+    {
+        return true;
+    }
+    // UNC network path (NAS): \\server\share\... or \\192.168.1.1\...
+    if text.starts_with("\\\\") && text.len() > 2 {
+        return true;
+    }
+    false
 }
