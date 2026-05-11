@@ -6,4 +6,5 @@ pub mod focus;
 pub mod hotkey;
 pub mod monitor;
 pub mod paste;
+pub mod source;
 pub mod tray;

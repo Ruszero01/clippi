@@ -2,11 +2,13 @@
 
 use crate::core::db::Database;
 use crate::core::filters::ClipboardFilters;
+use crate::core::paths::images_dir;
 use crate::core::types::format_relative_time;
 use crate::looper::Pollable;
 use crate::platform::clipboard::ClipboardShared;
 use crate::App;
 use crate::ClipboardEntry;
+use base64::Engine;
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -224,6 +226,27 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
     } else {
         (0, 0)
     };
+
+    // Decode source app icon from base64 and save to disk for Slint Image loading
+    let (source_icon_path, source_icon_image) = if !item.source_app_icon.is_empty() {
+        let icon_dir = images_dir().join("icons");
+        let _ = std::fs::create_dir_all(&icon_dir);
+        let icon_path = icon_dir.join(format!("{:016x}.png", item.content_hash));
+        let path_str = icon_path.to_string_lossy().to_string();
+
+        // Write decoded PNG only if not cached
+        if !icon_path.exists() {
+            if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&item.source_app_icon) {
+                let _ = std::fs::write(&icon_path, png_bytes);
+            }
+        }
+
+        let img = Image::load_from_path(std::path::Path::new(&icon_path)).unwrap_or_default();
+        (path_str, img)
+    } else {
+        (String::new(), Image::default())
+    };
+
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.full_text.clone()),
@@ -235,5 +258,8 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         image_width: img_w as i32,
         image_height: img_h as i32,
         is_favorite: item.is_favorite,
+        source_app_name: SharedString::from(item.source_app_name.clone()),
+        source_app_icon_path: SharedString::from(source_icon_path),
+        source_app_icon_image: source_icon_image,
     }
 }

@@ -5,6 +5,7 @@
 
 use crate::core::types::{is_url, ClipboardItem, ContentType};
 use crate::core::paths::images_dir;
+use crate::platform::source;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::collections::hash_map::DefaultHasher;
@@ -45,6 +46,9 @@ pub trait ClipboardListener: Send {
 /// Shared clipboard content detection (platform-agnostic).
 /// Priority: Image > Link > RichText > PlainText
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
+    // Capture source app info at detection time (only once, not on re-copy)
+    let source_info = source::get_clipboard_owner_info();
+
     if ctx.has(ContentFormat::Image) {
         if let Ok(img) = ctx.get_image() {
             if !img.is_empty() {
@@ -67,6 +71,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                     0,
                     file_path.to_str().unwrap_or(""),
                     hash,
+                    source_info.as_ref(),
                 ));
             }
         }
@@ -78,14 +83,14 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         }
 
         if is_url(&text) {
-            return Some(ClipboardItem::new_text(0, &text, ContentType::Link));
+            return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref()));
         }
 
         if ctx.has(ContentFormat::Html) {
-            return Some(ClipboardItem::new_text(0, &text, ContentType::RichText));
+            return Some(ClipboardItem::new_text(0, &text, ContentType::RichText, source_info.as_ref()));
         }
 
-        return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText));
+        return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText, source_info.as_ref()));
     }
 
     None

@@ -372,6 +372,19 @@ impl AppController {
             s.save();
         });
 
+        // Show source app callback
+        let settings_for_callbacks = Arc::clone(&shared_settings);
+        let app_for_source = app.clone();
+        slint_app.on_toggle_show_source_app(move || {
+            if let Some(app) = app_for_source.upgrade() {
+                let new_val = !app.get_show_source_app();
+                app.set_show_source_app(new_val);
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
+                s.show_source_app = new_val;
+                s.save();
+            }
+        });
+
         // Filter callbacks
         let looper_for_filter = Arc::clone(&looper);
         let app_for_filter = app.clone();
@@ -494,4 +507,5 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_position_mode(PositionMode::from_str(&settings.window_position_mode).to_int());
     app.set_card_height_mode(SharedString::from(&settings.card_height_mode));
     app.set_silent_start(settings.silent_start);
+    app.set_show_source_app(settings.show_source_app);
 }

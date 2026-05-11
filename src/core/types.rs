@@ -34,6 +34,13 @@ impl ContentType {
     }
 }
 
+/// Source application info extracted when clipboard content is first captured
+#[derive(Debug, Clone)]
+pub struct SourceAppInfo {
+    pub app_name: String,
+    pub icon_base64: String, // PNG icon encoded as base64
+}
+
 /// A clipboard item
 #[derive(Debug, Clone)]
 pub struct ClipboardItem {
@@ -46,13 +53,16 @@ pub struct ClipboardItem {
     pub updated_at: DateTime<Utc>,
     pub image_path: String,
     pub is_favorite: bool,
+    pub source_app_name: String,
+    pub source_app_icon: String, // base64-encoded PNG icon
 }
 
 impl ClipboardItem {
-    pub fn new_text(id: i64, text: &str, content_type: ContentType) -> Self {
+    pub fn new_text(id: i64, text: &str, content_type: ContentType, source: Option<&SourceAppInfo>) -> Self {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
         let now = Utc::now();
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
         Self {
             id,
             content_type,
@@ -63,11 +73,14 @@ impl ClipboardItem {
             updated_at: now,
             image_path: String::new(),
             is_favorite: false,
+            source_app_name: app_name,
+            source_app_icon: icon,
         }
     }
 
-    pub fn new_image(id: i64, image_path: &str, hash: u64) -> Self {
+    pub fn new_image(id: i64, image_path: &str, hash: u64, source: Option<&SourceAppInfo>) -> Self {
         let now = Utc::now();
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
         Self {
             id,
             content_type: ContentType::Image,
@@ -78,6 +91,8 @@ impl ClipboardItem {
             updated_at: now,
             image_path: image_path.to_string(),
             is_favorite: false,
+            source_app_name: app_name,
+            source_app_icon: icon,
         }
     }
 }

@@ -856,6 +856,7 @@ dependencies = [
 name = "clippi"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "base64",
  "block2 0.6.2",
  "chrono",
  "clipboard-rs",

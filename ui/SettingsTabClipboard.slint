@@ -2,9 +2,11 @@ export component SettingsTabClipboard inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <bool> sort-by-created: false;
     in property <string> card-height-mode: "medium";
+    in property <bool> show-source-app: false;
 
     callback toggle-sort-by-created();
     callback set-card-height-mode(string);
+    callback toggle-show-source-app();
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -211,6 +213,65 @@ export component SettingsTabClipboard inherits Rectangle {
                             x: 8px;
                             y: (parent.height - self.height) / 2;
                         }
+                    }
+                }
+            }
+        }
+
+        // 显示来源应用
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: "显示来源应用";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: root.show-source-app ? "显示复制来源的应用图标" : "只显示内容类型图标";
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.show-source-app ? accent : divider;
+                    animate background { duration: 200ms; easing: ease-out; }
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: #ffffff;
+                        x: root.show-source-app ? parent.width - self.width - 2px : 2px;
+                        animate x { duration: 200ms; easing: ease-out; }
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    showsource-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => { root.toggle-show-source-app(); }
                     }
                 }
             }

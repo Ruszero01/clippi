@@ -30,6 +30,7 @@ pub struct AppSettings {
     pub saved_window_y: i32,
     pub card_height_mode: String, // "low" | "medium" | "high" | "auto"
     pub silent_start: bool,
+    pub show_source_app: bool,
 }
 
 impl Default for AppSettings {
@@ -46,6 +47,7 @@ impl Default for AppSettings {
             saved_window_y: -1,
             card_height_mode: "medium".to_string(),
             silent_start: true,
+            show_source_app: false,
         }
     }
 }

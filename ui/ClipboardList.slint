@@ -16,6 +16,7 @@ export component ClipboardList inherits Rectangle {
     in-out property <bool> filter-image: false;
     in-out property <bool> filter-link: false;
     in property <string> card-height-mode: "medium";
+    in property <bool> show-source-app: false;
 
     // ========== 双击检测 ==========
     in-out property <int> last-clicked-id: -1;
@@ -39,6 +40,8 @@ export component ClipboardList inherits Rectangle {
     property <color> text-3:        dark-mode ? #5f6264 : #b4b9ca;
     property <color> accent:        dark-mode ? #7ecba3 : #6ab890;
     property <color> accent-soft:   dark-mode ? #1a2e24 : #e8f5ee;
+    property <color> tag-bg:        dark-mode ? #232b26 : #cdd5c4;
+    property <color> tag-text:      dark-mode ? #849084 : #ffffff;
     property <color> divider:       dark-mode ? #2b2c2d : #e6e8f0;
     property <color> btn-hover:     dark-mode ? #2b2c2d : #f0f1f8;
     property <color> danger:        #ff5f57;
@@ -314,30 +317,183 @@ export component ClipboardList inherits Rectangle {
                                 }
                             }
 
-                            // ── 图片类型：图标 + 缩略图 ──
-                            if entry.content-type == "image" : HorizontalLayout {
+                            // ── 来源应用模式（开启且有来源） ──
+                            if root.show-source-app && entry.source-app-name != "" : HorizontalLayout {
                                 padding: 10px;
                                 spacing: 10px;
 
-                                // 图片类型图标
-                                Rectangle {
+                                // 左侧图标列：应用图标 + 类型标签
+                                VerticalLayout {
                                     width: 34px;
-                                    height: 34px;
-                                    border-radius: 9px;
-                                    background: accent-soft;
+                                    spacing: 3px;
 
-                                    Text {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        text: "\u{e626}";
-                                        font-family: "iconfont";
-                                        font-size: 18px;
-                                        color: accent;
+                                    // 应用图标底板（34px 宽，与小标签对齐）
+                                    Rectangle {
+                                        width: 34px;
+                                        height: 24px;
+                                        border-radius: 6px;
+                                        background: divider;
+                                        clip: true;
+
+                                        Image {
+                                            width: 20px;
+                                            height: 20px;
+                                            x: 7px;
+                                            y: 2px;
+                                            source: entry.source-app-icon-image;
+                                            image-fit: cover;
+                                        }
+                                    }
+
+                                    // 类型小标签
+                                    st-bg := Rectangle {
+                                        height: 14px;
+                                        width: 34px;
+                                        border-radius: 3px;
+                                        background: tag-bg;
+
+                                        st-layout := HorizontalLayout {
+                                            padding-left: 3px;
+                                            padding-right: 3px;
+                                            spacing: 2px;
+                                            alignment: center;
+
+                                            st-icon := Text {
+                                                text: entry.content-type == "plain_text" ? "\u{e60e}" :
+                                                      entry.content-type == "rich_text" ? "\u{e6ae}" :
+                                                      entry.content-type == "image" ? "\u{e626}" : "\u{e6d7}";
+                                                font-family: "iconfont";
+                                                font-size: 8px;
+                                                color: tag-text;
+                                                vertical-alignment: center;
+                                            }
+
+                                            st-label := Text {
+                                                text: entry.content-type == "plain_text" ? "文本" :
+                                                      entry.content-type == "rich_text" ? "格式" :
+                                                      entry.content-type == "image" ? "图片" : "链接";
+                                                font-size: 8px;
+                                                font-weight: 600;
+                                                color: tag-text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
                                     }
                                 }
 
-                                // 图片预览
-                                Rectangle {
+                                // 右侧：内容预览 / 图片预览
+                                if entry.content-type != "image" : Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    color: text-1;
+                                    overflow: elide;
+                                    wrap: word-wrap;
+                                    vertical-alignment: top;
+                                }
+
+                                if entry.content-type == "image" : Rectangle {
+                                    border-radius: 6px;
+                                    clip: true;
+                                    background: accent-soft;
+
+                                    if entry.image-path != "" : Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: entry.thumbnail;
+                                        image-fit: cover;
+                                    }
+                                }
+                            }
+
+                            // ── 原始类型图标模式（关闭或没有来源） ──
+                            if !root.show-source-app || entry.source-app-name == "" : HorizontalLayout {
+                                padding: 10px;
+                                spacing: 10px;
+
+                                // 左侧：类型图标（与来源模式应用图标同尺寸）
+                                VerticalLayout {
+                                    width: 34px;
+
+                                    // 图片类型
+                                    if entry.content-type == "image": Rectangle {
+                                        width: 34px;
+                                        height: 34px;
+                                        border-radius: 6px;
+                                        background: tag-bg;
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e626}";
+                                            font-family: "iconfont";
+                                            font-size: 18px;
+                                            color: tag-text;
+                                        }
+                                    }
+
+                                    // 纯文本类型
+                                    if entry.content-type == "plain_text": Rectangle {
+                                        width: 34px;
+                                        height: 34px;
+                                        border-radius: 6px;
+                                        background: tag-bg;
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e60e}";
+                                            font-family: "iconfont";
+                                            font-size: 18px;
+                                            color: tag-text;
+                                        }
+                                    }
+
+                                    // 格式文本类型
+                                    if entry.content-type == "rich_text": Rectangle {
+                                        width: 34px;
+                                        height: 34px;
+                                        border-radius: 6px;
+                                        background: tag-bg;
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e6ae}";
+                                            font-family: "iconfont";
+                                            font-size: 18px;
+                                            color: tag-text;
+                                        }
+                                    }
+
+                                    // 链接类型
+                                    if entry.content-type == "link": Rectangle {
+                                        width: 34px;
+                                        height: 34px;
+                                        border-radius: 6px;
+                                        background: tag-bg;
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e6d7}";
+                                            font-family: "iconfont";
+                                            font-size: 18px;
+                                            color: tag-text;
+                                        }
+                                    }
+                                }
+
+                                // 内容预览 / 图片预览
+                                if entry.content-type != "image" : Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    color: text-1;
+                                    overflow: elide;
+                                    wrap: word-wrap;
+                                    vertical-alignment: top;
+                                }
+
+                                if entry.content-type == "image" : Rectangle {
                                     border-radius: 6px;
                                     clip: true;
                                     background: accent-soft;
@@ -357,73 +513,6 @@ export component ClipboardList inherits Rectangle {
                                         font-size: 20px;
                                         color: accent;
                                     }
-                                }
-                            }
-
-                            // ── 非图片类型：图标 + 文本 ──
-                            if entry.content-type != "image" : HorizontalLayout {
-                                padding: 10px;
-                                spacing: 10px;
-
-                                // 纯文本图标
-                                if entry.content-type == "plain_text": Rectangle {
-                                    width: 34px;
-                                    height: 34px;
-                                    border-radius: 9px;
-                                    background: accent-soft;
-
-                                    Text {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        text: "\u{e60e}";
-                                        font-family: "iconfont";
-                                        font-size: 18px;
-                                        color: accent;
-                                    }
-                                }
-
-                                // 格式文本图标
-                                if entry.content-type == "rich_text": Rectangle {
-                                    width: 34px;
-                                    height: 34px;
-                                    border-radius: 9px;
-                                    background: accent-soft;
-
-                                    Text {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        text: "\u{e6ae}";
-                                        font-family: "iconfont";
-                                        font-size: 18px;
-                                        color: accent;
-                                    }
-                                }
-
-                                // 链接图标
-                                if entry.content-type == "link": Rectangle {
-                                    width: 34px;
-                                    height: 34px;
-                                    border-radius: 9px;
-                                    background: accent-soft;
-
-                                    Text {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        text: "\u{e6d7}";
-                                        font-family: "iconfont";
-                                        font-size: 18px;
-                                        color: accent;
-                                    }
-                                }
-
-                                // 内容预览
-                                Text {
-                                    text: entry.preview;
-                                    font-size: 12px;
-                                    color: text-1;
-                                    overflow: elide;
-                                    wrap: word-wrap;
-                                    vertical-alignment: top;
                                 }
                             }
 
