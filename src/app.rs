@@ -6,7 +6,7 @@ use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
 };
-use crate::core::types::RichData;
+use crate::core::types::{is_url_or_path, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::paste::{paste_after_delay, restore_paste_target};
@@ -436,6 +436,35 @@ impl AppController {
             let _ = looper_for_note.try_with_clipboard_service(|cs| {
                 cs.update_note(id, &text);
             });
+        });
+
+        // Edit item callback — load content and switch to edit view
+        let db_for_edit = db.clone();
+        let app_for_edit = app.clone();
+        slint_app.on_edit_item(move |id| {
+            if let Ok(db) = db_for_edit.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    if let Some(app) = app_for_edit.upgrade() {
+                        app.set_editing_item_id(id);
+                        app.set_editing_item_type(SharedString::from(item.content_type.as_str()));
+                        app.set_editing_content(SharedString::from(item.full_text.clone()));
+                        app.set_current_view(SharedString::from("edit"));
+                    }
+                }
+            }
+        });
+
+        // Save content callback — update item and switch back to clipboard view
+        let looper_for_save = Arc::clone(&looper);
+        let app_for_save = app.clone();
+        slint_app.on_save_content(move |id, text: SharedString| {
+            let content_type = if is_url_or_path(&text) { "link" } else { "plain_text" };
+            let _ = looper_for_save.try_with_clipboard_service(|cs| {
+                cs.update_content(id, &text, content_type);
+            });
+            if let Some(app) = app_for_save.upgrade() {
+                app.set_current_view(SharedString::from("clipboard"));
+            }
         });
 
         // Filter callbacks

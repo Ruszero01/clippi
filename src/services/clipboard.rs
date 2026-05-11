@@ -177,6 +177,14 @@ impl ClipboardService {
         self.refresh_row(id);
     }
 
+    /// Update content for an item, recompute hash, and refresh that row
+    pub fn update_content(&mut self, id: i32, text: &str, content_type: &str) {
+        if let Ok(db) = self.db.lock() {
+            let _ = db.update_content(id as i64, text, content_type);
+        }
+        self.refresh_row(id);
+    }
+
     /// Get reference to shared buffer for platform layer
     pub fn shared(&self) -> &ClipboardShared {
         &self.shared

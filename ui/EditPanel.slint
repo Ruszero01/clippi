@@ -1,0 +1,163 @@
+export component EditPanel inherits Rectangle {
+    // ========== 输入属性 ==========
+    in property <bool> dark-mode: false;
+    in-out property <string> editing-content: "";
+    in property <string> content-type: "";
+    in property <int> editing-item-id: -1;
+
+    // ========== 回调 ==========
+    callback cancel();
+    callback save-content(int, string);
+
+    // ========== 主题色板 ==========
+    property <color> text-1:   dark-mode ? #eaebec : #1a1c2e;
+    property <color> text-2:   dark-mode ? #919496 : #7c809a;
+    property <color> accent:   dark-mode ? #7ecba3 : #6ab890;
+    property <color> surface:  dark-mode ? #232425 : #ffffff;
+    property <color> divider:  dark-mode ? #2b2c2d : #e6e8f0;
+
+    background: transparent;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        // ========== 顶部导航栏 ==========
+        HorizontalLayout {
+            height: 36px;
+            spacing: 8px;
+            alignment: start;
+
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                y: (parent.height - self.height) / 2;
+
+                back-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.cancel(); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "\u{e62b}";
+                    font-family: "iconfont";
+                    font-size: 16px;
+                    color: back-ta.has-hover ? accent : text-2;
+                }
+            }
+
+            Text {
+                text: "编辑内容";
+                font-size: 14px;
+                font-weight: 700;
+                color: text-1;
+                vertical-alignment: center;
+            }
+        }
+
+        // ========== 类型标签 ==========
+        HorizontalLayout {
+            height: 20px;
+            spacing: 6px;
+
+            Rectangle {
+                height: 20px;
+                width: type-label.preferred-width + 12px;
+                border-radius: 4px;
+                background: dark-mode ? #232b26 : #e8f5ee;
+
+                type-label := Text {
+                    x: 6px;
+                    y: (parent.height - self.height) / 2;
+                    text: root.content-type == "plain_text" ? "纯文本" :
+                          root.content-type == "rich_text" ? "格式文本（编辑后将丢失格式）" :
+                          root.content-type == "link" ? "链接" :
+                          root.content-type == "image" ? "图片路径（编辑后将解除图片关联）" : "未知";
+                    font-size: 10px;
+                    color: accent;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ========== 编辑区域 ==========
+        Rectangle {
+            border-radius: 8px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            edit-area := TextInput {
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                height: parent.height - 16px;
+                text <=> root.editing-content;
+                font-size: 12px;
+                color: text-1;
+                single-line: false;
+            }
+        }
+
+        // ========== 底部按钮 ==========
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            height: 32px;
+
+            // 取消按钮
+            Rectangle {
+                width: 60px;
+                height: 28px;
+                border-radius: 6px;
+                background: cancel-ta.has-hover ? divider : transparent;
+                border-width: 1px;
+                border-color: divider;
+
+                cancel-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.cancel(); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "取消";
+                    font-size: 11px;
+                    color: text-2;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // 保存按钮
+            Rectangle {
+                width: 60px;
+                height: 28px;
+                border-radius: 6px;
+                background: save-ta.has-hover ? (dark-mode ? #5da87a : #5da87a) : accent;
+
+                save-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => {
+                        root.save-content(root.editing-item-id, root.editing-content);
+                    }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "保存";
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

@@ -1,6 +1,7 @@
 import { ClipboardEntry } from "types.slint";
 import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
+import { EditPanel } from "EditPanel.slint";
 import { Palette } from "std-widgets.slint";
 
 export component App inherits Window {
@@ -41,6 +42,11 @@ export component App inherits Window {
     in-out property <bool> copy-as-plain-text: false;
     in-out property <bool> show-original-on-hover: false;
     in-out property <int> scroll-trigger: 0;
+
+    // 编辑视图状态
+    in-out property <string> editing-content: "";
+    in-out property <int> editing-item-id: -1;
+    in-out property <string> editing-item-type: "";
 
     // 分类筛选
     in-out property <bool> filter-plain-text: false;
@@ -85,6 +91,8 @@ export component App inherits Window {
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
     callback update-note(int, string);
+    callback edit-item(int);
+    callback save-content(int, string);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -377,9 +385,26 @@ export component App inherits Window {
                     search-keyword(keyword) => { root.search-keyword(keyword); }
                     copy-item(id) => { root.copy-item(id); }
                     paste-item(id) => { root.paste-item(id); }
+                    edit-item(id) => { root.edit-item(id); }
                     toggle-favorite(id) => { root.toggle-favorite(id); }
                     delete-item(id) => { root.delete-item(id); }
                     update-note(id, text) => { root.update-note(id, text); }
+                }
+
+                EditPanel {
+                    visible: root.current-view == "edit";
+                    opacity: root.current-view == "edit" ? 1 : 0;
+                    x: root.current-view == "edit" ? 0 : 20px;
+                    animate opacity { duration: 200ms; easing: ease-out; }
+                    animate x { duration: 200ms; easing: ease-out; }
+
+                    dark-mode: root.dark-mode;
+                    editing-content: root.editing-content;
+                    editing-item-id: root.editing-item-id;
+                    content-type: root.editing-item-type;
+
+                    cancel => { root.current-view = "clipboard"; }
+                    save-content(id, text) => { root.save-content(id, text); }
                 }
 
                 SettingsPanel {

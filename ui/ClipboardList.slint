@@ -30,6 +30,7 @@ export component ClipboardList inherits Rectangle {
     // ========== 回调 ==========
     callback copy-item(int);
     callback paste-item(int);
+    callback edit-item(int);
     callback toggle-filter(string);
     callback clear-filters();
     callback search-keyword(string);
@@ -590,6 +591,32 @@ export component ClipboardList inherits Rectangle {
                                             font-family: "iconfont";
                                             font-size: 12px;
                                             color: tb-copy-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 编辑按钮（非图片类型显示）
+                                    if entry.content-type != "image" : Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        edit-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -1;
+                                                root.edit-item(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e648}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: edit-ta.has-hover ? accent : text-2;
                                         }
                                     }
 
