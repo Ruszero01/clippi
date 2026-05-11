@@ -290,7 +290,8 @@ export component ClipboardList inherits Rectangle {
                         padding: 5px;
 
                         card-rect := Rectangle {
-                            height: root.card-height-mode == "auto" ?
+                            height: entry.note != "" ? 68px :
+                                root.card-height-mode == "auto" ?
                                 (entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
                                         (parent.width * entry.image-height / entry.image-width <= 82px ? 68px :
