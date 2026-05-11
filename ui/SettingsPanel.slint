@@ -19,6 +19,7 @@ export component SettingsPanel inherits Rectangle {
     in property <string> card-height-mode: "medium";
     in property <bool> silent-start: true;
     in property <bool> show-source-app: false;
+    in property <bool> auto-scroll-to-top: false;
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -37,6 +38,7 @@ export component SettingsPanel inherits Rectangle {
     callback set-card-height-mode(string);
     callback toggle-silent-start();
     callback toggle-show-source-app();
+    callback toggle-auto-scroll-to-top();
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #919496 : #7c809a;
@@ -247,9 +249,11 @@ export component SettingsPanel inherits Rectangle {
             sort-by-created: root.sort-by-created;
             card-height-mode: root.card-height-mode;
             show-source-app: root.show-source-app;
+            auto-scroll-to-top: root.auto-scroll-to-top;
             toggle-sort-by-created => { root.toggle-sort-by-created(); }
             set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
             toggle-show-source-app => { root.toggle-show-source-app(); }
+            toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
         }
 
         if (root.active-tab == 2) : SettingsTabHotkey {

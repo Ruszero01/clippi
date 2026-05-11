@@ -36,6 +36,8 @@ export component App inherits Window {
     in-out property <string> card-height-mode: "medium";
     in-out property <bool> silent-start: true;
     in-out property <bool> show-source-app: false;
+    in-out property <bool> auto-scroll-to-top: false;
+    in-out property <int> scroll-trigger: 0;
 
     // 分类筛选
     in-out property <bool> filter-plain-text: false;
@@ -76,6 +78,7 @@ export component App inherits Window {
     callback delete-item(int);
     callback toggle-silent-start();
     callback toggle-show-source-app();
+    callback toggle-auto-scroll-to-top();
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -351,6 +354,8 @@ export component App inherits Window {
                     filter-link: root.filter-link;
                     card-height-mode: root.card-height-mode;
                     show-source-app: root.show-source-app;
+                    auto-scroll-to-top: root.auto-scroll-to-top;
+                    scroll-trigger: root.scroll-trigger;
                     toggle-filter(type) => { root.toggle-filter(type); }
                     clear-filters => { root.clear-filters(); }
                     search-keyword(keyword) => { root.search-keyword(keyword); }
@@ -381,6 +386,7 @@ export component App inherits Window {
                     card-height-mode: root.card-height-mode;
                     silent-start: root.silent-start;
                     show-source-app: root.show-source-app;
+                    auto-scroll-to-top: root.auto-scroll-to-top;
 
                     back => { root.current-view = "clipboard"; }
                     toggle-auto-start => { root.toggle-auto-start(); }
@@ -395,6 +401,7 @@ export component App inherits Window {
                     set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
                     toggle-silent-start => { root.toggle-silent-start(); }
                     toggle-show-source-app => { root.toggle-show-source-app(); }
+                    toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
                 }
             }
         }

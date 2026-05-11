@@ -17,6 +17,8 @@ export component ClipboardList inherits Rectangle {
     in-out property <bool> filter-link: false;
     in property <string> card-height-mode: "medium";
     in property <bool> show-source-app: false;
+    in property <bool> auto-scroll-to-top: false;
+    in-out property <int> scroll-trigger: 0;
 
     // ========== 双击检测 ==========
     in-out property <int> last-clicked-id: -1;
@@ -45,6 +47,12 @@ export component ClipboardList inherits Rectangle {
     property <color> divider:       dark-mode ? #2b2c2d : #e6e8f0;
     property <color> btn-hover:     dark-mode ? #2b2c2d : #f0f1f8;
     property <color> danger:        #ff5f57;
+
+    changed scroll-trigger => {
+        if root.auto-scroll-to-top {
+            clip-list.viewport-y = 0px;
+        }
+    }
 
     background: transparent;
 
@@ -273,7 +281,7 @@ export component ClipboardList inherits Rectangle {
                 }
 
                 // 剪贴板列表
-                ListView {
+                clip-list := ListView {
                     for entry in root.items: VerticalLayout {
                         padding: 5px;
 

@@ -31,6 +31,7 @@ pub struct AppSettings {
     pub card_height_mode: String, // "low" | "medium" | "high" | "auto"
     pub silent_start: bool,
     pub show_source_app: bool,
+    pub auto_scroll_to_top: bool, // 每次开启窗口时自动回到列表顶部
 }
 
 impl Default for AppSettings {
@@ -48,6 +49,7 @@ impl Default for AppSettings {
             card_height_mode: "medium".to_string(),
             silent_start: true,
             show_source_app: false,
+            auto_scroll_to_top: false,
         }
     }
 }

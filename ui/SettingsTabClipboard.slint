@@ -3,10 +3,12 @@ export component SettingsTabClipboard inherits Rectangle {
     in property <bool> sort-by-created: false;
     in property <string> card-height-mode: "medium";
     in property <bool> show-source-app: false;
+    in property <bool> auto-scroll-to-top: false;
 
     callback toggle-sort-by-created();
     callback set-card-height-mode(string);
     callback toggle-show-source-app();
+    callback toggle-auto-scroll-to-top();
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -272,6 +274,65 @@ export component SettingsTabClipboard inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         clicked => { root.toggle-show-source-app(); }
+                    }
+                }
+            }
+        }
+
+        // 自动回到顶部
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: "自动回到顶部";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: root.auto-scroll-to-top ? "每次打开窗口回到列表顶部" : "保持上次关闭时的列表位置";
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.auto-scroll-to-top ? accent : divider;
+                    animate background { duration: 200ms; easing: ease-out; }
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: #ffffff;
+                        x: root.auto-scroll-to-top ? parent.width - self.width - 2px : 2px;
+                        animate x { duration: 200ms; easing: ease-out; }
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    autoscroll-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => { root.toggle-auto-scroll-to-top(); }
                     }
                 }
             }

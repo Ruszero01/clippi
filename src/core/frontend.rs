@@ -142,6 +142,8 @@ impl Frontend {
             window.show().ok();
             window.set_size(LogicalSize::new(320.0, 480.0));
             self.apply_position();
+            let t = app.get_scroll_trigger();
+            app.set_scroll_trigger(t + 1);
         }
 
         let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
@@ -162,6 +164,8 @@ impl Frontend {
             window.show().ok();
             window.set_size(LogicalSize::new(320.0, 480.0));
             self.apply_position();
+            let t = app.get_scroll_trigger();
+            app.set_scroll_trigger(t + 1);
             let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
             let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             ns_app.activateIgnoringOtherApps(true);
@@ -174,6 +178,8 @@ impl Frontend {
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.set_pinned(false);
+            let t = app.get_scroll_trigger();
+            app.set_scroll_trigger(t + 1);
         }
     }
 
@@ -200,6 +206,8 @@ impl Frontend {
             window.set_size(LogicalSize::new(320.0, 480.0));
             self.apply_position();
             self.visible = true;
+            let t = app.get_scroll_trigger();
+            app.set_scroll_trigger(t + 1);
         }
     }
 
