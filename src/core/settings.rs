@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub auto_scroll_to_top: bool, // 每次开启窗口时自动回到列表顶部
     #[serde(default)]
     pub copy_as_plain_text: bool, // 复制为纯文本: 开启后丢弃格式标签
+    #[serde(default)]
+    pub show_original_on_hover: bool, // 悬停时显示原内容: 有备注时鼠标悬停显示原始内容
 }
 
 impl Default for AppSettings {
@@ -56,6 +58,7 @@ impl Default for AppSettings {
             show_source_app: false,
             auto_scroll_to_top: false,
             copy_as_plain_text: false,
+            show_original_on_hover: false,
         }
     }
 }

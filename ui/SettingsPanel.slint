@@ -21,6 +21,7 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> show-source-app: false;
     in property <bool> auto-scroll-to-top: false;
     in property <bool> copy-as-plain-text: false;
+    in property <bool> show-original-on-hover: false;
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -41,6 +42,7 @@ export component SettingsPanel inherits Rectangle {
     callback toggle-show-source-app();
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
+    callback toggle-show-original-on-hover();
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #919496 : #7c809a;
@@ -253,11 +255,13 @@ export component SettingsPanel inherits Rectangle {
             show-source-app: root.show-source-app;
             auto-scroll-to-top: root.auto-scroll-to-top;
             copy-as-plain-text: root.copy-as-plain-text;
+            show-original-on-hover: root.show-original-on-hover;
             toggle-sort-by-created => { root.toggle-sort-by-created(); }
             set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
             toggle-show-source-app => { root.toggle-show-source-app(); }
             toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
             toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
+            toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
         }
 
         if (root.active-tab == 2) : SettingsTabHotkey {

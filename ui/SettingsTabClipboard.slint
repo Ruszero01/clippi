@@ -5,12 +5,14 @@ export component SettingsTabClipboard inherits Rectangle {
     in property <bool> show-source-app: false;
     in property <bool> auto-scroll-to-top: false;
     in property <bool> copy-as-plain-text: false;
+    in property <bool> show-original-on-hover: false;
 
     callback toggle-sort-by-created();
     callback set-card-height-mode(string);
     callback toggle-show-source-app();
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
+    callback toggle-show-original-on-hover();
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -394,6 +396,65 @@ export component SettingsTabClipboard inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         clicked => { root.toggle-copy-as-plain-text(); }
+                    }
+                }
+            }
+        }
+
+        // 悬停时显示原内容
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: "悬停时显示原内容";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: root.show-original-on-hover ? "鼠标悬停时显示原始内容" : "有备注的卡片始终显示备注";
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.show-original-on-hover ? accent : divider;
+                    animate background { duration: 200ms; easing: ease-out; }
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: #ffffff;
+                        x: root.show-original-on-hover ? parent.width - self.width - 2px : 2px;
+                        animate x { duration: 200ms; easing: ease-out; }
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    showoriginal-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => { root.toggle-show-original-on-hover(); }
                     }
                 }
             }

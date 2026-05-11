@@ -53,6 +53,7 @@ pub struct ClipboardItem {
     pub image_path: String,
     pub rich_data: String, // JSON: {"html":"...","rtf":"..."} or empty
     pub is_favorite: bool,
+    pub note: String,
     pub source_app_name: String,
     pub source_app_icon: String, // base64-encoded PNG icon
 }
@@ -93,6 +94,7 @@ impl ClipboardItem {
             image_path: String::new(),
             rich_data: rd,
             is_favorite: false,
+            note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
         }
@@ -111,6 +113,7 @@ impl ClipboardItem {
             image_path: image_path.to_string(),
             rich_data: String::new(),
             is_favorite: false,
+            note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
         }

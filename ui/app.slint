@@ -39,6 +39,7 @@ export component App inherits Window {
     in-out property <bool> show-source-app: false;
     in-out property <bool> auto-scroll-to-top: false;
     in-out property <bool> copy-as-plain-text: false;
+    in-out property <bool> show-original-on-hover: false;
     in-out property <int> scroll-trigger: 0;
 
     // 分类筛选
@@ -82,6 +83,8 @@ export component App inherits Window {
     callback toggle-show-source-app();
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
+    callback toggle-show-original-on-hover();
+    callback update-note(int, string);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -367,6 +370,7 @@ export component App inherits Window {
                     card-height-mode: root.card-height-mode;
                     show-source-app: root.show-source-app;
                     auto-scroll-to-top: root.auto-scroll-to-top;
+                    show-original-on-hover: root.show-original-on-hover;
                     scroll-trigger: root.scroll-trigger;
                     toggle-filter(type) => { root.toggle-filter(type); }
                     clear-filters => { root.clear-filters(); }
@@ -375,6 +379,7 @@ export component App inherits Window {
                     paste-item(id) => { root.paste-item(id); }
                     toggle-favorite(id) => { root.toggle-favorite(id); }
                     delete-item(id) => { root.delete-item(id); }
+                    update-note(id, text) => { root.update-note(id, text); }
                 }
 
                 SettingsPanel {
@@ -400,6 +405,7 @@ export component App inherits Window {
                     show-source-app: root.show-source-app;
                     auto-scroll-to-top: root.auto-scroll-to-top;
                     copy-as-plain-text: root.copy-as-plain-text;
+                    show-original-on-hover: root.show-original-on-hover;
 
                     back => { root.current-view = "clipboard"; }
                     toggle-auto-start => { root.toggle-auto-start(); }
@@ -416,6 +422,7 @@ export component App inherits Window {
                     toggle-show-source-app => { root.toggle-show-source-app(); }
                     toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
                     toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
+                    toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
                 }
             }
         }

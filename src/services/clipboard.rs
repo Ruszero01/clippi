@@ -169,6 +169,14 @@ impl ClipboardService {
         }
     }
 
+    /// Update note for an item and refresh that row
+    pub fn update_note(&mut self, id: i32, note: &str) {
+        if let Ok(db) = self.db.lock() {
+            let _ = db.update_note(id as i64, note);
+        }
+        self.refresh_row(id);
+    }
+
     /// Get reference to shared buffer for platform layer
     pub fn shared(&self) -> &ClipboardShared {
         &self.shared
@@ -271,6 +279,7 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         image_width: img_w as i32,
         image_height: img_h as i32,
         is_favorite: item.is_favorite,
+        note: SharedString::from(item.note.clone()),
         source_app_name: SharedString::from(item.source_app_name.clone()),
         source_app_icon_path: SharedString::from(source_icon_path),
         source_app_icon_image: source_icon_image,

@@ -18,7 +18,10 @@ export component ClipboardList inherits Rectangle {
     in property <string> card-height-mode: "medium";
     in property <bool> show-source-app: false;
     in property <bool> auto-scroll-to-top: false;
+    in property <bool> show-original-on-hover: false;
     in-out property <int> scroll-trigger: 0;
+    in-out property <int> editing-note-id: -1;
+    in-out property <string> editing-note-text: "";
 
     // ========== 双击检测 ==========
     in-out property <int> last-clicked-id: -1;
@@ -32,6 +35,7 @@ export component ClipboardList inherits Rectangle {
     callback search-keyword(string);
     callback toggle-favorite(int);
     callback delete-item(int);
+    callback update-note(int, string);
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #232425 : #ffffff;
@@ -285,7 +289,7 @@ export component ClipboardList inherits Rectangle {
                     for entry in root.items: VerticalLayout {
                         padding: 5px;
 
-                        Rectangle {
+                        card-rect := Rectangle {
                             height: root.card-height-mode == "auto" ?
                                 (entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
@@ -314,6 +318,11 @@ export component ClipboardList inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             clicked => {
+                                if (root.editing-note-id == entry.id) {
+                                    root.update-note(entry.id, root.editing-note-text);
+                                    root.editing-note-id = -1;
+                                    return;
+                                }
                                 search-input.clear-focus();
                                 if (root.click-pending && root.last-clicked-id == entry.id) {
                                     root.click-pending = false;
@@ -325,17 +334,16 @@ export component ClipboardList inherits Rectangle {
                                 }
                             }
 
-                            // ── 来源应用模式（开启且有来源） ──
-                            if root.show-source-app && entry.source-app-name != "" : HorizontalLayout {
+                            // ── 卡片内容区 ──
+                            HorizontalLayout {
                                 padding: 10px;
                                 spacing: 10px;
 
-                                // 左侧图标列：应用图标 + 类型标签
-                                VerticalLayout {
+                                // ── 来源应用模式（开启且有来源） ──
+                                if root.show-source-app && entry.source-app-name != "" : VerticalLayout {
                                     width: 34px;
                                     spacing: 3px;
 
-                                    // 应用图标底板（34px 宽，与小标签对齐）
                                     Rectangle {
                                         width: 34px;
                                         height: 24px;
@@ -353,7 +361,6 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    // 类型小标签
                                     st-bg := Rectangle {
                                         height: 14px;
                                         width: 34px;
@@ -389,40 +396,10 @@ export component ClipboardList inherits Rectangle {
                                     }
                                 }
 
-                                // 右侧：内容预览 / 图片预览
-                                if entry.content-type != "image" : Text {
-                                    text: entry.preview;
-                                    font-size: 12px;
-                                    color: text-1;
-                                    overflow: elide;
-                                    wrap: word-wrap;
-                                    vertical-alignment: top;
-                                }
-
-                                if entry.content-type == "image" : Rectangle {
-                                    border-radius: 6px;
-                                    clip: true;
-                                    background: accent-soft;
-
-                                    if entry.image-path != "" : Image {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        source: entry.thumbnail;
-                                        image-fit: cover;
-                                    }
-                                }
-                            }
-
-                            // ── 原始类型图标模式（关闭或没有来源） ──
-                            if !root.show-source-app || entry.source-app-name == "" : HorizontalLayout {
-                                padding: 10px;
-                                spacing: 10px;
-
-                                // 左侧：类型图标（与来源模式应用图标同尺寸）
-                                VerticalLayout {
+                                // ── 类型图标模式（关闭或没有来源） ──
+                                if !root.show-source-app || entry.source-app-name == "" : VerticalLayout {
                                     width: 34px;
 
-                                    // 图片类型
                                     if entry.content-type == "image": Rectangle {
                                         width: 34px;
                                         height: 34px;
@@ -439,7 +416,6 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    // 纯文本类型
                                     if entry.content-type == "plain_text": Rectangle {
                                         width: 34px;
                                         height: 34px;
@@ -456,7 +432,6 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    // 格式文本类型
                                     if entry.content-type == "rich_text": Rectangle {
                                         width: 34px;
                                         height: 34px;
@@ -473,7 +448,6 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    // 链接类型
                                     if entry.content-type == "link": Rectangle {
                                         width: 34px;
                                         height: 34px;
@@ -491,8 +465,60 @@ export component ClipboardList inherits Rectangle {
                                     }
                                 }
 
-                                // 内容预览 / 图片预览
-                                if entry.content-type != "image" : Text {
+                                // ── 右侧内容区：预览 / 图片 / 备注（两种模式共享） ──
+                                if root.editing-note-id == entry.id : VerticalLayout {
+                                    spacing: 2px;
+
+                                    note-input := TextInput {
+                                        text <=> root.editing-note-text;
+                                        font-size: 12px;
+                                        color: text-1;
+                                        single-line: true;
+                                        accepted => {
+                                            root.update-note(entry.id, root.editing-note-text);
+                                            root.editing-note-id = -1;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        alignment: end;
+
+                                        Rectangle {
+                                            width: 16px;
+                                            height: 16px;
+                                            background: transparent;
+
+                                            confirm-ta := TouchArea {
+                                                width: parent.width;
+                                                height: parent.height;
+                                                clicked => {
+                                                    root.update-note(entry.id, root.editing-note-text);
+                                                    root.editing-note-id = -1;
+                                                }
+                                            }
+
+                                            Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "\u{e611}";
+                                                font-family: "iconfont";
+                                                font-size: 12px;
+                                                color: confirm-ta.has-hover ? accent : text-2;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if root.editing-note-id != entry.id && entry.note != "" && !(root.show-original-on-hover && item-ta.has-hover) : Text {
+                                    text: entry.note;
+                                    font-size: 12px;
+                                    color: text-2;
+                                    overflow: elide;
+                                    wrap: word-wrap;
+                                    vertical-alignment: center;
+                                }
+
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "image" : Text {
                                     text: entry.preview;
                                     font-size: 12px;
                                     color: text-1;
@@ -501,7 +527,7 @@ export component ClipboardList inherits Rectangle {
                                     vertical-alignment: top;
                                 }
 
-                                if entry.content-type == "image" : Rectangle {
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "image" : Rectangle {
                                     border-radius: 6px;
                                     clip: true;
                                     background: accent-soft;
@@ -525,7 +551,7 @@ export component ClipboardList inherits Rectangle {
                             }
 
                             // ── 悬浮工具栏 ──
-                            if item-ta.has-hover : Rectangle {
+                            if item-ta.has-hover && root.editing-note-id != entry.id : Rectangle {
                                 x: parent.width - self.width - 4px;
                                 y: 3px;
                                 height: 22px;
@@ -539,32 +565,6 @@ export component ClipboardList inherits Rectangle {
                                     x: 5px;
                                     y: (parent.height - self.height) / 2;
                                     spacing: 2px;
-
-                                    // 收藏按钮
-                                    Rectangle {
-                                        width: 18px;
-                                        height: 18px;
-
-                                        fav-ta := TouchArea {
-                                            width: parent.width;
-                                            height: parent.height;
-                                            clicked => {
-                                                search-input.clear-focus();
-                                                root.click-pending = false;
-                                                root.last-clicked-id = -1;
-                                                root.toggle-favorite(entry.id);
-                                            }
-                                        }
-
-                                        Text {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            text: entry.is-favorite ? "\u{e630}" : "\u{e68d}";
-                                            font-family: "iconfont";
-                                            font-size: 11px;
-                                            color: entry.is-favorite ? accent : (fav-ta.has-hover ? accent : (dark-mode ? text-2 : text-2));
-                                        }
-                                    }
 
                                     // 复制按钮
                                     Rectangle {
@@ -589,6 +589,59 @@ export component ClipboardList inherits Rectangle {
                                             font-family: "iconfont";
                                             font-size: 12px;
                                             color: tb-copy-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 备注按钮
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        note-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -1;
+                                                root.editing-note-text = entry.note;
+                                                root.editing-note-id = entry.id;
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e606}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: note-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 收藏按钮
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        fav-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -1;
+                                                root.toggle-favorite(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: entry.is-favorite ? "\u{e630}" : "\u{e68d}";
+                                            font-family: "iconfont";
+                                            font-size: 11px;
+                                            color: entry.is-favorite ? accent : (fav-ta.has-hover ? accent : (dark-mode ? text-2 : text-2));
                                         }
                                     }
 
@@ -621,7 +674,7 @@ export component ClipboardList inherits Rectangle {
                             }
 
                             // 悬浮时间标签
-                            Rectangle {
+                            if root.editing-note-id != entry.id : Rectangle {
                                 x: parent.width - self.width - 10px;
                                 y: parent.height - self.height - 6px;
                                 height: 18px;

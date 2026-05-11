@@ -417,6 +417,27 @@ impl AppController {
             }
         });
 
+        // Show original on hover callback
+        let settings_for_callbacks = Arc::clone(&shared_settings);
+        let app_for_hover = app.clone();
+        slint_app.on_toggle_show_original_on_hover(move || {
+            if let Some(app) = app_for_hover.upgrade() {
+                let new_val = !app.get_show_original_on_hover();
+                app.set_show_original_on_hover(new_val);
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
+                s.show_original_on_hover = new_val;
+                s.save();
+            }
+        });
+
+        // Update note callback
+        let looper_for_note = Arc::clone(&looper);
+        slint_app.on_update_note(move |id, text: SharedString| {
+            let _ = looper_for_note.try_with_clipboard_service(|cs| {
+                cs.update_note(id, &text);
+            });
+        });
+
         // Filter callbacks
         let looper_for_filter = Arc::clone(&looper);
         let app_for_filter = app.clone();
@@ -542,6 +563,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_show_source_app(settings.show_source_app);
     app.set_auto_scroll_to_top(settings.auto_scroll_to_top);
     app.set_copy_as_plain_text(settings.copy_as_plain_text);
+    app.set_show_original_on_hover(settings.show_original_on_hover);
 }
 
 /// Write a clipboard item's content to the system clipboard.

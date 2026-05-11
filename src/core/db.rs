@@ -38,6 +38,7 @@ impl Database {
         let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN source_app_name TEXT NOT NULL DEFAULT ''", []);
         let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN source_app_icon TEXT NOT NULL DEFAULT ''", []);
         let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN rich_data TEXT NOT NULL DEFAULT ''", []);
+        let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN note TEXT NOT NULL DEFAULT ''", []);
         Ok(())
     }
 
@@ -76,7 +77,7 @@ impl Database {
     ) -> SqlResult<Vec<ClipboardItem>> {
         let (where_clause, mut filter_params) = filters.db_where();
         let query = format!(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, is_favorite, source_app_name, source_app_icon
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, is_favorite, note, source_app_name, source_app_icon
              FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
             where_clause, order_by
         );
@@ -88,7 +89,7 @@ impl Database {
 
     pub fn get_by_id(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, is_favorite, source_app_name, source_app_icon
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, is_favorite, note, source_app_name, source_app_icon
              FROM clipboard_items WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -101,7 +102,7 @@ impl Database {
 
     pub fn get_by_hash(&self, hash: u64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, is_favorite, source_app_name, source_app_icon
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, is_favorite, note, source_app_name, source_app_icon
              FROM clipboard_items WHERE content_hash = ?1",
         )?;
         let mut rows = stmt.query(params![hash as i64])?;
@@ -127,6 +128,14 @@ impl Database {
         )?;
         Ok(())
     }
+
+    pub fn update_note(&self, id: i64, note: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET note = ?1 WHERE id = ?2",
+            params![note, id],
+        )?;
+        Ok(())
+    }
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
@@ -136,8 +145,9 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let image_path: String = row.get(6).unwrap_or_default();
     let rich_data: String = row.get(7).unwrap_or_default();
     let is_favorite: i32 = row.get(8).unwrap_or(0);
-    let source_app_name: String = row.get(9).unwrap_or_default();
-    let source_app_icon: String = row.get(10).unwrap_or_default();
+    let note: String = row.get(9).unwrap_or_default();
+    let source_app_name: String = row.get(10).unwrap_or_default();
+    let source_app_icon: String = row.get(11).unwrap_or_default();
     Ok(ClipboardItem {
         id: row.get(0)?,
         content_type: ContentType::from_str(&ct_str),
@@ -148,6 +158,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         image_path,
         rich_data,
         is_favorite: is_favorite != 0,
+        note,
         source_app_name,
         source_app_icon,
     })
