@@ -29,9 +29,14 @@ pub struct AppSettings {
     pub saved_window_x: i32,
     pub saved_window_y: i32,
     pub card_height_mode: String, // "low" | "medium" | "high" | "auto"
+    #[serde(default)]
     pub silent_start: bool,
+    #[serde(default)]
     pub show_source_app: bool,
+    #[serde(default)]
     pub auto_scroll_to_top: bool, // 每次开启窗口时自动回到列表顶部
+    #[serde(default)]
+    pub copy_as_plain_text: bool, // 复制为纯文本: 开启后丢弃格式标签
 }
 
 impl Default for AppSettings {
@@ -50,6 +55,7 @@ impl Default for AppSettings {
             silent_start: true,
             show_source_app: false,
             auto_scroll_to_top: false,
+            copy_as_plain_text: false,
         }
     }
 }

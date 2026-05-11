@@ -112,7 +112,7 @@ impl ClipboardFilters {
 
         // Keyword filter
         if let Some(ref kw) = self.keyword {
-            conditions.push("searchable_text LIKE ?".to_string());
+            conditions.push("full_text LIKE ?".to_string());
             params.push(format!("%{}%", kw).into());
         }
 

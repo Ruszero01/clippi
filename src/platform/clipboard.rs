@@ -3,7 +3,7 @@
 //! Provides multi-format clipboard monitoring with detection priority:
 //! Image > Link > RichText > PlainText
 
-use crate::core::types::{is_url, ClipboardItem, ContentType};
+use crate::core::types::{is_url, ClipboardItem, ContentType, RichData};
 use crate::core::paths::images_dir;
 use crate::platform::source;
 use clipboard_rs::common::RustImage;
@@ -83,14 +83,19 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         }
 
         if is_url(&text) {
-            return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref()));
+            return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref(), None));
         }
 
-        if ctx.has(ContentFormat::Html) {
-            return Some(ClipboardItem::new_text(0, &text, ContentType::RichText, source_info.as_ref()));
+        if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {
+            let html = ctx.get_html().ok();
+            let rtf = ctx.get_rich_text().ok();
+            if html.is_some() || rtf.is_some() {
+                let rich = RichData { html, rtf };
+                return Some(ClipboardItem::new_text(0, &text, ContentType::RichText, source_info.as_ref(), Some(&rich)));
+            }
         }
 
-        return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText, source_info.as_ref()));
+        return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText, source_info.as_ref(), None));
     }
 
     None

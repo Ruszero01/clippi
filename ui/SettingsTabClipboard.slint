@@ -4,11 +4,13 @@ export component SettingsTabClipboard inherits Rectangle {
     in property <string> card-height-mode: "medium";
     in property <bool> show-source-app: false;
     in property <bool> auto-scroll-to-top: false;
+    in property <bool> copy-as-plain-text: false;
 
     callback toggle-sort-by-created();
     callback set-card-height-mode(string);
     callback toggle-show-source-app();
     callback toggle-auto-scroll-to-top();
+    callback toggle-copy-as-plain-text();
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -333,6 +335,65 @@ export component SettingsTabClipboard inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         clicked => { root.toggle-auto-scroll-to-top(); }
+                    }
+                }
+            }
+        }
+
+        // 复制为纯文本
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: "复制为纯文本";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: root.copy-as-plain-text ? "丢弃格式，只保存纯文本内容" : "保留格式标签，粘贴时恢复样式";
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.copy-as-plain-text ? accent : divider;
+                    animate background { duration: 200ms; easing: ease-out; }
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: #ffffff;
+                        x: root.copy-as-plain-text ? parent.width - self.width - 2px : 2px;
+                        animate x { duration: 200ms; easing: ease-out; }
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    copyplain-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => { root.toggle-copy-as-plain-text(); }
                     }
                 }
             }

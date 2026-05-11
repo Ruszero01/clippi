@@ -47,31 +47,51 @@ pub struct ClipboardItem {
     pub id: i64,
     pub content_type: ContentType,
     pub full_text: String,
-    pub searchable_text: String,
     pub content_hash: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub image_path: String,
+    pub rich_data: String, // JSON: {"html":"...","rtf":"..."} or empty
     pub is_favorite: bool,
     pub source_app_name: String,
     pub source_app_icon: String, // base64-encoded PNG icon
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+pub struct RichData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtf: Option<String>,
+}
+
+impl RichData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_json(s: &str) -> Self {
+        serde_json::from_str(s).unwrap_or_default()
+    }
+
+}
+
 impl ClipboardItem {
-    pub fn new_text(id: i64, text: &str, content_type: ContentType, source: Option<&SourceAppInfo>) -> Self {
+    pub fn new_text(id: i64, text: &str, content_type: ContentType, source: Option<&SourceAppInfo>, rich_data: Option<&RichData>) -> Self {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
         let now = Utc::now();
         let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        let rd = rich_data.map(|r| r.to_json()).unwrap_or_default();
         Self {
             id,
             content_type,
             full_text: text.to_string(),
-            searchable_text: text.to_string(),
             content_hash: hasher.finish(),
             created_at: now,
             updated_at: now,
             image_path: String::new(),
+            rich_data: rd,
             is_favorite: false,
             source_app_name: app_name,
             source_app_icon: icon,
@@ -85,11 +105,11 @@ impl ClipboardItem {
             id,
             content_type: ContentType::Image,
             full_text: image_path.to_string(),
-            searchable_text: String::new(),
             content_hash: hash,
             created_at: now,
             updated_at: now,
             image_path: image_path.to_string(),
+            rich_data: String::new(),
             is_favorite: false,
             source_app_name: app_name,
             source_app_icon: icon,

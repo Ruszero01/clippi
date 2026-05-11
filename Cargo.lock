@@ -872,6 +872,7 @@ dependencies = [
  "rfd",
  "rusqlite",
  "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "toml 0.8.2",

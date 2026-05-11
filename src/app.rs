@@ -6,6 +6,7 @@ use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
 };
+use crate::core::types::RichData;
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::paste::{paste_after_delay, restore_paste_target};
@@ -15,9 +16,10 @@ use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::tray::TrayService;
 use crate::App;
-use clipboard_rs::{Clipboard, ClipboardContext};
+use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent};
 use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct AppController {
     looper: Arc<Looper>,
@@ -50,6 +52,8 @@ impl AppController {
         let auto_hide_setting = settings.auto_hide;
         let hotkey_str = settings.hotkey.clone();
         let sort_by_created_setting = settings.sort_by_created;
+        let copy_as_plain_text_setting = settings.copy_as_plain_text;
+        let copy_as_plain_text_flag = Arc::new(AtomicBool::new(copy_as_plain_text_setting));
         let shared_settings = Arc::new(Mutex::new(settings));
 
         // Create clipboard service (sets up model in new())
@@ -60,9 +64,10 @@ impl AppController {
             app.clone(),
         );
         let clipboard_service_for_callbacks = clipboard_service.clone();
-        // Load initial data and apply sort setting
+        // Load initial data and apply settings
         clipboard_service.load_initial();
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
+        clipboard_service.set_copy_as_plain_text(copy_as_plain_text_setting);
 
         let mut listener = create_listener();
         listener.start(clipboard_service.shared())?;
@@ -118,15 +123,14 @@ impl AppController {
             }
         });
 
-        // Copy item to clipboard
+        // Copy item to clipboard (with format restoration when rich_data is present)
         let db_for_copy = db.clone();
         let cs_for_copy = clipboard_service_for_callbacks.clone();
+        let plain_flag_for_copy = Arc::clone(&copy_as_plain_text_flag);
         slint_app.on_copy_item(move |id| {
             if let Ok(db) = db_for_copy.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                    if let Ok(ctx) = ClipboardContext::new() {
-                        let _ = Clipboard::set_text(&ctx, item.full_text.clone());
-                    }
+                    write_item_to_clipboard(&item, plain_flag_for_copy.load(Ordering::Relaxed));
                 }
             }
             cs_for_copy.refresh_row(id);
@@ -135,18 +139,14 @@ impl AppController {
         // Paste item - copy to clipboard, restore focus, then paste
         // FocusService will auto-hide if not pinned
         let db_for_paste = db.clone();
+        let plain_flag_for_paste = Arc::clone(&copy_as_plain_text_flag);
         slint_app.on_paste_item(move |id| {
-            // Copy to clipboard
             if let Ok(db) = db_for_paste.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                    if let Ok(ctx) = ClipboardContext::new() {
-                        let _ = Clipboard::set_text(&ctx, item.full_text.clone());
-                    }
+                    write_item_to_clipboard(&item, plain_flag_for_paste.load(Ordering::Relaxed));
                 }
             }
-            // Restore focus to previous window (FocusService handles auto-hide)
             restore_paste_target();
-            // Simulate Ctrl+V after delay (to paste to previously focused app)
             paste_after_delay();
         });
 
@@ -398,6 +398,25 @@ impl AppController {
             }
         });
 
+        // Copy as plain text callback
+        let settings_for_callbacks = Arc::clone(&shared_settings);
+        let app_for_copy_plain = app.clone();
+        let looper_for_copy_plain = Arc::clone(&looper);
+        let plain_flag_for_toggle = Arc::clone(&copy_as_plain_text_flag);
+        slint_app.on_toggle_copy_as_plain_text(move || {
+            if let Some(app) = app_for_copy_plain.upgrade() {
+                let new_val = !app.get_copy_as_plain_text();
+                app.set_copy_as_plain_text(new_val);
+                let mut s = settings_for_callbacks.lock().expect("settings lock poisoned");
+                s.copy_as_plain_text = new_val;
+                s.save();
+                plain_flag_for_toggle.store(new_val, Ordering::Relaxed);
+                let _ = looper_for_copy_plain.try_with_clipboard_service(|cs| {
+                    cs.set_copy_as_plain_text(new_val);
+                });
+            }
+        });
+
         // Filter callbacks
         let looper_for_filter = Arc::clone(&looper);
         let app_for_filter = app.clone();
@@ -522,4 +541,26 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_silent_start(settings.silent_start);
     app.set_show_source_app(settings.show_source_app);
     app.set_auto_scroll_to_top(settings.auto_scroll_to_top);
+    app.set_copy_as_plain_text(settings.copy_as_plain_text);
+}
+
+/// Write a clipboard item's content to the system clipboard.
+/// When copy_as_plain_text is true, only plain text is written; otherwise
+/// HTML and RTF formats are also restored from rich_data.
+fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_plain_text: bool) {
+    if let Ok(ctx) = ClipboardContext::new() {
+        if copy_as_plain_text {
+            let _ = Clipboard::set_text(&ctx, item.full_text.clone());
+        } else {
+            let mut contents = vec![ClipboardContent::Text(item.full_text.clone())];
+            let rich = RichData::from_json(&item.rich_data);
+            if let Some(html) = rich.html {
+                contents.push(ClipboardContent::Html(html));
+            }
+            if let Some(rtf) = rich.rtf {
+                contents.push(ClipboardContent::Rtf(rtf));
+            }
+            let _ = Clipboard::set(&ctx, contents);
+        }
+    }
 }

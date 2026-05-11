@@ -23,6 +23,7 @@ pub struct ClipboardService {
     app: slint::Weak<App>,
     model: Rc<VecModel<ClipboardEntry>>,
     sort_by_created: bool,
+    copy_as_plain_text: bool,
     filters: ClipboardFilters,
 }
 
@@ -39,6 +40,7 @@ impl ClipboardService {
             app,
             model: model.clone(),
             sort_by_created: false,
+            copy_as_plain_text: false,
             filters: ClipboardFilters::default(),
         };
         if let Some(app) = service.app.upgrade() {
@@ -96,6 +98,11 @@ impl ClipboardService {
     pub fn set_sort_and_refresh(&mut self, sort_by_created: bool) {
         self.sort_by_created = sort_by_created;
         self.refresh_with_current_filter();
+    }
+
+    /// Toggle copy-as-plain-text mode (no reload needed — applies to incoming items)
+    pub fn set_copy_as_plain_text(&mut self, enabled: bool) {
+        self.copy_as_plain_text = enabled;
     }
 
     /// Load initial items from database (model starts empty; delegate to unified refresh)
@@ -180,14 +187,20 @@ impl Pollable for ClipboardService {
         }
 
         if let Ok(db) = self.db.lock() {
-            for item in &pending {
-                if let Err(e) = db.upsert(item) {
+            for mut item in pending {
+                // Convert RichText → PlainText when copy-as-plain-text is enabled
+                if self.copy_as_plain_text && item.content_type == crate::core::types::ContentType::RichText {
+                    item.content_type = crate::core::types::ContentType::PlainText;
+                    item.rich_data = String::new();
+                }
+
+                if let Err(e) = db.upsert(&item) {
                     eprintln!("[ERROR] ClipboardService: upsert error: {:?}", e);
                     continue;
                 }
 
                 // Check if item matches current filters
-                if !self.filters.matches_item(item) {
+                if !self.filters.matches_item(&item) {
                     continue;
                 }
 
@@ -200,7 +213,7 @@ impl Pollable for ClipboardService {
                     }
                     self.model.insert(0, item_to_entry(&existing));
                 } else {
-                    self.model.insert(0, item_to_entry(item));
+                    self.model.insert(0, item_to_entry(&item));
                 }
             }
         }
