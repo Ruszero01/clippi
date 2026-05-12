@@ -2,6 +2,7 @@
 
 pub mod blacklist;
 pub mod clipboard;
+pub mod cursor;
 pub mod focus;
 pub mod hotkey;
 pub mod monitor;

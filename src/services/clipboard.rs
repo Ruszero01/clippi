@@ -276,6 +276,15 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         (String::new(), Image::default())
     };
 
+    // Resolve color swatch for Color type items
+    let color_swatch = if item.content_type == crate::core::types::ContentType::Color {
+        crate::core::color::detect_color(&item.full_text)
+            .map(|c| slint::Color::from_rgb_u8(c.r, c.g, c.b))
+            .unwrap_or_default()
+    } else {
+        slint::Color::default()
+    };
+
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.full_text.clone()),
@@ -291,5 +300,6 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         source_app_name: SharedString::from(item.source_app_name.clone()),
         source_app_icon_path: SharedString::from(source_icon_path),
         source_app_icon_image: source_icon_image,
+        color_swatch: color_swatch,
     }
 }

@@ -11,6 +11,7 @@ pub enum ContentType {
     RichText,
     Image,
     Link,
+    Color,
 }
 
 impl ContentType {
@@ -20,6 +21,7 @@ impl ContentType {
             ContentType::RichText => "rich_text",
             ContentType::Image => "image",
             ContentType::Link => "link",
+            ContentType::Color => "color",
         }
     }
 
@@ -29,6 +31,7 @@ impl ContentType {
             "rich_text" | "html" => ContentType::RichText,
             "image" => ContentType::Image,
             "link" => ContentType::Link,
+            "color" => ContentType::Color,
             _ => ContentType::PlainText,
         }
     }
@@ -111,6 +114,25 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: image_path.to_string(),
+            rich_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            source_app_name: app_name,
+            source_app_icon: icon,
+        }
+    }
+
+    pub fn new_color(id: i64, text: &str, hash: u64, source: Option<&SourceAppInfo>) -> Self {
+        let now = Utc::now();
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        Self {
+            id,
+            content_type: ContentType::Color,
+            full_text: text.to_string(),
+            content_hash: hash,
+            created_at: now,
+            updated_at: now,
+            image_path: String::new(),
             rich_data: String::new(),
             is_favorite: false,
             note: String::new(),

@@ -15,6 +15,7 @@ export component ClipboardList inherits Rectangle {
     in-out property <bool> filter-rich-text: false;
     in-out property <bool> filter-image: false;
     in-out property <bool> filter-link: false;
+    in-out property <bool> filter-color: false;
     in property <string> card-height-mode: "medium";
     in property <bool> show-source-app: false;
     in property <bool> auto-scroll-to-top: false;
@@ -37,6 +38,7 @@ export component ClipboardList inherits Rectangle {
     callback toggle-favorite(int);
     callback delete-item(int);
     callback update-note(int, string);
+    callback show-context-menu(int);
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #232425 : #ffffff;
@@ -262,6 +264,43 @@ export component ClipboardList inherits Rectangle {
                             }
                         }
                     }
+
+                    // 颜色
+                    fc-bg := Rectangle {
+                        width: fc-layout.preferred-width;
+                        height: 22px;
+                        border-radius: 5px;
+                        background: root.filter-color ? (dark-mode ? #7ecba322 : #6ab89022) : (fc-ta.has-hover ? btn-hover : transparent);
+
+                        fc-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { search-input.clear-focus(); root.toggle-filter("color"); }
+                        }
+
+                        fc-layout := HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 3px;
+                            alignment: center;
+
+                            Text {
+                                text: "\u{e610}";
+                                font-family: "iconfont";
+                                font-size: 11px;
+                                color: root.filter-color ? accent : text-2;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "颜色";
+                                font-size: 11px;
+                                font-weight: root.filter-color ? 600 : 400;
+                                color: root.filter-color ? accent : text-2;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
                 }
 
                 // 空状态
@@ -335,6 +374,14 @@ export component ClipboardList inherits Rectangle {
                                     root.click-pending = true;
                                 }
                             }
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                    search-input.clear-focus();
+                                    root.click-pending = false;
+                                    root.last-clicked-id = -1;
+                                    root.show-context-menu(entry.id);
+                                }
+                            }
 
                             // ── 卡片内容区 ──
                             HorizontalLayout {
@@ -363,7 +410,17 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    st-bg := Rectangle {
+                                    // 颜色类型：显示色块；其他类型：显示图标+标签
+                                    if entry.content-type == "color" : Rectangle {
+                                        height: 14px;
+                                        width: 34px;
+                                        border-radius: 3px;
+                                        background: entry.color-swatch;
+                                        border-width: 1px;
+                                        border-color: dark-mode ? #ffffff20 : #00000018;
+                                    }
+
+                                    if entry.content-type != "color" : st-bg := Rectangle {
                                         height: 14px;
                                         width: 34px;
                                         border-radius: 3px;
@@ -465,6 +522,34 @@ export component ClipboardList inherits Rectangle {
                                             color: tag-text;
                                         }
                                     }
+
+                                    if entry.content-type == "color": VerticalLayout {
+                                        Rectangle {
+                                            vertical-stretch: 1;
+                                        }
+
+                                        Rectangle {
+                                            width: 34px;
+                                            height: 34px;
+                                            border-radius: 6px;
+                                            background: tag-bg;
+
+                                            Rectangle {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                width: 24px;
+                                                height: 24px;
+                                                border-radius: 4px;
+                                                background: entry.color-swatch;
+                                                border-width: 1px;
+                                                border-color: dark-mode ? #ffffff20 : #00000018;
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            vertical-stretch: 1;
+                                        }
+                                    }
                                 }
 
                                 // ── 右侧内容区：预览 / 图片 / 备注（两种模式共享） ──
@@ -520,7 +605,17 @@ export component ClipboardList inherits Rectangle {
                                     vertical-alignment: center;
                                 }
 
-                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "image" : Text {
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "color" : Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    color: text-1;
+                                    overflow: elide;
+                                    wrap: word-wrap;
+                                    vertical-alignment: center;
+                                }
+
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "color" && entry.content-type != "image" : Text {
                                     text: entry.preview;
                                     font-size: 12px;
                                     color: text-1;

@@ -1,14 +1,16 @@
 //! AppController - assembles all services and sets up the application
 
+use crate::core::color::{detect_color, is_hex_format};
 use crate::core::db::Database;
 use crate::core::frontend::{Frontend, PositionMode};
 use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
 };
-use crate::core::types::{is_url_or_path, RichData};
+use crate::core::types::{is_url_or_path, ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
+use crate::platform::cursor::get_cursor_pos;
 use crate::platform::paste::{paste_after_delay, restore_paste_target};
 use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
@@ -479,6 +481,7 @@ impl AppController {
                     app.set_filter_rich_text(cs.is_filter_active("rich_text"));
                     app.set_filter_image(cs.is_filter_active("image"));
                     app.set_filter_link(cs.is_filter_active("link"));
+                    app.set_filter_color(cs.is_filter_active("color"));
                 }
             });
         });
@@ -493,6 +496,7 @@ impl AppController {
                     app.set_filter_rich_text(false);
                     app.set_filter_image(false);
                     app.set_filter_link(false);
+                    app.set_filter_color(false);
                     app.set_filter_favorites(false);
                 }
             });
@@ -536,6 +540,96 @@ impl AppController {
                     cs.set_keyword(keyword.as_str());
                 }
             });
+        });
+
+        // ── Context menu callbacks ──
+
+        // Show context menu: read item from DB, determine type info,
+        // get cursor position, and set Slint properties for the overlay.
+        let db_for_ctx = db.clone();
+        let app_for_ctx = app.clone();
+        slint_app.on_show_context_menu(move |id| {
+            if let Some(app) = app_for_ctx.upgrade() {
+                let (is_color, is_hex, is_image, is_favorite) =
+                    if let Ok(db) = db_for_ctx.lock() {
+                        if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                            let color = item.content_type == ContentType::Color;
+                            let hex = color && is_hex_format(&item.full_text);
+                            let img = item.content_type == ContentType::Image;
+                            let fav = item.is_favorite;
+                            (color, hex, img, fav)
+                        } else {
+                            (false, false, false, false)
+                        }
+                    } else {
+                        (false, false, false, false)
+                    };
+
+                // Get cursor position in screen coordinates, convert to window-relative
+                let (cursor_x, cursor_y) = get_cursor_pos();
+                let pos = app.window().position();
+                let scale = app.window().scale_factor();
+                let client_x = (cursor_x as f32 - pos.x as f32) / scale;
+                let client_y = (cursor_y as f32 - pos.y as f32) / scale;
+                app.set_context_menu_x(client_x);
+                app.set_context_menu_y(client_y);
+
+                app.set_context_menu_item_id(id);
+                app.set_context_menu_is_color(is_color);
+                app.set_context_menu_is_hex(is_hex);
+                app.set_context_menu_is_image(is_image);
+                app.set_context_menu_is_favorite(is_favorite);
+                app.set_context_menu_visible(true);
+            }
+        });
+
+        let app_for_hide_ctx = app.clone();
+        slint_app.on_hide_context_menu(move || {
+            if let Some(app) = app_for_hide_ctx.upgrade() {
+                app.set_context_menu_visible(false);
+            }
+        });
+
+        // Paste as RGB: convert HEX color to rgb(r,g,b) format and paste
+        let db_for_rgb = db.clone();
+        let app_for_rgb = app.clone();
+        slint_app.on_paste_as_rgb(move |id| {
+            if let Ok(db) = db_for_rgb.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    if let Some(color) = detect_color(&item.full_text) {
+                        let rgb_text = color.to_rgb();
+                        if let Ok(ctx) = ClipboardContext::new() {
+                            let _ = Clipboard::set_text(&ctx, rgb_text);
+                        }
+                    }
+                }
+            }
+            restore_paste_target();
+            paste_after_delay();
+            if let Some(app) = app_for_rgb.upgrade() {
+                app.set_context_menu_visible(false);
+            }
+        });
+
+        // Paste as HEX: convert RGB color to #RRGGBB format and paste
+        let db_for_hex = db.clone();
+        let app_for_hex = app.clone();
+        slint_app.on_paste_as_hex(move |id| {
+            if let Ok(db) = db_for_hex.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    if let Some(color) = detect_color(&item.full_text) {
+                        let hex_text = color.to_css_hex();
+                        if let Ok(ctx) = ClipboardContext::new() {
+                            let _ = Clipboard::set_text(&ctx, hex_text);
+                        }
+                    }
+                }
+            }
+            restore_paste_target();
+            paste_after_delay();
+            if let Some(app) = app_for_hex.upgrade() {
+                app.set_context_menu_visible(false);
+            }
         });
 
         // Apply initial window position and suppress auto-hide before first show

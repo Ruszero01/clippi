@@ -1,8 +1,9 @@
 //! Clipboard listener trait and platform implementations
 //!
 //! Provides multi-format clipboard monitoring with detection priority:
-//! Image > Link > RichText > PlainText
+//! Image > Link > Color > RichText > PlainText
 
+use crate::core::color::detect_color;
 use crate::core::types::{is_url_or_path, ClipboardItem, ContentType, RichData};
 use crate::core::paths::images_dir;
 use crate::platform::source;
@@ -44,7 +45,7 @@ pub trait ClipboardListener: Send {
 }
 
 /// Shared clipboard content detection (platform-agnostic).
-/// Priority: Image > Link > RichText > PlainText
+/// Priority: Image > Link > Color > RichText > PlainText
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     // Capture source app info at detection time (only once, not on re-copy)
     let source_info = source::get_clipboard_owner_info();
@@ -84,6 +85,14 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
 
         if is_url_or_path(&text) {
             return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref(), None));
+        }
+
+        // Color detection: hash the normalized color value for dedup
+        if let Some(color) = detect_color(&text) {
+            let mut hasher = DefaultHasher::new();
+            color.to_hex_normalized().hash(&mut hasher);
+            let hash = hasher.finish();
+            return Some(ClipboardItem::new_color(0, &text, hash, source_info.as_ref()));
         }
 
         if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {
