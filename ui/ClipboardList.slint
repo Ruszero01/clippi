@@ -39,6 +39,7 @@ export component ClipboardList inherits Rectangle {
     callback delete-item(int);
     callback update-note(int, string);
     callback show-context-menu(int);
+    callback hide-context-menu();
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #232425 : #ffffff;
@@ -95,6 +96,9 @@ export component ClipboardList inherits Rectangle {
                 color: text-1;
                 single-line: true;
                 text <=> root.search-text;
+                changed has-focus => {
+                    if self.has-focus { root.hide-context-menu(); }
+                }
                 edited => {
                     root.search-keyword(root.search-text);
                 }
@@ -127,7 +131,7 @@ export component ClipboardList inherits Rectangle {
                         ft-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.toggle-filter("plain_text"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("plain_text"); }
                         }
 
                         ft-layout := HorizontalLayout {
@@ -164,7 +168,7 @@ export component ClipboardList inherits Rectangle {
                         fr-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.toggle-filter("rich_text"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("rich_text"); }
                         }
 
                         fr-layout := HorizontalLayout {
@@ -201,7 +205,7 @@ export component ClipboardList inherits Rectangle {
                         fi-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.toggle-filter("image"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("image"); }
                         }
 
                         fi-layout := HorizontalLayout {
@@ -238,7 +242,7 @@ export component ClipboardList inherits Rectangle {
                         fl-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.toggle-filter("link"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("link"); }
                         }
 
                         fl-layout := HorizontalLayout {
@@ -275,7 +279,7 @@ export component ClipboardList inherits Rectangle {
                         fc-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.toggle-filter("color"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("color"); }
                         }
 
                         fc-layout := HorizontalLayout {
@@ -365,6 +369,7 @@ export component ClipboardList inherits Rectangle {
                                     return;
                                 }
                                 search-input.clear-focus();
+                                root.hide-context-menu();
                                 if (root.click-pending && root.last-clicked-id == entry.id) {
                                     root.click-pending = false;
                                     root.last-clicked-id = -1;
