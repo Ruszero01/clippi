@@ -30,6 +30,7 @@ export component ClipboardList inherits Rectangle {
 
     // ========== 选中状态 ==========
     in property <int> selected-count: 0;
+    in-out property <bool> context-menu-is-batch: false;
 
     // ========== 回调 ==========
     callback copy-item(int);
@@ -386,7 +387,16 @@ export component ClipboardList inherits Rectangle {
                                     search-input.clear-focus();
                                     root.click-pending = false;
                                     root.last-clicked-id = -1;
-                                    root.show-context-menu(entry.id);
+                                    if (entry.selected && root.selected-count > 1) {
+                                        // 多选条目上右键 → 批量操作菜单
+                                        root.context-menu-is-batch = true;
+                                        root.show-context-menu(entry.id);
+                                    } else {
+                                        // 非选中条目右键 → 取消选中，单选此条目，普通菜单
+                                        root.select-single(entry.id);
+                                        root.context-menu-is-batch = false;
+                                        root.show-context-menu(entry.id);
+                                    }
                                     return;
                                 }
                                 if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {

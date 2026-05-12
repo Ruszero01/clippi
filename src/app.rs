@@ -11,7 +11,7 @@ use crate::core::types::{is_url_or_path, ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::cursor::get_cursor_pos;
-use crate::platform::paste::{paste_after_delay, restore_paste_target};
+use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
 use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
@@ -146,10 +146,16 @@ impl AppController {
         let db_for_paste = db.clone();
         let plain_flag_for_paste = Arc::clone(&copy_as_plain_text_flag);
         slint_app.on_paste_item(move |id| {
+            let mut expected = String::new();
             if let Ok(db) = db_for_paste.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                    write_item_to_clipboard(&item, plain_flag_for_paste.load(Ordering::Relaxed));
+                    let plain = plain_flag_for_paste.load(Ordering::Relaxed);
+                    expected = item.full_text.clone();
+                    write_item_to_clipboard(&item, plain);
                 }
+            }
+            if !expected.is_empty() {
+                verify_clipboard_content(&expected, 200);
             }
             restore_paste_target();
             paste_after_delay();
@@ -803,14 +809,28 @@ fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_pla
 }
 
 /// Sequential batch paste with clipboard verification and newline separators.
-/// Each item is written to clipboard, verified, then pasted before moving to the next.
-/// Text items get a `\n` separator appended (except the last) so pasted content
-/// is separated by line breaks in the target application.
+/// For each non-first item, a literal `\n` is pasted first to move the cursor to a
+/// new line, then the actual item is written and pasted. This works for all content
+/// types (text, rich text, images) because the newline is a separate paste operation.
 fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_flag: bool) {
     let n = items.len();
     for (i, item) in items.iter().enumerate() {
-        let is_last = i == n - 1;
-        let expected = write_item_for_batch(item, plain_flag, !is_last);
+        // For non-first items, paste a newline to move to the next line.
+        // Uses paste_sync (synchronous) to avoid race: the async paste_after_delay
+        // spawns a thread with 50ms+ delay, meaning the main thread could overwrite
+        // the clipboard before the paste actually fires.
+        if i > 0 {
+            if let Ok(ctx) = ClipboardContext::new() {
+                let _ = Clipboard::set_text(&ctx, "\n".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            restore_paste_target();
+            paste_sync();
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        }
+
+        let expected = item.full_text.clone();
+        write_item_to_clipboard(item, plain_flag);
 
         // Verify clipboard content before pasting (up to 300ms timeout)
         if !verify_clipboard_content(&expected, 300) {
@@ -821,57 +841,10 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         paste_after_delay();
 
         // Wait for target app to process the paste before writing next item
-        if !is_last {
+        if i < n - 1 {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
-}
-
-/// Write item to clipboard for batch paste, optionally appending a line separator.
-/// Returns the plain text that was written (for clipboard verification).
-fn write_item_for_batch(item: &crate::core::types::ClipboardItem, plain_flag: bool, append_newline: bool) -> String {
-    if let Ok(ctx) = ClipboardContext::new() {
-        // Images: no newline appended (image content doesn't benefit from it)
-        if item.content_type == ContentType::Image && !item.image_path.is_empty() {
-            if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
-                let contents = vec![
-                    ClipboardContent::Text(item.full_text.clone()),
-                    ClipboardContent::Image(img_data),
-                    ClipboardContent::Files(vec![item.image_path.clone()]),
-                ];
-                let _ = Clipboard::set(&ctx, contents);
-            }
-            return item.full_text.clone();
-        }
-
-        let text = if append_newline {
-            format!("{}\n", item.full_text)
-        } else {
-            item.full_text.clone()
-        };
-
-        if plain_flag {
-            let _ = Clipboard::set_text(&ctx, text.clone());
-            return text;
-        }
-
-        let mut contents = vec![ClipboardContent::Text(text.clone())];
-        let rich = RichData::from_json(&item.rich_data);
-        if let Some(html) = rich.html {
-            let html_text = if append_newline {
-                format!("{}<br>", html)
-            } else {
-                html
-            };
-            contents.push(ClipboardContent::Html(html_text));
-        }
-        if let Some(rtf) = rich.rtf {
-            contents.push(ClipboardContent::Rtf(rtf));
-        }
-        let _ = Clipboard::set(&ctx, contents);
-        return text;
-    }
-    item.full_text.clone()
 }
 
 /// Poll-read clipboard text until it matches expected or timeout expires.

@@ -12,6 +12,9 @@ export component ContextMenu inherits Rectangle {
     in property <bool> is-hex: false;
     in property <bool> is-image: false;
     in property <bool> is-favorite: false;
+    // 批量模式
+    in property <bool> is-batch: false;
+    in property <int> selected-count: 0;
 
     // 回调
     callback copy-item(int);
@@ -23,6 +26,9 @@ export component ContextMenu inherits Rectangle {
     callback paste-as-rgb(int);
     callback paste-as-hex(int);
     callback start-note-edit(int);
+    callback batch-paste();
+    callback batch-favorite();
+    callback batch-delete();
 
     // 主题色板
     property <color> accent:     dark-mode ? #7ecba3 : #6ab890;
@@ -53,7 +59,7 @@ export component ContextMenu inherits Rectangle {
         spacing: 0px;
 
         // ── 复制 ──
-        row-copy := Rectangle {
+        if !root.is-batch: row-copy := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -93,7 +99,7 @@ export component ContextMenu inherits Rectangle {
         }
 
         // ── 粘贴 ──
-        row-paste := Rectangle {
+        if !root.is-batch: row-paste := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -133,7 +139,7 @@ export component ContextMenu inherits Rectangle {
         }
 
         // ── 颜色转换（仅颜色类型显示） ──
-        if is-color: row-convert := Rectangle {
+        if !root.is-batch && is-color: row-convert := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -177,16 +183,16 @@ export component ContextMenu inherits Rectangle {
         }
 
         // ── 分隔线 ──
-        Rectangle { width: 156px; height: 3px; }
-        Rectangle {
+        if !root.is-batch: Rectangle { width: 156px; height: 3px; }
+        if !root.is-batch: Rectangle {
             width: 156px;
             height: 1px;
             background: sep-line;
         }
-        Rectangle { width: 156px; height: 3px; }
+        if !root.is-batch: Rectangle { width: 156px; height: 3px; }
 
         // ── 编辑 ──
-        if !is-image: row-edit := Rectangle {
+        if !root.is-batch && !is-image: row-edit := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -226,7 +232,7 @@ export component ContextMenu inherits Rectangle {
         }
 
         // ── 备注 ──
-        row-note := Rectangle {
+        if !root.is-batch: row-note := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -266,16 +272,16 @@ export component ContextMenu inherits Rectangle {
         }
 
         // ── 分隔线 ──
-        Rectangle { width: 156px; height: 3px; }
-        Rectangle {
+        if !root.is-batch: Rectangle { width: 156px; height: 3px; }
+        if !root.is-batch: Rectangle {
             width: 156px;
             height: 1px;
             background: sep-line;
         }
-        Rectangle { width: 156px; height: 3px; }
+        if !root.is-batch: Rectangle { width: 156px; height: 3px; }
 
         // ── 收藏 ──
-        row-fav := Rectangle {
+        if !root.is-batch: row-fav := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -315,7 +321,7 @@ export component ContextMenu inherits Rectangle {
         }
 
         // ── 删除 ──
-        row-del := Rectangle {
+        if !root.is-batch: row-del := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
@@ -349,6 +355,138 @@ export component ContextMenu inherits Rectangle {
                     text: "删除";
                     font-size: 13px;
                     color: row-del-ta.has-hover ? danger : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ══════════════════════════════════════════
+        // ── 批量操作菜单（仅在多选时显示） ──
+
+        // ── 批量粘贴 ──
+        if root.is-batch: row-batch-paste := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-bp-ta.has-hover ? btn-hover : transparent;
+
+            row-bp-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    batch-paste();
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e600}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-bp-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "粘贴 " + selected-count + " 条";
+                    font-size: 13px;
+                    color: row-bp-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 分隔线 ──
+        if root.is-batch: Rectangle { width: 156px; height: 3px; }
+        if root.is-batch: Rectangle {
+            width: 156px;
+            height: 1px;
+            background: sep-line;
+        }
+        if root.is-batch: Rectangle { width: 156px; height: 3px; }
+
+        // ── 批量收藏 ──
+        if root.is-batch: row-batch-fav := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-bf-ta.has-hover ? btn-hover : transparent;
+
+            row-bf-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    batch-favorite();
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e630}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-bf-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "批量收藏";
+                    font-size: 13px;
+                    color: row-bf-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 批量删除 ──
+        if root.is-batch: row-batch-del := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-bd-ta.has-hover ? btn-hover : transparent;
+
+            row-bd-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    batch-delete();
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e8b6}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-bd-ta.has-hover ? danger : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "批量删除";
+                    font-size: 13px;
+                    color: row-bd-ta.has-hover ? danger : text-1;
                     vertical-alignment: center;
                 }
             }

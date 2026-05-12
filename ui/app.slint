@@ -54,6 +54,7 @@ export component App inherits Window {
     in-out property <bool> context-menu-is-hex: false;
     in-out property <bool> context-menu-is-image: false;
     in-out property <bool> context-menu-is-favorite: false;
+    in-out property <bool> context-menu-is-batch: false;
 
     // 选中状态
     in-out property <int> selected-count: 0;
@@ -423,6 +424,7 @@ export component App inherits Window {
                     show-context-menu(id) => { root.show-context-menu(id); }
                     hide-context-menu => { root.hide-context-menu(); }
                     selected-count: root.selected-count;
+                    context-menu-is-batch <=> root.context-menu-is-batch;
                     select-single(id) => { root.select-single(id); }
                     toggle-selection(id) => { root.toggle-selection(id); }
                     range-select(id) => { root.range-select(id); }
@@ -505,6 +507,8 @@ export component App inherits Window {
             is-hex: root.context-menu-is-hex;
             is-image: root.context-menu-is-image;
             is-favorite: root.context-menu-is-favorite;
+            is-batch: root.context-menu-is-batch;
+            selected-count: root.selected-count;
 
             copy-item(id) => { root.copy-item(id); }
             paste-item(id) => { root.paste-item(id); }
@@ -518,6 +522,9 @@ export component App inherits Window {
                 root.editing-note-id = id;
                 root.editing-note-text = "";
             }
+            batch-paste => { root.batch-paste(); }
+            batch-favorite => { root.batch-favorite(); }
+            batch-delete => { root.batch-delete(); }
         }
     }
     }
