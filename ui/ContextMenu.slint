@@ -30,22 +30,25 @@ export component ContextMenu inherits Rectangle {
     property <color> text-2:     dark-mode ? #919496 : #7c809a;
     property <color> danger:     #ff5f57;
     property <color> btn-hover:  dark-mode ? #2b2c2d : #f0f1f8;
-    property <color> divider:    dark-mode ? #2b2c2d : #e6e8f0;
+    property <color> divider:    dark-mode ? #3d3e40 : #e0e2ea;
+    property <color> sep-line:   dark-mode ? #ffffff0d : #00000010;
     property <color> surface:    dark-mode ? #2c2d2e : #ffffff;
     property <color> border:     dark-mode ? #3a3b3c : #d0d2de;
 
     width: 164px;
+    height: menu-content.preferred-height;
     x: clamp(menu-x, 4px, container-width - 168px);
     y: clamp(menu-y, 4px, container-height - self.height - 4px);
     border-radius: 8px;
     background: surface;
+    opacity: 0.95;
     border-width: 1px;
-    border-color: border;
+    border-color: dark-mode ? #ffffff14 : #00000012;
     drop-shadow-blur: 12px;
     drop-shadow-color: #00000040;
     drop-shadow-offset-y: 2px;
 
-    VerticalLayout {
+    menu-content := VerticalLayout {
         padding: 4px;
         spacing: 0px;
 
@@ -178,7 +181,7 @@ export component ContextMenu inherits Rectangle {
         Rectangle {
             width: 156px;
             height: 1px;
-            background: divider;
+            background: sep-line;
         }
         Rectangle { width: 156px; height: 3px; }
 
@@ -267,7 +270,7 @@ export component ContextMenu inherits Rectangle {
         Rectangle {
             width: 156px;
             height: 1px;
-            background: divider;
+            background: sep-line;
         }
         Rectangle { width: 156px; height: 3px; }
 
