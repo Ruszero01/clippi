@@ -28,6 +28,9 @@ export component ClipboardList inherits Rectangle {
     in-out property <int> last-clicked-id: -1;
     in-out property <bool> click-pending: false;
 
+    // ========== 选中状态 ==========
+    in property <int> selected-count: 0;
+
     // ========== 回调 ==========
     callback copy-item(int);
     callback paste-item(int);
@@ -40,6 +43,13 @@ export component ClipboardList inherits Rectangle {
     callback update-note(int, string);
     callback show-context-menu(int);
     callback hide-context-menu();
+    callback select-single(int);
+    callback toggle-selection(int);
+    callback range-select(int);
+    callback clear-selection();
+    callback batch-paste();
+    callback batch-favorite();
+    callback batch-delete();
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #232425 : #ffffff;
@@ -63,6 +73,15 @@ export component ClipboardList inherits Rectangle {
     }
 
     background: transparent;
+
+    // 点击空白区域取消所有选中
+    bg-ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            root.clear-selection();
+        }
+    }
 
     VerticalLayout {
         padding-top: 4px;
@@ -351,8 +370,8 @@ export component ClipboardList inherits Rectangle {
                                 96px;
                             border-radius: 10px;
                             background: item-ta.pressed ? surface-press : item-ta.has-hover ? surface-hover : surface;
-                            border-width: 1px;
-                            border-color: divider;
+                            border-width: entry.selected ? 2px : 1px;
+                            border-color: entry.selected ? accent : divider;
                             clip: true;
 
                             drop-shadow-blur: 4px;
@@ -362,29 +381,53 @@ export component ClipboardList inherits Rectangle {
                         item-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => {
-                                if (root.editing-note-id == entry.id) {
-                                    root.update-note(entry.id, root.editing-note-text);
-                                    root.editing-note-id = -1;
-                                    return;
-                                }
-                                search-input.clear-focus();
-                                root.hide-context-menu();
-                                if (root.click-pending && root.last-clicked-id == entry.id) {
-                                    root.click-pending = false;
-                                    root.last-clicked-id = -1;
-                                    root.paste-item(entry.id);
-                                } else {
-                                    root.last-clicked-id = entry.id;
-                                    root.click-pending = true;
-                                }
-                            }
                             pointer-event(event) => {
                                 if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                                     search-input.clear-focus();
                                     root.click-pending = false;
                                     root.last-clicked-id = -1;
                                     root.show-context-menu(entry.id);
+                                    return;
+                                }
+                                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                                    // 工具栏按钮点击冒泡：使用标记值 -2 跳过选中逻辑
+                                    if (root.last-clicked-id == -2) {
+                                        root.last-clicked-id = -1;
+                                        return;
+                                    }
+
+                                    if (root.editing-note-id == entry.id) {
+                                        root.update-note(entry.id, root.editing-note-text);
+                                        root.editing-note-id = -1;
+                                        return;
+                                    }
+                                    search-input.clear-focus();
+                                    root.hide-context-menu();
+
+                                    if (root.click-pending && root.last-clicked-id == entry.id) {
+                                        root.click-pending = false;
+                                        root.last-clicked-id = -1;
+                                        if (root.selected-count > 1) {
+                                            root.batch-paste();
+                                        } else {
+                                            root.paste-item(entry.id);
+                                        }
+                                        return;
+                                    }
+
+                                    if (event.modifiers.control) {
+                                        root.toggle-selection(entry.id);
+                                    } else if (event.modifiers.shift) {
+                                        root.range-select(entry.id);
+                                    } else if (!entry.selected) {
+                                        // 仅点击未选中条目时触发单选；已选中条目保持选中以便双击批量粘贴
+                                        root.select-single(entry.id);
+                                    }
+
+                                    // 强制重启双击计时器
+                                    root.click-pending = false;
+                                    root.last-clicked-id = entry.id;
+                                    root.click-pending = true;
                                 }
                             }
 
@@ -652,8 +695,8 @@ export component ClipboardList inherits Rectangle {
                                 }
                             }
 
-                            // ── 悬浮工具栏 ──
-                            if item-ta.has-hover && root.editing-note-id != entry.id : Rectangle {
+                            // ── 单选悬浮工具栏（选中数 <= 1 时显示） ──
+                            if item-ta.has-hover && root.editing-note-id != entry.id && root.selected-count <= 1 : Rectangle {
                                 x: parent.width - self.width - 4px;
                                 y: 3px;
                                 height: 22px;
@@ -679,7 +722,7 @@ export component ClipboardList inherits Rectangle {
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -1;
+                                                root.last-clicked-id = -2;
                                                 root.copy-item(entry.id);
                                             }
                                         }
@@ -705,7 +748,7 @@ export component ClipboardList inherits Rectangle {
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -1;
+                                                root.last-clicked-id = -2;
                                                 root.edit-item(entry.id);
                                             }
                                         }
@@ -731,7 +774,7 @@ export component ClipboardList inherits Rectangle {
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -1;
+                                                root.last-clicked-id = -2;
                                                 root.editing-note-text = entry.note;
                                                 root.editing-note-id = entry.id;
                                             }
@@ -758,7 +801,7 @@ export component ClipboardList inherits Rectangle {
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -1;
+                                                root.last-clicked-id = -2;
                                                 root.toggle-favorite(entry.id);
                                             }
                                         }
@@ -784,7 +827,7 @@ export component ClipboardList inherits Rectangle {
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -1;
+                                                root.last-clicked-id = -2;
                                                 root.delete-item(entry.id);
                                             }
                                         }
@@ -798,6 +841,121 @@ export component ClipboardList inherits Rectangle {
                                             color: del-ta.has-hover ? danger : text-2;
                                         }
                                     }
+                                }
+                            }
+
+                            // ── 批量操作悬浮工具栏（选中数 > 1 且有选中项被悬停时显示） ──
+                            if item-ta.has-hover && root.editing-note-id != entry.id && root.selected-count > 1 && entry.selected : Rectangle {
+                                x: parent.width - self.width - 4px;
+                                y: 3px;
+                                height: 22px;
+                                width: bb-inner.preferred-width + 10px;
+                                border-radius: 6px;
+                                background: dark-mode ? #232425e8 : #ffffffe8;
+                                border-width: 1px;
+                                border-color: dark-mode ? #ffffff20 : #0000000c;
+
+                                bb-inner := HorizontalLayout {
+                                    x: 5px;
+                                    y: (parent.height - self.height) / 2;
+                                    spacing: 2px;
+
+                                    // 批量粘贴
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        bb-paste-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -2;
+                                                root.batch-paste();
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e600}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: bb-paste-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 批量收藏
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        bb-fav-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -2;
+                                                root.batch-favorite();
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e630}";
+                                            font-family: "iconfont";
+                                            font-size: 11px;
+                                            color: bb-fav-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 批量删除
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        bb-del-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.last-clicked-id = -2;
+                                                root.batch-delete();
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e8b6}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: bb-del-ta.has-hover ? danger : text-2;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 选中序号徽章（置于顶层，缩小尺寸）
+                            if entry.selected && root.selected-count > 1 : Rectangle {
+                                x: 2px;
+                                y: 2px;
+                                width: 12px;
+                                height: 12px;
+                                border-radius: 3px;
+                                background: accent;
+
+                                Text {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    text: entry.selection-order + 1;
+                                    font-size: 7px;
+                                    font-weight: 700;
+                                    color: #ffffff;
                                 }
                             }
 

@@ -18,7 +18,8 @@ use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::tray::TrayService;
 use crate::App;
-use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent};
+use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent, common::RustImageData};
+use clipboard_rs::common::RustImage;
 use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,6 +61,8 @@ impl AppController {
 
         // Create clipboard service (sets up model in new())
         let clipboard_shared = ClipboardShared::new();
+        let batch_pasting_flag = clipboard_shared.batch_pasting.clone();
+        let clear_selection_flag = clipboard_shared.clear_selection_requested.clone();
         let mut clipboard_service = ClipboardService::new(
             clipboard_shared,
             db.clone(),
@@ -590,6 +593,83 @@ impl AppController {
             }
         });
 
+        // ── Selection callbacks ──
+
+        let looper_for_select = Arc::clone(&looper);
+        slint_app.on_select_single(move |id| {
+            let _ = looper_for_select.try_with_clipboard_service(|cs| {
+                cs.select_single(id);
+            });
+        });
+
+        let looper_for_toggle = Arc::clone(&looper);
+        slint_app.on_toggle_selection(move |id| {
+            let _ = looper_for_toggle.try_with_clipboard_service(|cs| {
+                cs.toggle_selection(id);
+            });
+        });
+
+        let looper_for_range = Arc::clone(&looper);
+        slint_app.on_range_select(move |id| {
+            let _ = looper_for_range.try_with_clipboard_service(|cs| {
+                cs.range_select(id);
+            });
+        });
+
+        let looper_for_clear_sel = Arc::clone(&looper);
+        slint_app.on_clear_selection(move || {
+            let _ = looper_for_clear_sel.try_with_clipboard_service(|cs| {
+                cs.clear_selection();
+            });
+        });
+
+        // ── Batch operation callbacks ──
+
+        // Batch paste: paste selected items sequentially in selection order
+        let looper_for_batch_paste = Arc::clone(&looper);
+        let plain_flag_for_batch = Arc::clone(&copy_as_plain_text_flag);
+        let bp_flag = batch_pasting_flag.clone();
+        let clear_sel_flag = clear_selection_flag.clone();
+        slint_app.on_batch_paste(move || {
+            let items = looper_for_batch_paste.try_with_clipboard_service(|cs| {
+                cs.get_selected_items()
+            }).unwrap_or_default();
+
+            if items.is_empty() {
+                return;
+            }
+
+            let plain_flag = plain_flag_for_batch.load(Ordering::Relaxed);
+            let owned_items: Vec<_> = items.into_iter().collect();
+            let bp = bp_flag.clone();
+            let clear_sel = clear_sel_flag.clone();
+
+            std::thread::spawn(move || {
+                bp.store(true, Ordering::SeqCst);
+                batch_paste_sequential(&owned_items, plain_flag);
+                bp.store(false, Ordering::SeqCst);
+
+                // Signal looper to clear selection on next poll (main thread)
+                clear_sel.store(true, Ordering::SeqCst);
+            });
+        });
+
+        // Batch toggle favorite
+        let looper_for_batch_fav = Arc::clone(&looper);
+        slint_app.on_batch_favorite(move || {
+            let _ = looper_for_batch_fav.try_with_clipboard_service(|cs| {
+                cs.batch_toggle_favorite();
+            });
+        });
+
+        // Batch delete
+        let looper_for_batch_del = Arc::clone(&looper);
+        slint_app.on_batch_delete(move || {
+            let _ = looper_for_batch_del.try_with_clipboard_service(|cs| {
+                cs.batch_delete();
+            });
+        });
+
         // Paste as RGB: convert HEX color to rgb(r,g,b) format and paste
         let db_for_rgb = db.clone();
         let app_for_rgb = app.clone();
@@ -692,9 +772,21 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
 /// Write a clipboard item's content to the system clipboard.
 /// When copy_as_plain_text is true, only plain text is written; otherwise
 /// HTML and RTF formats are also restored from rich_data.
+/// For images, the PNG file is loaded and written as an image format.
 fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_plain_text: bool) {
     if let Ok(ctx) = ClipboardContext::new() {
-        if copy_as_plain_text {
+        if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+            // Write image + file path text
+            if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
+                let mut contents = vec![
+                    ClipboardContent::Text(item.full_text.clone()),
+                    ClipboardContent::Image(img_data),
+                ];
+                // Also add Files for drag-and-drop compatibility
+                contents.push(ClipboardContent::Files(vec![item.image_path.clone()]));
+                let _ = Clipboard::set(&ctx, contents);
+            }
+        } else if copy_as_plain_text {
             let _ = Clipboard::set_text(&ctx, item.full_text.clone());
         } else {
             let mut contents = vec![ClipboardContent::Text(item.full_text.clone())];
@@ -707,5 +799,95 @@ fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_pla
             }
             let _ = Clipboard::set(&ctx, contents);
         }
+    }
+}
+
+/// Sequential batch paste with clipboard verification and newline separators.
+/// Each item is written to clipboard, verified, then pasted before moving to the next.
+/// Text items get a `\n` separator appended (except the last) so pasted content
+/// is separated by line breaks in the target application.
+fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_flag: bool) {
+    let n = items.len();
+    for (i, item) in items.iter().enumerate() {
+        let is_last = i == n - 1;
+        let expected = write_item_for_batch(item, plain_flag, !is_last);
+
+        // Verify clipboard content before pasting (up to 300ms timeout)
+        if !verify_clipboard_content(&expected, 300) {
+            eprintln!("[WARN] batch_paste: clipboard verification timed out for item {}", item.id);
+        }
+
+        restore_paste_target();
+        paste_after_delay();
+
+        // Wait for target app to process the paste before writing next item
+        if !is_last {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+/// Write item to clipboard for batch paste, optionally appending a line separator.
+/// Returns the plain text that was written (for clipboard verification).
+fn write_item_for_batch(item: &crate::core::types::ClipboardItem, plain_flag: bool, append_newline: bool) -> String {
+    if let Ok(ctx) = ClipboardContext::new() {
+        // Images: no newline appended (image content doesn't benefit from it)
+        if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+            if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
+                let contents = vec![
+                    ClipboardContent::Text(item.full_text.clone()),
+                    ClipboardContent::Image(img_data),
+                    ClipboardContent::Files(vec![item.image_path.clone()]),
+                ];
+                let _ = Clipboard::set(&ctx, contents);
+            }
+            return item.full_text.clone();
+        }
+
+        let text = if append_newline {
+            format!("{}\n", item.full_text)
+        } else {
+            item.full_text.clone()
+        };
+
+        if plain_flag {
+            let _ = Clipboard::set_text(&ctx, text.clone());
+            return text;
+        }
+
+        let mut contents = vec![ClipboardContent::Text(text.clone())];
+        let rich = RichData::from_json(&item.rich_data);
+        if let Some(html) = rich.html {
+            let html_text = if append_newline {
+                format!("{}<br>", html)
+            } else {
+                html
+            };
+            contents.push(ClipboardContent::Html(html_text));
+        }
+        if let Some(rtf) = rich.rtf {
+            contents.push(ClipboardContent::Rtf(rtf));
+        }
+        let _ = Clipboard::set(&ctx, contents);
+        return text;
+    }
+    item.full_text.clone()
+}
+
+/// Poll-read clipboard text until it matches expected or timeout expires.
+fn verify_clipboard_content(expected: &str, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        if let Ok(ctx) = ClipboardContext::new() {
+            if let Ok(text) = ctx.get_text() {
+                if text == expected {
+                    return true;
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }

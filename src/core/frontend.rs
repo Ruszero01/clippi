@@ -138,6 +138,9 @@ impl Frontend {
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.set_pinned(false);
+            // Reset double-click state so stale state doesn't eat the first click
+            app.set_click_pending(false);
+            app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
             window.set_size(LogicalSize::new(320.0, 480.0));
@@ -160,6 +163,8 @@ impl Frontend {
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.set_pinned(false);
+            app.set_click_pending(false);
+            app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
             window.set_size(LogicalSize::new(320.0, 480.0));
@@ -178,6 +183,8 @@ impl Frontend {
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             app.set_pinned(false);
+            app.set_click_pending(false);
+            app.set_last_clicked_id(-1);
             let t = app.get_scroll_trigger();
             app.set_scroll_trigger(t + 1);
         }

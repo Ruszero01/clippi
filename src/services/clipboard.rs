@@ -12,6 +12,7 @@ use base64::Engine;
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 
 /// Maximum items to keep in memory
 const MAX_ITEMS: usize = 100;
@@ -25,6 +26,8 @@ pub struct ClipboardService {
     sort_by_created: bool,
     copy_as_plain_text: bool,
     filters: ClipboardFilters,
+    selected_ids: Vec<i32>,
+    anchor_id: i32,
 }
 
 impl ClipboardService {
@@ -42,6 +45,8 @@ impl ClipboardService {
             sort_by_created: false,
             copy_as_plain_text: false,
             filters: ClipboardFilters::default(),
+            selected_ids: Vec::new(),
+            anchor_id: -1,
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -82,6 +87,9 @@ impl ClipboardService {
 
     fn refresh_with_current_filter(&mut self) {
         self.model.clear();
+        // 筛选变化时清除选中状态
+        self.selected_ids.clear();
+        self.anchor_id = -1;
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
         let items = self.db.lock().expect("db lock poisoned")
             .load_filtered(&self.filters, MAX_ITEMS, order_by)
@@ -91,6 +99,7 @@ impl ClipboardService {
         }
         if let Some(app) = self.app.upgrade() {
             app.set_item_count(self.model.row_count() as i32);
+            app.set_selected_count(0);
         }
     }
 
@@ -189,10 +198,157 @@ impl ClipboardService {
     pub fn shared(&self) -> &ClipboardShared {
         &self.shared
     }
+
+    // ── Selection management ──
+
+    /// Select a single item; deselect all others
+    pub fn select_single(&mut self, id: i32) {
+        self.selected_ids.clear();
+        self.selected_ids.push(id);
+        self.anchor_id = id;
+        self.sync_selection_to_model();
+    }
+
+    /// Toggle selection of an item (Ctrl+click)
+    pub fn toggle_selection(&mut self, id: i32) {
+        if let Some(pos) = self.selected_ids.iter().position(|&x| x == id) {
+            self.selected_ids.remove(pos);
+        } else {
+            self.selected_ids.push(id);
+            self.anchor_id = id;
+        }
+        self.sync_selection_to_model();
+    }
+
+    /// Range select from anchor to given id (Shift+click)
+    pub fn range_select(&mut self, id: i32) {
+        // Fall back to single select if no anchor exists
+        if self.anchor_id < 0 || self.selected_ids.is_empty() {
+            self.select_single(id);
+            return;
+        }
+        let mut anchor_idx: Option<usize> = None;
+        let mut clicked_idx: Option<usize> = None;
+        for i in 0..self.model.row_count() {
+            if let Some(entry) = self.model.row_data(i) {
+                if entry.id == self.anchor_id {
+                    anchor_idx = Some(i);
+                }
+                if entry.id == id {
+                    clicked_idx = Some(i);
+                }
+            }
+        }
+
+        if let (Some(a), Some(c)) = (anchor_idx, clicked_idx) {
+            self.selected_ids.clear();
+            if a <= c {
+                for i in a..=c {
+                    if let Some(entry) = self.model.row_data(i) {
+                        self.selected_ids.push(entry.id);
+                    }
+                }
+            } else {
+                for i in (c..=a).rev() {
+                    if let Some(entry) = self.model.row_data(i) {
+                        self.selected_ids.push(entry.id);
+                    }
+                }
+            }
+        }
+        self.sync_selection_to_model();
+    }
+
+    /// Clear all selection
+    pub fn clear_selection(&mut self) {
+        self.selected_ids.clear();
+        self.anchor_id = -1;
+        self.sync_selection_to_model();
+    }
+
+    /// Sync in-memory selection state to model `selected` / `selection_order` fields
+    fn sync_selection_to_model(&self) {
+        // Set count BEFORE model updates so Slint bindings use the correct value
+        // when re-evaluating visibility of selection-dependent elements (e.g. badge).
+        if let Some(app) = self.app.upgrade() {
+            app.set_selected_count(self.selected_ids.len() as i32);
+        }
+        for i in 0..self.model.row_count() {
+            if let Some(mut entry) = self.model.row_data(i) {
+                let pos = self.selected_ids.iter().position(|&x| x == entry.id);
+                entry.selected = pos.is_some();
+                entry.selection_order = pos.map(|p| p as i32).unwrap_or(-1);
+                self.model.set_row_data(i, entry);
+            }
+        }
+    }
+
+    /// Get selected items in selection order
+    pub fn get_selected_items(&self) -> Vec<crate::core::types::ClipboardItem> {
+        let db = self.db.lock().expect("db lock poisoned");
+        self.selected_ids
+            .iter()
+            .filter_map(|&id| db.get_by_id(id as i64).ok().flatten())
+            .collect()
+    }
+
+    /// Batch toggle favorite on all selected items
+    pub fn batch_toggle_favorite(&mut self) {
+        let needs_full_refresh = self.filters.is_favorites_active();
+        {
+            let db = self.db.lock().expect("db lock poisoned");
+            for &id in &self.selected_ids {
+                let _ = db.toggle_favorite(id as i64);
+            }
+        }
+        if needs_full_refresh {
+            self.refresh_with_current_filter();
+            self.clear_selection();
+        } else {
+            for &id in &self.selected_ids {
+                self.refresh_row(id);
+            }
+            // Re-sync selection after refresh
+            self.sync_selection_to_model();
+        }
+    }
+
+    /// Batch delete all selected items
+    pub fn batch_delete(&mut self) {
+        {
+            let db = self.db.lock().expect("db lock poisoned");
+            for &id in &self.selected_ids {
+                let _ = db.delete_item(id as i64);
+            }
+        }
+        // Remove from model (iterate in reverse to maintain indices)
+        let ids = self.selected_ids.clone();
+        self.selected_ids.clear();
+        self.anchor_id = -1;
+        for id in ids {
+            for i in 0..self.model.row_count() {
+                if let Some(entry) = self.model.row_data(i) {
+                    if entry.id == id {
+                        self.model.remove(i);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
+            app.set_selected_count(0);
+        }
+    }
 }
 
 impl Pollable for ClipboardService {
     fn poll(&mut self) {
+        // Check if batch paste completed and wants selection cleared
+        if self.shared.clear_selection_requested.swap(false, Ordering::SeqCst) {
+            self.clear_selection();
+        }
+
         let pending = {
             let mut p = self.shared.pending.lock().expect("clipboard pending lock poisoned");
             p.drain(..).collect::<Vec<_>>()
@@ -301,5 +457,7 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         source_app_icon_path: SharedString::from(source_icon_path),
         source_app_icon_image: source_icon_image,
         color_swatch: color_swatch,
+        selected: false,
+        selection_order: -1,
     }
 }

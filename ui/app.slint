@@ -3,6 +3,7 @@ import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
 import { EditPanel } from "EditPanel.slint";
 import { ContextMenu } from "ContextMenu.slint";
+
 import { Palette } from "std-widgets.slint";
 
 export component App inherits Window {
@@ -53,6 +54,9 @@ export component App inherits Window {
     in-out property <bool> context-menu-is-hex: false;
     in-out property <bool> context-menu-is-image: false;
     in-out property <bool> context-menu-is-favorite: false;
+
+    // 选中状态
+    in-out property <int> selected-count: 0;
 
     // 编辑视图状态
     in property <string> editing-content: "";
@@ -113,6 +117,13 @@ export component App inherits Window {
     callback hide-context-menu();
     callback paste-as-rgb(int);
     callback paste-as-hex(int);
+    callback select-single(int);
+    callback toggle-selection(int);
+    callback range-select(int);
+    callback clear-selection();
+    callback batch-paste();
+    callback batch-favorite();
+    callback batch-delete();
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -137,16 +148,13 @@ export component App inherits Window {
         Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
     }
 
-    // 双击检测定时器
+    // 双击检测定时器（200ms 窗口，每次点击强制重启）
     double-click-timer := Timer {
-        interval: 300ms;
+        interval: 200ms;
         running: root.click-pending;
         triggered => {
             root.click-pending = false;
-            if (root.last-clicked-id >= 0) {
-                root.copy-item(root.last-clicked-id);
-                root.last-clicked-id = -1;
-            }
+            root.last-clicked-id = -1;
         }
     }
 
@@ -389,8 +397,8 @@ export component App inherits Window {
                     dark-mode: root.dark-mode;
                     items: root.clipboard-items;
                     item-count: root.item-count;
-                    last-clicked-id: root.last-clicked-id;
-                    click-pending: root.click-pending;
+                    last-clicked-id <=> root.last-clicked-id;
+                    click-pending <=> root.click-pending;
                     filter-plain-text: root.filter-plain-text;
                     filter-rich-text: root.filter-rich-text;
                     filter-image: root.filter-image;
@@ -414,6 +422,14 @@ export component App inherits Window {
                     update-note(id, text) => { root.update-note(id, text); }
                     show-context-menu(id) => { root.show-context-menu(id); }
                     hide-context-menu => { root.hide-context-menu(); }
+                    selected-count: root.selected-count;
+                    select-single(id) => { root.select-single(id); }
+                    toggle-selection(id) => { root.toggle-selection(id); }
+                    range-select(id) => { root.range-select(id); }
+                    clear-selection => { root.clear-selection(); }
+                    batch-paste => { root.batch-paste(); }
+                    batch-favorite => { root.batch-favorite(); }
+                    batch-delete => { root.batch-delete(); }
                 }
 
                 EditPanel {

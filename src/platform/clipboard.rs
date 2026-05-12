@@ -21,12 +21,16 @@ use std::time::{Duration, Instant};
 #[derive(Clone)]
 pub struct ClipboardShared {
     pub pending: Arc<Mutex<Vec<ClipboardItem>>>,
+    pub batch_pasting: Arc<AtomicBool>,
+    pub clear_selection_requested: Arc<AtomicBool>,
 }
 
 impl ClipboardShared {
     pub fn new() -> Self {
         Self {
             pending: Arc::new(Mutex::new(Vec::new())),
+            batch_pasting: Arc::new(AtomicBool::new(false)),
+            clear_selection_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -155,6 +159,7 @@ impl ClipboardListener for PollingClipboardListener {
         let running = self.running.clone();
         let startup_end = self.startup_end.clone();
         let pending = shared.pending.clone();
+        let batch_pasting = shared.batch_pasting.clone();
 
         thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
@@ -162,6 +167,12 @@ impl ClipboardListener for PollingClipboardListener {
                     .lock()
                     .unwrap()
                     .map_or(false, |end| end.elapsed().as_millis() > 500);
+
+                // 批量粘贴期间跳过记录，避免产生冗余条目
+                if batch_pasting.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
 
                 if let Ok(ctx) = ClipboardContext::new() {
                     let mut hasher = DefaultHasher::new();
