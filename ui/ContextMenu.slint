@@ -1,0 +1,354 @@
+export component ContextMenu inherits Rectangle {
+    // 定位
+    in property <length> menu-x: 0px;
+    in property <length> menu-y: 0px;
+    in property <length> container-width: 0px;
+    in property <length> container-height: 0px;
+    // 主题
+    in property <bool> dark-mode: false;
+    // 条目属性
+    in property <int> item-id: -1;
+    in property <bool> is-color: false;
+    in property <bool> is-hex: false;
+    in property <bool> is-image: false;
+    in property <bool> is-favorite: false;
+
+    // 回调
+    callback copy-item(int);
+    callback paste-item(int);
+    callback edit-item(int);
+    callback toggle-favorite(int);
+    callback delete-item(int);
+    callback hide-menu();
+    callback paste-as-rgb(int);
+    callback paste-as-hex(int);
+    callback start-note-edit(int);
+
+    // 主题色板
+    property <color> accent:     dark-mode ? #7ecba3 : #6ab890;
+    property <color> text-1:     dark-mode ? #eaebec : #1a1c2e;
+    property <color> text-2:     dark-mode ? #919496 : #7c809a;
+    property <color> danger:     #ff5f57;
+    property <color> btn-hover:  dark-mode ? #2b2c2d : #f0f1f8;
+    property <color> divider:    dark-mode ? #2b2c2d : #e6e8f0;
+    property <color> surface:    dark-mode ? #2c2d2e : #ffffff;
+    property <color> border:     dark-mode ? #3a3b3c : #d0d2de;
+
+    width: 164px;
+    x: clamp(menu-x, 4px, container-width - 168px);
+    y: clamp(menu-y, 4px, container-height - self.height - 4px);
+    border-radius: 8px;
+    background: surface;
+    border-width: 1px;
+    border-color: border;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000040;
+    drop-shadow-offset-y: 2px;
+
+    VerticalLayout {
+        padding: 4px;
+        spacing: 0px;
+
+        // ── 复制 ──
+        row-copy := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-copy-ta.has-hover ? btn-hover : transparent;
+
+            row-copy-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    copy-item(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e600}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-copy-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "复制";
+                    font-size: 13px;
+                    color: row-copy-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 粘贴 ──
+        row-paste := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-paste-ta.has-hover ? btn-hover : transparent;
+
+            row-paste-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    paste-item(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e600}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-paste-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "粘贴";
+                    font-size: 13px;
+                    color: row-paste-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 颜色转换（仅颜色类型显示） ──
+        if is-color: row-convert := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-convert-ta.has-hover ? btn-hover : transparent;
+
+            row-convert-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    if is-hex {
+                        paste-as-rgb(item-id);
+                    } else {
+                        paste-as-hex(item-id);
+                    }
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e610}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-convert-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: is-hex ? "粘贴为 RGB" : "粘贴为 HEX";
+                    font-size: 13px;
+                    color: row-convert-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 分隔线 ──
+        Rectangle { width: 156px; height: 3px; }
+        Rectangle {
+            width: 156px;
+            height: 1px;
+            background: divider;
+        }
+        Rectangle { width: 156px; height: 3px; }
+
+        // ── 编辑 ──
+        if !is-image: row-edit := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-edit-ta.has-hover ? btn-hover : transparent;
+
+            row-edit-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    edit-item(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e648}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-edit-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "编辑";
+                    font-size: 13px;
+                    color: row-edit-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 备注 ──
+        row-note := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-note-ta.has-hover ? btn-hover : transparent;
+
+            row-note-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    start-note-edit(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e606}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-note-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "备注";
+                    font-size: 13px;
+                    color: row-note-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 分隔线 ──
+        Rectangle { width: 156px; height: 3px; }
+        Rectangle {
+            width: 156px;
+            height: 1px;
+            background: divider;
+        }
+        Rectangle { width: 156px; height: 3px; }
+
+        // ── 收藏 ──
+        row-fav := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-fav-ta.has-hover ? btn-hover : transparent;
+
+            row-fav-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    toggle-favorite(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: is-favorite ? "\u{e630}" : "\u{e68d}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: is-favorite ? accent : (row-fav-ta.has-hover ? accent : text-2);
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: is-favorite ? "取消收藏" : "收藏";
+                    font-size: 13px;
+                    color: row-fav-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 删除 ──
+        row-del := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-del-ta.has-hover ? btn-hover : transparent;
+
+            row-del-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    delete-item(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e8b6}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-del-ta.has-hover ? danger : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "删除";
+                    font-size: 13px;
+                    color: row-del-ta.has-hover ? danger : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

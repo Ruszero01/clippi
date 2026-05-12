@@ -2,6 +2,7 @@ import { ClipboardEntry } from "types.slint";
 import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
 import { EditPanel } from "EditPanel.slint";
+import { ContextMenu } from "ContextMenu.slint";
 import { Palette } from "std-widgets.slint";
 
 export component App inherits Window {
@@ -477,324 +478,29 @@ export component App inherits Window {
         }
 
         // ========== 右键菜单浮层 ==========
-        if root.context-menu-visible: cm-panel := Rectangle {
-            x: clamp(root.context-menu-x, 4px, parent.width - 168px);
-            y: clamp(root.context-menu-y, 4px, parent.height - self.height - 4px);
-            width: 164px;
-            border-radius: 8px;
-            background: dark-mode ? #2c2d2e : #ffffff;
-            border-width: 1px;
-            border-color: dark-mode ? #3a3b3c : #d0d2de;
-            drop-shadow-blur: 12px;
-            drop-shadow-color: #00000040;
-            drop-shadow-offset-y: 2px;
+        if root.context-menu-visible: ContextMenu {
+            menu-x: root.context-menu-x;
+            menu-y: root.context-menu-y;
+            container-width: parent.width;
+            container-height: parent.height;
+            dark-mode: root.dark-mode;
+            item-id: root.context-menu-item-id;
+            is-color: root.context-menu-is-color;
+            is-hex: root.context-menu-is-hex;
+            is-image: root.context-menu-is-image;
+            is-favorite: root.context-menu-is-favorite;
 
-            VerticalLayout {
-                padding: 4px;
-                spacing: 0px;
-
-                // ── 复制 ──
-                cm-copy := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-copy-ta.has-hover ? btn-hover : transparent;
-
-                    cm-copy-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.copy-item(root.context-menu-item-id);
-                            root.hide-context-menu();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: "\u{e600}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: cm-copy-ta.has-hover ? accent : text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "复制";
-                            font-size: 13px;
-                            color: cm-copy-ta.has-hover ? accent : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // ── 粘贴 ──
-                cm-paste := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-paste-ta.has-hover ? btn-hover : transparent;
-
-                    cm-paste-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.paste-item(root.context-menu-item-id);
-                            root.hide-context-menu();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: "\u{e600}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: cm-paste-ta.has-hover ? accent : text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "粘贴";
-                            font-size: 13px;
-                            color: cm-paste-ta.has-hover ? accent : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // ── 颜色转换（仅颜色类型显示） ──
-                if root.context-menu-is-color: cm-convert := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-convert-ta.has-hover ? btn-hover : transparent;
-
-                    cm-convert-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            if root.context-menu-is-hex {
-                                root.paste-as-rgb(root.context-menu-item-id);
-                            } else {
-                                root.paste-as-hex(root.context-menu-item-id);
-                            }
-                            root.hide-context-menu();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: "\u{e610}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: cm-convert-ta.has-hover ? accent : text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: root.context-menu-is-hex ? "粘贴为 RGB" : "粘贴为 HEX";
-                            font-size: 13px;
-                            color: cm-convert-ta.has-hover ? accent : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // ── 分隔线 ──
-                Rectangle { width: 156px; height: 3px; }
-                Rectangle {
-                    width: 156px;
-                    height: 1px;
-                    background: divider;
-                }
-                Rectangle { width: 156px; height: 3px; }
-
-                // ── 编辑 ──
-                if !root.context-menu-is-image: cm-edit := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-edit-ta.has-hover ? btn-hover : transparent;
-
-                    cm-edit-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.edit-item(root.context-menu-item-id);
-                            root.hide-context-menu();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: "\u{e648}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: cm-edit-ta.has-hover ? accent : text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "编辑";
-                            font-size: 13px;
-                            color: cm-edit-ta.has-hover ? accent : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // ── 备注 ──
-                cm-note := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-note-ta.has-hover ? btn-hover : transparent;
-
-                    cm-note-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.hide-context-menu();
-                            root.editing-note-id = root.context-menu-item-id;
-                            root.editing-note-text = "";
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: "\u{e606}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: cm-note-ta.has-hover ? accent : text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "备注";
-                            font-size: 13px;
-                            color: cm-note-ta.has-hover ? accent : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // ── 分隔线 ──
-                Rectangle { width: 156px; height: 3px; }
-                Rectangle {
-                    width: 156px;
-                    height: 1px;
-                    background: divider;
-                }
-                Rectangle { width: 156px; height: 3px; }
-
-                // ── 收藏 ──
-                cm-fav := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-fav-ta.has-hover ? btn-hover : transparent;
-
-                    cm-fav-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.toggle-favorite(root.context-menu-item-id);
-                            root.hide-context-menu();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: root.context-menu-is-favorite ? "\u{e630}" : "\u{e68d}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: root.context-menu-is-favorite ? accent : (cm-fav-ta.has-hover ? accent : text-2);
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: root.context-menu-is-favorite ? "取消收藏" : "收藏";
-                            font-size: 13px;
-                            color: cm-fav-ta.has-hover ? accent : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // ── 删除 ──
-                cm-del := Rectangle {
-                    width: 156px;
-                    height: 30px;
-                    border-radius: 5px;
-                    background: cm-del-ta.has-hover ? btn-hover : transparent;
-
-                    cm-del-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.delete-item(root.context-menu-item-id);
-                            root.hide-context-menu();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        height: 30px;
-                        alignment: start;
-
-                        Text {
-                            text: "\u{e8b6}";
-                            font-family: "iconfont";
-                            font-size: 13px;
-                            color: cm-del-ta.has-hover ? danger : text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "删除";
-                            font-size: 13px;
-                            color: cm-del-ta.has-hover ? danger : text-1;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
+            copy-item(id) => { root.copy-item(id); }
+            paste-item(id) => { root.paste-item(id); }
+            edit-item(id) => { root.edit-item(id); }
+            toggle-favorite(id) => { root.toggle-favorite(id); }
+            delete-item(id) => { root.delete-item(id); }
+            hide-menu => { root.hide-context-menu(); }
+            paste-as-rgb(id) => { root.paste-as-rgb(id); }
+            paste-as-hex(id) => { root.paste-as-hex(id); }
+            start-note-edit(id) => {
+                root.editing-note-id = id;
+                root.editing-note-text = "";
             }
         }
     }
