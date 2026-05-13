@@ -377,13 +377,23 @@ impl Pollable for ClipboardService {
                 }
 
                 if let Ok(Some(existing)) = db.get_by_hash(item.content_hash) {
-                    let existing_idx = (0..self.model.row_count()).position(|i| {
-                        self.model.row_data(i).map(|e| e.id as i64 == existing.id).unwrap_or(false)
-                    });
-                    if let Some(idx) = existing_idx {
-                        self.model.remove(idx);
+                    if self.sort_by_created {
+                        // created_at doesn't change on dedup, so item should stay
+                        // in place. Just update the row with fresh timestamp/label.
+                        if let Some(idx) = (0..self.model.row_count()).position(|i| {
+                            self.model.row_data(i).map(|e| e.id as i64 == existing.id).unwrap_or(false)
+                        }) {
+                            self.model.set_row_data(idx, item_to_entry(&existing));
+                        }
+                    } else {
+                        let existing_idx = (0..self.model.row_count()).position(|i| {
+                            self.model.row_data(i).map(|e| e.id as i64 == existing.id).unwrap_or(false)
+                        });
+                        if let Some(idx) = existing_idx {
+                            self.model.remove(idx);
+                        }
+                        self.model.insert(0, item_to_entry(&existing));
                     }
-                    self.model.insert(0, item_to_entry(&existing));
                 } else {
                     self.model.insert(0, item_to_entry(&item));
                 }

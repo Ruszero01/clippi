@@ -28,6 +28,10 @@ export component ClipboardList inherits Rectangle {
     in-out property <int> last-clicked-id: -1;
     in-out property <bool> click-pending: false;
 
+    // 工具栏点击标记 — 由工具栏 pointer-event(down) 设置，卡片 pointer-event(up) 消费。
+    // 用独立布尔值避免与双击检测的 last-clicked-id 互相干扰。
+    in-out property <bool> toolbar-action: false;
+
     // ========== 选中状态 ==========
     in property <int> selected-count: 0;
     in-out property <bool> context-menu-is-batch: false;
@@ -371,7 +375,7 @@ export component ClipboardList inherits Rectangle {
                                 96px;
                             border-radius: 10px;
                             background: item-ta.pressed ? surface-press : item-ta.has-hover ? surface-hover : surface;
-                            border-width: entry.selected ? 2px : 1px;
+                            border-width: 1px;
                             border-color: entry.selected ? accent : divider;
                             clip: true;
 
@@ -400,9 +404,9 @@ export component ClipboardList inherits Rectangle {
                                     return;
                                 }
                                 if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                                    // 工具栏按钮点击冒泡：使用标记值 -2 跳过选中逻辑
-                                    if (root.last-clicked-id == -2) {
-                                        root.last-clicked-id = -1;
+                                    // 工具栏按钮点击：标记已在 pointer-event(down) 设置，此处消费
+                                    if root.toolbar-action {
+                                        root.toolbar-action = false;
                                         return;
                                     }
 
@@ -729,10 +733,15 @@ export component ClipboardList inherits Rectangle {
                                         tb-copy-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.copy-item(entry.id);
                                             }
                                         }
@@ -755,10 +764,15 @@ export component ClipboardList inherits Rectangle {
                                         edit-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.edit-item(entry.id);
                                             }
                                         }
@@ -781,10 +795,15 @@ export component ClipboardList inherits Rectangle {
                                         note-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.editing-note-text = entry.note;
                                                 root.editing-note-id = entry.id;
                                             }
@@ -808,10 +827,15 @@ export component ClipboardList inherits Rectangle {
                                         fav-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.toggle-favorite(entry.id);
                                             }
                                         }
@@ -834,10 +858,15 @@ export component ClipboardList inherits Rectangle {
                                         del-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.delete-item(entry.id);
                                             }
                                         }
@@ -878,10 +907,15 @@ export component ClipboardList inherits Rectangle {
                                         bb-paste-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.batch-paste();
                                             }
                                         }
@@ -904,10 +938,15 @@ export component ClipboardList inherits Rectangle {
                                         bb-fav-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.batch-favorite();
                                             }
                                         }
@@ -930,10 +969,15 @@ export component ClipboardList inherits Rectangle {
                                         bb-del-ta := TouchArea {
                                             width: parent.width;
                                             height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
                                             clicked => {
                                                 search-input.clear-focus();
                                                 root.click-pending = false;
-                                                root.last-clicked-id = -2;
+                                                root.toolbar-action = false;
                                                 root.batch-delete();
                                             }
                                         }
