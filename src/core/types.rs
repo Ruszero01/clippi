@@ -12,6 +12,7 @@ pub enum ContentType {
     Image,
     Link,
     Color,
+    File,
 }
 
 impl ContentType {
@@ -22,6 +23,7 @@ impl ContentType {
             ContentType::Image => "image",
             ContentType::Link => "link",
             ContentType::Color => "color",
+            ContentType::File => "file",
         }
     }
 
@@ -32,6 +34,7 @@ impl ContentType {
             "image" => ContentType::Image,
             "link" => ContentType::Link,
             "color" => ContentType::Color,
+            "file" => ContentType::File,
             _ => ContentType::PlainText,
         }
     }
@@ -55,6 +58,7 @@ pub struct ClipboardItem {
     pub updated_at: DateTime<Utc>,
     pub image_path: String,
     pub rich_data: String, // JSON: {"html":"...","rtf":"..."} or empty
+    pub file_data: String, // JSON: [{"name":"...","path":"...","is_dir":false}, ...]
     pub is_favorite: bool,
     pub note: String,
     pub source_app_name: String,
@@ -80,6 +84,60 @@ impl RichData {
 
 }
 
+/// Info for a single file within a clipboard file group
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileInfo {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// File group data serialized as JSON in the database
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct FileData {
+    pub files: Vec<FileInfo>,
+}
+
+impl FileData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_json(s: &str) -> Self {
+        serde_json::from_str(s).unwrap_or_default()
+    }
+
+    pub fn display_text(&self) -> String {
+        self.files.iter()
+            .map(|f| f.name.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Return a human-readable label for a file extension or directory
+pub fn get_extension_label(name: &str) -> String {
+    if let Some(idx) = name.rfind('.') {
+        name[idx..].to_lowercase()
+    } else {
+        "文件".to_string()
+    }
+}
+
+/// Check if a file path has a common image extension
+pub fn is_image_extension(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".bmp")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".ico")
+        || lower.ends_with(".tiff")
+        || lower.ends_with(".tif")
+}
+
 impl ClipboardItem {
     pub fn new_text(id: i64, text: &str, content_type: ContentType, source: Option<&SourceAppInfo>, rich_data: Option<&RichData>) -> Self {
         let mut hasher = DefaultHasher::new();
@@ -96,6 +154,7 @@ impl ClipboardItem {
             updated_at: now,
             image_path: String::new(),
             rich_data: rd,
+            file_data: String::new(),
             is_favorite: false,
             note: String::new(),
             source_app_name: app_name,
@@ -115,6 +174,7 @@ impl ClipboardItem {
             updated_at: now,
             image_path: image_path.to_string(),
             rich_data: String::new(),
+            file_data: String::new(),
             is_favorite: false,
             note: String::new(),
             source_app_name: app_name,
@@ -134,6 +194,28 @@ impl ClipboardItem {
             updated_at: now,
             image_path: String::new(),
             rich_data: String::new(),
+            file_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            source_app_name: app_name,
+            source_app_icon: icon,
+        }
+    }
+
+    pub fn new_file(id: i64, file_data: &FileData, hash: u64, source: Option<&SourceAppInfo>) -> Self {
+        let now = Utc::now();
+        let display = file_data.display_text();
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        Self {
+            id,
+            content_type: ContentType::File,
+            full_text: display,
+            content_hash: hash,
+            created_at: now,
+            updated_at: now,
+            image_path: String::new(),
+            rich_data: String::new(),
+            file_data: file_data.to_json(),
             is_favorite: false,
             note: String::new(),
             source_app_name: app_name,

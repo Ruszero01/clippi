@@ -73,7 +73,7 @@ impl ClipboardFilters {
                 return false;
             }
         }
-        // Keyword filter: match against full_text for text types, skip images
+        // Keyword filter: match against full_text for text types; skip only bitmap images
         if let Some(ref kw) = self.keyword {
             match item.content_type {
                 crate::core::types::ContentType::Image => return false,

@@ -147,15 +147,20 @@ impl AppController {
         let plain_flag_for_paste = Arc::clone(&copy_as_plain_text_flag);
         slint_app.on_paste_item(move |id| {
             let mut expected = String::new();
+            let mut is_file = false;
             if let Ok(db) = db_for_paste.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
                     let plain = plain_flag_for_paste.load(Ordering::Relaxed);
                     expected = item.full_text.clone();
+                    is_file = item.content_type == ContentType::File;
                     write_item_to_clipboard(&item, plain);
                 }
             }
-            if !expected.is_empty() {
+            if !expected.is_empty() && !is_file {
                 verify_clipboard_content(&expected, 200);
+            }
+            if is_file {
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
             restore_paste_target();
             paste_after_delay();
@@ -484,13 +489,18 @@ impl AppController {
         slint_app.on_toggle_filter(move |filter: SharedString| {
             let ft = filter.to_string();
             let _ = looper_for_filter.try_with_clipboard_service(|cs| {
-                cs.toggle_filter_and_refresh(&ft);
+                if ft == "file" {
+                    cs.toggle_file_filter_and_refresh();
+                } else {
+                    cs.toggle_filter_and_refresh(&ft);
+                }
                 if let Some(app) = app_for_filter.upgrade() {
                     app.set_filter_plain_text(cs.is_filter_active("plain_text"));
                     app.set_filter_rich_text(cs.is_filter_active("rich_text"));
                     app.set_filter_image(cs.is_filter_active("image"));
                     app.set_filter_link(cs.is_filter_active("link"));
                     app.set_filter_color(cs.is_filter_active("color"));
+                    app.set_filter_file(cs.is_filter_active("file") || cs.is_filter_active("image"));
                 }
             });
         });
@@ -506,6 +516,7 @@ impl AppController {
                     app.set_filter_image(false);
                     app.set_filter_link(false);
                     app.set_filter_color(false);
+                    app.set_filter_file(false);
                     app.set_filter_favorites(false);
                 }
             });
@@ -559,19 +570,20 @@ impl AppController {
         let app_for_ctx = app.clone();
         slint_app.on_show_context_menu(move |id| {
             if let Some(app) = app_for_ctx.upgrade() {
-                let (is_color, is_hex, is_image, is_favorite) =
+                let (is_color, is_hex, is_image, is_file, is_favorite) =
                     if let Ok(db) = db_for_ctx.lock() {
                         if let Ok(Some(item)) = db.get_by_id(id as i64) {
                             let color = item.content_type == ContentType::Color;
                             let hex = color && is_hex_format(&item.full_text);
                             let img = item.content_type == ContentType::Image;
+                            let file = item.content_type == ContentType::File;
                             let fav = item.is_favorite;
-                            (color, hex, img, fav)
+                            (color, hex, img, file, fav)
                         } else {
-                            (false, false, false, false)
+                            (false, false, false, false, false)
                         }
                     } else {
-                        (false, false, false, false)
+                        (false, false, false, false, false)
                     };
 
                 // Get cursor position in screen coordinates, convert to window-relative
@@ -587,6 +599,7 @@ impl AppController {
                 app.set_context_menu_is_color(is_color);
                 app.set_context_menu_is_hex(is_hex);
                 app.set_context_menu_is_image(is_image);
+                app.set_context_menu_is_file(is_file);
                 app.set_context_menu_is_favorite(is_favorite);
                 app.set_context_menu_visible(true);
             }
@@ -779,6 +792,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
 /// When copy_as_plain_text is true, only plain text is written; otherwise
 /// HTML and RTF formats are also restored from rich_data.
 /// For images, the PNG file is loaded and written as an image format.
+/// For files, file paths are written via ClipboardContent::Files (CF_HDROP).
 fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_plain_text: bool) {
     if let Ok(ctx) = ClipboardContext::new() {
         if item.content_type == ContentType::Image && !item.image_path.is_empty() {
@@ -792,6 +806,12 @@ fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_pla
                 contents.push(ClipboardContent::Files(vec![item.image_path.clone()]));
                 let _ = Clipboard::set(&ctx, contents);
             }
+        } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
+            // Write file paths to clipboard (CF_HDROP on Windows)
+            let file_data = crate::core::types::FileData::from_json(&item.file_data);
+            let paths: Vec<String> = file_data.files.iter().map(|f| f.path.clone()).collect();
+            let contents = vec![ClipboardContent::Files(paths)];
+            let _ = Clipboard::set(&ctx, contents);
         } else if copy_as_plain_text {
             let _ = Clipboard::set_text(&ctx, item.full_text.clone());
         } else {
@@ -833,8 +853,13 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         write_item_to_clipboard(item, plain_flag);
 
         // Verify clipboard content before pasting (up to 300ms timeout)
-        if !verify_clipboard_content(&expected, 300) {
-            eprintln!("[WARN] batch_paste: clipboard verification timed out for item {}", item.id);
+        // Skip text verification for File items (file paths, not text-based)
+        if item.content_type != ContentType::File {
+            if !verify_clipboard_content(&expected, 300) {
+                eprintln!("[WARN] batch_paste: clipboard verification timed out for item {}", item.id);
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         restore_paste_target();

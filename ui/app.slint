@@ -54,6 +54,7 @@ export component App inherits Window {
     in-out property <bool> context-menu-is-hex: false;
     in-out property <bool> context-menu-is-image: false;
     in-out property <bool> context-menu-is-favorite: false;
+    in-out property <bool> context-menu-is-file: false;
     in-out property <bool> context-menu-is-batch: false;
 
     // 选中状态
@@ -74,6 +75,7 @@ export component App inherits Window {
     in-out property <bool> filter-image: false;
     in-out property <bool> filter-link: false;
     in-out property <bool> filter-color: false;
+    in-out property <bool> filter-file: false;
     in-out property <bool> filter-favorites: false;
 
     // 双击检测
@@ -405,6 +407,7 @@ export component App inherits Window {
                     filter-image: root.filter-image;
                     filter-link: root.filter-link;
                     filter-color: root.filter-color;
+                    filter-file: root.filter-file;
                     card-height-mode: root.card-height-mode;
                     show-source-app: root.show-source-app;
                     auto-scroll-to-top: root.auto-scroll-to-top;
@@ -506,6 +509,7 @@ export component App inherits Window {
             is-color: root.context-menu-is-color;
             is-hex: root.context-menu-is-hex;
             is-image: root.context-menu-is-image;
+            is-file: root.context-menu-is-file;
             is-favorite: root.context-menu-is-favorite;
             is-batch: root.context-menu-is-batch;
             selected-count: root.selected-count;

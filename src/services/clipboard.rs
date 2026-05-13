@@ -6,6 +6,7 @@ use crate::core::paths::images_dir;
 use crate::core::types::format_relative_time;
 use crate::looper::Pollable;
 use crate::platform::clipboard::ClipboardShared;
+use crate::platform::file_icon;
 use crate::App;
 use crate::ClipboardEntry;
 use base64::Engine;
@@ -58,6 +59,24 @@ impl ClipboardService {
     /// Toggle a content type filter and reload from database
     pub fn toggle_filter_and_refresh(&mut self, filter_type: &str) {
         self.filters.toggle_type(filter_type);
+        self.refresh_with_current_filter();
+    }
+
+    /// Toggle the combined "file" filter (image + file types) atomically.
+    /// Avoids double-refresh by modifying both type filters before reloading.
+    pub fn toggle_file_filter_and_refresh(&mut self) {
+        // Toggle both "image" and "file" type_filters together
+        let file_active = self.filters.is_type_active("file");
+        let image_active = self.filters.is_type_active("image");
+        if file_active && image_active {
+            // Both active → deactivate both
+            self.filters.toggle_type("file");
+            self.filters.toggle_type("image");
+        } else {
+            // At least one inactive → activate both
+            if !file_active { self.filters.toggle_type("file"); }
+            if !image_active { self.filters.toggle_type("image"); }
+        }
         self.refresh_with_current_filter();
     }
 
@@ -422,11 +441,20 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         (0, 0)
     };
 
-    // Decode source app icon from base64 and save to disk for Slint Image loading
+    // Decode source app icon from base64 and save to disk for Slint Image loading.
+    // Use sanitized app name as filename so each app caches only one icon.
     let (source_icon_path, source_icon_image) = if !item.source_app_icon.is_empty() {
         let icon_dir = images_dir().join("icons");
         let _ = std::fs::create_dir_all(&icon_dir);
-        let icon_path = icon_dir.join(format!("{:016x}.png", item.content_hash));
+        let safe_name: String = item.source_app_name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let icon_path = if safe_name.is_empty() {
+            icon_dir.join(format!("{:016x}.png", item.content_hash))
+        } else {
+            icon_dir.join(format!("{}.png", safe_name))
+        };
         let path_str = icon_path.to_string_lossy().to_string();
 
         // Write decoded PNG only if not cached
@@ -451,6 +479,78 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         slint::Color::default()
     };
 
+    // File type fields
+    let (file_count, file_icon_text, file_name_1, file_name_2, file_name_3, file_overflow) =
+        if item.content_type == crate::core::types::ContentType::File && !item.file_data.is_empty() {
+            let fd = crate::core::types::FileData::from_json(&item.file_data);
+            let count = fd.files.len() as i32;
+            let icon_text = if count == 1 {
+                if fd.files[0].is_dir {
+                    "文件夹".to_string()
+                } else {
+                    crate::core::types::get_extension_label(&fd.files[0].name)
+                }
+            } else {
+                format!("{}个文件", count)
+            };
+            let n1 = fd.files.first().map(|f| f.name.clone()).unwrap_or_default();
+            let n2 = fd.files.get(1).map(|f| f.name.clone()).unwrap_or_default();
+            let n3 = fd.files.get(2).map(|f| f.name.clone()).unwrap_or_default();
+            let overflow = if count > 3 { count - 3 } else { 0 };
+            (count, icon_text, n1, n2, n3, overflow)
+        } else {
+            (0, String::new(), String::new(), String::new(), String::new(), 0)
+        };
+
+    // Extract OS file icon for the first file.
+    // Executables (exe/dll/msi/scr/cpl) embed unique icons → cache by filename.
+    // Other files derive icons from associated program → cache by extension.
+    let (file_icon_path, file_icon_image) = if item.content_type == crate::core::types::ContentType::File && !item.file_data.is_empty() {
+        let fd = crate::core::types::FileData::from_json(&item.file_data);
+        if let Some(first_file) = fd.files.first() {
+            let cache_name = if first_file.is_dir {
+                "ext_folder".to_string()
+            } else {
+                let ext = std::path::Path::new(&first_file.name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                if matches!(ext.as_str(), "exe" | "dll" | "msi" | "scr" | "cpl") {
+                    let stem = std::path::Path::new(&first_file.name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_lowercase())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    format!("app_{}", stem)
+                } else if ext.is_empty() {
+                    "ext_file".to_string()
+                } else {
+                    format!("ext_{}", ext)
+                }
+            };
+            if let Some(icon_base64) = file_icon::extract_file_icon_base64(&first_file.path) {
+                let icon_dir = images_dir().join("icons");
+                let _ = std::fs::create_dir_all(&icon_dir);
+                let icon_path = icon_dir.join(format!("{}.png", cache_name));
+                let path_str = icon_path.to_string_lossy().to_string();
+                if !icon_path.exists() {
+                    if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&icon_base64) {
+                        let _ = std::fs::write(&icon_path, png_bytes);
+                    }
+                }
+                let img = Image::load_from_path(std::path::Path::new(&path_str)).unwrap_or_default();
+                (path_str, img)
+            } else {
+                (String::new(), Image::default())
+            }
+        } else {
+            (String::new(), Image::default())
+        }
+    } else {
+        (String::new(), Image::default())
+    };
+
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.full_text.clone()),
@@ -469,5 +569,13 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         color_swatch: color_swatch,
         selected: false,
         selection_order: -1,
+        file_count,
+        file_icon_text: SharedString::from(file_icon_text),
+        file_name_1: SharedString::from(file_name_1),
+        file_name_2: SharedString::from(file_name_2),
+        file_name_3: SharedString::from(file_name_3),
+        file_overflow,
+        file_icon_path: SharedString::from(file_icon_path),
+        file_icon_image,
     }
 }

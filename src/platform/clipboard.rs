@@ -1,13 +1,14 @@
 //! Clipboard listener trait and platform implementations
 //!
 //! Provides multi-format clipboard monitoring with detection priority:
-//! Image > Link > Color > RichText > PlainText
+//! Files > Image > Link > Color > RichText > PlainText
 
 use crate::core::color::detect_color;
-use crate::core::types::{is_url_or_path, ClipboardItem, ContentType, RichData};
+use crate::core::types::{is_url_or_path, is_image_extension, ClipboardItem, ContentType, FileData, FileInfo, RichData};
 use crate::core::paths::images_dir;
 use crate::platform::source;
 use clipboard_rs::common::RustImage;
+use clipboard_rs::common::RustImageData;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
@@ -49,10 +50,83 @@ pub trait ClipboardListener: Send {
 }
 
 /// Shared clipboard content detection (platform-agnostic).
-/// Priority: Image > Link > Color > RichText > PlainText
+/// Priority: Files > Image > Link > Color > RichText > PlainText
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     // Capture source app info at detection time (only once, not on re-copy)
     let source_info = source::get_clipboard_owner_info();
+
+    // ── File list detection (CF_HDROP on Windows, NSFilenames on macOS) ──
+    let has_files = ctx.has(ContentFormat::Files);
+    if has_files {
+        let files_result = ctx.get_files();
+        if let Ok(files) = files_result {
+            if !files.is_empty() {
+                let entries: Vec<FileInfo> = files.iter().map(|path| {
+                    let p = std::path::Path::new(path);
+                    FileInfo {
+                        name: p.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.clone()),
+                        path: path.clone(),
+                        is_dir: p.is_dir(),
+                    }
+                }).collect();
+
+                // Single image file → treat as Image type for thumbnail preview
+                if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path) {
+                    if let Ok(img) = RustImageData::from_path(&entries[0].path) {
+                        if !img.is_empty() {
+                            if let Ok(png_bytes) = img.to_png() {
+                                let mut hasher = DefaultHasher::new();
+                                hasher.write(png_bytes.get_bytes());
+                                let hash = hasher.finish();
+
+                                let img_dir = images_dir();
+                                let file_name = format!("{:016x}.png", hash);
+                                let file_path = img_dir.join(&file_name);
+
+                                if !file_path.exists() {
+                                    if png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err() {
+                                        // Fall through to File type below
+                                    } else {
+                                        return Some(ClipboardItem::new_image(
+                                            0,
+                                            file_path.to_str().unwrap_or(""),
+                                            hash,
+                                            source_info.as_ref(),
+                                        ));
+                                    }
+                                } else {
+                                    return Some(ClipboardItem::new_image(
+                                        0,
+                                        file_path.to_str().unwrap_or(""),
+                                        hash,
+                                        source_info.as_ref(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    // On any failure, fall through to File type below
+                }
+
+                // Multi-file, single directory, or single non-image file → File type
+                let file_data = FileData { files: entries };
+                let mut hasher = DefaultHasher::new();
+                for f in &file_data.files {
+                    f.path.hash(&mut hasher);
+                }
+                let hash = hasher.finish();
+
+                return Some(ClipboardItem::new_file(
+                    0,
+                    &file_data,
+                    hash,
+                    source_info.as_ref(),
+                ));
+            }
+        }
+    }
 
     if ctx.has(ContentFormat::Image) {
         if let Ok(img) = ctx.get_image() {
@@ -144,6 +218,21 @@ impl PollingClipboardListener {
             }
             if ctx.has(ContentFormat::Image) {
                 hasher.write(b"[img]");
+                // Include image bytes in hash for change detection
+                if let Ok(img) = ctx.get_image() {
+                    if let Ok(png) = img.to_png() {
+                        hasher.write(png.get_bytes());
+                    }
+                }
+                *self.startup_end.lock().unwrap() = Some(Instant::now());
+            }
+            if ctx.has(ContentFormat::Files) {
+                hasher.write(b"[files]");
+                if let Ok(files) = ctx.get_files() {
+                    for path in &files {
+                        path.hash(&mut hasher);
+                    }
+                }
                 *self.startup_end.lock().unwrap() = Some(Instant::now());
             }
         }
@@ -176,19 +265,37 @@ impl ClipboardListener for PollingClipboardListener {
 
                 if let Ok(ctx) = ClipboardContext::new() {
                     let mut hasher = DefaultHasher::new();
-                    let mut has_content = false;
+                    let mut has_text = false;
 
                     if let Ok(text) = ctx.get_text() {
                         if !text.is_empty() {
                             text.hash(&mut hasher);
-                            has_content = true;
+                            has_text = true;
                         }
                     }
 
-                    if ctx.has(ContentFormat::Image) {
+                    let has_img = ctx.has(ContentFormat::Image);
+                    if has_img {
                         hasher.write(b"[img]");
-                        has_content = true;
+                        // Include image bytes in hash for change detection
+                        if let Ok(img) = ctx.get_image() {
+                            if let Ok(png) = img.to_png() {
+                                hasher.write(png.get_bytes());
+                            }
+                        }
                     }
+
+                    let has_files = ctx.has(ContentFormat::Files);
+                    if has_files {
+                        hasher.write(b"[files]");
+                        if let Ok(files) = ctx.get_files() {
+                            for path in &files {
+                                path.hash(&mut hasher);
+                            }
+                        }
+                    }
+
+                    let has_content = has_text || has_img || has_files;
 
                     if has_content {
                         let hash = hasher.finish();

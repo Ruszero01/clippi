@@ -16,6 +16,7 @@ export component ClipboardList inherits Rectangle {
     in-out property <bool> filter-image: false;
     in-out property <bool> filter-link: false;
     in-out property <bool> filter-color: false;
+    in-out property <bool> filter-file: false;
     in property <string> card-height-mode: "medium";
     in property <bool> show-source-app: false;
     in property <bool> auto-scroll-to-top: false;
@@ -219,17 +220,17 @@ export component ClipboardList inherits Rectangle {
                         }
                     }
 
-                    // 图片
+                    // 文件
                     fi-bg := Rectangle {
                         width: fi-layout.preferred-width;
                         height: 22px;
                         border-radius: 5px;
-                        background: root.filter-image ? (dark-mode ? #7ecba322 : #6ab89022) : (fi-ta.has-hover ? btn-hover : transparent);
+                        background: root.filter-file ? (dark-mode ? #7ecba322 : #6ab89022) : (fi-ta.has-hover ? btn-hover : transparent);
 
                         fi-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("image"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("file"); }
                         }
 
                         fi-layout := HorizontalLayout {
@@ -239,18 +240,18 @@ export component ClipboardList inherits Rectangle {
                             alignment: center;
 
                             Text {
-                                text: "\u{e626}";
+                                text: "\u{e646}";
                                 font-family: "iconfont";
                                 font-size: 11px;
-                                color: root.filter-image ? accent : text-2;
+                                color: root.filter-file ? accent : text-2;
                                 vertical-alignment: center;
                             }
 
                             Text {
-                                text: "图片";
+                                text: "文件";
                                 font-size: 11px;
-                                font-weight: root.filter-image ? 600 : 400;
-                                color: root.filter-image ? accent : text-2;
+                                font-weight: root.filter-file ? 600 : 400;
+                                color: root.filter-file ? accent : text-2;
                                 vertical-alignment: center;
                             }
                         }
@@ -450,8 +451,8 @@ export component ClipboardList inherits Rectangle {
                                 padding: 10px;
                                 spacing: 10px;
 
-                                // ── 来源应用模式（开启且有来源） ──
-                                if root.show-source-app && entry.source-app-name != "" : VerticalLayout {
+                                // ── 来源应用模式（开启且有来源，文件类型除外） ──
+                                if root.show-source-app && entry.source-app-name != "" && entry.content-type != "file" : VerticalLayout {
                                     width: 34px;
                                     spacing: 3px;
 
@@ -497,7 +498,8 @@ export component ClipboardList inherits Rectangle {
                                             st-icon := Text {
                                                 text: entry.content-type == "plain_text" ? "\u{e60e}" :
                                                       entry.content-type == "rich_text" ? "\u{e6ae}" :
-                                                      entry.content-type == "image" ? "\u{e626}" : "\u{e6d7}";
+                                                      entry.content-type == "image" ? "\u{e626}" :
+                                                      entry.content-type == "file" ? "\u{e646}" : "\u{e6d7}";
                                                 font-family: "iconfont";
                                                 font-size: 8px;
                                                 color: tag-text;
@@ -507,7 +509,8 @@ export component ClipboardList inherits Rectangle {
                                             st-label := Text {
                                                 text: entry.content-type == "plain_text" ? "文本" :
                                                       entry.content-type == "rich_text" ? "格式" :
-                                                      entry.content-type == "image" ? "图片" : "链接";
+                                                      entry.content-type == "image" ? "图片" :
+                                                      entry.content-type == "file" ? entry.file-icon-text : "链接";
                                                 font-size: 8px;
                                                 font-weight: 500;
                                                 color: tag-text;
@@ -517,8 +520,8 @@ export component ClipboardList inherits Rectangle {
                                     }
                                 }
 
-                                // ── 类型图标模式（关闭或没有来源） ──
-                                if !root.show-source-app || entry.source-app-name == "" : VerticalLayout {
+                                // ── 类型图标模式（关闭、没有来源、或文件类型） ──
+                                if !root.show-source-app || entry.source-app-name == "" || entry.content-type == "file" : VerticalLayout {
                                     width: 34px;
 
                                     if entry.content-type == "image": Rectangle {
@@ -531,6 +534,32 @@ export component ClipboardList inherits Rectangle {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                             text: "\u{e626}";
+                                            font-family: "iconfont";
+                                            font-size: 18px;
+                                            color: tag-text;
+                                        }
+                                    }
+
+                                    if entry.content-type == "file": Rectangle {
+                                        width: 34px;
+                                        height: 34px;
+                                        border-radius: 6px;
+                                        background: tag-bg;
+                                        clip: true;
+
+                                        if entry.file-icon-path != "" : Image {
+                                            width: 28px;
+                                            height: 28px;
+                                            x: 3px;
+                                            y: 3px;
+                                            source: entry.file-icon-image;
+                                            image-fit: contain;
+                                        }
+
+                                        if entry.file-icon-path == "" : Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e646}";
                                             font-family: "iconfont";
                                             font-size: 18px;
                                             color: tag-text;
@@ -707,6 +736,7 @@ export component ClipboardList inherits Rectangle {
                                         color: accent;
                                     }
                                 }
+
                             }
 
                             // ── 单选悬浮工具栏（选中数 <= 1 时显示） ──
@@ -756,8 +786,8 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    // 编辑按钮（非图片类型显示）
-                                    if entry.content-type != "image" : Rectangle {
+                                    // 编辑按钮（非图片和文件类型显示）
+                                    if entry.content-type != "image" && entry.content-type != "file" : Rectangle {
                                         width: 18px;
                                         height: 18px;
 

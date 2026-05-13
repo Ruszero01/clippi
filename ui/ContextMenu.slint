@@ -11,6 +11,7 @@ export component ContextMenu inherits Rectangle {
     in property <bool> is-color: false;
     in property <bool> is-hex: false;
     in property <bool> is-image: false;
+    in property <bool> is-file: false;
     in property <bool> is-favorite: false;
     // 批量模式
     in property <bool> is-batch: false;
@@ -192,7 +193,7 @@ export component ContextMenu inherits Rectangle {
         if !root.is-batch: Rectangle { width: 156px; height: 3px; }
 
         // ── 编辑 ──
-        if !root.is-batch && !is-image: row-edit := Rectangle {
+        if !root.is-batch && !is-image && !is-file: row-edit := Rectangle {
             width: 156px;
             height: 30px;
             border-radius: 5px;
