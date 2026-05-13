@@ -361,13 +361,13 @@ export component ClipboardList inherits Rectangle {
                         card-rect := Rectangle {
                             height: entry.note != "" ? 68px :
                                 root.card-height-mode == "auto" ?
-                                (entry.content-type == "link" || entry.content-type == "path" ? 58px :
+                                (entry.content-type == "link" || entry.content-type == "path" ? 68px :
                                  entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
                                         (parent.width * entry.image-height / entry.image-width <= 82px ? 68px :
                                          parent.width * entry.image-height / entry.image-width <= 112px ? 96px : 128px) :
                                         96px) :
-                                    (entry.preview-length <= 50 ? 60px :
+                                    (entry.preview-length <= 50 ? 68px :
                                      entry.preview-length <= 150 ? 80px :
                                      entry.preview-length <= 300 ? 104px :
                                      entry.preview-length <= 500 ? 130px :
@@ -453,22 +453,22 @@ export component ClipboardList inherits Rectangle {
                                 spacing: 10px;
 
                                 // ── 来源应用模式（开启且有来源，文件类型除外） ──
-                                if root.show-source-app && entry.source-app-name != "" && entry.content-type != "file" && entry.content-type != "path" : VerticalLayout {
+                                if root.show-source-app && entry.source-app-name != "" && entry.content-type != "file" && entry.content-type != "path" && entry.content-type != "link" : VerticalLayout {
                                     width: 34px;
                                     spacing: 3px;
 
                                     Rectangle {
                                         width: 34px;
-                                        height: 24px;
+                                        height: 28px;
                                         border-radius: 6px;
                                         background: divider;
                                         clip: true;
 
                                         Image {
-                                            width: 20px;
-                                            height: 20px;
-                                            x: 7px;
-                                            y: 2px;
+                                            width: 22px;
+                                            height: 22px;
+                                            x: 6px;
+                                            y: 3px;
                                             source: entry.source-app-icon-image;
                                             image-fit: cover;
                                         }
@@ -526,7 +526,7 @@ export component ClipboardList inherits Rectangle {
                                 }
 
                                 // ── 类型图标模式（关闭、没有来源、或文件类型） ──
-                                if !root.show-source-app || entry.source-app-name == "" || entry.content-type == "file" || entry.content-type == "path" : VerticalLayout {
+                                if !root.show-source-app || entry.source-app-name == "" || entry.content-type == "file" || entry.content-type == "path" || entry.content-type == "link" : VerticalLayout {
                                     width: 34px;
 
                                     if entry.content-type == "image": Rectangle {
@@ -545,29 +545,65 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    if entry.content-type == "file": Rectangle {
-                                        width: 34px;
-                                        height: 34px;
-                                        border-radius: 6px;
-                                        background: tag-bg;
-                                        clip: true;
+                                    if entry.content-type == "file": VerticalLayout {
+                                        spacing: 3px;
 
-                                        if entry.file-icon-path != "" : Image {
-                                            width: 28px;
+                                        Rectangle {
+                                            width: 34px;
                                             height: 28px;
-                                            x: 3px;
-                                            y: 3px;
-                                            source: entry.file-icon-image;
-                                            image-fit: contain;
+                                            border-radius: 6px;
+                                            background: tag-bg;
+                                            clip: true;
+
+                                            if entry.file-icon-path != "" : Image {
+                                                width: 22px;
+                                                height: 22px;
+                                                x: 6px;
+                                                y: 3px;
+                                                source: entry.file-icon-image;
+                                                image-fit: contain;
+                                            }
+
+                                            if entry.file-icon-path == "" : Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "\u{e646}";
+                                                font-family: "iconfont";
+                                                font-size: 16px;
+                                                color: tag-text;
+                                            }
                                         }
 
-                                        if entry.file-icon-path == "" : Text {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            text: "\u{e646}";
-                                            font-family: "iconfont";
-                                            font-size: 18px;
-                                            color: tag-text;
+                                        Rectangle {
+                                            height: 14px;
+                                            width: 34px;
+                                            border-radius: 3px;
+                                            background: tag-bg;
+                                            clip: true;
+
+                                            HorizontalLayout {
+                                                padding-left: 3px;
+                                                padding-right: 3px;
+                                                spacing: 2px;
+                                                alignment: center;
+
+                                                Text {
+                                                    text: "\u{e646}";
+                                                    font-family: "iconfont";
+                                                    font-size: 8px;
+                                                    color: tag-text;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                Text {
+                                                    text: entry.file-icon-text;
+                                                    font-size: 8px;
+                                                    font-weight: 500;
+                                                    color: tag-text;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
+                                            }
                                         }
                                     }
 
@@ -603,71 +639,143 @@ export component ClipboardList inherits Rectangle {
                                         }
                                     }
 
-                                    if entry.content-type == "link": Rectangle {
-                                        width: 34px;
-                                        height: 34px;
-                                        border-radius: 6px;
-                                        background: tag-bg;
-                                        clip: true;
+                                    if entry.content-type == "link": VerticalLayout {
+                                        spacing: 3px;
 
-                                        if entry.favicon-path != "" : Rectangle {
-                                            width: 28px;
+                                        Rectangle {
+                                            width: 34px;
                                             height: 28px;
-                                            x: 3px;
-                                            y: 3px;
+                                            border-radius: 6px;
+                                            background: tag-bg;
                                             clip: true;
-                                            border-radius: 14px;
 
-                                            Image {
-                                                width: 28px;
-                                                height: 28px;
-                                                source: entry.favicon-image;
-                                                image-fit: cover;
+                                            if entry.favicon-path != "" : Rectangle {
+                                                width: 22px;
+                                                height: 22px;
+                                                x: 6px;
+                                                y: 3px;
+                                                clip: true;
+                                                border-radius: 11px;
+
+                                                Image {
+                                                    width: 22px;
+                                                    height: 22px;
+                                                    source: entry.favicon-image;
+                                                    image-fit: cover;
+                                                }
+                                            }
+
+                                            if entry.favicon-path == "" && root.show-source-app && entry.source-app-icon-path != "" : Image {
+                                                width: 22px;
+                                                height: 22px;
+                                                x: 6px;
+                                                y: 3px;
+                                                source: entry.source-app-icon-image;
+                                                image-fit: contain;
+                                            }
+
+                                            if entry.favicon-path == "" && !(root.show-source-app && entry.source-app-icon-path != "") : Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "\u{e6d7}";
+                                                font-family: "iconfont";
+                                                font-size: 16px;
+                                                color: tag-text;
                                             }
                                         }
 
-                                        if entry.favicon-path == "" && root.show-source-app && entry.source-app-icon-path != "" : Image {
-                                            width: 24px;
-                                            height: 24px;
-                                            x: 5px;
-                                            y: 5px;
-                                            source: entry.source-app-icon-image;
-                                            image-fit: contain;
-                                        }
+                                        Rectangle {
+                                            height: 14px;
+                                            width: 34px;
+                                            border-radius: 3px;
+                                            background: tag-bg;
+                                            clip: true;
 
-                                        if entry.favicon-path == "" && !(root.show-source-app && entry.source-app-icon-path != "") : Text {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            text: "\u{e6d7}";
-                                            font-family: "iconfont";
-                                            font-size: 18px;
-                                            color: tag-text;
+                                            HorizontalLayout {
+                                                padding-left: 3px;
+                                                padding-right: 3px;
+                                                spacing: 2px;
+                                                alignment: center;
+
+                                                Text {
+                                                    text: "\u{e6d7}";
+                                                    font-family: "iconfont";
+                                                    font-size: 8px;
+                                                    color: tag-text;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                Text {
+                                                    text: "URL";
+                                                    font-size: 8px;
+                                                    font-weight: 500;
+                                                    color: tag-text;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
+                                            }
                                         }
                                     }
 
-                                    if entry.content-type == "path": Rectangle {
-                                        width: 34px;
-                                        height: 34px;
-                                        border-radius: 6px;
-                                        background: tag-bg;
-                                        clip: true;
+                                    if entry.content-type == "path": VerticalLayout {
+                                        spacing: 3px;
 
-                                        if entry.folder-icon-path != "" : Image {
-                                            width: 28px;
+                                        Rectangle {
+                                            width: 34px;
                                             height: 28px;
-                                            x: 3px;
-                                            y: 3px;
-                                            source: entry.folder-icon-image;
-                                            image-fit: contain;
+                                            border-radius: 6px;
+                                            background: tag-bg;
+                                            clip: true;
+
+                                            if entry.folder-icon-path != "" : Image {
+                                                width: 22px;
+                                                height: 22px;
+                                                x: 6px;
+                                                y: 3px;
+                                                source: entry.folder-icon-image;
+                                                image-fit: contain;
+                                            }
+
+                                            if entry.folder-icon-path == "" : Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "\u{e646}";
+                                                font-family: "iconfont";
+                                                font-size: 16px;
+                                                color: tag-text;
+                                            }
                                         }
 
-                                        if entry.folder-icon-path == "" : Text {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            text: "\u{e646}";
-                                            font-family: "iconfont";
-                                            font-size: 18px;
-                                            color: tag-text;
+                                        Rectangle {
+                                            height: 14px;
+                                            width: 34px;
+                                            border-radius: 3px;
+                                            background: tag-bg;
+                                            clip: true;
+
+                                            HorizontalLayout {
+                                                padding-left: 3px;
+                                                padding-right: 3px;
+                                                spacing: 2px;
+                                                alignment: center;
+
+                                                Text {
+                                                    text: "\u{e646}";
+                                                    font-family: "iconfont";
+                                                    font-size: 8px;
+                                                    color: tag-text;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                Text {
+                                                    text: "路径";
+                                                    font-size: 8px;
+                                                    font-weight: 500;
+                                                    color: tag-text;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
+                                            }
                                         }
                                     }
 
