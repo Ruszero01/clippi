@@ -361,7 +361,8 @@ export component ClipboardList inherits Rectangle {
                         card-rect := Rectangle {
                             height: entry.note != "" ? 68px :
                                 root.card-height-mode == "auto" ?
-                                (entry.content-type == "image" ?
+                                (entry.content-type == "link" || entry.content-type == "path" ? 58px :
+                                 entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
                                         (parent.width * entry.image-height / entry.image-width <= 82px ? 68px :
                                          parent.width * entry.image-height / entry.image-width <= 112px ? 96px : 128px) :
@@ -452,7 +453,7 @@ export component ClipboardList inherits Rectangle {
                                 spacing: 10px;
 
                                 // ── 来源应用模式（开启且有来源，文件类型除外） ──
-                                if root.show-source-app && entry.source-app-name != "" && entry.content-type != "file" : VerticalLayout {
+                                if root.show-source-app && entry.source-app-name != "" && entry.content-type != "file" && entry.content-type != "path" : VerticalLayout {
                                     width: 34px;
                                     spacing: 3px;
 
@@ -499,7 +500,9 @@ export component ClipboardList inherits Rectangle {
                                                 text: entry.content-type == "plain_text" ? "\u{e60e}" :
                                                       entry.content-type == "rich_text" ? "\u{e6ae}" :
                                                       entry.content-type == "image" ? "\u{e626}" :
-                                                      entry.content-type == "file" ? "\u{e646}" : "\u{e6d7}";
+                                                      entry.content-type == "file" ? "\u{e646}" :
+                                                      entry.content-type == "link" ? "\u{e6d7}" :
+                                                      entry.content-type == "path" ? "\u{e646}" : "";
                                                 font-family: "iconfont";
                                                 font-size: 8px;
                                                 color: tag-text;
@@ -510,7 +513,9 @@ export component ClipboardList inherits Rectangle {
                                                 text: entry.content-type == "plain_text" ? "文本" :
                                                       entry.content-type == "rich_text" ? "格式" :
                                                       entry.content-type == "image" ? "图片" :
-                                                      entry.content-type == "file" ? entry.file-icon-text : "链接";
+                                                      entry.content-type == "file" ? entry.file-icon-text :
+                                                      entry.content-type == "link" ? "URL" :
+                                                      entry.content-type == "path" ? "路径" : "";
                                                 font-size: 8px;
                                                 font-weight: 500;
                                                 color: tag-text;
@@ -521,7 +526,7 @@ export component ClipboardList inherits Rectangle {
                                 }
 
                                 // ── 类型图标模式（关闭、没有来源、或文件类型） ──
-                                if !root.show-source-app || entry.source-app-name == "" || entry.content-type == "file" : VerticalLayout {
+                                if !root.show-source-app || entry.source-app-name == "" || entry.content-type == "file" || entry.content-type == "path" : VerticalLayout {
                                     width: 34px;
 
                                     if entry.content-type == "image": Rectangle {
@@ -603,11 +608,63 @@ export component ClipboardList inherits Rectangle {
                                         height: 34px;
                                         border-radius: 6px;
                                         background: tag-bg;
+                                        clip: true;
 
-                                        Text {
+                                        if entry.favicon-path != "" : Rectangle {
+                                            width: 28px;
+                                            height: 28px;
+                                            x: 3px;
+                                            y: 3px;
+                                            clip: true;
+                                            border-radius: 14px;
+
+                                            Image {
+                                                width: 28px;
+                                                height: 28px;
+                                                source: entry.favicon-image;
+                                                image-fit: cover;
+                                            }
+                                        }
+
+                                        if entry.favicon-path == "" && root.show-source-app && entry.source-app-icon-path != "" : Image {
+                                            width: 24px;
+                                            height: 24px;
+                                            x: 5px;
+                                            y: 5px;
+                                            source: entry.source-app-icon-image;
+                                            image-fit: contain;
+                                        }
+
+                                        if entry.favicon-path == "" && !(root.show-source-app && entry.source-app-icon-path != "") : Text {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                             text: "\u{e6d7}";
+                                            font-family: "iconfont";
+                                            font-size: 18px;
+                                            color: tag-text;
+                                        }
+                                    }
+
+                                    if entry.content-type == "path": Rectangle {
+                                        width: 34px;
+                                        height: 34px;
+                                        border-radius: 6px;
+                                        background: tag-bg;
+                                        clip: true;
+
+                                        if entry.folder-icon-path != "" : Image {
+                                            width: 28px;
+                                            height: 28px;
+                                            x: 3px;
+                                            y: 3px;
+                                            source: entry.folder-icon-image;
+                                            image-fit: contain;
+                                        }
+
+                                        if entry.folder-icon-path == "" : Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e646}";
                                             font-family: "iconfont";
                                             font-size: 18px;
                                             color: tag-text;
@@ -706,7 +763,40 @@ export component ClipboardList inherits Rectangle {
                                     vertical-alignment: center;
                                 }
 
-                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "color" && entry.content-type != "image" : Text {
+                                // Link URL: domain (bold) + path (faded), single line, vertically centered
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "link" : HorizontalLayout {
+                                    spacing: 0px;
+                                    alignment: start;
+
+                                    Text {
+                                        text: entry.link-domain;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        color: text-1;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if entry.link-path != "" : Text {
+                                        text: entry.link-path;
+                                        font-size: 12px;
+                                        color: text-3;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+
+                                // Path: single line, vertically centered
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "path" : Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    color: text-1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                // Other text types (plain, rich, color)
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "color" && entry.content-type != "image" && entry.content-type != "link" && entry.content-type != "path" : Text {
                                     text: entry.preview;
                                     font-size: 12px;
                                     color: text-1;

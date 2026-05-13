@@ -82,7 +82,8 @@ export component EditPanel inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     text: root.content-type == "plain_text" ? "纯文本" :
                           root.content-type == "rich_text" ? "格式文本（编辑后将丢失格式）" :
-                          root.content-type == "link" ? "链接" :
+                          root.content-type == "link" ? "URL链接" :
+                          root.content-type == "path" ? "文件路径（编辑后将解除路径关联）" :
                           root.content-type == "image" ? "图片路径（编辑后将解除图片关联）" :
                           root.content-type == "file" ? "文件路径（编辑后将解除文件关联）" : "未知";
                     font-size: 10px;

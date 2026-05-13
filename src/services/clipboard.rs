@@ -6,6 +6,7 @@ use crate::core::paths::images_dir;
 use crate::core::types::format_relative_time;
 use crate::looper::Pollable;
 use crate::platform::clipboard::ClipboardShared;
+use crate::platform::favicon;
 use crate::platform::file_icon;
 use crate::App;
 use crate::ClipboardEntry;
@@ -76,6 +77,20 @@ impl ClipboardService {
             // At least one inactive → activate both
             if !file_active { self.filters.toggle_type("file"); }
             if !image_active { self.filters.toggle_type("image"); }
+        }
+        self.refresh_with_current_filter();
+    }
+
+    /// Toggle the combined "链接" filter (link + path types) atomically.
+    pub fn toggle_link_filter_and_refresh(&mut self) {
+        let link_active = self.filters.is_type_active("link");
+        let path_active = self.filters.is_type_active("path");
+        if link_active && path_active {
+            self.filters.toggle_type("link");
+            self.filters.toggle_type("path");
+        } else {
+            if !link_active { self.filters.toggle_type("link"); }
+            if !path_active { self.filters.toggle_type("path"); }
         }
         self.refresh_with_current_filter();
     }
@@ -551,6 +566,56 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         (String::new(), Image::default())
     };
 
+    // Link/URL preview fields
+    let (link_domain, link_path, favicon_path, favicon_image, folder_icon_path, folder_icon_image) =
+        match item.content_type {
+            crate::core::types::ContentType::Link => {
+                let domain = crate::core::types::url_domain(&item.full_text);
+                let path = crate::core::types::url_path(&item.full_text);
+                // Try cached favicon
+                let cache_path = favicon::favicon_cache_path(&domain);
+                let cp = std::path::PathBuf::from(&cache_path);
+                let (fav_path_str, fav_img) = if cp.exists() {
+                    let img = Image::load_from_path(std::path::Path::new(&cache_path)).unwrap_or_default();
+                    (cache_path, img)
+                } else {
+                    (String::new(), Image::default())
+                };
+                (SharedString::from(domain), SharedString::from(path),
+                 SharedString::from(fav_path_str), fav_img,
+                 SharedString::default(), Image::default())
+            }
+            crate::core::types::ContentType::Path => {
+                // Extract platform folder icon, cached once
+                let icon_dir = images_dir().join("icons");
+                let _ = std::fs::create_dir_all(&icon_dir);
+                let icon_path = icon_dir.join("path_folder.png");
+                if !icon_path.exists() {
+                    let sample_dir = std::path::Path::new(&item.full_text)
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| item.full_text.clone());
+                    if let Some(b64) = file_icon::extract_file_icon_base64(&sample_dir) {
+                        if let Ok(png) = base64::engine::general_purpose::STANDARD.decode(&b64) {
+                            let _ = std::fs::write(&icon_path, png);
+                        }
+                    }
+                }
+                let (fol_path_str, fol_img) = if icon_path.exists() {
+                    let img = Image::load_from_path(std::path::Path::new(&icon_path)).unwrap_or_default();
+                    (icon_path.to_string_lossy().to_string(), img)
+                } else {
+                    (String::new(), Image::default())
+                };
+                (SharedString::default(), SharedString::default(),
+                 SharedString::default(), Image::default(),
+                 SharedString::from(fol_path_str), fol_img)
+            }
+            _ => (SharedString::default(), SharedString::default(),
+                  SharedString::default(), Image::default(),
+                  SharedString::default(), Image::default())
+        };
+
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.full_text.clone()),
@@ -567,6 +632,12 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         source_app_icon_path: SharedString::from(source_icon_path),
         source_app_icon_image: source_icon_image,
         color_swatch: color_swatch,
+        link_domain,
+        link_path,
+        favicon_path,
+        favicon_image,
+        folder_icon_path,
+        folder_icon_image,
         selected: false,
         selection_order: -1,
         file_count,

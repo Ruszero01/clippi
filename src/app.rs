@@ -7,7 +7,7 @@ use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
 };
-use crate::core::types::{is_url_or_path, ContentType, RichData};
+use crate::core::types::{is_url, is_path, ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::cursor::get_cursor_pos;
@@ -474,7 +474,13 @@ impl AppController {
         let looper_for_save = Arc::clone(&looper);
         let app_for_save = app.clone();
         slint_app.on_save_content(move |id, text: SharedString| {
-            let content_type = if is_url_or_path(&text) { "link" } else { "plain_text" };
+            let content_type = if is_url(&text) {
+                "link"
+            } else if is_path(&text) {
+                "path"
+            } else {
+                "plain_text"
+            };
             let _ = looper_for_save.try_with_clipboard_service(|cs| {
                 cs.update_content(id, &text, content_type);
             });
@@ -491,6 +497,8 @@ impl AppController {
             let _ = looper_for_filter.try_with_clipboard_service(|cs| {
                 if ft == "file" {
                     cs.toggle_file_filter_and_refresh();
+                } else if ft == "link" {
+                    cs.toggle_link_filter_and_refresh();
                 } else {
                     cs.toggle_filter_and_refresh(&ft);
                 }
@@ -498,7 +506,7 @@ impl AppController {
                     app.set_filter_plain_text(cs.is_filter_active("plain_text"));
                     app.set_filter_rich_text(cs.is_filter_active("rich_text"));
                     app.set_filter_image(cs.is_filter_active("image"));
-                    app.set_filter_link(cs.is_filter_active("link"));
+                    app.set_filter_link(cs.is_filter_active("link") || cs.is_filter_active("path"));
                     app.set_filter_color(cs.is_filter_active("color"));
                     app.set_filter_file(cs.is_filter_active("file") || cs.is_filter_active("image"));
                 }

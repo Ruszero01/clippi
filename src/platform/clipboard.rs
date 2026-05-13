@@ -4,9 +4,10 @@
 //! Files > Image > Link > Color > RichText > PlainText
 
 use crate::core::color::detect_color;
-use crate::core::types::{is_url_or_path, is_image_extension, ClipboardItem, ContentType, FileData, FileInfo, RichData};
+use crate::core::types::{is_url, is_path, is_image_extension, ClipboardItem, ContentType, FileData, FileInfo, RichData};
 use crate::core::paths::images_dir;
 use crate::platform::source;
+use crate::platform::favicon;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::common::RustImageData;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
@@ -161,8 +162,15 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             return None;
         }
 
-        if is_url_or_path(&text) {
+        if is_url(&text) {
+            // Prefetch favicon in background thread (non-critical)
+            let domain = crate::core::types::url_to_domain(&text);
+            let _ = favicon::ensure_favicon_cached(&domain);
             return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref(), None));
+        }
+
+        if is_path(&text) {
+            return Some(ClipboardItem::new_text(0, &text, ContentType::Path, source_info.as_ref(), None));
         }
 
         // Color detection: hash the normalized color value for dedup

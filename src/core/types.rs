@@ -13,6 +13,7 @@ pub enum ContentType {
     Link,
     Color,
     File,
+    Path,
 }
 
 impl ContentType {
@@ -24,6 +25,7 @@ impl ContentType {
             ContentType::Link => "link",
             ContentType::Color => "color",
             ContentType::File => "file",
+            ContentType::Path => "path",
         }
     }
 
@@ -35,6 +37,7 @@ impl ContentType {
             "link" => ContentType::Link,
             "color" => ContentType::Color,
             "file" => ContentType::File,
+            "path" => ContentType::Path,
             _ => ContentType::PlainText,
         }
     }
@@ -242,16 +245,20 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     }
 }
 
-/// Check if text is a URL or file path (local or network/NAS).
-/// Recognizes: http/https URLs, Windows absolute paths (C:\...), UNC paths (\\server\...)
-pub fn is_url_or_path(text: &str) -> bool {
+/// Check if text is a web URL (http:// or https:// only).
+pub fn is_url(text: &str) -> bool {
     let text = text.trim();
     if text.contains('\n') {
         return false;
     }
-    // http/https URL
-    if (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10 {
-        return true;
+    (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10
+}
+
+/// Check if text is a file system path (Windows absolute, UNC, or Unix absolute).
+pub fn is_path(text: &str) -> bool {
+    let text = text.trim();
+    if text.contains('\n') {
+        return false;
     }
     // Windows absolute path: C:\..., D:/...
     if text.len() >= 3
@@ -261,9 +268,45 @@ pub fn is_url_or_path(text: &str) -> bool {
     {
         return true;
     }
-    // UNC network path (NAS): \\server\share\... or \\192.168.1.1\...
+    // UNC network path: \\server\share\... or \\192.168.1.1\...
     if text.starts_with("\\\\") && text.len() > 2 {
         return true;
     }
+    // Unix absolute path: /Users/..., /etc/..., /tmp/...
+    if text.starts_with('/') && text.len() >= 3 && text.as_bytes()[1] != b'/' {
+        return true;
+    }
     false
+}
+
+/// Extract the domain portion from a URL for display.
+/// "https://www.github.com/user/repo" -> "www.github.com"
+pub fn url_domain(text: &str) -> String {
+    let s = text.trim();
+    let no_scheme = s.strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+    match no_scheme.find(|c: char| c == '/' || c == '?' || c == '#') {
+        Some(pos) => no_scheme[..pos].to_string(),
+        None => no_scheme.to_string(),
+    }
+}
+
+/// Extract the path, query, and fragment from a URL for display.
+/// "https://www.github.com/user/repo?tab=stars" -> "/user/repo?tab=stars"
+/// Returns empty string if the URL has no path portion.
+pub fn url_path(text: &str) -> String {
+    let s = text.trim();
+    let no_scheme = s.strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+    match no_scheme.find(|c: char| c == '/' || c == '?' || c == '#') {
+        Some(pos) => no_scheme[pos..].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Extract the domain from a URL for favicon lookup (same as url_domain).
+pub fn url_to_domain(text: &str) -> String {
+    url_domain(text)
 }

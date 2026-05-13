@@ -69,7 +69,10 @@ impl ClipboardFilters {
         // Type filter dimension
         if !self.type_filters.is_empty() {
             let type_str = item.content_type.as_str();
-            if !self.type_filters.iter().any(|t| t.as_str() == type_str) {
+            if !self.type_filters.iter().any(|t| {
+                t.as_str() == type_str
+                || (t == "link" && type_str == "path")
+            }) {
                 return false;
             }
         }
@@ -98,15 +101,22 @@ impl ClipboardFilters {
             conditions.push("is_favorite = 1".to_string());
         }
 
-        // Type filter
+        // Type filter — expand "link" to also include "path"
         if !self.type_filters.is_empty() {
-            let placeholders: Vec<&str> = self.type_filters.iter().map(|_| "?").collect();
+            let expanded: Vec<String> = self.type_filters.iter().flat_map(|t| {
+                if t == "link" {
+                    vec!["link".to_string(), "path".to_string()]
+                } else {
+                    vec![t.clone()]
+                }
+            }).collect();
+            let placeholders: Vec<&str> = expanded.iter().map(|_| "?").collect();
             conditions.push(format!(
                 "content_type IN ({})",
                 placeholders.join(", ")
             ));
-            for t in &self.type_filters {
-                params.push(t.clone().into());
+            for t in expanded {
+                params.push(t.into());
             }
         }
 

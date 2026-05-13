@@ -157,6 +157,17 @@ impl Database {
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let ct_str: String = row.get(1)?;
+    // Lazy reclassification: legacy "link" items that are actually file paths → "path"
+    let ct_str = if ct_str == "link" {
+        let full_text: String = row.get(2)?;
+        if crate::core::types::is_path(&full_text) {
+            "path".to_string()
+        } else {
+            ct_str
+        }
+    } else {
+        ct_str
+    };
     let created_str: String = row.get(4)?;
     let updated_str: String = row.get(5)?;
     let image_path: String = row.get(6).unwrap_or_default();
