@@ -286,7 +286,7 @@ pub fn url_domain(text: &str) -> String {
     let no_scheme = s.strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
-    match no_scheme.find(|c: char| c == '/' || c == '?' || c == '#') {
+    match no_scheme.find(['/', '?', '#']) {
         Some(pos) => no_scheme[..pos].to_string(),
         None => no_scheme.to_string(),
     }
@@ -300,7 +300,7 @@ pub fn url_path(text: &str) -> String {
     let no_scheme = s.strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
-    match no_scheme.find(|c: char| c == '/' || c == '?' || c == '#') {
+    match no_scheme.find(['/', '?', '#']) {
         Some(pos) => no_scheme[pos..].to_string(),
         None => String::new(),
     }

@@ -14,17 +14,17 @@ pub struct ColorValue {
 
 impl ColorValue {
     /// Normalized 6-digit uppercase hex string (no `#`), used as the hash source.
-    pub fn to_hex_normalized(&self) -> String {
+    pub fn to_hex_normalized(self) -> String {
         format!("{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
 
     /// CSS hex format: `#RRGGBB`
-    pub fn to_css_hex(&self) -> String {
+    pub fn to_css_hex(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
 
     /// CSS rgb format: `rgb(R, G, B)`
-    pub fn to_rgb(&self) -> String {
+    pub fn to_rgb(self) -> String {
         format!("rgb({}, {}, {})", self.r, self.g, self.b)
     }
 }
@@ -56,13 +56,6 @@ pub fn detect_color(text: &str) -> Option<ColorValue> {
 pub fn is_hex_format(text: &str) -> bool {
     let text = text.trim();
     parse_hex(text).is_some()
-}
-
-/// Check whether the original text is in RGB-like format.
-#[allow(dead_code)]
-pub fn is_rgb_format(text: &str) -> bool {
-    let text = text.trim();
-    parse_rgb(text).is_some()
 }
 
 // ── HEX parsing ──
@@ -277,14 +270,6 @@ mod tests {
         assert!(is_hex_format("#F80"));
         assert!(!is_hex_format("rgb(255,128,0)"));
         assert!(!is_hex_format("255, 128, 0"));
-    }
-
-    #[test]
-    fn test_is_rgb_format() {
-        assert!(is_rgb_format("rgb(255,128,0)"));
-        assert!(is_rgb_format("255, 128, 0"));
-        assert!(is_rgb_format("255 128 0"));
-        assert!(!is_rgb_format("#FF8000"));
     }
 
     #[test]

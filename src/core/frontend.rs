@@ -4,6 +4,10 @@ use crate::platform::monitor;
 use crate::App;
 use slint::{ComponentHandle, LogicalSize, PhysicalPosition};
 
+/// Default window size (width, height) in logical pixels.
+pub const DEFAULT_WINDOW_WIDTH: f32 = 320.0;
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum PositionMode {
     Center,
@@ -143,7 +147,7 @@ impl Frontend {
             app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
-            window.set_size(LogicalSize::new(320.0, 480.0));
+            window.set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
             self.apply_position();
             let t = app.get_scroll_trigger();
             app.set_scroll_trigger(t + 1);
@@ -167,7 +171,7 @@ impl Frontend {
             app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
-            window.set_size(LogicalSize::new(320.0, 480.0));
+            window.set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
             self.apply_position();
             let t = app.get_scroll_trigger();
             app.set_scroll_trigger(t + 1);
@@ -210,7 +214,7 @@ impl Frontend {
             app.set_current_view(slint::SharedString::from("settings"));
             let window = app.window();
             window.show().ok();
-            window.set_size(LogicalSize::new(320.0, 480.0));
+            window.set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
             self.apply_position();
             self.visible = true;
             let t = app.get_scroll_trigger();

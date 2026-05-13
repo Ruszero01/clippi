@@ -26,7 +26,9 @@ mod windows_impl {
         ) -> BOOL;
     }
 
+    #[allow(clippy::upper_case_acronyms)]
     type HICON = HANDLE;
+    #[allow(clippy::upper_case_acronyms)]
     type HBRUSH = HANDLE;
 
     const DI_NORMAL: u32 = 0x0003;
@@ -113,20 +115,10 @@ mod windows_impl {
                 rgba.push(chunk[3]); // A
             }
 
-            let png_bytes = encode_png(&rgba, icon_size as u32, icon_size as u32)?;
+            let png_bytes = super::super::util::encode_png(&rgba, icon_size as u32, icon_size as u32)?;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
             Some(b64)
         }
-    }
-
-    fn encode_png(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
-        use image::{ImageEncoder, codecs::png::PngEncoder};
-        let mut buf = Vec::new();
-        let encoder = PngEncoder::new(&mut buf);
-        encoder
-            .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
-            .ok()?;
-        Some(buf)
     }
 }
 

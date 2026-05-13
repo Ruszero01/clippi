@@ -631,7 +631,7 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         source_app_name: SharedString::from(item.source_app_name.clone()),
         source_app_icon_path: SharedString::from(source_icon_path),
         source_app_icon_image: source_icon_image,
-        color_swatch: color_swatch,
+        color_swatch,
         link_domain,
         link_path,
         favicon_path,

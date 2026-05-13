@@ -26,8 +26,11 @@ impl Looper {
         Self {
             timer: Timer::default(),
             services: Vec::new(),
+            #[allow(clippy::arc_with_non_send_sync)]
             clipboard_service: Arc::new(Mutex::new(None)),
+            #[allow(clippy::arc_with_non_send_sync)]
             hotkey_service: Arc::new(Mutex::new(None)),
+            #[allow(clippy::arc_with_non_send_sync)]
             focus_service: Arc::new(Mutex::new(None)),
         }
     }

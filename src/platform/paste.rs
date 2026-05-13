@@ -81,7 +81,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
         // Ctrl down
         inputs[0].r#type = INPUT_KEYBOARD;
         inputs[0].Anonymous.ki = KEYBDINPUT {
-            wVk: VK_CONTROL as u16,
+            wVk: VK_CONTROL,
             wScan: 0,
             dwFlags: 0,
             time: 0,
@@ -91,7 +91,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
         // V down
         inputs[1].r#type = INPUT_KEYBOARD;
         inputs[1].Anonymous.ki = KEYBDINPUT {
-            wVk: VK_V as u16,
+            wVk: VK_V,
             wScan: 0,
             dwFlags: 0,
             time: 0,
@@ -101,7 +101,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
         // V up
         inputs[2].r#type = INPUT_KEYBOARD;
         inputs[2].Anonymous.ki = KEYBDINPUT {
-            wVk: VK_V as u16,
+            wVk: VK_V,
             wScan: 0,
             dwFlags: KEYEVENTF_KEYUP,
             time: 0,
@@ -111,7 +111,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
         // Ctrl up
         inputs[3].r#type = INPUT_KEYBOARD;
         inputs[3].Anonymous.ki = KEYBDINPUT {
-            wVk: VK_CONTROL as u16,
+            wVk: VK_CONTROL,
             wScan: 0,
             dwFlags: KEYEVENTF_KEYUP,
             time: 0,

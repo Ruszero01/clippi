@@ -162,7 +162,7 @@ mod windows {
 
         for (vk, code) in vk_map {
             unsafe {
-                if GetAsyncKeyState(*vk as i32) < 0 {
+                if GetAsyncKeyState(*vk) < 0 {
                     return Some(*code);
                 }
             }
@@ -507,7 +507,7 @@ mod linux {
     impl HotkeyListener for LinuxHotkeyListener {
         fn stop(&mut self) {}
         fn update_hotkey(&mut self, _hotkey_str: &str) -> Result<(), String> {
-            todo!()
+            Ok(())
         }
         fn start_recording(&mut self) {}
         fn finish_recording(&mut self) {}

@@ -70,11 +70,20 @@ impl FocusWatcher {
 #[cfg(target_os = "windows")]
 pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
     let hook = unsafe {
-        let proc: WINEVENTPROC = Some(std::mem::transmute(win_event_proc as *const ()));
+        let proc: WINEVENTPROC = Some(
+            std::mem::transmute::<*const (), unsafe extern "system" fn(
+                *mut std::ffi::c_void,
+                u32,
+                *mut std::ffi::c_void,
+                i32,
+                i32,
+                u32,
+                u32,
+            )>(win_event_proc as *const ()));
         SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
-            0 as *mut std::ffi::c_void,
+            std::ptr::null_mut::<std::ffi::c_void>(),
             proc,
             0,
             0,

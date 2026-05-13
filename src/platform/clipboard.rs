@@ -141,10 +141,10 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                 let file_name = format!("{:016x}.png", hash);
                 let file_path = img_dir.join(&file_name);
 
-                if !file_path.exists() {
-                    if png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err() {
-                        return None;
-                    }
+                if !file_path.exists()
+                    && png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err()
+                {
+                    return None;
                 }
 
                 return Some(ClipboardItem::new_image(
@@ -263,7 +263,7 @@ impl ClipboardListener for PollingClipboardListener {
                 let startup_done = startup_end
                     .lock()
                     .unwrap()
-                    .map_or(false, |end| end.elapsed().as_millis() > 500);
+                    .is_some_and(|end| end.elapsed().as_millis() > 500);
 
                 // 批量粘贴期间跳过记录，避免产生冗余条目
                 if batch_pasting.load(Ordering::SeqCst) {

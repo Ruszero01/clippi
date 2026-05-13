@@ -10,7 +10,7 @@ use crate::core::settings::{
 use crate::core::types::{is_url, is_path, ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
-use crate::platform::cursor::get_cursor_pos;
+use crate::platform::monitor::get_cursor_pos;
 use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
 use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
@@ -182,6 +182,7 @@ impl AppController {
         });
 
         // Hotkey callbacks
+        #[allow(clippy::arc_with_non_send_sync)]
         let looper = Arc::new(looper);
         let looper_for_set = Arc::clone(&looper);
         let looper_for_recording = Arc::clone(&looper);
@@ -595,7 +596,7 @@ impl AppController {
                     };
 
                 // Get cursor position in screen coordinates, convert to window-relative
-                let (cursor_x, cursor_y) = get_cursor_pos();
+                let (cursor_x, cursor_y) = get_cursor_pos().unwrap_or((0, 0));
                 let pos = app.window().position();
                 let scale = app.window().scale_factor();
                 let client_x = (cursor_x as f32 - pos.x as f32) / scale;

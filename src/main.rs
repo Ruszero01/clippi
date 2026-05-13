@@ -2,6 +2,7 @@
 
 slint::include_modules!();
 
+use crate::core::frontend::{DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT};
 use slint::{ComponentHandle, LogicalSize};
 
 mod app;
@@ -42,7 +43,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         slint_app.window().show().unwrap();
-        slint_app.window().set_size(LogicalSize::new(320.0, 480.0));
+        slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
         let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
         let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
         ns_app.activate();
@@ -50,7 +51,7 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     {
         slint_app.window().show().unwrap();
-        slint_app.window().set_size(LogicalSize::new(320.0, 480.0));
+        slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
     }
     if slint_app.get_silent_start() {
         slint_app.window().hide().unwrap();
