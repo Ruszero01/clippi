@@ -715,13 +715,8 @@ impl AppController {
                     cs.load_all_tags_for_filter();
                 });
                 app.set_tag_picker_visible(false);
-                if let Some(pos) = get_cursor_pos() {
-                    let win_pos = app.window().position();
-                    let wx = (pos.0 - win_pos.x as i32) as f32;
-                    let wy = (pos.1 - win_pos.y as i32) as f32;
-                    app.set_tag_filter_x(wx);
-                    app.set_tag_filter_y(wy);
-                }
+                // Fixed position: centered horizontally (via Slint), aligned with card list top
+                app.set_tag_filter_y(106.0);
                 app.set_tag_filter_visible(true);
             }
         });

@@ -38,7 +38,7 @@ export component TagFilterPanel inherits Rectangle {
     property <color> input-bg: TagPanelTheme.input-bg;
     property <color> sep-line: TagPanelTheme.sep-line;
 
-    width: 290px;
+    width: 304px;
     height: panel-content.preferred-height;
     x: (container-w - self.width) / 2;
     y: clamp(panel-y, 4px, container-h - self.height - 4px);
@@ -166,7 +166,7 @@ export component TagFilterPanel inherits Rectangle {
         // 标签列表（滚动，双列网格布局）
         ScrollView {
             height: 166px;
-            viewport-width: 274px;
+            viewport-width: 288px;
             viewport-height: tag-list-container.preferred-height;
 
             tag-list-container := VerticalLayout {
@@ -176,7 +176,7 @@ export component TagFilterPanel inherits Rectangle {
                     for tag[idx] in root.all-tags: Rectangle {
                         col: Math.mod(idx, 2);
                         row: idx / 2;
-                        width: 135px;
+                        width: 140px;
                         height: 30px;
                         border-radius: 5px;
                         background: tag.checked ? (dark-mode ? #7ecba318 : #6ab89018) : (row-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent);

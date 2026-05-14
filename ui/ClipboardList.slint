@@ -148,8 +148,12 @@ export component ClipboardList inherits Rectangle {
             spacing: 6px;
                 // ========== 筛选按钮栏 ==========
                 HorizontalLayout {
-                    spacing: 6px;
+                    alignment: space-between;
                     height: 22px;
+
+                    // 类型筛选按钮组
+                    HorizontalLayout {
+                        spacing: 6px;
 
                     // 文本
                     ft-bg := Rectangle {
@@ -336,7 +340,17 @@ export component ClipboardList inherits Rectangle {
                         }
                     }
 
-                    // 标签筛选按钮（仅图标）
+                    } // end type filter group
+
+                    // 分割线
+                    Rectangle {
+                        width: 1px;
+                        height: 14px;
+                        y: 4px;
+                        background: dark-mode ? #ffffff18 : #00000014;
+                    }
+
+                    // 标签筛选按钮（仅图标，右对齐）
                     ft-tag-btn := Rectangle {
                         width: 24px;
                         height: 22px;
