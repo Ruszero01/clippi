@@ -286,7 +286,11 @@ impl ClipboardService {
 
     /// Create a new tag
     pub fn create_tag(&self, name: &str) -> Option<crate::core::types::TagInfo> {
-        let color = crate::core::types::random_tag_color();
+        let count = self.db.lock().expect("db lock poisoned")
+            .get_all_tags()
+            .map(|t| t.len())
+            .unwrap_or(0);
+        let color = crate::core::types::next_tag_color(count);
         self.db.lock().expect("db lock poisoned")
             .create_tag(name, color)
             .ok()
@@ -331,12 +335,13 @@ impl ClipboardService {
 
     /// Create a tag and add it to the current item (from picker)
     pub fn create_and_add_tag(&mut self, item_id: i32, name: &str) -> Option<crate::core::types::TagInfo> {
-        let color = crate::core::types::random_tag_color();
-        let tag_id = {
-            self.db.lock().expect("db lock poisoned")
-                .create_tag(name, color)
-                .ok()
-        }?;
+        let (tag_id, color) = {
+            let db = self.db.lock().expect("db lock poisoned");
+            let count = db.get_all_tags().map(|t| t.len()).unwrap_or(0);
+            let color = crate::core::types::next_tag_color(count);
+            let id = db.create_tag(name, color).ok()?;
+            (id, color.to_string())
+        };
         self.db.lock().expect("db lock poisoned")
             .add_item_tag(item_id as i64, tag_id)
             .ok()?;

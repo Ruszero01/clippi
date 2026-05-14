@@ -197,7 +197,7 @@ impl Database {
     }
 
     pub fn get_all_tags(&self) -> SqlResult<Vec<TagInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE")?;
+        let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags ORDER BY id DESC")?;
         let rows = stmt.query_map([], |row| {
             Ok(TagInfo {
                 id: row.get(0)?,

@@ -125,6 +125,12 @@ export component TagFilterPanel inherits Rectangle {
                     letter-spacing: 0.5px;
                     horizontal-alignment: left;
                     vertical-alignment: center;
+                    accepted => {
+                        if create-input.text != "" {
+                            root.create-tag(create-input.text);
+                            create-input.text = "";
+                        }
+                    }
                 }
             }
 

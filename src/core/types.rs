@@ -74,10 +74,9 @@ pub const TAG_PRESET_COLORS: &[(&str, &str)] = &[
     ("天蓝", "#0EA5E9"),
 ];
 
-/// Pick a random color from presets (deterministic, no rand dep)
-pub fn random_tag_color() -> &'static str {
-    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-    TAG_PRESET_COLORS[(nanos as usize) % TAG_PRESET_COLORS.len()].1
+/// Pick the next color from presets in round-robin order
+pub fn next_tag_color(index: usize) -> &'static str {
+    TAG_PRESET_COLORS[index % TAG_PRESET_COLORS.len()].1
 }
 
 /// Parse hex color "#EF4444" → (r, g, b)
