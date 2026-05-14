@@ -182,6 +182,12 @@ impl Database {
 
     pub fn delete_tag(&mut self, tag_id: i64) -> SqlResult<()> {
         let tx = self.conn.transaction()?;
+        // Touch affected items before removing the associations
+        tx.execute(
+            "UPDATE clipboard_items SET updated_at = ?1
+             WHERE id IN (SELECT item_id FROM item_tags WHERE tag_id = ?2)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339(), tag_id],
+        )?;
         tx.execute("DELETE FROM item_tags WHERE tag_id = ?1", params![tag_id])?;
         tx.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
         tx.commit()?;
@@ -258,6 +264,7 @@ impl Database {
             "INSERT OR REPLACE INTO item_tags (tag_id, item_id, used_at) VALUES (?1, ?2, ?3)",
             params![tag_id, item_id, now],
         )?;
+        self.touch_item(item_id)?;
         Ok(())
     }
 
@@ -266,6 +273,7 @@ impl Database {
             "DELETE FROM item_tags WHERE tag_id = ?1 AND item_id = ?2",
             params![tag_id, item_id],
         )?;
+        self.touch_item(item_id)?;
         Ok(())
     }
 
@@ -274,10 +282,10 @@ impl Database {
             "DELETE FROM item_tags WHERE item_id = ?1",
             params![item_id],
         )?;
+        self.touch_item(item_id)?;
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn get_tag_by_name(&self, name: &str) -> SqlResult<Option<TagInfo>> {
         let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags WHERE name = ?1")?;
         let mut rows = stmt.query(params![name])?;
@@ -317,6 +325,102 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    // ── Sync helpers ──
+
+    /// Get all items (excluding image and file types) with tags for sync snapshot.
+    pub fn get_all_sync_items_with_tags(&self) -> SqlResult<Vec<ClipboardItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at,
+             image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon
+             FROM clipboard_items
+             WHERE content_type NOT IN ('image', 'file')
+             ORDER BY updated_at DESC",
+        )?;
+        let mut items: Vec<ClipboardItem> = stmt
+            .query_map([], row_to_item)?
+            .collect::<SqlResult<Vec<_>>>()?;
+        if !items.is_empty() {
+            let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
+            let tag_map = self.get_tags_for_items(&ids)?;
+            for item in &mut items {
+                item.tags = tag_map.get(&item.id).cloned().unwrap_or_default();
+            }
+        }
+        Ok(items)
+    }
+
+    /// Insert a full item row (used during sync merge for new remote items).
+    pub fn insert_sync_item_raw(
+        &self,
+        full_text: &str,
+        content_type: &str,
+        content_hash: u64,
+        created_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+        rich_data: &str,
+        is_favorite: bool,
+        note: &str,
+        source_app_name: &str,
+    ) -> SqlResult<i64> {
+        self.conn.execute(
+            "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at,
+             rich_data, is_favorite, note, source_app_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                content_type,
+                full_text,
+                content_hash as i64,
+                created_at.to_rfc3339(),
+                updated_at.to_rfc3339(),
+                rich_data,
+                is_favorite as i32,
+                note,
+                source_app_name,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Update an item's fields from a newer remote version (sync merge).
+    pub fn update_sync_item(
+        &self,
+        id: i64,
+        full_text: &str,
+        content_type: &str,
+        updated_at: String,
+        rich_data: &str,
+        is_favorite: bool,
+        note: &str,
+        source_app_name: &str,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
+             rich_data = ?4, is_favorite = ?5, note = ?6, source_app_name = ?7
+             WHERE id = ?8",
+            rusqlite::params![
+                full_text,
+                content_type,
+                updated_at,
+                rich_data,
+                is_favorite as i32,
+                note,
+                source_app_name,
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Bump updated_at on an item (called after tag changes to mark dirty for sync).
+    pub fn touch_item(&self, item_id: i64) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE clipboard_items SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, item_id],
+        )?;
+        Ok(())
     }
 }
 

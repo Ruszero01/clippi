@@ -1,10 +1,11 @@
-import { ClipboardEntry, TagItem } from "types.slint";
+import { ClipboardEntry, TagItem, SyncBackendInfo } from "types.slint";
 import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
 import { EditPanel } from "EditPanel.slint";
 import { ContextMenu } from "ContextMenu.slint";
 import { TagFilterPanel } from "TagFilterPanel.slint";
 import { TagPickerPanel } from "TagPickerPanel.slint";
+import { AddBackendPanel } from "AddBackendPanel.slint";
 
 import { Palette } from "std-widgets.slint";
 import { TagPanelTheme } from "theme.slint";
@@ -47,6 +48,20 @@ export component App inherits Window {
     in-out property <bool> copy-as-plain-text: false;
     in-out property <bool> show-original-on-hover: false;
     in-out property <int> scroll-trigger: 0;
+    // 云同步
+    in property <[SyncBackendInfo]> sync-backends: [];
+    in-out property <bool> sync-auto-enabled: true;
+    in-out property <int> sync-interval-secs: 60;
+    in-out property <string> sync-status: "";
+    in-out property <int> sync-items-added: 0;
+    in-out property <int> sync-items-updated: 0;
+    in-out property <int> sync-tags-added: 0;
+    // 添加服务浮层
+    in-out property <bool> add-backend-panel-visible: false;
+    in-out property <length> add-backend-panel-x: 0px;
+    in-out property <length> add-backend-panel-y: 0px;
+    in property <string> preset-onedrive-path: "";
+    in property <string> preset-icloud-path: "";
 
     // 右键菜单状态
     in-out property <bool> context-menu-visible: false;
@@ -128,6 +143,14 @@ export component App inherits Window {
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
+    callback toggle-sync-auto-enabled();
+    callback set-sync-interval(int);
+    callback sync-now();
+    callback show-add-backend-panel();
+    callback hide-add-backend-panel();
+    callback add-sync-backend(string, string);
+    callback remove-sync-backend(string);
+    callback toggle-sync-backend(string);
     callback update-note(int, string);
     callback edit-item(int);
     callback save-content(int, string);
@@ -467,6 +490,13 @@ export component App inherits Window {
                     auto-scroll-to-top: root.auto-scroll-to-top;
                     copy-as-plain-text: root.copy-as-plain-text;
                     show-original-on-hover: root.show-original-on-hover;
+                    sync-auto-enabled: root.sync-auto-enabled;
+                    sync-interval-secs: root.sync-interval-secs;
+                    sync-status: root.sync-status;
+                    sync-items-added: root.sync-items-added;
+                    sync-items-updated: root.sync-items-updated;
+                    sync-tags-added: root.sync-tags-added;
+                    sync-backends: root.sync-backends;
 
                     back => { root.current-view = "clipboard"; }
                     toggle-auto-start => { root.toggle-auto-start(); }
@@ -484,6 +514,12 @@ export component App inherits Window {
                     toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
                     toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
                     toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
+                    toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
+                    set-sync-interval(i) => { root.set-sync-interval(i); }
+                    sync-now => { root.sync-now(); }
+                    show-add-backend-panel => { root.show-add-backend-panel(); }
+                    remove-sync-backend(id) => { root.remove-sync-backend(id); }
+                    toggle-sync-backend(id) => { root.toggle-sync-backend(id); }
                 }
             }
         }
@@ -559,6 +595,20 @@ export component App inherits Window {
             batch-add-tag(tag-id) => { root.batch-add-tag(tag-id); }
             batch-remove-tag(tag-id) => { root.batch-remove-tag(tag-id); }
             clear-all-tags => { root.clear-all-tags(); }
+        }
+
+        // ========== 添加同步服务浮层 ==========
+        if root.add-backend-panel-visible: AddBackendPanel {
+            panel-x: root.add-backend-panel-x;
+            panel-y: root.add-backend-panel-y;
+            container-w: parent.width;
+            container-h: parent.height;
+            dark-mode: root.dark-mode;
+            preset-onedrive-path: root.preset-onedrive-path;
+            preset-icloud-path: root.preset-icloud-path;
+
+            hide-panel => { root.hide-add-backend-panel(); }
+            add-backend(name, path) => { root.add-sync-backend(name, path); }
         }
 
         // ========== 缩放手柄（置于最顶层，优先接收鼠标事件） ==========

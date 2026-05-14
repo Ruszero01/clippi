@@ -16,6 +16,7 @@ use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
+use crate::services::sync::SyncManager;
 use crate::services::tray::TrayService;
 use crate::App;
 use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent, common::RustImageData};
@@ -64,10 +65,12 @@ impl AppController {
         let clipboard_shared = ClipboardShared::new();
         let batch_pasting_flag = clipboard_shared.batch_pasting.clone();
         let clear_selection_flag = clipboard_shared.clear_selection_requested.clone();
+        let sync_dirty_flag = Arc::new(AtomicBool::new(false));
         let mut clipboard_service = ClipboardService::new(
             clipboard_shared,
             db.clone(),
             app.clone(),
+            sync_dirty_flag.clone(),
         );
         let clipboard_service_for_callbacks = clipboard_service.clone();
         // Load initial data and apply settings
@@ -97,12 +100,31 @@ impl AppController {
         // Apply initial focus settings
         focus_service.set_auto_hide(auto_hide_setting);
 
+        // Create sync manager (uses the same dirty flag as ClipboardService)
+        let sync_manager = SyncManager::new(
+            db.clone(),
+            shared_settings.clone(),
+            app.clone(),
+            sync_dirty_flag,
+        );
+
+        // Detect preset paths for AddBackendPanel
+        let presets = crate::services::backends::local_folder::detect_presets();
+        for (name, path) in &presets {
+            match *name {
+                "OneDrive" => slint_app.set_preset_onedrive_path(SharedString::from(path)),
+                "iCloud" => slint_app.set_preset_icloud_path(SharedString::from(path)),
+                _ => {}
+            }
+        }
+
         // Create and start looper
         let mut looper = Looper::new();
         looper.add_service(Box::new(tray_service));
         looper.set_clipboard_service(clipboard_service);
         looper.set_hotkey_service(hotkey_service);
         looper.set_focus_service(focus_service);
+        looper.set_sync_manager(sync_manager);
         looper.start();
 
         // ========== Bind Slint callbacks ==========
@@ -450,6 +472,85 @@ impl AppController {
                 s.show_original_on_hover = new_val;
                 s.save();
             }
+        });
+
+        // ── Sync callbacks ──
+
+        // Toggle auto-sync
+        let settings_for_sync_auto = Arc::clone(&shared_settings);
+        let app_for_sync_auto = app.clone();
+        slint_app.on_toggle_sync_auto_enabled(move || {
+            if let Some(app) = app_for_sync_auto.upgrade() {
+                let new_val = !app.get_sync_auto_enabled();
+                app.set_sync_auto_enabled(new_val);
+                let mut s = settings_for_sync_auto.lock().expect("settings lock poisoned");
+                s.sync_auto_enabled = new_val;
+                s.save();
+            }
+        });
+
+        // Set sync interval (global)
+        let settings_for_sync_interval = Arc::clone(&shared_settings);
+        let app_for_sync_interval = app.clone();
+        slint_app.on_set_sync_interval(move |secs: i32| {
+            if let Some(app) = app_for_sync_interval.upgrade() {
+                app.set_sync_interval_secs(secs);
+                let mut s = settings_for_sync_interval.lock().expect("settings lock poisoned");
+                s.sync_interval_secs = secs as u64;
+                s.save();
+            }
+        });
+
+        // Manual sync now
+        let looper_for_sync_now = Arc::clone(&looper);
+        slint_app.on_sync_now(move || {
+            let _ = looper_for_sync_now.try_with_sync_manager(|sm| {
+                sm.trigger_sync_now();
+            });
+        });
+
+        // Show add-backend floating panel
+        let app_for_show_panel = app.clone();
+        slint_app.on_show_add_backend_panel(move || {
+            if let Some(app) = app_for_show_panel.upgrade() {
+                if let Some(pos) = get_cursor_pos() {
+                    app.set_add_backend_panel_x(pos.0 as f32);
+                    app.set_add_backend_panel_y(pos.1 as f32);
+                }
+                app.set_add_backend_panel_visible(true);
+            }
+        });
+
+        // Hide add-backend floating panel
+        let app_for_hide_panel = app.clone();
+        slint_app.on_hide_add_backend_panel(move || {
+            if let Some(app) = app_for_hide_panel.upgrade() {
+                app.set_add_backend_panel_visible(false);
+            }
+        });
+
+        // Add backend from floating panel
+        let looper_for_add_backend = Arc::clone(&looper);
+        slint_app.on_add_sync_backend(move |name: SharedString, path: SharedString| {
+            let _ = looper_for_add_backend.try_with_sync_manager(|sm| {
+                sm.add_local_folder_backend(name.to_string(), path.to_string());
+            });
+        });
+
+        // Remove backend
+        let looper_for_remove_backend = Arc::clone(&looper);
+        slint_app.on_remove_sync_backend(move |id: SharedString| {
+            let _ = looper_for_remove_backend.try_with_sync_manager(|sm| {
+                sm.remove_backend(&id);
+            });
+        });
+
+        // Toggle backend enabled/disabled
+        let looper_for_toggle_backend = Arc::clone(&looper);
+        slint_app.on_toggle_sync_backend(move |id: SharedString| {
+            let _ = looper_for_toggle_backend.try_with_sync_manager(|sm| {
+                sm.toggle_backend(&id);
+            });
         });
 
         // Update note callback
@@ -977,6 +1078,8 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_auto_scroll_to_top(settings.auto_scroll_to_top);
     app.set_copy_as_plain_text(settings.copy_as_plain_text);
     app.set_show_original_on_hover(settings.show_original_on_hover);
+    app.set_sync_auto_enabled(settings.sync_auto_enabled);
+    app.set_sync_interval_secs(settings.sync_interval_secs as i32);
 }
 
 /// Write a clipboard item's content to the system clipboard.

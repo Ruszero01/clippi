@@ -1,0 +1,286 @@
+import { TagPanelTheme } from "theme.slint";
+
+export component AddBackendPanel inherits Rectangle {
+    // 定位
+    in property <length> panel-x: 0px;
+    in property <length> panel-y: 0px;
+    in property <length> container-w: 0px;
+    in property <length> container-h: 0px;
+    // 主题
+    in property <bool> dark-mode: false;
+    // 预设（由 Rust 端检测后传入）
+    in property <string> preset-onedrive-path: "";
+    in property <string> preset-icloud-path: "";
+
+    // 回调
+    callback hide-panel();
+    callback add-backend(string, string);  // (name, folder_path)
+
+    // 主题色板
+    property <color> accent: TagPanelTheme.accent;
+    property <color> text-1: TagPanelTheme.text-1;
+    property <color> text-2: TagPanelTheme.text-2;
+    property <color> text-3: TagPanelTheme.text-3;
+    property <color> btn-hover: TagPanelTheme.btn-hover;
+    property <color> surface: TagPanelTheme.surface;
+    property <color> input-bg: TagPanelTheme.input-bg;
+    property <color> sep-line: TagPanelTheme.sep-line;
+
+    width: 320px;
+    height: panel-content.preferred-height;
+    x: (container-w - self.width) / 2;
+    y: clamp(panel-y, 4px, container-h - self.height - 4px);
+    border-radius: 8px;
+    background: surface;
+    opacity: 0.96;
+    border-width: 1px;
+    border-color: dark-mode ? #ffffff14 : #00000012;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #00000060;
+    drop-shadow-offset-y: 4px;
+
+    // 阻断鼠标事件穿透
+    event-blocker := TouchArea {
+        width: 100%;
+        height: 100%;
+        scroll-event => { accept }
+    }
+
+    panel-content := VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        // 标题行
+        HorizontalLayout {
+            height: 24px;
+            alignment: space-between;
+
+            Text {
+                text: "添加同步服务";
+                font-size: 13px;
+                font-weight: 600;
+                color: text-1;
+                vertical-alignment: center;
+            }
+
+            close-btn := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 5px;
+                background: close-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+
+                close-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => { root.hide-panel(); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "\u{e7b7}";
+                    font-family: "iconfont";
+                    font-size: 11px;
+                    color: text-2;
+                }
+            }
+        }
+
+        // 分割线
+        Rectangle {
+            width: 100%;
+            height: 1px;
+            background: sep-line;
+        }
+
+        // 预设按钮
+        Text {
+            text: "快速添加";
+            font-size: 11px;
+            font-weight: 600;
+            color: text-2;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            // OneDrive 预设
+            if root.preset-onedrive-path != "" : Rectangle {
+                height: 36px;
+                border-radius: 8px;
+                background: od-ta.has-hover ? accent : btn-hover;
+                border-width: 1px;
+                border-color: od-selected ? accent : transparent;
+
+                property <bool> od-selected: panel-folder-input.text == root.preset-onedrive-path;
+
+                od-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        if panel-name-input.text == "" {
+                            panel-name-input.text = "OneDrive";
+                        }
+                        panel-folder-input.text = root.preset-onedrive-path;
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 6px;
+                    height: 36px;
+
+                    Text {
+                        text: "\u{e60a}";
+                        font-family: "iconfont";
+                        font-size: 14px;
+                        color: od-ta.has-hover ? #ffffff : accent;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "OneDrive";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: od-ta.has-hover ? #ffffff : text-1;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // iCloud 预设
+            if root.preset-icloud-path != "" : Rectangle {
+                height: 36px;
+                border-radius: 8px;
+                background: ic-ta.has-hover ? accent : btn-hover;
+                border-width: 1px;
+                border-color: ic-selected ? accent : transparent;
+
+                property <bool> ic-selected: panel-folder-input.text == root.preset-icloud-path;
+
+                ic-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        if panel-name-input.text == "" {
+                            panel-name-input.text = "iCloud";
+                        }
+                        panel-folder-input.text = root.preset-icloud-path;
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 6px;
+                    height: 36px;
+
+                    Text {
+                        text: "\u{e60a}";
+                        font-family: "iconfont";
+                        font-size: 14px;
+                        color: ic-ta.has-hover ? #ffffff : accent;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "iCloud";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: ic-ta.has-hover ? #ffffff : text-1;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // 分割线
+        Rectangle {
+            width: 100%;
+            height: 1px;
+            background: sep-line;
+        }
+
+        // 名称输入
+        Text {
+            text: "服务名称";
+            font-size: 11px;
+            font-weight: 600;
+            color: text-2;
+        }
+
+        Rectangle {
+            height: 30px;
+            border-radius: 6px;
+            background: input-bg;
+
+            panel-name-input := TextInput {
+                x: 8px;
+                y: (parent.height - self.preferred-height) / 2;
+                width: parent.width - 16px;
+                height: 16px;
+                color: text-1;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        // 目录路径
+        Text {
+            text: "同步目录";
+            font-size: 11px;
+            font-weight: 600;
+            color: text-2;
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+
+            Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: input-bg;
+
+                panel-folder-input := TextInput {
+                    x: 8px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 16px;
+                    height: 16px;
+                    color: text-1;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 添加按钮
+        Rectangle {
+            height: 34px;
+            border-radius: 7px;
+            background: add-ta.has-hover ? accent-soft : accent;
+
+            add-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    if panel-name-input.text != "" && panel-folder-input.text != "" {
+                        root.add-backend(panel-name-input.text, panel-folder-input.text);
+                        panel-name-input.text = "";
+                        panel-folder-input.text = "";
+                        root.hide-panel();
+                    }
+                }
+            }
+
+            property <color> accent-soft: dark-mode ? #1a2e24 : #e8f5ee;
+
+            Text {
+                text: "添加服务";
+                font-size: 12px;
+                font-weight: 600;
+                color: add-ta.has-hover ? accent : #ffffff;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

@@ -3,6 +3,7 @@
 use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
+use crate::services::sync::SyncManager;
 use slint::{Timer, TimerMode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,6 +20,7 @@ pub struct Looper {
     clipboard_service: Arc<Mutex<Option<ClipboardService>>>,
     hotkey_service: Arc<Mutex<Option<HotkeyService>>>,
     focus_service: Arc<Mutex<Option<FocusService>>>,
+    sync_manager: Arc<Mutex<Option<SyncManager>>>,
 }
 
 impl Looper {
@@ -32,6 +34,8 @@ impl Looper {
             hotkey_service: Arc::new(Mutex::new(None)),
             #[allow(clippy::arc_with_non_send_sync)]
             focus_service: Arc::new(Mutex::new(None)),
+            #[allow(clippy::arc_with_non_send_sync)]
+            sync_manager: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -103,6 +107,27 @@ impl Looper {
         }
     }
 
+    /// Register sync manager (keeps concrete type for special methods)
+    pub fn set_sync_manager(&mut self, manager: SyncManager) {
+        *self.sync_manager.lock().expect("sync manager lock poisoned") = Some(manager);
+    }
+
+    /// Try to access sync manager
+    pub fn try_with_sync_manager<F, R>(&self, f: F) -> Result<R, ()>
+    where
+        F: FnOnce(&mut SyncManager) -> R,
+    {
+        let mut sm = match self.sync_manager.lock() {
+            Ok(sm) => sm,
+            Err(_) => return Err(()),
+        };
+        if let Some(ref mut sm) = *sm {
+            Ok(f(sm))
+        } else {
+            Err(())
+        }
+    }
+
     pub fn start(&mut self) {
         let mut services: Vec<Box<dyn Pollable>> = Vec::new();
         std::mem::swap(&mut self.services, &mut services);
@@ -110,6 +135,7 @@ impl Looper {
         let cs = Arc::clone(&self.clipboard_service);
         let hk = Arc::clone(&self.hotkey_service);
         let fs = Arc::clone(&self.focus_service);
+        let sm = Arc::clone(&self.sync_manager);
 
         self.timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
             for svc in &mut services {
@@ -124,6 +150,9 @@ impl Looper {
             if let Some(ref mut fs) = *fs.lock().expect("focus service lock poisoned") {
                 fs.poll();
             }
+            if let Some(ref mut sm) = *sm.lock().expect("sync manager lock poisoned") {
+                sm.poll();
+            }
         });
     }
 
@@ -137,6 +166,9 @@ impl Looper {
         }
         if let Some(ref mut fs) = *self.focus_service.lock().expect("focus service lock poisoned") {
             fs.stop();
+        }
+        if let Some(ref mut sm) = *self.sync_manager.lock().expect("sync manager lock poisoned") {
+            sm.stop();
         }
     }
 }

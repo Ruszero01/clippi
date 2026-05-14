@@ -1,0 +1,373 @@
+import { SyncBackendInfo } from "types.slint";
+
+export component SettingsTabSync inherits Rectangle {
+    in property <bool> dark-mode: false;
+    in property <bool> sync-auto-enabled: true;
+    in property <int> sync-interval-secs: 60;
+    in property <string> sync-status: "";
+    in property <int> sync-items-added: 0;
+    in property <int> sync-items-updated: 0;
+    in property <int> sync-tags-added: 0;
+    in property <[SyncBackendInfo]> sync-backends: [];
+
+    callback toggle-sync-auto-enabled();
+    callback set-sync-interval(int);
+    callback sync-now();
+    callback show-add-backend-panel();
+    callback remove-sync-backend(string);
+    callback toggle-sync-backend(string);
+
+    property <color> surface:       dark-mode ? #232425 : #ffffff;
+    property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
+    property <color> text-2:       dark-mode ? #919496 : #7c809a;
+    property <color> text-3:       dark-mode ? #5f6264 : #b4b9ca;
+    property <color> accent:       dark-mode ? #7ecba3 : #6ab890;
+    property <color> accent-soft:  dark-mode ? #1a2e24 : #e8f5ee;
+    property <color> divider:      dark-mode ? #2b2c2d : #e6e8f0;
+    property <color> green: #4CAF50;
+    property <color> red: #FF5252;
+    property <color> gray: #9E9E9E;
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 12px;
+        padding-top: 8px;
+
+        // ════════════════════════════════════════
+        // 上半部分：同步设置
+        // ════════════════════════════════════════
+
+        // ── 同步设置容器 ──
+        Rectangle {
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            VerticalLayout {
+                spacing: 0;
+
+                // 云同步开关行
+                HorizontalLayout {
+                    height: 38px;
+                    padding-left: 14px;
+                    padding-right: 12px;
+                    alignment: space-between;
+
+                    Text {
+                        text: "云同步";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 40px;
+                        height: 22px;
+                        border-radius: 11px;
+                        y: (parent.height - self.height) / 2;
+                        background: root.sync-auto-enabled ? accent : divider;
+                        animate background { duration: 200ms; }
+
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            background: #ffffff;
+                            x: root.sync-auto-enabled ? parent.width - self.width - 2px : 2px;
+                            animate x { duration: 200ms; }
+                        }
+
+                        toggle-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.toggle-sync-auto-enabled(); }
+                        }
+                    }
+                }
+
+                // 开启后显示：间隔 + 立即同步
+                if root.sync-auto-enabled : Rectangle {
+                    width: parent.width;
+                    height: 1px;
+                    background: divider;
+                }
+
+                if root.sync-auto-enabled : HorizontalLayout {
+                    spacing: 6px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+
+                    Rectangle {
+                        height: 26px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        background: i30-selected ? accent : (i30-ta.has-hover ? accent-soft : transparent);
+                        animate background { duration: 200ms; }
+                        property <bool> i30-selected: root.sync-interval-secs == 30;
+                        i30-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-sync-interval(30); }
+                        }
+                        Text {
+                            text: "30秒"; font-size: 10px; font-weight: 600;
+                            color: i30-selected ? #ffffff : (i30-ta.has-hover ? accent : text-2);
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 26px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        background: i60-selected ? accent : (i60-ta.has-hover ? accent-soft : transparent);
+                        animate background { duration: 200ms; }
+                        property <bool> i60-selected: root.sync-interval-secs == 60;
+                        i60-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-sync-interval(60); }
+                        }
+                        Text {
+                            text: "1分"; font-size: 10px; font-weight: 600;
+                            color: i60-selected ? #ffffff : (i60-ta.has-hover ? accent : text-2);
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 26px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        background: i300-selected ? accent : (i300-ta.has-hover ? accent-soft : transparent);
+                        animate background { duration: 200ms; }
+                        property <bool> i300-selected: root.sync-interval-secs == 300;
+                        i300-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-sync-interval(300); }
+                        }
+                        Text {
+                            text: "5分"; font-size: 10px; font-weight: 600;
+                            color: i300-selected ? #ffffff : (i300-ta.has-hover ? accent : text-2);
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 26px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        background: i900-selected ? accent : (i900-ta.has-hover ? accent-soft : transparent);
+                        animate background { duration: 200ms; }
+                        property <bool> i900-selected: root.sync-interval-secs == 900;
+                        i900-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-sync-interval(900); }
+                        }
+                        Text {
+                            text: "15分"; font-size: 10px; font-weight: 600;
+                            color: i900-selected ? #ffffff : (i900-ta.has-hover ? accent : text-2);
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    // 立即同步
+                    Rectangle {
+                        height: 26px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        background: sync-now-ta.has-hover ? accent-soft : accent;
+                        sync-now-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.sync-now(); }
+                        }
+                        Text {
+                            text: "立即同步";
+                            font-size: 10px; font-weight: 600;
+                            color: sync-now-ta.has-hover ? accent : #ffffff;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 同步状态卡片 ──
+        Rectangle {
+            height: 42px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: space-between;
+
+                Text {
+                    text: root.sync-status;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: text-1;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "新增" + root.sync-items-added + " 更新" + root.sync-items-updated + " 标签" + root.sync-tags-added;
+                    font-size: 10px;
+                    color: text-3;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ════════════════════════════════════════
+        // 下半部分：服务配置
+        // ════════════════════════════════════════
+
+        // ── 服务列表 ──
+        for backend in root.sync-backends: Rectangle {
+            height: 72px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 12px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        y: (parent.height - self.height) / 2;
+                        background: backend.status == "online" ? green :
+                                   backend.status == "syncing" ? accent :
+                                   backend.status == "error" ? red : gray;
+                    }
+
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: backend.name;
+                                font-size: 12px;
+                                font-weight: 600;
+                                color: text-1;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                height: 16px;
+                                border-radius: 3px;
+                                background: accent-soft;
+
+                                Text {
+                                    text: "本地文件夹";
+                                    font-size: 9px;
+                                    color: accent;
+                                    x: 4px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: backend.folder-path;
+                            font-size: 10px;
+                            color: text-3;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: backend.last-sync-at;
+                            font-size: 10px;
+                            color: text-3;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 5px;
+                    y: (parent.height - self.height) / 2;
+                    background: rm-ta.has-hover ? (dark-mode ? #3e0005 : #ffeaea) : transparent;
+
+                    rm-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.remove-sync-backend(backend.id); }
+                    }
+
+                    Text {
+                        text: "\u{e7c4}";
+                        font-family: "iconfont";
+                        font-size: 12px;
+                        color: rm-ta.has-hover ? red : text-3;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ── 添加服务按钮 ──
+        Rectangle {
+            height: 40px;
+            border-radius: 10px;
+            background: add-btn-ta.has-hover ? accent-soft : surface;
+            border-width: 1px;
+            border-color: add-btn-ta.has-hover ? accent : divider;
+
+            add-btn-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => { root.show-add-backend-panel(); }
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 6px;
+                height: 40px;
+
+                Text {
+                    text: "+";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: add-btn-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "添加服务";
+                    font-size: 12px;
+                    color: add-btn-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

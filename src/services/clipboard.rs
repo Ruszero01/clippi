@@ -14,7 +14,7 @@ use base64::Engine;
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum items to keep in memory
 const MAX_ITEMS: usize = 100;
@@ -30,6 +30,7 @@ pub struct ClipboardService {
     filters: ClipboardFilters,
     selected_ids: Vec<i32>,
     anchor_id: i32,
+    sync_dirty: Arc<AtomicBool>,
 }
 
 impl ClipboardService {
@@ -37,6 +38,7 @@ impl ClipboardService {
         shared: ClipboardShared,
         db: Arc<Mutex<Database>>,
         app: slint::Weak<App>,
+        sync_dirty: Arc<AtomicBool>,
     ) -> Self {
         let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
         let service = Self {
@@ -49,6 +51,7 @@ impl ClipboardService {
             filters: ClipboardFilters::default(),
             selected_ids: Vec::new(),
             anchor_id: -1,
+            sync_dirty,
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -361,6 +364,7 @@ impl ClipboardService {
                 let _ = db.add_item_tag(id as i64, tag_id);
             }
         }
+        self.mark_dirty();
         self.refresh_with_current_filter();
         self.selected_ids.clear();
     }
@@ -372,6 +376,7 @@ impl ClipboardService {
                 let _ = db.remove_item_tag(id as i64, tag_id);
             }
         }
+        self.mark_dirty();
         self.refresh_with_current_filter();
         self.selected_ids.clear();
     }
@@ -381,6 +386,7 @@ impl ClipboardService {
         if let Ok(db) = self.db.lock() {
             let _ = db.clear_item_tags(item_id as i64);
         }
+        self.mark_dirty();
         self.refresh_row(item_id);
     }
 
@@ -391,6 +397,7 @@ impl ClipboardService {
                 let _ = db.clear_item_tags(id as i64);
             }
         }
+        self.mark_dirty();
         self.refresh_with_current_filter();
         self.selected_ids.clear();
     }
@@ -403,6 +410,7 @@ impl ClipboardService {
                 let _ = db.toggle_favorite(id as i64);
             }
         }
+        self.mark_dirty();
         if needs_full_refresh {
             self.refresh_with_current_filter();
         } else {
@@ -415,6 +423,7 @@ impl ClipboardService {
         if let Ok(db) = self.db.lock() {
             let _ = db.delete_item(id as i64);
         }
+        self.mark_dirty();
         for i in 0..self.model.row_count() {
             if let Some(entry) = self.model.row_data(i) {
                 if entry.id == id {
@@ -433,6 +442,7 @@ impl ClipboardService {
         if let Ok(db) = self.db.lock() {
             let _ = db.update_note(id as i64, note);
         }
+        self.mark_dirty();
         self.refresh_row(id);
     }
 
@@ -441,12 +451,18 @@ impl ClipboardService {
         if let Ok(db) = self.db.lock() {
             let _ = db.update_content(id as i64, text, content_type);
         }
+        self.mark_dirty();
         self.refresh_row(id);
     }
 
     /// Get reference to shared buffer for platform layer
     pub fn shared(&self) -> &ClipboardShared {
         &self.shared
+    }
+
+    /// Mark sync dirty (called after any data mutation).
+    fn mark_dirty(&self) {
+        self.sync_dirty.store(true, Ordering::SeqCst);
     }
 
     // ── Selection management ──
@@ -551,6 +567,7 @@ impl ClipboardService {
                 let _ = db.toggle_favorite(id as i64);
             }
         }
+        self.mark_dirty();
         if needs_full_refresh {
             self.refresh_with_current_filter();
             self.clear_selection();
@@ -571,6 +588,7 @@ impl ClipboardService {
                 let _ = db.delete_item(id as i64);
             }
         }
+        self.mark_dirty();
         // Remove from model (iterate in reverse to maintain indices)
         let ids = self.selected_ids.clone();
         self.selected_ids.clear();
@@ -607,6 +625,8 @@ impl Pollable for ClipboardService {
         if pending.is_empty() {
             return;
         }
+
+        self.mark_dirty();
 
         if let Ok(db) = self.db.lock() {
             for mut item in pending {

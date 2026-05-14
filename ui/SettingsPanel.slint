@@ -1,8 +1,10 @@
 import { ScrollView } from "std-widgets.slint";
+import { SyncBackendInfo } from "types.slint";
 import { SettingsTabGeneral } from "SettingsTabGeneral.slint";
 import { SettingsTabClipboard } from "SettingsTabClipboard.slint";
 import { SettingsTabHotkey } from "SettingsTabHotkey.slint";
 import { SettingsTabData } from "SettingsTabData.slint";
+import { SettingsTabSync } from "SettingsTabSync.slint";
 
 export component SettingsPanel inherits Rectangle {
     // ========== 输入属性 ==========
@@ -22,6 +24,14 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> auto-scroll-to-top: false;
     in property <bool> copy-as-plain-text: false;
     in property <bool> show-original-on-hover: false;
+    // sync
+    in property <bool> sync-auto-enabled: true;
+    in property <int> sync-interval-secs: 60;
+    in property <string> sync-status: "";
+    in property <int> sync-items-added: 0;
+    in property <int> sync-items-updated: 0;
+    in property <int> sync-tags-added: 0;
+    in property <[SyncBackendInfo]> sync-backends: [];
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -43,6 +53,12 @@ export component SettingsPanel inherits Rectangle {
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
+    callback toggle-sync-auto-enabled();
+    callback set-sync-interval(int);
+    callback sync-now();
+    callback show-add-backend-panel();
+    callback remove-sync-backend(string);
+    callback toggle-sync-backend(string);
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #919496 : #7c809a;
@@ -98,7 +114,7 @@ export component SettingsPanel inherits Rectangle {
         spacing: 0px;
 
         Rectangle {
-            width: 25%;
+            width: 20%;
             height: 100%;
 
             HorizontalLayout {
@@ -130,7 +146,7 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Rectangle {
-            width: 25%;
+            width: 20%;
             height: 100%;
 
             HorizontalLayout {
@@ -162,7 +178,7 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Rectangle {
-            width: 25%;
+            width: 20%;
             height: 100%;
 
             HorizontalLayout {
@@ -194,7 +210,7 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Rectangle {
-            width: 25%;
+            width: 20%;
             height: 100%;
 
             HorizontalLayout {
@@ -224,6 +240,38 @@ export component SettingsPanel inherits Rectangle {
                 animate background { duration: 200ms; easing: ease-out; }
             }
         }
+
+        Rectangle {
+            width: 20%;
+            height: 100%;
+
+            HorizontalLayout {
+                alignment: center;
+
+                Text {
+                    text: "同步";
+                    font-size: 12px;
+                    font-weight: root.active-tab == 4 ? 700 : 400;
+                    color: root.active-tab == 4 ? accent : text-2;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.active-tab = 4; }
+            }
+
+            Rectangle {
+                height: 2px;
+                background: root.active-tab == 4 ? accent : transparent;
+                y: parent.height - self.height;
+                width: parent.width;
+                animate background { duration: 200ms; easing: ease-out; }
+            }
+        }
     }
 
     // ========== 选项卡内容 ==========
@@ -234,6 +282,7 @@ export component SettingsPanel inherits Rectangle {
         width: parent.width - 16px;
 
         VerticalLayout {
+            width: parent.width;
         if (root.active-tab == 0) : SettingsTabGeneral {
             dark-mode: root.dark-mode;
             theme-mode: root.theme-mode;
@@ -277,6 +326,23 @@ export component SettingsPanel inherits Rectangle {
             settings-error: root.settings-error;
             pick-db-path => { root.pick-db-path(); }
             reset-db-path => { root.reset-db-path(); }
+        }
+
+        if (root.active-tab == 4) : SettingsTabSync {
+            dark-mode: root.dark-mode;
+            sync-auto-enabled: root.sync-auto-enabled;
+            sync-interval-secs: root.sync-interval-secs;
+            sync-status: root.sync-status;
+            sync-items-added: root.sync-items-added;
+            sync-items-updated: root.sync-items-updated;
+            sync-tags-added: root.sync-tags-added;
+            sync-backends: root.sync-backends;
+            toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
+            set-sync-interval(i) => { root.set-sync-interval(i); }
+            sync-now => { root.sync-now(); }
+            show-add-backend-panel => { root.show-add-backend-panel(); }
+            remove-sync-backend(id) => { root.remove-sync-backend(id); }
+            toggle-sync-backend(id) => { root.toggle-sync-backend(id); }
         }
         }
     }

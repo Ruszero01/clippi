@@ -17,6 +17,17 @@ const APP_NAME: &str = "Clippi";
 #[cfg(target_os = "macos")]
 const LAUNCH_AGENT_ID: &str = "com.clippi.launcher";
 
+/// Configuration for a single sync backend (persisted in settings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendConfig {
+    pub id: String,
+    pub enabled: bool,
+    pub backend_type: String, // "local_folder"
+    pub name: String,
+    pub folder_path: String,
+    pub device_name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub theme: String,
@@ -43,6 +54,21 @@ pub struct AppSettings {
     pub saved_window_width: f32,  // 用户调整后的窗口宽度 (0=使用默认值)
     #[serde(default)]
     pub saved_window_height: f32, // 用户调整后的窗口高度 (0=使用默认值)
+    // ── Cloud sync ──
+    #[serde(default)]
+    pub sync_enabled: bool,
+    #[serde(default)]
+    pub sync_data_dir: String,       // 云同步目录路径 (OneDrive/iCloud) — deprecated, use sync_backends
+    #[serde(default)]
+    pub sync_device_name: String,    // 设备名 — deprecated, use sync_backends
+    #[serde(default)]
+    pub sync_last_at: String,        // 上次同步时间 RFC3339 — deprecated
+    #[serde(default)]
+    pub sync_interval_secs: u64,     // 同步间隔秒数 (默认60)
+    #[serde(default)]
+    pub sync_backends: Vec<BackendConfig>, // 多后端配置列表 (new)
+    #[serde(default)]
+    pub sync_auto_enabled: bool,           // 自动同步开关 (dirty + interval)
 }
 
 impl Default for AppSettings {
@@ -65,6 +91,13 @@ impl Default for AppSettings {
             show_original_on_hover: false,
             saved_window_width: 0.0,
             saved_window_height: 0.0,
+            sync_enabled: false,
+            sync_data_dir: String::new(),
+            sync_device_name: String::new(),
+            sync_last_at: String::new(),
+            sync_interval_secs: 60,
+            sync_backends: Vec::new(),
+            sync_auto_enabled: true,
         }
     }
 }
@@ -72,11 +105,43 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn load() -> Self {
         let path = Self::config_path();
-        if path.exists() {
+        let mut settings: Self = if path.exists() {
             let content = std::fs::read_to_string(&path).unwrap_or_default();
             toml::from_str(&content).unwrap_or_default()
         } else {
             Self::default()
+        };
+        // Migrate old flat sync fields → BackendConfig list
+        settings.migrate_sync_fields();
+        settings
+    }
+
+    /// One-time migration: old `sync_enabled` + `sync_data_dir` → `sync_backends` entry.
+    fn migrate_sync_fields(&mut self) {
+        if self.sync_enabled
+            && !self.sync_data_dir.is_empty()
+            && self.sync_backends.is_empty()
+        {
+            let device_name = if self.sync_device_name.is_empty() {
+                crate::services::backends::local_folder::hostname()
+            } else {
+                self.sync_device_name.clone()
+            };
+            self.sync_backends.push(BackendConfig {
+                id: generate_id(),
+                enabled: true,
+                backend_type: "local_folder".into(),
+                name: device_name.clone(),
+                folder_path: self.sync_data_dir.clone(),
+                device_name,
+            });
+            // Clear old fields
+            self.sync_enabled = false;
+            self.sync_data_dir.clear();
+            self.sync_device_name.clear();
+            self.sync_last_at.clear();
+            // Save migrated state
+            self.save();
         }
     }
 
@@ -198,6 +263,17 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn set_auto_start(_enable: bool) -> Result<(), String> {
     Ok(())
+}
+
+/// Generate a simple unique ID for backend configs.
+pub(crate) fn generate_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let rand: u32 = (ts as u32).wrapping_mul(1103515245).wrapping_add(12345);
+    format!("{:08x}{:08x}", ts as u32, rand)
 }
 
 pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), String> {

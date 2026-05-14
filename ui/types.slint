@@ -1,3 +1,14 @@
+export struct SyncBackendInfo {
+    id: string,
+    name: string,
+    backend-type: string,
+    status: string,           // "online" | "offline" | "error" | "syncing"
+    status-message: string,
+    enabled: bool,
+    folder-path: string,
+    last-sync-at: string,
+}
+
 export struct TagItem {
     id: int,
     name: string,
