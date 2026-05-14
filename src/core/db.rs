@@ -269,6 +269,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn clear_item_tags(&self, item_id: i64) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM item_tags WHERE item_id = ?1",
+            params![item_id],
+        )?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn get_tag_by_name(&self, name: &str) -> SqlResult<Option<TagInfo>> {
         let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags WHERE name = ?1")?;

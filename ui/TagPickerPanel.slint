@@ -20,6 +20,7 @@ export component TagPickerPanel inherits Rectangle {
     callback toggle-item-tag(int);
     callback batch-add-tag(int);
     callback batch-remove-tag(int);
+    callback clear-all-tags();
 
     // 主题色板 (delegated to shared global)
     property <color> accent: TagPanelTheme.accent;
@@ -68,25 +69,52 @@ export component TagPickerPanel inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            close-btn := Rectangle {
-                width: 22px;
-                height: 22px;
-                border-radius: 5px;
-                background: close-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+            HorizontalLayout {
+                spacing: 2px;
 
-                close-ta := TouchArea {
-                    width: 100%;
-                    height: 100%;
-                    clicked => { root.hide-picker(); }
+                // 清除所有标签
+                clear-btn := Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    background: clear-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+
+                    clear-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.clear-all-tags(); }
+                    }
+
+                    Text {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        text: "\u{e607}";
+                        font-family: "iconfont";
+                        font-size: 11px;
+                        color: text-2;
+                    }
                 }
 
-                Text {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    text: "\u{e7b7}";
-                    font-family: "iconfont";
-                    font-size: 11px;
-                    color: text-2;
+                close-btn := Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    background: close-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+
+                    close-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.hide-picker(); }
+                    }
+
+                    Text {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        text: "\u{e7b7}";
+                        font-family: "iconfont";
+                        font-size: 11px;
+                        color: text-2;
+                    }
                 }
             }
         }

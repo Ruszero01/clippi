@@ -155,6 +155,7 @@ export component App inherits Window {
     callback toggle-item-tag(int, int);
     callback batch-add-tag(int);
     callback batch-remove-tag(int);
+    callback clear-all-tags();
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -603,6 +604,7 @@ export component App inherits Window {
             }
             batch-add-tag(tag-id) => { root.batch-add-tag(tag-id); }
             batch-remove-tag(tag-id) => { root.batch-remove-tag(tag-id); }
+            clear-all-tags => { root.clear-all-tags(); }
         }
     }
     }

@@ -857,6 +857,24 @@ impl AppController {
             });
         });
 
+        // Clear all tags from current item / selected items
+        let looper_for_clear_tags = Arc::clone(&looper);
+        let app_for_clear_tags = app.clone();
+        slint_app.on_clear_all_tags(move || {
+            let _ = looper_for_clear_tags.try_with_clipboard_service(|cs| {
+                if let Some(app) = app_for_clear_tags.upgrade() {
+                    if app.get_tag_picker_is_batch() {
+                        cs.clear_selected_tags();
+                        app.set_tag_picker_visible(false);
+                        app.set_selected_count(0);
+                    } else {
+                        cs.clear_item_tags(app.get_tag_picker_item_id());
+                        cs.load_all_tags_for_picker(app.get_tag_picker_item_id());
+                    }
+                }
+            });
+        });
+
         // Paste as RGB: convert HEX color to rgb(r,g,b) format and paste
         let db_for_rgb = db.clone();
         let app_for_rgb = app.clone();

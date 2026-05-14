@@ -376,6 +376,25 @@ impl ClipboardService {
         self.selected_ids.clear();
     }
 
+    /// Clear all tags from a single item
+    pub fn clear_item_tags(&mut self, item_id: i32) {
+        if let Ok(db) = self.db.lock() {
+            let _ = db.clear_item_tags(item_id as i64);
+        }
+        self.refresh_row(item_id);
+    }
+
+    /// Clear all tags from all selected items (batch)
+    pub fn clear_selected_tags(&mut self) {
+        if let Ok(db) = self.db.lock() {
+            for &id in &self.selected_ids {
+                let _ = db.clear_item_tags(id as i64);
+            }
+        }
+        self.refresh_with_current_filter();
+        self.selected_ids.clear();
+    }
+
     /// Toggle favorite status for an item and refresh that row
     pub fn toggle_favorite(&mut self, id: i32) {
         let needs_full_refresh = self.filters.is_favorites_active();
