@@ -45,6 +45,7 @@ impl AppController {
         let mut frontend = Frontend::new(slint_app);
         frontend.set_position_mode(PositionMode::from_str(&settings.window_position_mode));
         frontend.set_saved_position(settings.saved_window_x, settings.saved_window_y);
+        frontend.set_saved_size(settings.saved_window_width, settings.saved_window_height);
         let frontend = Arc::new(Mutex::new(frontend));
         let app = slint_app.as_weak();
 
@@ -115,6 +116,7 @@ impl AppController {
 
         // Window resize — delta from resize handles in app.slint
         let app_for_resize = app.clone();
+        let frontend_for_resize = frontend.clone();
         slint_app.on_resize_window(move |dx, dy| {
             if let Some(app) = app_for_resize.upgrade() {
                 let window = app.window();
@@ -125,6 +127,9 @@ impl AppController {
                 let new_w = (w + dx).max(320.0);
                 let new_h = (h + dy).max(480.0);
                 window.set_size(LogicalSize::new(new_w, new_h));
+                if let Ok(mut fe) = frontend_for_resize.lock() {
+                    fe.set_saved_size(new_w, new_h);
+                }
             }
         });
 

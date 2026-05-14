@@ -39,6 +39,10 @@ pub struct AppSettings {
     pub copy_as_plain_text: bool, // 复制为纯文本: 开启后丢弃格式标签
     #[serde(default)]
     pub show_original_on_hover: bool, // 悬停时显示原内容: 有备注时鼠标悬停显示原始内容
+    #[serde(default)]
+    pub saved_window_width: f32,  // 用户调整后的窗口宽度 (0=使用默认值)
+    #[serde(default)]
+    pub saved_window_height: f32, // 用户调整后的窗口高度 (0=使用默认值)
 }
 
 impl Default for AppSettings {
@@ -59,6 +63,8 @@ impl Default for AppSettings {
             auto_scroll_to_top: false,
             copy_as_plain_text: false,
             show_original_on_hover: false,
+            saved_window_width: 0.0,
+            saved_window_height: 0.0,
         }
     }
 }

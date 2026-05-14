@@ -48,6 +48,8 @@ pub struct Frontend {
     position_mode: PositionMode,
     saved_window_x: i32,
     saved_window_y: i32,
+    saved_window_width: f32,
+    saved_window_height: f32,
 }
 
 impl Frontend {
@@ -59,6 +61,8 @@ impl Frontend {
             position_mode: PositionMode::Center,
             saved_window_x: -1,
             saved_window_y: -1,
+            saved_window_width: 0.0,
+            saved_window_height: 0.0,
         }
     }
 
@@ -71,6 +75,11 @@ impl Frontend {
         self.saved_window_y = y;
     }
 
+    pub fn set_saved_size(&mut self, w: f32, h: f32) {
+        self.saved_window_width = w;
+        self.saved_window_height = h;
+    }
+
     pub fn saved_position(&self) -> (i32, i32) {
         (self.saved_window_x, self.saved_window_y)
     }
@@ -79,6 +88,10 @@ impl Frontend {
         if self.saved_window_x >= 0 && self.saved_window_y >= 0 {
             settings.saved_window_x = self.saved_window_x;
             settings.saved_window_y = self.saved_window_y;
+        }
+        if self.saved_window_width > 0.0 && self.saved_window_height > 0.0 {
+            settings.saved_window_width = self.saved_window_width;
+            settings.saved_window_height = self.saved_window_height;
         }
     }
 
@@ -147,7 +160,9 @@ impl Frontend {
             app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
-            window.set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+            let w = if self.saved_window_width > 0.0 { self.saved_window_width } else { DEFAULT_WINDOW_WIDTH };
+            let h = if self.saved_window_height > 0.0 { self.saved_window_height } else { DEFAULT_WINDOW_HEIGHT };
+            window.set_size(LogicalSize::new(w, h));
             self.apply_position();
             let t = app.get_scroll_trigger();
             app.set_scroll_trigger(t + 1);
@@ -171,7 +186,9 @@ impl Frontend {
             app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
-            window.set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+            let w = if self.saved_window_width > 0.0 { self.saved_window_width } else { DEFAULT_WINDOW_WIDTH };
+            let h = if self.saved_window_height > 0.0 { self.saved_window_height } else { DEFAULT_WINDOW_HEIGHT };
+            window.set_size(LogicalSize::new(w, h));
             self.apply_position();
             let t = app.get_scroll_trigger();
             app.set_scroll_trigger(t + 1);
@@ -195,12 +212,18 @@ impl Frontend {
     }
 
     pub fn hide(&mut self) {
-        if self.position_mode == PositionMode::Remember {
-            if let Some(app) = self.app.upgrade() {
-                let pos = app.window().position();
+        if let Some(app) = self.app.upgrade() {
+            let window = app.window();
+            if self.position_mode == PositionMode::Remember {
+                let pos = window.position();
                 self.saved_window_x = pos.x;
                 self.saved_window_y = pos.y;
             }
+            // Save current window size so user-resized dimensions persist
+            let size = window.size();
+            let scale = window.scale_factor();
+            self.saved_window_width = size.width as f32 / scale;
+            self.saved_window_height = size.height as f32 / scale;
         }
         self.visible = false;
         if let Some(app) = self.app.upgrade() {
@@ -214,7 +237,9 @@ impl Frontend {
             app.set_current_view(slint::SharedString::from("settings"));
             let window = app.window();
             window.show().ok();
-            window.set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+            let w = if self.saved_window_width > 0.0 { self.saved_window_width } else { DEFAULT_WINDOW_WIDTH };
+            let h = if self.saved_window_height > 0.0 { self.saved_window_height } else { DEFAULT_WINDOW_HEIGHT };
+            window.set_size(LogicalSize::new(w, h));
             self.apply_position();
             self.visible = true;
             let t = app.get_scroll_trigger();

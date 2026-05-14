@@ -208,52 +208,6 @@ export component App inherits Window {
             border-color: dark-mode ? #3a3b3c : #d0d2de;
             clip: true;
 
-        // ========== 缩放手柄 ==========
-        // 右边缘
-        resize-right := TouchArea {
-            x: parent.width - 6px;
-            y: 12px;
-            width: 6px;
-            height: parent.height - 24px;
-            mouse-cursor: col-resize;
-
-            moved => {
-                if (self.pressed) {
-                    root.resize-window((self.mouse-x - self.pressed-x) / 1px, 0);
-                }
-            }
-        }
-
-        // 底边缘
-        resize-bottom := TouchArea {
-            x: 12px;
-            y: parent.height - 6px;
-            width: parent.width - 24px;
-            height: 6px;
-            mouse-cursor: row-resize;
-
-            moved => {
-                if (self.pressed) {
-                    root.resize-window(0, (self.mouse-y - self.pressed-y) / 1px);
-                }
-            }
-        }
-
-        // 右下角
-        resize-corner := TouchArea {
-            x: parent.width - 12px;
-            y: parent.height - 12px;
-            width: 12px;
-            height: 12px;
-            mouse-cursor: col-resize;
-
-            moved => {
-                if (self.pressed) {
-                    root.resize-window((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
-                }
-            }
-        }
-
         // 滚动 Timer
         error-scroll-timer := Timer {
             interval: 50ms;
@@ -606,6 +560,52 @@ export component App inherits Window {
             batch-remove-tag(tag-id) => { root.batch-remove-tag(tag-id); }
             clear-all-tags => { root.clear-all-tags(); }
         }
-    }
+
+        // ========== 缩放手柄（置于最顶层，优先接收鼠标事件） ==========
+        // 右边缘
+        resize-right := TouchArea {
+            x: parent.width - 6px;
+            y: 12px;
+            width: 6px;
+            height: parent.height - 24px;
+            mouse-cursor: col-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.resize-window((self.mouse-x - self.pressed-x) / 1px, 0);
+                }
+            }
+        }
+
+        // 底边缘
+        resize-bottom := TouchArea {
+            x: 12px;
+            y: parent.height - 6px;
+            width: parent.width - 24px;
+            height: 6px;
+            mouse-cursor: row-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.resize-window(0, (self.mouse-y - self.pressed-y) / 1px);
+                }
+            }
+        }
+
+        // 右下角
+        resize-corner := TouchArea {
+            x: parent.width - 12px;
+            y: parent.height - 12px;
+            width: 12px;
+            height: 12px;
+            mouse-cursor: se-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.resize-window((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
+                }
+            }
+        }
+        }
     }
 }
