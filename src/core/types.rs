@@ -50,6 +50,49 @@ pub struct SourceAppInfo {
     pub icon_base64: String, // PNG icon encoded as base64
 }
 
+/// User-defined tag with name and color
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TagInfo {
+    pub id: i64,
+    pub name: String,
+    pub color: String, // 6-digit uppercase hex, e.g. "FF5733"
+}
+
+/// 12 preset tag colors: (name, hex)
+pub const TAG_PRESET_COLORS: &[(&str, &str)] = &[
+    ("红色", "#EF4444"),
+    ("橙色", "#F97316"),
+    ("黄色", "#EAB308"),
+    ("绿色", "#22C55E"),
+    ("青色", "#06B6D4"),
+    ("蓝色", "#3B82F6"),
+    ("靛蓝", "#6366F1"),
+    ("紫色", "#A855F7"),
+    ("粉色", "#EC4899"),
+    ("灰色", "#6B7280"),
+    ("棕色", "#92400E"),
+    ("天蓝", "#0EA5E9"),
+];
+
+/// Pick a random color from presets (deterministic, no rand dep)
+pub fn random_tag_color() -> &'static str {
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+    TAG_PRESET_COLORS[(nanos as usize) % TAG_PRESET_COLORS.len()].1
+}
+
+/// Parse hex color "#EF4444" → (r, g, b)
+pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
+    let s = hex.strip_prefix('#')?;
+    if s.len() != 6 {
+        return None;
+    }
+    Some((
+        u8::from_str_radix(&s[0..2], 16).ok()?,
+        u8::from_str_radix(&s[2..4], 16).ok()?,
+        u8::from_str_radix(&s[4..6], 16).ok()?,
+    ))
+}
+
 /// A clipboard item
 #[derive(Debug, Clone)]
 pub struct ClipboardItem {
@@ -66,6 +109,7 @@ pub struct ClipboardItem {
     pub note: String,
     pub source_app_name: String,
     pub source_app_icon: String, // base64-encoded PNG icon
+    pub tags: Vec<TagInfo>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -162,6 +206,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            tags: Vec::new(),
         }
     }
 
@@ -182,6 +227,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            tags: Vec::new(),
         }
     }
 
@@ -202,6 +248,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            tags: Vec::new(),
         }
     }
 
@@ -223,6 +270,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            tags: Vec::new(),
         }
     }
 }

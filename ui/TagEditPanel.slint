@@ -1,0 +1,188 @@
+import { TagPanelTheme } from "theme.slint";
+
+export component TagEditPanel inherits Rectangle {
+    // 数据
+    in-out property <string> tag-name: "";
+    in-out property <color> tag-color: #3B82F6;
+    // 主题
+    in property <bool> dark-mode: false;
+
+    // 回调
+    callback cancel();
+    callback save(string, color);
+
+    // 主题色板
+    property <color> text-1: TagPanelTheme.text-1;
+    property <color> text-2: TagPanelTheme.text-2;
+    property <color> surface: TagPanelTheme.surface;
+    property <color> input-bg: TagPanelTheme.input-bg;
+    property <color> sep-line: TagPanelTheme.sep-line;
+    property <color> btn-hover: TagPanelTheme.btn-hover;
+
+    width: 260px;
+    height: panel-content.preferred-height;
+    border-radius: 8px;
+    background: surface;
+    border-width: 1px;
+    border-color: dark-mode ? #ffffff20 : #00000020;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000080;
+    drop-shadow-offset-y: 4px;
+
+    event-blocker := TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+
+    panel-content := VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+
+        // 标题
+        Text {
+            text: "编辑标签";
+            font-size: 13px;
+            font-weight: 600;
+            color: text-1;
+        }
+
+        // 分割线
+        Rectangle {
+            width: 100%;
+            height: 1px;
+            background: sep-line;
+        }
+
+        // 名称输入
+        HorizontalLayout {
+            height: 26px;
+            spacing: 6px;
+
+            Text {
+                text: "名称";
+                font-size: 11px;
+                color: text-2;
+                vertical-alignment: center;
+                width: 28px;
+            }
+
+            Rectangle {
+                width: parent.width - 34px;
+                height: 26px;
+                border-radius: 5px;
+                background: input-bg;
+
+                name-input := TextInput {
+                    x: 6px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 12px;
+                    height: 16px;
+                    color: text-1;
+                    font-size: 11px;
+                    text <=> root.tag-name;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 分割线
+        Rectangle {
+            width: 100%;
+            height: 1px;
+            background: sep-line;
+        }
+
+        // 颜色选择
+        Text {
+            text: "颜色";
+            font-size: 11px;
+            color: text-2;
+        }
+
+        // 颜色网格 (12色, 2行×6列)
+        GridLayout {
+            spacing: 4px;
+
+            for c[idx] in root.color-grid-colors: Rectangle {
+                col: Math.mod(idx, 6);
+                row: idx / 6;
+                width: 36px;
+                height: 24px;
+                border-radius: 4px;
+                background: c;
+                border-width: c == root.tag-color ? 2px : 0px;
+                border-color: text-1;
+
+                color-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => { root.tag-color = c; }
+                }
+            }
+        }
+
+        // 分割线
+        Rectangle {
+            width: 100%;
+            height: 1px;
+            background: sep-line;
+        }
+
+        // 按钮行
+        HorizontalLayout {
+            height: 26px;
+            alignment: end;
+            spacing: 6px;
+
+            Rectangle {
+                width: 52px;
+                height: 26px;
+                border-radius: 5px;
+                background: cancel-ta.has-hover ? btn-hover : transparent;
+
+                cancel-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => { root.cancel(); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "取消";
+                    font-size: 11px;
+                    color: text-2;
+                }
+            }
+
+            Rectangle {
+                width: 52px;
+                height: 26px;
+                border-radius: 5px;
+                background: save-ta.has-hover ? (dark-mode ? #7ecba3cc : #6ab890cc) : (dark-mode ? #7ecba3 : #6ab890);
+
+                save-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => { root.save(root.tag-name, root.tag-color); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "保存";
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #ffffff;
+                }
+            }
+        }
+    }
+
+    // 预设颜色数组 (12色)
+    property <[color]> color-grid-colors: [
+        #EF4444, #F97316, #EAB308, #22C55E, #06B6D4, #3B82F6,
+        #6366F1, #A855F7, #EC4899, #6B7280, #92400E, #0EA5E9,
+    ];
+}

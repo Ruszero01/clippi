@@ -527,6 +527,7 @@ impl AppController {
                     app.set_filter_color(false);
                     app.set_filter_file(false);
                     app.set_filter_favorites(false);
+                    app.set_has_tag_filter(false);
                 }
             });
         });
@@ -695,6 +696,169 @@ impl AppController {
         slint_app.on_batch_delete(move || {
             let _ = looper_for_batch_del.try_with_clipboard_service(|cs| {
                 cs.batch_delete();
+            });
+        });
+
+        // ── Tag callbacks ──
+
+        // Show tag filter panel
+        let looper_for_tag_filter_panel = Arc::clone(&looper);
+        let app_for_tag_filter_panel = app.clone();
+        slint_app.on_show_tag_filter_panel(move || {
+            if let Some(app) = app_for_tag_filter_panel.upgrade() {
+                // Toggle: close if already visible, open if hidden
+                if app.get_tag_filter_visible() {
+                    app.set_tag_filter_visible(false);
+                    return;
+                }
+                let _ = looper_for_tag_filter_panel.try_with_clipboard_service(|cs| {
+                    cs.load_all_tags_for_filter();
+                });
+                app.set_tag_picker_visible(false);
+                if let Some(pos) = get_cursor_pos() {
+                    let win_pos = app.window().position();
+                    let wx = (pos.0 - win_pos.x as i32) as f32;
+                    let wy = (pos.1 - win_pos.y as i32) as f32;
+                    app.set_tag_filter_x(wx);
+                    app.set_tag_filter_y(wy);
+                }
+                app.set_tag_filter_visible(true);
+            }
+        });
+
+        // Hide tag filter panel
+        let app_for_hide_tag_filter = app.clone();
+        slint_app.on_hide_tag_filter_panel(move || {
+            if let Some(app) = app_for_hide_tag_filter.upgrade() {
+                app.set_tag_filter_visible(false);
+            }
+        });
+
+        // Toggle tag filter
+        let looper_for_toggle_tag = Arc::clone(&looper);
+        let app_for_toggle_tag = app.clone();
+        slint_app.on_toggle_tag_filter(move |tag_id: i32| {
+            let _ = looper_for_toggle_tag.try_with_clipboard_service(|cs| {
+                cs.toggle_tag_filter_and_refresh(tag_id as i64);
+                cs.load_all_tags_for_filter();
+                if let Some(app) = app_for_toggle_tag.upgrade() {
+                    app.set_has_tag_filter(cs.has_tag_filters());
+                }
+            });
+        });
+
+        // Create tag from filter panel
+        let looper_for_create_tag = Arc::clone(&looper);
+        slint_app.on_create_tag(move |name: SharedString| {
+            let _ = looper_for_create_tag.try_with_clipboard_service(|cs| {
+                cs.create_tag(name.as_str());
+                cs.load_all_tags_for_filter();
+            });
+        });
+
+        // Update tag from filter panel
+        let looper_for_update_tag = Arc::clone(&looper);
+        slint_app.on_update_tag(move |tag_id: i32, name: SharedString, color: slint::Color| {
+            let hex = format!("#{:02X}{:02X}{:02X}", color.red(), color.green(), color.blue());
+            let _ = looper_for_update_tag.try_with_clipboard_service(|cs| {
+                cs.update_tag(tag_id as i64, name.as_str(), &hex);
+                cs.load_all_tags_for_filter();
+                cs.refresh_with_current_filter();
+            });
+        });
+
+        // Delete tag from filter panel
+        let looper_for_delete_tag = Arc::clone(&looper);
+        let app_for_delete_tag = app.clone();
+        slint_app.on_delete_tag(move |tag_id: i32| {
+            let _ = looper_for_delete_tag.try_with_clipboard_service(|cs| {
+                cs.delete_tag(tag_id as i64);
+                cs.load_all_tags_for_filter();
+                cs.refresh_with_current_filter();
+                if let Some(app) = app_for_delete_tag.upgrade() {
+                    app.set_has_tag_filter(cs.has_tag_filters());
+                }
+            });
+        });
+
+        // Show tag picker (from context menu)
+        let looper_for_show_picker = Arc::clone(&looper);
+        let app_for_show_picker = app.clone();
+        slint_app.on_show_tag_picker(move |item_id: i32| {
+            let is_batch = {
+                if let Some(app) = app_for_show_picker.upgrade() {
+                    app.get_context_menu_is_batch()
+                } else {
+                    false
+                }
+            };
+            let _ = looper_for_show_picker.try_with_clipboard_service(|cs| {
+                if is_batch {
+                    cs.load_all_tags_for_batch_picker();
+                } else {
+                    cs.load_all_tags_for_picker(item_id);
+                }
+            });
+            if let Some(app) = app_for_show_picker.upgrade() {
+                app.set_tag_filter_visible(false);
+                let (px, py) = (app.get_context_menu_x(), app.get_context_menu_y());
+                app.set_tag_picker_x(px);
+                app.set_tag_picker_y(py);
+                app.set_tag_picker_item_id(item_id);
+                app.set_tag_picker_is_batch(is_batch);
+                app.set_tag_picker_visible(true);
+            }
+        });
+
+        // Hide tag picker
+        let app_for_hide_picker = app.clone();
+        slint_app.on_hide_tag_picker(move || {
+            if let Some(app) = app_for_hide_picker.upgrade() {
+                app.set_tag_picker_visible(false);
+            }
+        });
+
+        // Create tag and add to item (from picker)
+        let looper_for_create_add = Arc::clone(&looper);
+        slint_app.on_create_and_add_tag(move |item_id: i32, name: SharedString| {
+            let _ = looper_for_create_add.try_with_clipboard_service(|cs| {
+                cs.create_and_add_tag(item_id, name.as_str());
+                cs.load_all_tags_for_picker(item_id);
+            });
+        });
+
+        // Toggle tag on item
+        let looper_for_toggle_item_tag = Arc::clone(&looper);
+        slint_app.on_toggle_item_tag(move |item_id: i32, tag_id: i32| {
+            let _ = looper_for_toggle_item_tag.try_with_clipboard_service(|cs| {
+                cs.toggle_item_tag(item_id, tag_id as i64);
+                cs.load_all_tags_for_picker(item_id);
+            });
+        });
+
+        // Batch add tag
+        let looper_for_batch_add_tag = Arc::clone(&looper);
+        let app_for_batch_add_tag = app.clone();
+        slint_app.on_batch_add_tag(move |tag_id: i32| {
+            let _ = looper_for_batch_add_tag.try_with_clipboard_service(|cs| {
+                cs.batch_add_tag(tag_id as i64);
+                if let Some(app) = app_for_batch_add_tag.upgrade() {
+                    app.set_tag_picker_visible(false);
+                    app.set_selected_count(0);
+                }
+            });
+        });
+
+        // Batch remove tag
+        let looper_for_batch_rem_tag = Arc::clone(&looper);
+        let app_for_batch_rem_tag = app.clone();
+        slint_app.on_batch_remove_tag(move |tag_id: i32| {
+            let _ = looper_for_batch_rem_tag.try_with_clipboard_service(|cs| {
+                cs.batch_remove_tag(tag_id as i64);
+                if let Some(app) = app_for_batch_rem_tag.upgrade() {
+                    app.set_tag_picker_visible(false);
+                    app.set_selected_count(0);
+                }
             });
         });
 

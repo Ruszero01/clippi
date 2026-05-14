@@ -16,6 +16,8 @@ pub struct ClipboardFilters {
     keyword: Option<String>,
     /// Favorites filter: true = show only favorites
     favorites_only: bool,
+    /// Tag filter: empty = no tag filter, non-empty = item must have at least one of these tags
+    tag_ids: Vec<i64>,
 }
 
 impl ClipboardFilters {
@@ -47,6 +49,7 @@ impl ClipboardFilters {
         self.type_filters.clear();
         self.keyword = None;
         self.favorites_only = false;
+        self.tag_ids.clear();
     }
 
     /// Check if a specific type filter is active
@@ -59,12 +62,50 @@ impl ClipboardFilters {
         self.favorites_only
     }
 
+    /// Toggle a tag filter on/off
+    pub fn toggle_tag(&mut self, tag_id: i64) {
+        if let Some(pos) = self.tag_ids.iter().position(|&t| t == tag_id) {
+            self.tag_ids.remove(pos);
+        } else {
+            self.tag_ids.push(tag_id);
+        }
+    }
+
+    /// Unconditionally remove a tag filter (no-op if not present)
+    pub fn remove_tag(&mut self, tag_id: i64) {
+        if let Some(pos) = self.tag_ids.iter().position(|&t| t == tag_id) {
+            self.tag_ids.remove(pos);
+        }
+    }
+
+    /// Check if a specific tag filter is active
+    pub fn is_tag_active(&self, tag_id: i64) -> bool {
+        self.tag_ids.iter().any(|&t| t == tag_id)
+    }
+
+    /// Check if any tag filter is active
+    pub fn has_tag_filters(&self) -> bool {
+        !self.tag_ids.is_empty()
+    }
+
+    /// Clear only tag filters
+    #[allow(dead_code)]
+    pub fn clear_tags(&mut self) {
+        self.tag_ids.clear();
+    }
+
     /// Check if an in-memory item matches all active filters (AND logic).
     /// Used during poll() for real-time filtering of incoming items.
     pub fn matches_item(&self, item: &ClipboardItem) -> bool {
         // Favorites filter dimension
         if self.favorites_only && !item.is_favorite {
             return false;
+        }
+        // Tag filter dimension: item must have at least one of the selected tags (OR logic)
+        if !self.tag_ids.is_empty() {
+            if !item.tags.iter().any(|t| self.tag_ids.contains(&t.id)) {
+                return false;
+            }
         }
         // Type filter dimension
         if !self.type_filters.is_empty() {
@@ -101,6 +142,18 @@ impl ClipboardFilters {
             conditions.push("is_favorite = 1".to_string());
         }
 
+        // Tag filter — item must have at least one of the selected tags
+        if !self.tag_ids.is_empty() {
+            let ph: Vec<&str> = self.tag_ids.iter().map(|_| "?").collect();
+            conditions.push(format!(
+                "id IN (SELECT item_id FROM item_tags WHERE tag_id IN ({}))",
+                ph.join(",")
+            ));
+            for id in &self.tag_ids {
+                params.push((*id).into());
+            }
+        }
+
         // Type filter — expand "link" to also include "path"
         if !self.type_filters.is_empty() {
             let expanded: Vec<String> = self.type_filters.iter().flat_map(|t| {
@@ -120,10 +173,17 @@ impl ClipboardFilters {
             }
         }
 
-        // Keyword filter
+        // Keyword filter — also matches tag names
         if let Some(ref kw) = self.keyword {
-            conditions.push("full_text LIKE ?".to_string());
-            params.push(format!("%{}%", kw).into());
+            conditions.push(
+                "(full_text LIKE ? OR id IN (\
+                 SELECT item_id FROM item_tags it \
+                 INNER JOIN tags t ON it.tag_id = t.id \
+                 WHERE t.name LIKE ?))".to_string()
+            );
+            let pattern = format!("%{}%", kw);
+            params.push(pattern.clone().into());
+            params.push(pattern.into());
         }
 
         if conditions.is_empty() {

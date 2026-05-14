@@ -1,7 +1,7 @@
 //! Database persistence for clipboard items
 
 use crate::core::filters::ClipboardFilters;
-use crate::core::types::{ClipboardItem, ContentType};
+use crate::core::types::{ClipboardItem, ContentType, TagInfo};
 use rusqlite::{params, Connection, Result as SqlResult};
 
 pub struct Database {
@@ -41,6 +41,22 @@ impl Database {
         let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN source_app_icon TEXT NOT NULL DEFAULT ''", []);
         let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN rich_data TEXT NOT NULL DEFAULT ''", []);
         let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN note TEXT NOT NULL DEFAULT ''", []);
+        // Tags tables
+        let _ = self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS item_tags (
+                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                item_id INTEGER NOT NULL REFERENCES clipboard_items(id) ON DELETE CASCADE,
+                used_at TEXT NOT NULL,
+                PRIMARY KEY (tag_id, item_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_item_tags_item ON item_tags(item_id);
+            CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);",
+        );
         Ok(())
     }
 
@@ -153,6 +169,147 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // ── Tag CRUD ──
+
+    pub fn create_tag(&self, name: &str, color: &str) -> SqlResult<i64> {
+        self.conn.execute(
+            "INSERT INTO tags (name, color) VALUES (?1, ?2)",
+            params![name, color],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn delete_tag(&mut self, tag_id: i64) -> SqlResult<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM item_tags WHERE tag_id = ?1", params![tag_id])?;
+        tx.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn update_tag(&self, tag_id: i64, name: &str, color: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE tags SET name = ?1, color = ?2 WHERE id = ?3",
+            params![name, color, tag_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_tags(&self) -> SqlResult<Vec<TagInfo>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TagInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_tags_for_item(&self, item_id: i64) -> SqlResult<Vec<TagInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.name, t.color FROM tags t \
+             INNER JOIN item_tags it ON t.id = it.tag_id \
+             WHERE it.item_id = ?1 ORDER BY it.used_at DESC",
+        )?;
+        let rows = stmt.query_map(params![item_id], |row| {
+            Ok(TagInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_tags_for_items(&self, item_ids: &[i64]) -> SqlResult<std::collections::HashMap<i64, Vec<TagInfo>>> {
+        let mut map: std::collections::HashMap<i64, Vec<TagInfo>> = std::collections::HashMap::new();
+        if item_ids.is_empty() {
+            return Ok(map);
+        }
+        let placeholders: Vec<String> = item_ids.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT it.item_id, t.id, t.name, t.color FROM tags t \
+             INNER JOIN item_tags it ON t.id = it.tag_id \
+             WHERE it.item_id IN ({}) ORDER BY it.used_at DESC",
+            placeholders.join(",")
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let params: Vec<rusqlite::types::Value> = item_ids.iter().map(|&id| (id).into()).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok((row.get::<_, i64>(0)?, TagInfo {
+                id: row.get(1)?,
+                name: row.get(2)?,
+                color: row.get(3)?,
+            }))
+        })?;
+        for row in rows {
+            let (item_id, tag) = row?;
+            map.entry(item_id).or_default().push(tag);
+        }
+        Ok(map)
+    }
+
+    pub fn add_item_tag(&self, item_id: i64, tag_id: i64) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO item_tags (tag_id, item_id, used_at) VALUES (?1, ?2, ?3)",
+            params![tag_id, item_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_item_tag(&self, item_id: i64, tag_id: i64) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM item_tags WHERE tag_id = ?1 AND item_id = ?2",
+            params![tag_id, item_id],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn get_tag_by_name(&self, name: &str) -> SqlResult<Option<TagInfo>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags WHERE name = ?1")?;
+        let mut rows = stmt.query(params![name])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(TagInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Load items with tags pre-filled via batch query
+    pub fn load_filtered_with_tags(
+        &self,
+        filters: &ClipboardFilters,
+        limit: usize,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        let mut items = self.load_filtered(filters, limit, order_by)?;
+        if !items.is_empty() {
+            let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
+            let tag_map = self.get_tags_for_items(&ids)?;
+            for item in &mut items {
+                item.tags = tag_map.get(&item.id).cloned().unwrap_or_default();
+            }
+        }
+        Ok(items)
+    }
+
+    pub fn get_by_id_with_tags(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {
+        if let Some(mut item) = self.get_by_id(id)? {
+            item.tags = self.get_tags_for_item(id)?;
+            Ok(Some(item))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
@@ -191,5 +348,6 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         note,
         source_app_name,
         source_app_icon,
+        tags: Vec::new(), // filled later via batch query
     })
 }

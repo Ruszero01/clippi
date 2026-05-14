@@ -32,6 +32,7 @@ export component ClipboardList inherits Rectangle {
     // 工具栏点击标记 — 由工具栏 pointer-event(down) 设置，卡片 pointer-event(up) 消费。
     // 用独立布尔值避免与双击检测的 last-clicked-id 互相干扰。
     in-out property <bool> toolbar-action: false;
+    in property <bool> has-tag-filter: false;
 
     // ========== 选中状态 ==========
     in property <int> selected-count: 0;
@@ -56,6 +57,10 @@ export component ClipboardList inherits Rectangle {
     callback batch-paste();
     callback batch-favorite();
     callback batch-delete();
+    callback show-tag-filter-panel();
+    callback show-tag-picker(int);
+    callback hide-tag-picker();
+    callback hide-tag-filter-panel();
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #232425 : #ffffff;
@@ -122,7 +127,7 @@ export component ClipboardList inherits Rectangle {
                 single-line: true;
                 text <=> root.search-text;
                 changed has-focus => {
-                    if self.has-focus { root.hide-context-menu(); }
+                    if self.has-focus { root.hide-context-menu(); root.hide-tag-filter-panel(); root.hide-tag-picker(); }
                 }
                 edited => {
                     root.search-keyword(root.search-text);
@@ -151,12 +156,12 @@ export component ClipboardList inherits Rectangle {
                         width: ft-layout.preferred-width;
                         height: 22px;
                         border-radius: 5px;
-                        background: root.filter-plain-text ? (dark-mode ? #7ecba322 : #6ab89022) : (ft-ta.has-hover ? btn-hover : transparent);
+                        background: root.filter-plain-text ? (dark-mode ? #7ecba322 : #6ab89022) : (ft-ta.has-hover ? (dark-mode ? btn-hover : #e0e1ea) : transparent);
 
                         ft-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("plain_text"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.hide-tag-filter-panel(); root.hide-tag-picker(); root.toggle-filter("plain_text"); }
                         }
 
                         ft-layout := HorizontalLayout {
@@ -188,12 +193,12 @@ export component ClipboardList inherits Rectangle {
                         width: fr-layout.preferred-width;
                         height: 22px;
                         border-radius: 5px;
-                        background: root.filter-rich-text ? (dark-mode ? #7ecba322 : #6ab89022) : (fr-ta.has-hover ? btn-hover : transparent);
+                        background: root.filter-rich-text ? (dark-mode ? #7ecba322 : #6ab89022) : (fr-ta.has-hover ? (dark-mode ? btn-hover : #e0e1ea) : transparent);
 
                         fr-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("rich_text"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.hide-tag-filter-panel(); root.hide-tag-picker(); root.toggle-filter("rich_text"); }
                         }
 
                         fr-layout := HorizontalLayout {
@@ -225,12 +230,12 @@ export component ClipboardList inherits Rectangle {
                         width: fi-layout.preferred-width;
                         height: 22px;
                         border-radius: 5px;
-                        background: root.filter-file ? (dark-mode ? #7ecba322 : #6ab89022) : (fi-ta.has-hover ? btn-hover : transparent);
+                        background: root.filter-file ? (dark-mode ? #7ecba322 : #6ab89022) : (fi-ta.has-hover ? (dark-mode ? btn-hover : #e0e1ea) : transparent);
 
                         fi-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("file"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.hide-tag-filter-panel(); root.hide-tag-picker(); root.toggle-filter("file"); }
                         }
 
                         fi-layout := HorizontalLayout {
@@ -262,12 +267,12 @@ export component ClipboardList inherits Rectangle {
                         width: fl-layout.preferred-width;
                         height: 22px;
                         border-radius: 5px;
-                        background: root.filter-link ? (dark-mode ? #7ecba322 : #6ab89022) : (fl-ta.has-hover ? btn-hover : transparent);
+                        background: root.filter-link ? (dark-mode ? #7ecba322 : #6ab89022) : (fl-ta.has-hover ? (dark-mode ? btn-hover : #e0e1ea) : transparent);
 
                         fl-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("link"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.hide-tag-filter-panel(); root.hide-tag-picker(); root.toggle-filter("link"); }
                         }
 
                         fl-layout := HorizontalLayout {
@@ -299,12 +304,12 @@ export component ClipboardList inherits Rectangle {
                         width: fc-layout.preferred-width;
                         height: 22px;
                         border-radius: 5px;
-                        background: root.filter-color ? (dark-mode ? #7ecba322 : #6ab89022) : (fc-ta.has-hover ? btn-hover : transparent);
+                        background: root.filter-color ? (dark-mode ? #7ecba322 : #6ab89022) : (fc-ta.has-hover ? (dark-mode ? btn-hover : #e0e1ea) : transparent);
 
                         fc-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.toggle-filter("color"); }
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.hide-tag-filter-panel(); root.hide-tag-picker(); root.toggle-filter("color"); }
                         }
 
                         fc-layout := HorizontalLayout {
@@ -328,6 +333,30 @@ export component ClipboardList inherits Rectangle {
                                 color: root.filter-color ? accent : text-2;
                                 vertical-alignment: center;
                             }
+                        }
+                    }
+
+                    // 标签筛选按钮（仅图标）
+                    ft-tag-btn := Rectangle {
+                        width: 24px;
+                        height: 22px;
+                        border-radius: 5px;
+                        background: tag-plus-ta.has-hover ? (dark-mode ? btn-hover : #e0e1ea) : (root.has-tag-filter ? (dark-mode ? #7ecba322 : #6ab89022) : transparent);
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: "\u{ec07}";
+                            font-family: "iconfont";
+                            font-size: 13px;
+                            color: root.has-tag-filter ? accent : text-2;
+                            vertical-alignment: center;
+                        }
+
+                        tag-plus-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { search-input.clear-focus(); root.hide-context-menu(); root.hide-tag-picker(); root.show-tag-filter-panel(); }
                         }
                     }
                 }
@@ -393,6 +422,8 @@ export component ClipboardList inherits Rectangle {
                                     search-input.clear-focus();
                                     root.click-pending = false;
                                     root.last-clicked-id = -1;
+                                    root.hide-tag-filter-panel();
+                                    root.hide-tag-picker();
                                     if (entry.selected && root.selected-count > 1) {
                                         // 多选条目上右键 → 批量操作菜单
                                         root.context-menu-is-batch = true;
@@ -419,6 +450,8 @@ export component ClipboardList inherits Rectangle {
                                     }
                                     search-input.clear-focus();
                                     root.hide-context-menu();
+                                    root.hide-tag-filter-panel();
+                                    root.hide-tag-picker();
 
                                     if (root.click-pending && root.last-clicked-id == entry.id) {
                                         root.click-pending = false;
@@ -1241,23 +1274,102 @@ export component ClipboardList inherits Rectangle {
                                 }
                             }
 
-                            // 悬浮时间标签
-                            if root.editing-note-id != entry.id : Rectangle {
-                                x: parent.width - self.width - 10px;
+                            // 标签色块 + 悬浮时间标签
+                            if root.editing-note-id != entry.id : HorizontalLayout {
+                                x: parent.width - self.preferred-width - 10px;
                                 y: parent.height - self.height - 6px;
                                 height: 18px;
-                                width: time-text.preferred-width + 14px;
-                                border-radius: 9px;
-                                background: dark-mode ? #232425e8 : #ffffffe8;
-                                border-width: 1px;
-                                border-color: dark-mode ? #ffffff20 : #0000000c;
+                                spacing: 4px;
 
-                                time-text := Text {
-                                    text: entry.time-label;
-                                    font-size: 9px;
-                                    color: text-2;
-                                    x: 7px;
-                                    vertical-alignment: center;
+                                // 标签名药丸（边框+文字为标签颜色，底板同时间标签）
+                                if entry.has-tags && entry.tag-name-0 != "" : Rectangle {
+                                    height: 18px;
+                                    width: tag0-text.preferred-width + 10px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 0.5px;
+                                    border-color: dark-mode ? #ffffff20 : #0000001a;
+
+                                    tag0-text := Text {
+                                        x: 5px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: entry.tag-name-0;
+                                        font-size: 9px;
+                                        color: entry.tag-dot-0;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if entry.tag-name-1 != "" : Rectangle {
+                                    height: 18px;
+                                    width: tag1-text.preferred-width + 10px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 0.5px;
+                                    border-color: dark-mode ? #ffffff20 : #0000001a;
+
+                                    tag1-text := Text {
+                                        x: 5px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: entry.tag-name-1;
+                                        font-size: 9px;
+                                        color: entry.tag-dot-1;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if entry.tag-name-2 != "" : Rectangle {
+                                    height: 18px;
+                                    width: tag2-text.preferred-width + 10px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 0.5px;
+                                    border-color: dark-mode ? #ffffff20 : #0000001a;
+
+                                    tag2-text := Text {
+                                        x: 5px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: entry.tag-name-2;
+                                        font-size: 9px;
+                                        color: entry.tag-dot-2;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if entry.tags-overflow > 0 : Rectangle {
+                                    height: 18px;
+                                    width: overflow-text.preferred-width + 10px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 1px;
+                                    border-color: dark-mode ? #ffffff20 : #0000000c;
+
+                                    overflow-text := Text {
+                                        x: 5px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "+" + entry.tags-overflow;
+                                        font-size: 9px;
+                                        color: text-2;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // 悬浮时间标签
+                                time-rect := Rectangle {
+                                    height: 18px;
+                                    width: time-text.preferred-width + 14px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 1px;
+                                    border-color: dark-mode ? #ffffff20 : #0000000c;
+
+                                    time-text := Text {
+                                        text: entry.time-label;
+                                        font-size: 9px;
+                                        color: text-2;
+                                        x: 7px;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }

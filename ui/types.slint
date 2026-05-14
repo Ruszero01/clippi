@@ -1,3 +1,10 @@
+export struct TagItem {
+    id: int,
+    name: string,
+    color: color,
+    checked: bool,
+}
+
 export struct ClipboardEntry {
     id: int,
     preview: string,
@@ -32,4 +39,14 @@ export struct ClipboardEntry {
     favicon-image: image,
     folder-icon-path: string,
     folder-icon-image: image,
+    // Tag fields
+    has-tags: bool,
+    tag-dot-0: color,
+    tag-dot-1: color,
+    tag-dot-2: color,
+    tag-name-0: string,
+    tag-name-1: string,
+    tag-name-2: string,
+    tags-overflow: int,
+    tags-json: string,
 }

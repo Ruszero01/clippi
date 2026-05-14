@@ -1,10 +1,13 @@
-import { ClipboardEntry } from "types.slint";
+import { ClipboardEntry, TagItem } from "types.slint";
 import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
 import { EditPanel } from "EditPanel.slint";
 import { ContextMenu } from "ContextMenu.slint";
+import { TagFilterPanel } from "TagFilterPanel.slint";
+import { TagPickerPanel } from "TagPickerPanel.slint";
 
 import { Palette } from "std-widgets.slint";
+import { TagPanelTheme } from "theme.slint";
 
 export component App inherits Window {
     icon: @image-url("../assets/LOGO.ico");
@@ -77,6 +80,18 @@ export component App inherits Window {
     in-out property <bool> filter-color: false;
     in-out property <bool> filter-file: false;
     in-out property <bool> filter-favorites: false;
+    in-out property <bool> has-tag-filter: false;
+
+    // 标签浮层状态
+    in-out property <bool> tag-filter-visible: false;
+    in-out property <length> tag-filter-x: 0px;
+    in-out property <length> tag-filter-y: 0px;
+    in-out property <bool> tag-picker-visible: false;
+    in-out property <length> tag-picker-x: 0px;
+    in-out property <length> tag-picker-y: 0px;
+    in-out property <int> tag-picker-item-id: -1;
+    in-out property <bool> tag-picker-is-batch: false;
+    in-out property <[TagItem]> all-tags: [];
 
     // 双击检测
     in-out property <int> last-clicked-id: -1;
@@ -127,6 +142,19 @@ export component App inherits Window {
     callback batch-paste();
     callback batch-favorite();
     callback batch-delete();
+    // 标签回调
+    callback show-tag-filter-panel();
+    callback hide-tag-filter-panel();
+    callback toggle-tag-filter(int);
+    callback create-tag(string);
+    callback delete-tag(int);
+    callback update-tag(int, string, color);
+    callback show-tag-picker(int);
+    callback hide-tag-picker();
+    callback create-and-add-tag(int, string);
+    callback toggle-item-tag(int, int);
+    callback batch-add-tag(int);
+    callback batch-remove-tag(int);
 
     // ========== 主题色板 ==========
     property <color> bg:            dark-mode ? #191a1b : #f2f3f8;
@@ -146,9 +174,11 @@ export component App inherits Window {
     // 同步 Slint 原生组件（滚动条等）的颜色方案
     init => {
         Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
+        TagPanelTheme.dark-mode = root.dark-mode;
     }
     changed dark-mode => {
         Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
+        TagPanelTheme.dark-mode = root.dark-mode;
     }
 
     // 双击检测定时器（200ms 窗口，每次点击强制重启）
@@ -435,6 +465,11 @@ export component App inherits Window {
                     batch-paste => { root.batch-paste(); }
                     batch-favorite => { root.batch-favorite(); }
                     batch-delete => { root.batch-delete(); }
+                    has-tag-filter: root.has-tag-filter;
+                    show-tag-filter-panel => { root.show-tag-filter-panel(); }
+                    show-tag-picker(id) => { root.show-tag-picker(id); }
+                    hide-tag-picker => { root.hide-tag-picker(); }
+                    hide-tag-filter-panel => { root.hide-tag-filter-panel(); }
                 }
 
                 EditPanel {
@@ -529,6 +564,45 @@ export component App inherits Window {
             batch-paste => { root.batch-paste(); }
             batch-favorite => { root.batch-favorite(); }
             batch-delete => { root.batch-delete(); }
+            show-tag-picker(id) => { root.show-tag-picker(id); }
+        }
+
+        // ========== 标签筛选浮层面板 ==========
+        if root.tag-filter-visible: TagFilterPanel {
+            panel-x: root.tag-filter-x;
+            panel-y: root.tag-filter-y;
+            container-w: parent.width;
+            container-h: parent.height;
+            dark-mode: root.dark-mode;
+            all-tags <=> root.all-tags;
+            has-tag-filter: root.has-tag-filter;
+
+            hide-panel => { root.hide-tag-filter-panel(); }
+            create-tag(name) => { root.create-tag(name); }
+            delete-tag(id) => { root.delete-tag(id); }
+            update-tag(id, name, color) => { root.update-tag(id, name, color); }
+            toggle-tag-filter(id) => { root.toggle-tag-filter(id); }
+        }
+
+        // ========== 标签选择器浮层面板 ==========
+        if root.tag-picker-visible: TagPickerPanel {
+            panel-x: root.tag-picker-x;
+            panel-y: root.tag-picker-y;
+            container-w: parent.width;
+            container-h: parent.height;
+            dark-mode: root.dark-mode;
+            all-tags <=> root.all-tags;
+            is-batch: root.tag-picker-is-batch;
+
+            hide-picker => { root.hide-tag-picker(); }
+            create-and-add-tag(name) => {
+                root.create-and-add-tag(root.tag-picker-item-id, name);
+            }
+            toggle-item-tag(tag-id) => {
+                root.toggle-item-tag(root.tag-picker-item-id, tag-id);
+            }
+            batch-add-tag(tag-id) => { root.batch-add-tag(tag-id); }
+            batch-remove-tag(tag-id) => { root.batch-remove-tag(tag-id); }
         }
     }
     }

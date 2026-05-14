@@ -119,14 +119,14 @@ impl ClipboardService {
         self.refresh_with_current_filter();
     }
 
-    fn refresh_with_current_filter(&mut self) {
+    pub fn refresh_with_current_filter(&mut self) {
         self.model.clear();
         // 筛选变化时清除选中状态
         self.selected_ids.clear();
         self.anchor_id = -1;
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
         let items = self.db.lock().expect("db lock poisoned")
-            .load_filtered(&self.filters, MAX_ITEMS, order_by)
+            .load_filtered_with_tags(&self.filters, MAX_ITEMS, order_by)
             .unwrap_or_default();
         for item in items {
             self.model.push(item_to_entry(&item));
@@ -156,7 +156,7 @@ impl ClipboardService {
     /// Refresh a single row by id (e.g., after copying to update timestamp)
     pub fn refresh_row(&self, id: i32) {
         if let Ok(db) = self.db.lock() {
-            if let Ok(Some(item)) = db.get_by_id(id as i64) {
+            if let Ok(Some(item)) = db.get_by_id_with_tags(id as i64) {
                 for i in 0..self.model.row_count() {
                     if let Some(entry) = self.model.row_data(i) {
                         if entry.id == id {
@@ -177,6 +177,198 @@ impl ClipboardService {
     /// Check if favorites filter is active
     pub fn is_favorites_filter_active(&self) -> bool {
         self.filters.is_favorites_active()
+    }
+
+    // ── Tag methods ──
+
+    #[allow(dead_code)]
+    pub fn is_tag_filter_active(&self, tag_id: i64) -> bool {
+        self.filters.is_tag_active(tag_id)
+    }
+
+    pub fn has_tag_filters(&self) -> bool {
+        self.filters.has_tag_filters()
+    }
+
+    /// Toggle a tag filter and full reload
+    pub fn toggle_tag_filter_and_refresh(&mut self, tag_id: i64) {
+        self.filters.toggle_tag(tag_id);
+        self.refresh_with_current_filter();
+    }
+
+    /// Clear all tag filters and full reload
+    #[allow(dead_code)]
+    pub fn clear_tag_filters(&mut self) {
+        self.filters.clear_tags();
+        self.refresh_with_current_filter();
+    }
+
+    /// Load all tags into the shared model with filter-checked state
+    pub fn load_all_tags_for_filter(&self) {
+        let tags = self.db.lock().expect("db lock poisoned")
+            .get_all_tags()
+            .unwrap_or_default();
+        let model: Vec<crate::TagItem> = tags.iter().map(|t| {
+            crate::TagItem {
+                id: t.id as i32,
+                name: slint::SharedString::from(t.name.clone()),
+                color: hex_to_slint_color(&t.color),
+                checked: self.filters.is_tag_active(t.id),
+            }
+        }).collect();
+        if let Some(app) = self.app.upgrade() {
+            app.set_all_tags(slint::ModelRc::from(model.as_slice()));
+        }
+    }
+
+    /// Load all tags for the picker panel with item-checked state (sorted by recency)
+    pub fn load_all_tags_for_picker(&self, item_id: i32) {
+        let mut tags = self.db.lock().expect("db lock poisoned")
+            .get_all_tags()
+            .unwrap_or_default();
+        let item_tags = self.db.lock().expect("db lock poisoned")
+            .get_tags_for_item(item_id as i64)
+            .unwrap_or_default();
+        let item_tag_ids: Vec<i64> = item_tags.iter().map(|t| t.id).collect();
+
+        // Sort: tags on the item first, then by name
+        tags.sort_by(|a, b| {
+            let a_has = item_tag_ids.contains(&a.id);
+            let b_has = item_tag_ids.contains(&b.id);
+            match (a_has, b_has) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            }
+        });
+
+        let model: Vec<crate::TagItem> = tags.iter().map(|t| {
+            crate::TagItem {
+                id: t.id as i32,
+                name: slint::SharedString::from(t.name.clone()),
+                color: hex_to_slint_color(&t.color),
+                checked: item_tag_ids.contains(&t.id),
+            }
+        }).collect();
+        if let Some(app) = self.app.upgrade() {
+            app.set_all_tags(slint::ModelRc::from(model.as_slice()));
+        }
+    }
+
+    /// Load all tags for batch picker (checked if all selected items have the tag)
+    pub fn load_all_tags_for_batch_picker(&self) {
+        let tags = self.db.lock().expect("db lock poisoned")
+            .get_all_tags()
+            .unwrap_or_default();
+
+        // Get tags for all selected items
+        let selected_i64: Vec<i64> = self.selected_ids.iter().map(|&id| id as i64).collect();
+        let tag_map = self.db.lock().expect("db lock poisoned")
+            .get_tags_for_items(&selected_i64)
+            .unwrap_or_default();
+
+        let total = self.selected_ids.len() as i64;
+        let model: Vec<crate::TagItem> = tags.iter().map(|t| {
+            let count = tag_map.values()
+                .filter(|item_tags| item_tags.iter().any(|it| it.id == t.id))
+                .count() as i64;
+            crate::TagItem {
+                id: t.id as i32,
+                name: slint::SharedString::from(t.name.clone()),
+                color: hex_to_slint_color(&t.color),
+                checked: count == total && total > 0,
+            }
+        }).collect();
+        if let Some(app) = self.app.upgrade() {
+            app.set_all_tags(slint::ModelRc::from(model.as_slice()));
+        }
+    }
+
+    /// Create a new tag
+    pub fn create_tag(&self, name: &str) -> Option<crate::core::types::TagInfo> {
+        let color = crate::core::types::random_tag_color();
+        self.db.lock().expect("db lock poisoned")
+            .create_tag(name, color)
+            .ok()
+            .map(|id| crate::core::types::TagInfo { id, name: name.to_string(), color: color.to_string() })
+    }
+
+    /// Update a tag's name and color
+    pub fn update_tag(&self, tag_id: i64, name: &str, color: &str) {
+        let _ = self.db.lock().expect("db lock poisoned")
+            .update_tag(tag_id, name, color);
+    }
+
+    /// Delete a tag
+    pub fn delete_tag(&mut self, tag_id: i64) {
+        if let Ok(mut db) = self.db.lock() {
+            let _ = db.delete_tag(tag_id);
+        }
+        self.filters.remove_tag(tag_id);
+    }
+
+    /// Toggle a tag on an item (add/remove)
+    pub fn toggle_item_tag(&mut self, item_id: i32, tag_id: i64) {
+        let needs_full_refresh = self.filters.has_tag_filters();
+        {
+            if let Ok(db) = self.db.lock() {
+                let item_id_i64 = item_id as i64;
+                // Check if already has tag
+                let tags = db.get_tags_for_item(item_id_i64).unwrap_or_default();
+                if tags.iter().any(|t| t.id == tag_id) {
+                    let _ = db.remove_item_tag(item_id_i64, tag_id);
+                } else {
+                    let _ = db.add_item_tag(item_id_i64, tag_id);
+                }
+            }
+        }
+        if needs_full_refresh {
+            self.refresh_with_current_filter();
+        } else {
+            self.refresh_row(item_id);
+        }
+    }
+
+    /// Create a tag and add it to the current item (from picker)
+    pub fn create_and_add_tag(&mut self, item_id: i32, name: &str) -> Option<crate::core::types::TagInfo> {
+        let color = crate::core::types::random_tag_color();
+        let tag_id = {
+            self.db.lock().expect("db lock poisoned")
+                .create_tag(name, color)
+                .ok()
+        }?;
+        self.db.lock().expect("db lock poisoned")
+            .add_item_tag(item_id as i64, tag_id)
+            .ok()?;
+        let needs_full = self.filters.has_tag_filters();
+        if needs_full {
+            self.refresh_with_current_filter();
+        } else {
+            self.refresh_row(item_id);
+        }
+        Some(crate::core::types::TagInfo { id: tag_id, name: name.to_string(), color: color.to_string() })
+    }
+
+    /// Batch add tag to all selected items
+    pub fn batch_add_tag(&mut self, tag_id: i64) {
+        if let Ok(db) = self.db.lock() {
+            for &id in &self.selected_ids {
+                let _ = db.add_item_tag(id as i64, tag_id);
+            }
+        }
+        self.refresh_with_current_filter();
+        self.selected_ids.clear();
+    }
+
+    /// Batch remove tag from all selected items
+    pub fn batch_remove_tag(&mut self, tag_id: i64) {
+        if let Ok(db) = self.db.lock() {
+            for &id in &self.selected_ids {
+                let _ = db.remove_item_tag(id as i64, tag_id);
+            }
+        }
+        self.refresh_with_current_filter();
+        self.selected_ids.clear();
     }
 
     /// Toggle favorite status for an item and refresh that row
@@ -410,7 +602,8 @@ impl Pollable for ClipboardService {
                     continue;
                 }
 
-                if let Ok(Some(existing)) = db.get_by_hash(item.content_hash) {
+                if let Ok(Some(mut existing)) = db.get_by_hash(item.content_hash) {
+                    existing.tags = db.get_tags_for_item(existing.id).unwrap_or_default();
                     if self.sort_by_created {
                         // created_at doesn't change on dedup, so item should stay
                         // in place. Just update the row with fresh timestamp/label.
@@ -442,6 +635,13 @@ impl Pollable for ClipboardService {
             app.set_item_count(self.model.row_count() as i32);
         }
     }
+}
+
+/// Convert hex color "#EF4444" to slint::Color
+fn hex_to_slint_color(hex: &str) -> slint::Color {
+    crate::core::types::parse_hex_color(hex)
+        .map(|(r, g, b)| slint::Color::from_rgb_u8(r, g, b))
+        .unwrap_or_default()
 }
 
 fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
@@ -616,6 +816,30 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
                   SharedString::default(), Image::default())
         };
 
+    // Tag dots: up to 3 visible colored dots + overflow count + JSON data
+    let (has_tags, tag_dot_0, tag_dot_1, tag_dot_2, tag_name_0, tag_name_1, tag_name_2, tags_overflow, tags_json) = {
+        let tags = &item.tags;
+        let json = serde_json::to_string(tags).unwrap_or_default();
+        let mut colors: Vec<slint::Color> = Vec::new();
+        let mut names: Vec<SharedString> = Vec::new();
+        for t in tags.iter().take(3) {
+            names.push(SharedString::from(t.name.clone()));
+            if let Some((r, g, b)) = crate::core::types::parse_hex_color(&t.color) {
+                colors.push(slint::Color::from_rgb_u8(r, g, b));
+            } else {
+                colors.push(slint::Color::default());
+            }
+        }
+        while colors.len() < 3 {
+            colors.push(slint::Color::default());
+        }
+        while names.len() < 3 {
+            names.push(SharedString::default());
+        }
+        let overflow = if tags.len() > 3 { (tags.len() - 3) as i32 } else { 0 };
+        (tags.len() > 0, colors[0], colors[1], colors[2], names.remove(0), names.remove(0), names.remove(0), overflow, SharedString::from(json))
+    };
+
     ClipboardEntry {
         id: item.id as i32,
         preview: SharedString::from(item.full_text.clone()),
@@ -648,5 +872,14 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         file_overflow,
         file_icon_path: SharedString::from(file_icon_path),
         file_icon_image,
+        has_tags,
+        tag_dot_0,
+        tag_dot_1,
+        tag_dot_2,
+        tag_name_0,
+        tag_name_1,
+        tag_name_2,
+        tags_overflow,
+        tags_json,
     }
 }
