@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
@@ -10,7 +10,6 @@ build = "build.rs"
 
 [package.metadata.wix]
 upgrade-guid = "66941EB2-9E76-47FE-93C4-E29C1CE863C8"
-path-guid = "DFAC08E5-F4EF-4907-9424-79708970616D"
 license = false
 eula = false
 
