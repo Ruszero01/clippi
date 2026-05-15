@@ -1,6 +1,9 @@
 # Clippi - 剪贴板管理器
 
-![Banner](assets/Banner.png)
+<p align="center">
+  <img src="assets/Banner.png" alt="Banner" width="100%">
+  <img src="assets/UI.png" alt="UI Screenshot" width="100%">
+</p>
 
 一个轻量级剪贴板管理器，使用 Rust + Slint 构建。支持 Windows 和 macOS。
 
@@ -60,11 +63,10 @@
 - 悬停显示原始内容
 - 纯文本复制模式
 
-### 云同步 (v2 协议)
+### 云同步
 - 多后端架构：支持同时配置多个同步服务
 - 本地文件夹后端：通过 OneDrive / iCloud / Dropbox 等云盘同步
 - 自动检测 OneDrive (Windows) 和 iCloud (macOS) 预设路径
-- 全量同步：文本/富文本/链接/路径/颜色类型 + 标签
 - 跨设备删除传播（墓碑机制）
 - 最后写入者胜出 (LWW) 冲突解决
 - 可配同步间隔 + 手动同步 + 自动同步开关
