@@ -11,10 +11,17 @@ export component AddBackendPanel inherits Rectangle {
     // 预设（由 Rust 端检测后传入）
     in property <string> preset-onedrive-path: "";
     in property <string> preset-icloud-path: "";
+    // 编辑模式
+    in property <bool> edit-mode: false;
+    in property <string> edit-id: "";
+    in-out property <string> edit-name: "";
+    in-out property <string> edit-folder: "";
 
     // 回调
     callback hide-panel();
     callback add-backend(string, string);  // (name, folder_path)
+    callback save-backend(string, string, string);  // (id, name, folder_path)
+    callback pick-folder();
 
     // 主题色板
     property <color> accent: TagPanelTheme.accent;
@@ -56,7 +63,7 @@ export component AddBackendPanel inherits Rectangle {
             alignment: space-between;
 
             Text {
-                text: "添加同步服务";
+                text: root.edit-mode ? "编辑同步服务" : "添加同步服务";
                 font-size: 13px;
                 font-weight: 600;
                 color: text-1;
@@ -93,15 +100,15 @@ export component AddBackendPanel inherits Rectangle {
             background: sep-line;
         }
 
-        // 预设按钮
-        Text {
+        // 预设按钮（仅添加模式）
+        if !root.edit-mode : Text {
             text: "快速添加";
             font-size: 11px;
             font-weight: 600;
             color: text-2;
         }
 
-        HorizontalLayout {
+        if !root.edit-mode : HorizontalLayout {
             spacing: 8px;
 
             // OneDrive 预设
@@ -221,6 +228,7 @@ export component AddBackendPanel inherits Rectangle {
                 color: text-1;
                 font-size: 11px;
                 vertical-alignment: center;
+                text <=> root.edit-name;
             }
         }
 
@@ -237,6 +245,7 @@ export component AddBackendPanel inherits Rectangle {
 
             Rectangle {
                 height: 30px;
+                horizontal-stretch: 1;
                 border-radius: 6px;
                 background: input-bg;
 
@@ -248,12 +257,37 @@ export component AddBackendPanel inherits Rectangle {
                     color: text-1;
                     font-size: 11px;
                     vertical-alignment: center;
+                    text <=> root.edit-folder;
+                }
+            }
+
+            Rectangle {
+                height: 30px;
+                width: 52px;
+                border-radius: 6px;
+                background: pick-ta.has-hover ? accent : btn-hover;
+
+                pick-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => { root.pick-folder(); }
+                }
+
+                Text {
+                    text: "选择";
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: pick-ta.has-hover ? #ffffff : accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
             }
         }
 
-        // 添加按钮
-        Rectangle {
+        property <color> accent-soft: dark-mode ? #1a2e24 : #e8f5ee;
+
+        // 添加按钮（添加模式）
+        if !root.edit-mode : Rectangle {
             height: 34px;
             border-radius: 7px;
             background: add-ta.has-hover ? accent-soft : accent;
@@ -264,20 +298,47 @@ export component AddBackendPanel inherits Rectangle {
                 clicked => {
                     if panel-name-input.text != "" && panel-folder-input.text != "" {
                         root.add-backend(panel-name-input.text, panel-folder-input.text);
-                        panel-name-input.text = "";
-                        panel-folder-input.text = "";
+                        root.edit-name = "";
+                        root.edit-folder = "";
                         root.hide-panel();
                     }
                 }
             }
-
-            property <color> accent-soft: dark-mode ? #1a2e24 : #e8f5ee;
 
             Text {
                 text: "添加服务";
                 font-size: 12px;
                 font-weight: 600;
                 color: add-ta.has-hover ? accent : #ffffff;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // 保存按钮（编辑模式）
+        if root.edit-mode : Rectangle {
+            height: 34px;
+            border-radius: 7px;
+            background: save-ta.has-hover ? accent-soft : accent;
+
+            save-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    if panel-name-input.text != "" && panel-folder-input.text != "" {
+                        root.save-backend(root.edit-id, panel-name-input.text, panel-folder-input.text);
+                        root.edit-name = "";
+                        root.edit-folder = "";
+                        root.hide-panel();
+                    }
+                }
+            }
+
+            Text {
+                text: "保存";
+                font-size: 12px;
+                font-weight: 600;
+                color: save-ta.has-hover ? accent : #ffffff;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }

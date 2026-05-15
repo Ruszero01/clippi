@@ -62,6 +62,10 @@ export component App inherits Window {
     in-out property <length> add-backend-panel-y: 0px;
     in property <string> preset-onedrive-path: "";
     in property <string> preset-icloud-path: "";
+    in-out property <bool> add-backend-edit-mode: false;
+    in-out property <string> add-backend-edit-id: "";
+    in-out property <string> add-backend-edit-name: "";
+    in-out property <string> add-backend-edit-folder: "";
 
     // 右键菜单状态
     in-out property <bool> context-menu-visible: false;
@@ -149,8 +153,11 @@ export component App inherits Window {
     callback show-add-backend-panel();
     callback hide-add-backend-panel();
     callback add-sync-backend(string, string);
+    callback save-sync-backend(string, string, string);  // (id, name, folder_path)
+    callback pick-backend-folder();
     callback remove-sync-backend(string);
     callback toggle-sync-backend(string);
+    callback edit-sync-backend(string);
     callback update-note(int, string);
     callback edit-item(int);
     callback save-content(int, string);
@@ -520,6 +527,7 @@ export component App inherits Window {
                     show-add-backend-panel => { root.show-add-backend-panel(); }
                     remove-sync-backend(id) => { root.remove-sync-backend(id); }
                     toggle-sync-backend(id) => { root.toggle-sync-backend(id); }
+                    edit-sync-backend(id) => { root.edit-sync-backend(id); }
                 }
             }
         }
@@ -606,9 +614,15 @@ export component App inherits Window {
             dark-mode: root.dark-mode;
             preset-onedrive-path: root.preset-onedrive-path;
             preset-icloud-path: root.preset-icloud-path;
+            edit-mode: root.add-backend-edit-mode;
+            edit-id: root.add-backend-edit-id;
+            edit-name <=> root.add-backend-edit-name;
+            edit-folder <=> root.add-backend-edit-folder;
 
             hide-panel => { root.hide-add-backend-panel(); }
             add-backend(name, path) => { root.add-sync-backend(name, path); }
+            save-backend(id, name, path) => { root.save-sync-backend(id, name, path); }
+            pick-folder => { root.pick-backend-folder(); }
         }
 
         // ========== 缩放手柄（置于最顶层，优先接收鼠标事件） ==========

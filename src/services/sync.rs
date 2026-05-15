@@ -32,6 +32,10 @@ struct BackendState {
     status: BackendStatus,
     last_sync: Option<Instant>,
     last_sync_at: String,
+    last_item_count: u32,
+    last_tag_count: u32,
+    folder_path: String,
+    service_label: String,
     is_running: Arc<AtomicBool>,
     cancel_flag: Arc<AtomicBool>,
     pending_result: Arc<Mutex<Option<BackendSyncResult>>>,
@@ -67,9 +71,43 @@ impl BackendState {
             status: SharedString::from(&status_str),
             status_message: SharedString::from(&status_msg),
             enabled: true,
-            folder_path: SharedString::from(""), // re-read below
-            last_sync_at: SharedString::from(&self.last_sync_at),
+            folder_path: SharedString::from(&self.folder_path),
+            last_sync_at: SharedString::from(&format_relative_time(&self.last_sync_at)),
+            item_count: self.last_item_count as i32,
+            tag_count: self.last_tag_count as i32,
+            service_label: SharedString::from(&self.service_label),
         }
+    }
+}
+
+fn detect_service_label(folder_path: &str) -> String {
+    let lower = folder_path.to_lowercase();
+    if lower.contains("onedrive") {
+        "OneDrive".into()
+    } else if lower.contains("icloud") {
+        "iCloud".into()
+    } else {
+        "本地".into()
+    }
+}
+
+fn format_relative_time(rfc3339: &str) -> String {
+    if rfc3339.is_empty() {
+        return "从未同步".into();
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(rfc3339) {
+        let dur = chrono::Utc::now().signed_duration_since(dt);
+        if dur.num_seconds() < 60 {
+            "刚刚".into()
+        } else if dur.num_minutes() < 60 {
+            format!("{}分钟前", dur.num_minutes())
+        } else if dur.num_hours() < 24 {
+            format!("{}小时前", dur.num_hours())
+        } else {
+            format!("{}天前", dur.num_days())
+        }
+    } else {
+        rfc3339.to_string()
     }
 }
 
@@ -190,6 +228,31 @@ impl SyncManager {
         self.refresh_model();
     }
 
+    /// Get backend name and folder path by ID.
+    pub fn get_backend_info(&self, id: &str) -> Option<(String, String)> {
+        self.backends
+            .iter()
+            .find(|b| b.backend.id() == id)
+            .map(|b| (b.backend.name().to_string(), b.folder_path.clone()))
+    }
+
+    /// Edit a backend — updates name and folder path, then persists.
+    pub fn edit_backend(&mut self, id: &str, new_name: &str, new_path: &str) {
+        {
+            let mut s = self.settings.lock().expect("settings lock");
+            for cfg in &mut s.sync_backends {
+                if cfg.id == id {
+                    cfg.name = new_name.to_string();
+                    cfg.folder_path = new_path.to_string();
+                    let _ = s.save();
+                    break;
+                }
+            }
+        }
+        self.reload_backends();
+        self.refresh_model();
+    }
+
     /// Trigger an immediate sync cycle for all enabled backends.
     pub fn trigger_sync_now(&self) {
         self.manual_trigger.store(true, Ordering::SeqCst);
@@ -220,6 +283,10 @@ impl SyncManager {
                     status: old.status.clone(),
                     last_sync: old.last_sync,
                     last_sync_at: old.last_sync_at.clone(),
+                    last_item_count: old.last_item_count,
+                    last_tag_count: old.last_tag_count,
+                    folder_path: old.folder_path.clone(),
+                    service_label: old.service_label.clone(),
                     is_running: Arc::clone(&old.is_running),
                     cancel_flag: Arc::clone(&old.cancel_flag),
                     pending_result: Arc::clone(&old.pending_result),
@@ -243,6 +310,8 @@ impl SyncManager {
     }
 
     fn build_state(config: BackendConfig) -> BackendState {
+        let folder_path = config.folder_path.clone();
+        let service_label = detect_service_label(&folder_path);
         let backend: Arc<dyn SyncBackend> = Arc::new(LocalFolderBackend::new(config));
 
         BackendState {
@@ -250,6 +319,10 @@ impl SyncManager {
             backend,
             last_sync: None,
             last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            folder_path,
+            service_label,
             is_running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             pending_result: Arc::new(Mutex::new(None)),
@@ -357,6 +430,8 @@ impl SyncManager {
             if result.success {
                 state.last_sync_at = chrono::Utc::now().to_rfc3339();
                 state.status = state.backend.check_status();
+                state.last_item_count = result.pushed_items;
+                state.last_tag_count = result.pushed_tags;
             } else {
                 state.status = BackendStatus::Error(msg);
             }

@@ -59,6 +59,7 @@ export component SettingsPanel inherits Rectangle {
     callback show-add-backend-panel();
     callback remove-sync-backend(string);
     callback toggle-sync-backend(string);
+    callback edit-sync-backend(string);
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #919496 : #7c809a;
@@ -343,6 +344,7 @@ export component SettingsPanel inherits Rectangle {
             show-add-backend-panel => { root.show-add-backend-panel(); }
             remove-sync-backend(id) => { root.remove-sync-backend(id); }
             toggle-sync-backend(id) => { root.toggle-sync-backend(id); }
+            edit-sync-backend(id) => { root.edit-sync-backend(id); }
         }
         }
     }

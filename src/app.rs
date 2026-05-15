@@ -517,6 +517,9 @@ impl AppController {
                     app.set_add_backend_panel_x(pos.0 as f32);
                     app.set_add_backend_panel_y(pos.1 as f32);
                 }
+                app.set_add_backend_edit_mode(false);
+                app.set_add_backend_edit_name(SharedString::default());
+                app.set_add_backend_edit_folder(SharedString::default());
                 app.set_add_backend_panel_visible(true);
             }
         });
@@ -526,6 +529,7 @@ impl AppController {
         slint_app.on_hide_add_backend_panel(move || {
             if let Some(app) = app_for_hide_panel.upgrade() {
                 app.set_add_backend_panel_visible(false);
+                app.set_add_backend_edit_mode(false);
             }
         });
 
@@ -534,6 +538,26 @@ impl AppController {
         slint_app.on_add_sync_backend(move |name: SharedString, path: SharedString| {
             let _ = looper_for_add_backend.try_with_sync_manager(|sm| {
                 sm.add_local_folder_backend(name.to_string(), path.to_string());
+            });
+        });
+
+        // Pick folder for backend path
+        let app_for_pick_folder = app.clone();
+        slint_app.on_pick_backend_folder(move || {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                if let Some(app) = app_for_pick_folder.upgrade() {
+                    app.set_add_backend_edit_folder(SharedString::from(
+                        folder.to_string_lossy().as_ref(),
+                    ));
+                }
+            }
+        });
+
+        // Save backend from floating panel (edit mode)
+        let looper_for_save_backend = Arc::clone(&looper);
+        slint_app.on_save_sync_backend(move |id: SharedString, name: SharedString, path: SharedString| {
+            let _ = looper_for_save_backend.try_with_sync_manager(|sm| {
+                sm.edit_backend(&id, &name, &path);
             });
         });
 
@@ -550,6 +574,27 @@ impl AppController {
         slint_app.on_toggle_sync_backend(move |id: SharedString| {
             let _ = looper_for_toggle_backend.try_with_sync_manager(|sm| {
                 sm.toggle_backend(&id);
+            });
+        });
+
+        // Edit backend — show panel pre-filled with current config
+        let looper_for_edit_backend = Arc::clone(&looper);
+        let app_for_edit = app.clone();
+        slint_app.on_edit_sync_backend(move |id: SharedString| {
+            let _ = looper_for_edit_backend.try_with_sync_manager(|sm| {
+                if let Some((name, folder)) = sm.get_backend_info(&id) {
+                    if let Some(app) = app_for_edit.upgrade() {
+                        if let Some(pos) = get_cursor_pos() {
+                            app.set_add_backend_panel_x(pos.0 as f32);
+                            app.set_add_backend_panel_y(pos.1 as f32);
+                        }
+                        app.set_add_backend_edit_id(id.clone());
+                        app.set_add_backend_edit_name(SharedString::from(&name));
+                        app.set_add_backend_edit_folder(SharedString::from(&folder));
+                        app.set_add_backend_edit_mode(true);
+                        app.set_add_backend_panel_visible(true);
+                    }
+                }
             });
         });
 

@@ -1,4 +1,5 @@
 import { SyncBackendInfo } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
 
 export component SettingsTabSync inherits Rectangle {
     in property <bool> dark-mode: false;
@@ -16,6 +17,7 @@ export component SettingsTabSync inherits Rectangle {
     callback show-add-backend-panel();
     callback remove-sync-backend(string);
     callback toggle-sync-backend(string);
+    callback edit-sync-backend(string);
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -200,172 +202,207 @@ export component SettingsTabSync inherits Rectangle {
             }
         }
 
-        // ── 同步状态卡片 ──
+        // ════════════════════════════════════════
+        // 下半部分：服务管理容器
+        // ════════════════════════════════════════
+
         Rectangle {
-            height: 42px;
             border-radius: 10px;
             background: surface;
             border-width: 1px;
             border-color: divider;
 
-            HorizontalLayout {
-                width: parent.width;
-                height: parent.height;
-                padding-left: 14px;
-                padding-right: 14px;
-                alignment: space-between;
+            VerticalLayout {
+                spacing: 0;
 
-                Text {
-                    text: root.sync-status;
-                    font-size: 11px;
-                    font-weight: 600;
-                    color: text-1;
-                    vertical-alignment: center;
-                }
+                // 添加服务按钮
+                Rectangle {
+                    height: 40px;
+                    border-radius: 10px;
+                    background: add-btn-ta.has-hover ? accent-soft : transparent;
 
-                Text {
-                    text: "新增" + root.sync-items-added + " 更新" + root.sync-items-updated + " 标签" + root.sync-tags-added;
-                    font-size: 10px;
-                    color: text-3;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        // ════════════════════════════════════════
-        // 下半部分：服务配置
-        // ════════════════════════════════════════
-
-        // ── 服务列表 ──
-        for backend in root.sync-backends: Rectangle {
-            height: 72px;
-            border-radius: 10px;
-            background: surface;
-            border-width: 1px;
-            border-color: divider;
-
-            HorizontalLayout {
-                width: parent.width;
-                height: parent.height;
-                padding: 12px;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Rectangle {
-                        width: 10px;
-                        height: 10px;
-                        border-radius: 5px;
-                        y: (parent.height - self.height) / 2;
-                        background: backend.status == "online" ? green :
-                                   backend.status == "syncing" ? accent :
-                                   backend.status == "error" ? red : gray;
+                    add-btn-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.show-add-backend-panel(); }
                     }
 
-                    VerticalLayout {
-                        spacing: 2px;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        padding-top: 10px;
+                        padding-bottom: 10px;
+                        spacing: 6px;
 
-                        HorizontalLayout {
-                            spacing: 6px;
+                        Text {
+                            text: "+";
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: add-btn-ta.has-hover ? accent : text-2;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "添加服务";
+                            font-size: 12px;
+                            color: add-btn-ta.has-hover ? accent : text-2;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
 
-                            Text {
-                                text: backend.name;
-                                font-size: 12px;
-                                font-weight: 600;
-                                color: text-1;
-                                vertical-alignment: center;
-                            }
+                // 分割线（有服务时显示）
+                if root.sync-backends.length > 0 : Rectangle {
+                    width: parent.width;
+                    height: 1px;
+                    background: divider;
+                }
 
-                            Rectangle {
-                                height: 16px;
-                                border-radius: 3px;
-                                background: accent-soft;
+                // 服务卡片滚动列表
+                if root.sync-backends.length > 0 : ScrollView {
+                    height: 220px;
+                    viewport-width: parent.width;
+                    viewport-height: svc-list.preferred-height;
 
-                                Text {
-                                    text: "本地文件夹";
-                                    font-size: 9px;
-                                    color: accent;
-                                    x: 4px;
-                                    vertical-alignment: center;
+                    svc-list := VerticalLayout {
+                        spacing: 6px;
+                        padding: 8px;
+
+                        for backend in root.sync-backends: Rectangle {
+                            height: 56px;
+                            border-radius: 8px;
+                            background: dark-mode ? #1e1f20 : #f8f9fc;
+                            border-width: 1px;
+                            border-color: divider;
+
+                            VerticalLayout {
+                                height: 100%;
+                                padding-left: 10px;
+                                padding-right: 6px;
+
+                                Rectangle {
+                                    vertical-stretch: 1;
+                                }
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+
+                                    VerticalLayout {
+                                        spacing: 3px;
+
+                                        HorizontalLayout {
+                                            spacing: 6px;
+
+                                            Rectangle {
+                                                width: 12px;
+                                                height: 12px;
+                                                border-radius: 6px;
+                                                y: (parent.height - self.height) / 2;
+                                                border-width: 1px;
+                                                border-color: backend.status == "online" ? green :
+                                                             backend.status == "syncing" ? accent :
+                                                             backend.status == "error" ? red : gray;
+                                                background: transparent;
+
+                                                Rectangle {
+                                                    width: 5px;
+                                                    height: 5px;
+                                                    border-radius: 3px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    background: backend.status == "online" ? green :
+                                                               backend.status == "syncing" ? accent :
+                                                               backend.status == "error" ? red : gray;
+                                                }
+                                            }
+
+                                            Text {
+                                                text: backend.name;
+                                                font-size: 12px;
+                                                font-weight: 600;
+                                                color: text-1;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Rectangle {
+                                                height: 16px;
+                                                width: svc-label-text.width + 10px;
+                                                border-radius: 3px;
+                                                background: accent-soft;
+
+                                                svc-label-text := Text {
+                                                    text: backend.service-label;
+                                                    font-size: 10px;
+                                                    color: accent;
+                                                    x: 5px;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: backend.last-sync-at + " · " + backend.item-count + "条记录 · " + backend.tag-count + "个标签";
+                                            font-size: 10px;
+                                            color: text-3;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 2px;
+
+                                        Rectangle {
+                                            width: 24px;
+                                            height: 24px;
+                                            border-radius: 5px;
+                                            y: (parent.height - self.height) / 2;
+                                            background: edit-ta.has-hover ? (dark-mode ? #2b2c2d : #e6e8f0) : transparent;
+
+                                            edit-ta := TouchArea {
+                                                width: 100%;
+                                                height: 100%;
+                                                clicked => { root.edit-sync-backend(backend.id); }
+                                            }
+
+                                            Text {
+                                                text: "\u{e648}";
+                                                font-family: "iconfont";
+                                                font-size: 12px;
+                                                color: edit-ta.has-hover ? accent : text-3;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            width: 24px;
+                                            height: 24px;
+                                            border-radius: 5px;
+                                            y: (parent.height - self.height) / 2;
+                                            background: rm-ta.has-hover ? (dark-mode ? #3e0005 : #ffeaea) : transparent;
+
+                                            rm-ta := TouchArea {
+                                                width: 100%;
+                                                height: 100%;
+                                                clicked => { root.remove-sync-backend(backend.id); }
+                                            }
+
+                                            Text {
+                                                text: "\u{e8b6}";
+                                                font-family: "iconfont";
+                                                font-size: 12px;
+                                                color: rm-ta.has-hover ? red : text-3;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    vertical-stretch: 1;
                                 }
                             }
                         }
-
-                        Text {
-                            text: backend.folder-path;
-                            font-size: 10px;
-                            color: text-3;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: backend.last-sync-at;
-                            font-size: 10px;
-                            color: text-3;
-                        }
                     }
-                }
-
-                Rectangle {
-                    width: 26px;
-                    height: 26px;
-                    border-radius: 5px;
-                    y: (parent.height - self.height) / 2;
-                    background: rm-ta.has-hover ? (dark-mode ? #3e0005 : #ffeaea) : transparent;
-
-                    rm-ta := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => { root.remove-sync-backend(backend.id); }
-                    }
-
-                    Text {
-                        text: "\u{e7c4}";
-                        font-family: "iconfont";
-                        font-size: 12px;
-                        color: rm-ta.has-hover ? red : text-3;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-
-        // ── 添加服务按钮 ──
-        Rectangle {
-            height: 40px;
-            border-radius: 10px;
-            background: add-btn-ta.has-hover ? accent-soft : surface;
-            border-width: 1px;
-            border-color: add-btn-ta.has-hover ? accent : divider;
-
-            add-btn-ta := TouchArea {
-                width: 100%;
-                height: 100%;
-                clicked => { root.show-add-backend-panel(); }
-            }
-
-            HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                padding-top: 10px;
-                padding-bottom: 10px;
-                spacing: 6px;
-                height: 40px;
-
-                Text {
-                    text: "+";
-                    font-size: 16px;
-                    font-weight: 600;
-                    color: add-btn-ta.has-hover ? accent : text-2;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: "添加服务";
-                    font-size: 12px;
-                    color: add-btn-ta.has-hover ? accent : text-2;
-                    vertical-alignment: center;
                 }
             }
         }
