@@ -163,13 +163,42 @@ pub fn detect_icloud_path() -> Option<PathBuf> {
     None
 }
 
-/// Try to detect the OneDrive path. On macOS this is a no-op (use iCloud instead).
-#[cfg(not(target_os = "windows"))]
+/// Try to detect the OneDrive folder path on macOS.
+/// Checks the App Store version (CloudStorage) and standalone client locations.
+#[cfg(target_os = "macos")]
+pub fn detect_onedrive_path() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+
+    // Method 1: App Store version — check ~/Library/CloudStorage for OneDrive-* dirs
+    let cloud_storage = home.join("Library/CloudStorage");
+    if cloud_storage.exists() {
+        if let Ok(entries) = std::fs::read_dir(&cloud_storage) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("OneDrive-") && entry.path().is_dir() {
+                    return Some(entry.path());
+                }
+            }
+        }
+    }
+
+    // Method 2: Standalone client default path
+    let candidate = home.join("OneDrive");
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    None
+}
+
+/// Try to detect the OneDrive path. Non-Windows/macOS is a no-op.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn detect_onedrive_path() -> Option<PathBuf> {
     None
 }
 
-/// Try to detect the iCloud path. On non-macOS this is a no-op (use OneDrive instead).
+/// Try to detect the iCloud path. On non-macOS this is a no-op.
 #[cfg(not(target_os = "macos"))]
 #[allow(dead_code)]
 pub fn detect_icloud_path() -> Option<PathBuf> {
@@ -180,7 +209,7 @@ pub fn detect_icloud_path() -> Option<PathBuf> {
 pub fn detect_presets() -> Vec<(&'static str, String)> {
     let mut presets = Vec::new();
 
-    #[cfg(target_os = "windows")]
+    // OneDrive — available on both Windows and macOS
     if let Some(p) = detect_onedrive_path() {
         presets.push(("OneDrive", p.join("Clippi").to_string_lossy().to_string()));
     }
