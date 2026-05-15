@@ -58,6 +58,7 @@ impl AppController {
         let hotkey_str = settings.hotkey.clone();
         let sort_by_created_setting = settings.sort_by_created;
         let copy_as_plain_text_setting = settings.copy_as_plain_text;
+        let max_items_setting = settings.max_items;
         let copy_as_plain_text_flag = Arc::new(AtomicBool::new(copy_as_plain_text_setting));
         let shared_settings = Arc::new(Mutex::new(settings));
 
@@ -77,6 +78,7 @@ impl AppController {
         clipboard_service.load_initial();
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
         clipboard_service.set_copy_as_plain_text(copy_as_plain_text_setting);
+        clipboard_service.set_max_items(max_items_setting);
 
         let mut listener = create_listener();
         listener.start(clipboard_service.shared())?;
@@ -472,6 +474,23 @@ impl AppController {
                 s.show_original_on_hover = new_val;
                 s.save();
             }
+        });
+
+        // Set max items callback
+        let settings_for_max_items = Arc::clone(&shared_settings);
+        let app_for_max_items = app.clone();
+        let looper_for_max_items = Arc::clone(&looper);
+        slint_app.on_set_max_items(move |v: i32| {
+            let v_u32 = if v < 0 { 0 } else { v as u32 };
+            if let Some(app) = app_for_max_items.upgrade() {
+                app.set_max_items(v);
+            }
+            let mut s = settings_for_max_items.lock().expect("settings lock poisoned");
+            s.max_items = v_u32;
+            s.save();
+            let _ = looper_for_max_items.try_with_clipboard_service(|cs| {
+                cs.set_max_items(v_u32);
+            });
         });
 
         // ── Sync callbacks ──
@@ -1123,6 +1142,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_auto_scroll_to_top(settings.auto_scroll_to_top);
     app.set_copy_as_plain_text(settings.copy_as_plain_text);
     app.set_show_original_on_hover(settings.show_original_on_hover);
+    app.set_max_items(settings.max_items as i32);
     app.set_sync_auto_enabled(settings.sync_auto_enabled);
     app.set_sync_interval_secs(settings.sync_interval_secs as i32);
 }

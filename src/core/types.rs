@@ -56,6 +56,8 @@ pub struct TagInfo {
     pub id: i64,
     pub name: String,
     pub color: String, // 6-digit uppercase hex, e.g. "FF5733"
+    #[serde(default)]
+    pub updated_at: String, // RFC3339, used for sync conflict resolution
 }
 
 /// 12 preset tag colors: (name, hex)

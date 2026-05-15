@@ -500,7 +500,7 @@ export component ClipboardList inherits Rectangle {
                                 spacing: 10px;
 
                                 // ── 来源应用模式（开启且有来源，文件类型除外） ──
-                                if root.show-source-app && entry.source-app-name != "" && entry.content-type != "file" && entry.content-type != "path" && entry.content-type != "link" : VerticalLayout {
+                                if root.show-source-app && entry.source-app-name != "" && entry.source-app-icon-path != "" && entry.content-type != "file" && entry.content-type != "path" && entry.content-type != "link" : VerticalLayout {
                                     width: 34px;
                                     spacing: 3px;
 
@@ -573,7 +573,7 @@ export component ClipboardList inherits Rectangle {
                                 }
 
                                 // ── 类型图标模式（关闭、没有来源、或文件类型） ──
-                                if !root.show-source-app || entry.source-app-name == "" || entry.content-type == "file" || entry.content-type == "path" || entry.content-type == "link" : VerticalLayout {
+                                if !root.show-source-app || entry.source-app-name == "" || entry.source-app-icon-path == "" || entry.content-type == "file" || entry.content-type == "path" || entry.content-type == "link" : VerticalLayout {
                                     width: 34px;
 
                                     if entry.content-type == "image": Rectangle {

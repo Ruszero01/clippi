@@ -16,9 +16,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Maximum items to keep in memory
-const MAX_ITEMS: usize = 100;
-
 #[derive(Clone)]
 pub struct ClipboardService {
     shared: ClipboardShared,
@@ -31,6 +28,7 @@ pub struct ClipboardService {
     selected_ids: Vec<i32>,
     anchor_id: i32,
     sync_dirty: Arc<AtomicBool>,
+    max_items: usize,
 }
 
 impl ClipboardService {
@@ -52,6 +50,7 @@ impl ClipboardService {
             selected_ids: Vec::new(),
             anchor_id: -1,
             sync_dirty,
+            max_items: 100, // 历史默认值
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -128,8 +127,9 @@ impl ClipboardService {
         self.selected_ids.clear();
         self.anchor_id = -1;
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
+        let limit = if self.max_items == 0 { usize::MAX } else { self.max_items };
         let items = self.db.lock().expect("db lock poisoned")
-            .load_filtered_with_tags(&self.filters, MAX_ITEMS, order_by)
+            .load_filtered_with_tags(&self.filters, limit, order_by)
             .unwrap_or_default();
         for item in items {
             self.model.push(item_to_entry(&item));
@@ -149,6 +149,11 @@ impl ClipboardService {
     /// Toggle copy-as-plain-text mode (no reload needed — applies to incoming items)
     pub fn set_copy_as_plain_text(&mut self, enabled: bool) {
         self.copy_as_plain_text = enabled;
+    }
+
+    /// Set max items limit (0 = unlimited)
+    pub fn set_max_items(&mut self, max_items: u32) {
+        self.max_items = max_items as usize;
     }
 
     /// Load initial items from database (model starts empty; delegate to unified refresh)
@@ -294,24 +299,44 @@ impl ClipboardService {
             .map(|t| t.len())
             .unwrap_or(0);
         let color = crate::core::types::next_tag_color(count);
-        self.db.lock().expect("db lock poisoned")
+        let result = self.db.lock().expect("db lock poisoned")
             .create_tag(name, color)
             .ok()
-            .map(|id| crate::core::types::TagInfo { id, name: name.to_string(), color: color.to_string() })
+            .map(|id| crate::core::types::TagInfo {
+                id,
+                name: name.to_string(),
+                color: color.to_string(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            });
+        self.mark_dirty();
+        result
     }
 
     /// Update a tag's name and color
     pub fn update_tag(&self, tag_id: i64, name: &str, color: &str) {
         let _ = self.db.lock().expect("db lock poisoned")
             .update_tag(tag_id, name, color);
+        self.mark_dirty();
     }
 
     /// Delete a tag
     pub fn delete_tag(&mut self, tag_id: i64) {
-        if let Ok(mut db) = self.db.lock() {
-            let _ = db.delete_tag(tag_id);
+        // Get tag name, delete, and record tombstone in one lock to avoid a
+        // race where a sync cycle runs between deletion and tombstone recording.
+        {
+            if let Ok(mut db) = self.db.lock() {
+                let tag_name = db.get_all_tags().ok()
+                    .and_then(|tags| tags.iter().find(|t| t.id == tag_id).map(|t| t.name.clone()));
+                let _ = db.delete_tag(tag_id);
+                if let Some(name) = tag_name {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let device = crate::services::backends::local_folder::hostname();
+                    let _ = db.record_tag_deletion(&name, &now, &device);
+                }
+            }
         }
         self.filters.remove_tag(tag_id);
+        self.mark_dirty();
     }
 
     /// Toggle a tag on an item (add/remove)
@@ -354,7 +379,12 @@ impl ClipboardService {
         } else {
             self.refresh_row(item_id);
         }
-        Some(crate::core::types::TagInfo { id: tag_id, name: name.to_string(), color: color.to_string() })
+        Some(crate::core::types::TagInfo {
+            id: tag_id,
+            name: name.to_string(),
+            color: color.to_string(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        })
     }
 
     /// Batch add tag to all selected items
@@ -420,8 +450,17 @@ impl ClipboardService {
 
     /// Delete an item from database and remove from model
     pub fn delete_item(&mut self, id: i32) {
-        if let Ok(db) = self.db.lock() {
-            let _ = db.delete_item(id as i64);
+        // Delete and record tombstone in the same lock to avoid a race where
+        // a sync cycle runs between deletion and tombstone recording.
+        {
+            if let Ok(db) = self.db.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    let _ = db.delete_item(id as i64);
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let device = crate::services::backends::local_folder::hostname();
+                    let _ = db.record_item_deletion(item.content_hash, &now, &device);
+                }
+            }
         }
         self.mark_dirty();
         for i in 0..self.model.row_count() {
@@ -464,6 +503,7 @@ impl ClipboardService {
     fn mark_dirty(&self) {
         self.sync_dirty.store(true, Ordering::SeqCst);
     }
+
 
     // ── Selection management ──
 
@@ -582,10 +622,21 @@ impl ClipboardService {
 
     /// Batch delete all selected items
     pub fn batch_delete(&mut self) {
+        // Delete and record tombstones in the same lock to avoid a race where
+        // a sync cycle runs between deletion and tombstone recording.
         {
             let db = self.db.lock().expect("db lock poisoned");
+            let mut hashes: Vec<u64> = Vec::with_capacity(self.selected_ids.len());
             for &id in &self.selected_ids {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    hashes.push(item.content_hash);
+                }
                 let _ = db.delete_item(id as i64);
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            let device = crate::services::backends::local_folder::hostname();
+            for h in &hashes {
+                let _ = db.record_item_deletion(*h, &now, &device);
             }
         }
         self.mark_dirty();
@@ -671,8 +722,10 @@ impl Pollable for ClipboardService {
             }
         }
 
-        while self.model.row_count() > MAX_ITEMS {
-            self.model.remove(self.model.row_count() - 1);
+        if self.max_items > 0 {
+            while self.model.row_count() > self.max_items {
+                self.model.remove(self.model.row_count() - 1);
+            }
         }
 
         if let Some(app) = self.app.upgrade() {

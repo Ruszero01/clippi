@@ -57,6 +57,27 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_item_tags_item ON item_tags(item_id);
             CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);",
         );
+        // Add updated_at to tags for sync conflict resolution
+        let _ = self.conn.execute(
+            "ALTER TABLE tags ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''", [],
+        );
+        // Tombstone tables for sync deletion propagation
+        let _ = self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS deleted_items (
+                content_hash INTEGER NOT NULL,
+                deleted_at TEXT NOT NULL,
+                device_name TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_del_items_hash ON deleted_items(content_hash);
+            CREATE INDEX IF NOT EXISTS idx_del_items_at ON deleted_items(deleted_at);
+            CREATE TABLE IF NOT EXISTS deleted_tags (
+                name TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                device_name TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_del_tags_name ON deleted_tags(name);
+            CREATE INDEX IF NOT EXISTS idx_del_tags_at ON deleted_tags(deleted_at);",
+        );
         Ok(())
     }
 
@@ -173,9 +194,10 @@ impl Database {
     // ── Tag CRUD ──
 
     pub fn create_tag(&self, name: &str, color: &str) -> SqlResult<i64> {
+        let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO tags (name, color) VALUES (?1, ?2)",
-            params![name, color],
+            "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
+            params![name, color, now],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -195,20 +217,23 @@ impl Database {
     }
 
     pub fn update_tag(&self, tag_id: i64, name: &str, color: &str) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE tags SET name = ?1, color = ?2 WHERE id = ?3",
-            params![name, color, tag_id],
+            "UPDATE tags SET name = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
+            params![name, color, now, tag_id],
         )?;
         Ok(())
     }
 
     pub fn get_all_tags(&self) -> SqlResult<Vec<TagInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags ORDER BY id DESC")?;
+        let mut stmt = self.conn.prepare("SELECT id, name, color, updated_at FROM tags ORDER BY id DESC")?;
         let rows = stmt.query_map([], |row| {
+            let updated_str: String = row.get::<_, String>(3).unwrap_or_default();
             Ok(TagInfo {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 color: row.get(2)?,
+                updated_at: updated_str,
             })
         })?;
         rows.collect()
@@ -216,15 +241,17 @@ impl Database {
 
     pub fn get_tags_for_item(&self, item_id: i64) -> SqlResult<Vec<TagInfo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT t.id, t.name, t.color FROM tags t \
+            "SELECT t.id, t.name, t.color, t.updated_at FROM tags t \
              INNER JOIN item_tags it ON t.id = it.tag_id \
              WHERE it.item_id = ?1 ORDER BY it.used_at DESC",
         )?;
         let rows = stmt.query_map(params![item_id], |row| {
+            let updated_str: String = row.get::<_, String>(3).unwrap_or_default();
             Ok(TagInfo {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 color: row.get(2)?,
+                updated_at: updated_str,
             })
         })?;
         rows.collect()
@@ -237,7 +264,7 @@ impl Database {
         }
         let placeholders: Vec<String> = item_ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT it.item_id, t.id, t.name, t.color FROM tags t \
+            "SELECT it.item_id, t.id, t.name, t.color, t.updated_at FROM tags t \
              INNER JOIN item_tags it ON t.id = it.tag_id \
              WHERE it.item_id IN ({}) ORDER BY it.used_at DESC",
             placeholders.join(",")
@@ -245,10 +272,12 @@ impl Database {
         let mut stmt = self.conn.prepare(&query)?;
         let params: Vec<rusqlite::types::Value> = item_ids.iter().map(|&id| (id).into()).collect();
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let updated_str: String = row.get::<_, String>(4).unwrap_or_default();
             Ok((row.get::<_, i64>(0)?, TagInfo {
                 id: row.get(1)?,
                 name: row.get(2)?,
                 color: row.get(3)?,
+                updated_at: updated_str,
             }))
         })?;
         for row in rows {
@@ -287,13 +316,15 @@ impl Database {
     }
 
     pub fn get_tag_by_name(&self, name: &str) -> SqlResult<Option<TagInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, color FROM tags WHERE name = ?1")?;
+        let mut stmt = self.conn.prepare("SELECT id, name, color, updated_at FROM tags WHERE name = ?1")?;
         let mut rows = stmt.query(params![name])?;
         if let Some(row) = rows.next()? {
+            let updated_str: String = row.get::<_, String>(3).unwrap_or_default();
             Ok(Some(TagInfo {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 color: row.get(2)?,
+                updated_at: updated_str,
             }))
         } else {
             Ok(None)
@@ -421,6 +452,133 @@ impl Database {
             rusqlite::params![now, item_id],
         )?;
         Ok(())
+    }
+
+    // ── Tombstone operations ──
+
+    /// Record a deleted item tombstone for sync propagation.
+    pub fn record_item_deletion(&self, content_hash: u64, deleted_at: &str, device_name: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO deleted_items (content_hash, deleted_at, device_name) VALUES (?1, ?2, ?3)",
+            params![content_hash as i64, deleted_at, device_name],
+        )?;
+        Ok(())
+    }
+
+    /// Record a deleted tag tombstone for sync propagation.
+    pub fn record_tag_deletion(&self, name: &str, deleted_at: &str, device_name: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO deleted_tags (name, deleted_at, device_name) VALUES (?1, ?2, ?3)",
+            params![name, deleted_at, device_name],
+        )?;
+        Ok(())
+    }
+
+    /// Get item tombstones newer than N days for sync snapshot.
+    pub fn get_deleted_items_recent(&self, days: i64) -> SqlResult<Vec<(u64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content_hash, deleted_at, device_name FROM deleted_items WHERE deleted_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+        )?;
+        let rows = stmt.query_map(params![format!("-{days} days")], |row| {
+            Ok((row.get::<_, i64>(0)? as u64, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Get tag tombstones newer than N days for sync snapshot.
+    pub fn get_deleted_tags_recent(&self, days: i64) -> SqlResult<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, deleted_at, device_name FROM deleted_tags WHERE deleted_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+        )?;
+        let rows = stmt.query_map(params![format!("-{days} days")], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Clean up tombstones older than N days.
+    pub fn cleanup_old_tombstones(&self, days: i64) -> SqlResult<()> {
+        let cutoff = format!("-{days} days");
+        self.conn.execute(
+            "DELETE FROM deleted_items WHERE deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+            params![&cutoff],
+        )?;
+        self.conn.execute(
+            "DELETE FROM deleted_tags WHERE deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+            params![&cutoff],
+        )?;
+        Ok(())
+    }
+
+    /// Check if an item has a local tombstone (prevents re-import after delete).
+    pub fn is_item_tombstoned(&self, content_hash: u64) -> SqlResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM deleted_items WHERE content_hash = ?1",
+            params![content_hash as i64],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Check if a tag has a local tombstone.
+    pub fn is_tag_tombstoned(&self, name: &str) -> SqlResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM deleted_tags WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Delete a local item by content_hash (triggered by remote tombstone).
+    pub fn delete_item_by_hash(&self, content_hash: u64) -> SqlResult<bool> {
+        let affected = self.conn.execute(
+            "DELETE FROM clipboard_items WHERE content_hash = ?1",
+            params![content_hash as i64],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Delete a local tag by name (triggered by remote tombstone).
+    /// Also cleans up item_tags associations and touches affected items.
+    pub fn delete_tag_by_name(&mut self, name: &str) -> SqlResult<bool> {
+        let tx = self.conn.transaction()?;
+        // Touch affected items
+        tx.execute(
+            "UPDATE clipboard_items SET updated_at = ?1
+             WHERE id IN (SELECT it.item_id FROM item_tags it
+                          INNER JOIN tags t ON t.id = it.tag_id
+                          WHERE t.name = ?2)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339(), name],
+        )?;
+        // Delete item_tags associations
+        tx.execute(
+            "DELETE FROM item_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?1)",
+            params![name],
+        )?;
+        // Delete the tag
+        let affected = tx.execute("DELETE FROM tags WHERE name = ?1", params![name])?;
+        tx.commit()?;
+        Ok(affected > 0)
+    }
+
+    /// Update tag with explicit timestamp (for sync merge).
+    pub fn update_tag_with_timestamp(&self, id: i64, name: &str, color: &str, updated_at: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE tags SET name = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
+            params![name, color, updated_at, id],
+        )?;
+        Ok(())
+    }
+
+    /// Create tag with explicit timestamp (for sync merge).
+    /// Caller must ensure the tag does not already exist.
+    pub fn create_tag_with_timestamp(&self, name: &str, color: &str, updated_at: &str) -> SqlResult<i64> {
+        self.conn.execute(
+            "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
+            params![name, color, updated_at],
+        )?;
+        Ok(self.conn.last_insert_rowid())
     }
 }
 

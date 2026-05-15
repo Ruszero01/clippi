@@ -397,13 +397,16 @@ impl SyncManager {
         let msg = result.message.clone();
 
         // Show merge stats, or push counts if no remote data was merged
-        let items_added = if result.stats.items_added > 0 || result.stats.items_updated > 0 {
+        let has_merge = result.stats.items_added > 0
+            || result.stats.items_updated > 0
+            || result.stats.items_deleted > 0;
+        let items_added = if has_merge {
             result.stats.items_added
         } else {
             result.pushed_items
         };
         let items_updated = result.stats.items_updated;
-        let tags_added = if result.stats.tags_added > 0 {
+        let tags_added = if result.stats.tags_added > 0 || result.stats.tags_deleted > 0 {
             result.stats.tags_added
         } else {
             result.pushed_tags
@@ -515,16 +518,19 @@ fn run_sync_cycle_for_backend(
     cancel: &AtomicBool,
 ) -> (bool, String, MergeStats, u32, u32) {
     let device_name = backend.name().to_string();
+    let local_device = crate::services::backends::local_folder::hostname();
 
     // Phase 1: Pull — read remote data and merge into local DB
     let mut stats = MergeStats::default();
     match backend.pull() {
-        Ok(remote) => match sync::merge_remote_into_local(db, &remote) {
-            Ok(s) => stats = s,
-            Err(e) => {
-                return (false, format!("合并远程数据失败: {e}"), stats, 0, 0);
+        Ok(remote) => {
+            match sync::merge_remote_into_local(db, &remote, &local_device) {
+                Ok(s) => stats = s,
+                Err(e) => {
+                    return (false, format!("合并远程数据失败: {e}"), stats, 0, 0);
+                }
             }
-        },
+        }
         Err(e) => {
             if !e.contains("不存在") && !e.contains("not found") && e != "@@unchanged" {
                 return (false, format!("拉取失败: {e}"), stats, 0, 0);
@@ -551,16 +557,28 @@ fn run_sync_cycle_for_backend(
         return (false, format!("推送失败: {e}"), stats, pushed_items, pushed_tags);
     }
 
-    let total = stats.items_added + stats.items_updated + stats.tags_added;
-    let msg = if total == 0 && pushed_items == 0 {
+    let mut parts: Vec<String> = Vec::new();
+    if stats.items_added > 0 {
+        parts.push(format!("新增{}条", stats.items_added));
+    }
+    if stats.items_updated > 0 {
+        parts.push(format!("更新{}条", stats.items_updated));
+    }
+    if stats.items_deleted > 0 {
+        parts.push(format!("删除{}条", stats.items_deleted));
+    }
+    if stats.tags_added > 0 {
+        parts.push(format!("标签+{}", stats.tags_added));
+    }
+    if stats.tags_deleted > 0 {
+        parts.push(format!("标签-{}", stats.tags_deleted));
+    }
+    let msg = if parts.is_empty() && pushed_items == 0 {
         "同步完成，本地无数据".to_string()
-    } else if total == 0 {
+    } else if parts.is_empty() {
         format!("同步完成: 已推送 {pushed_items} 条记录, {pushed_tags} 个标签")
     } else {
-        format!(
-            "同步完成: 新增{}条, 更新{}条, 标签{}个",
-            stats.items_added, stats.items_updated, stats.tags_added
-        )
+        format!("同步完成: {}", parts.join(", "))
     };
 
     (true, msg, stats, pushed_items, pushed_tags)

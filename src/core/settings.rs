@@ -69,6 +69,8 @@ pub struct AppSettings {
     pub sync_backends: Vec<BackendConfig>, // 多后端配置列表 (new)
     #[serde(default)]
     pub sync_auto_enabled: bool,           // 自动同步开关 (dirty + interval)
+    #[serde(default)]
+    pub max_items: u32,                    // 最大保存条目数 (0=不限制, 默认0)
 }
 
 impl Default for AppSettings {
@@ -98,6 +100,7 @@ impl Default for AppSettings {
             sync_interval_secs: 60,
             sync_backends: Vec::new(),
             sync_auto_enabled: true,
+            max_items: 0,
         }
     }
 }

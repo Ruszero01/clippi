@@ -47,6 +47,7 @@ export component App inherits Window {
     in-out property <bool> auto-scroll-to-top: false;
     in-out property <bool> copy-as-plain-text: false;
     in-out property <bool> show-original-on-hover: false;
+    in-out property <int> max-items: 0;
     in-out property <int> scroll-trigger: 0;
     // 云同步
     in property <[SyncBackendInfo]> sync-backends: [];
@@ -147,6 +148,7 @@ export component App inherits Window {
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
+    callback set-max-items(int);
     callback toggle-sync-auto-enabled();
     callback set-sync-interval(int);
     callback sync-now();
@@ -497,6 +499,7 @@ export component App inherits Window {
                     auto-scroll-to-top: root.auto-scroll-to-top;
                     copy-as-plain-text: root.copy-as-plain-text;
                     show-original-on-hover: root.show-original-on-hover;
+                    max-items: root.max-items;
                     sync-auto-enabled: root.sync-auto-enabled;
                     sync-interval-secs: root.sync-interval-secs;
                     sync-status: root.sync-status;
@@ -521,6 +524,7 @@ export component App inherits Window {
                     toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
                     toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
                     toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
+                    set-max-items(v) => { root.set-max-items(v); }
                     toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
                     set-sync-interval(i) => { root.set-sync-interval(i); }
                     sync-now => { root.sync-now(); }

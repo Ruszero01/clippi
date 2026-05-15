@@ -24,6 +24,7 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> auto-scroll-to-top: false;
     in property <bool> copy-as-plain-text: false;
     in property <bool> show-original-on-hover: false;
+    in property <int> max-items: 0;
     // sync
     in property <bool> sync-auto-enabled: true;
     in property <int> sync-interval-secs: 60;
@@ -53,6 +54,7 @@ export component SettingsPanel inherits Rectangle {
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
+    callback set-max-items(int);
     callback toggle-sync-auto-enabled();
     callback set-sync-interval(int);
     callback sync-now();
@@ -325,8 +327,10 @@ export component SettingsPanel inherits Rectangle {
             dark-mode: root.dark-mode;
             db-path: root.db-path;
             settings-error: root.settings-error;
+            max-items: root.max-items;
             pick-db-path => { root.pick-db-path(); }
             reset-db-path => { root.reset-db-path(); }
+            set-max-items(v) => { root.set-max-items(v); }
         }
 
         if (root.active-tab == 4) : SettingsTabSync {

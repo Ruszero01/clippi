@@ -2,9 +2,12 @@ export component SettingsTabData inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <string> db-path: "";
     in property <string> settings-error: "";
+    in property <int> max-items: 0;
 
     callback pick-db-path();
     callback reset-db-path();
+    callback set-max-items(int);
+    in-out property <string> max-items-text: root.max-items == 0 ? "" : root.max-items;
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -104,6 +107,84 @@ export component SettingsTabData inherits Rectangle {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
+                    }
+                }
+            }
+        }
+
+        // 最大保存条目数
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: "最大保存条数";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: "设置为 0 则不限制条目数量";
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                Rectangle {
+                    height: 28px;
+                    width: 80px;
+                    border-radius: 7px;
+                    background: dark-mode ? #191a1b : #f2f3f8;
+                    border-width: 1px;
+                    border-color: input-focus.has-focus ? accent : divider;
+                    y: (parent.height - self.height) / 2;
+
+                    input-focus := FocusScope {
+                        width: 100%;
+
+                        max-items-input := TextInput {
+                            text <=> root.max-items-text;
+                            font-size: 12px;
+                            color: text-1;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            input-type: number;
+                            width: parent.width - 16px;
+                            accepted => {
+                                root.set-max-items(root.max-items-text.to-float());
+                                self.clear-focus();
+                            }
+                            changed has-focus => {
+                                if !self.has-focus {
+                                    root.set-max-items(root.max-items-text.to-float());
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "无限制";
+                        font-size: 12px;
+                        color: text-3;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                        visible: root.max-items-text == "" && !max-items-input.has-focus;
                     }
                 }
             }
