@@ -98,9 +98,35 @@ mod windows_impl {
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use crate::core::types::SourceAppInfo;
+    use crate::platform::util::nsimage_to_base64_png;
+    use objc2_app_kit::NSWorkspace;
 
     pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
-        None
+        unsafe {
+            use objc2::msg_send;
+            use objc2::rc::Retained;
+            use objc2_app_kit::NSImage;
+
+            let workspace = NSWorkspace::sharedWorkspace();
+            let app = workspace.frontmostApplication()?;
+
+            // Don't record Clippi itself as the source
+            if app.processIdentifier() == std::process::id() as i32 {
+                return None;
+            }
+
+            let name: Retained<objc2_foundation::NSString> = msg_send![&app, localizedName];
+            let app_name = name.to_string();
+
+            let icon: Option<Retained<NSImage>> = msg_send![&app, icon];
+            let icon = icon?;
+            let icon_base64 = nsimage_to_base64_png(&icon, 32)?;
+
+            Some(SourceAppInfo {
+                app_name,
+                icon_base64,
+            })
+        }
     }
 }
 

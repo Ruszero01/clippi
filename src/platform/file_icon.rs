@@ -26,7 +26,27 @@ mod windows_impl {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod macos_impl {
+    use crate::platform::util::nsimage_to_base64_png;
+    use objc2_app_kit::{NSWorkspace, NSImage};
+    use objc2_foundation::NSString;
+
+    pub fn extract_file_icon_base64(file_path: &str) -> Option<String> {
+        unsafe {
+            // NSWorkspace.iconForFile: returns the icon associated with the file
+            use objc2::msg_send;
+            use objc2::rc::Retained;
+            let workspace = NSWorkspace::sharedWorkspace();
+            let path_str = NSString::from_str(file_path);
+            let icon: Option<Retained<NSImage>> = msg_send![&workspace, iconForFile: &*path_str];
+            let icon = icon?;
+            nsimage_to_base64_png(&icon, 32)
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod fallback {
     pub fn extract_file_icon_base64(_file_path: &str) -> Option<String> {
         None
@@ -38,7 +58,11 @@ pub fn extract_file_icon_base64(file_path: &str) -> Option<String> {
     {
         windows_impl::extract_file_icon_base64(file_path)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_impl::extract_file_icon_base64(file_path)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         fallback::extract_file_icon_base64(file_path)
     }
