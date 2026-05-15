@@ -165,7 +165,11 @@
         <Property Id='WIXUI_INSTALLDIR' Value='APPLICATIONFOLDER' />
 
         <UI>
-            <UIRef Id='WixUI_InstallDir'/>
+            <UIRef Id='WixUI_Mondo'/>
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='InstallDirDlg' Order='99'>1</Publish>
+            <Publish Dialog='InstallDirDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+            <Publish Dialog='InstallDirDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='InstallDirDlg' Order='99'>1</Publish>
         </UI>
 
     </Product>
