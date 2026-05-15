@@ -146,17 +146,17 @@ export component SettingsTabSync inherits Rectangle {
                         height: 26px;
                         horizontal-stretch: 1;
                         border-radius: 6px;
-                        background: i300-selected ? accent : (i300-ta.has-hover ? accent-soft : transparent);
+                        background: i600-selected ? accent : (i600-ta.has-hover ? accent-soft : transparent);
                         animate background { duration: 200ms; }
-                        property <bool> i300-selected: root.sync-interval-secs == 300;
-                        i300-ta := TouchArea {
+                        property <bool> i600-selected: root.sync-interval-secs == 600;
+                        i600-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { root.set-sync-interval(300); }
+                            clicked => { root.set-sync-interval(600); }
                         }
                         Text {
-                            text: "5分"; font-size: 10px; font-weight: 600;
-                            color: i300-selected ? #ffffff : (i300-ta.has-hover ? accent : text-2);
+                            text: "10分"; font-size: 10px; font-weight: 600;
+                            color: i600-selected ? #ffffff : (i600-ta.has-hover ? accent : text-2);
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                     }
@@ -165,17 +165,17 @@ export component SettingsTabSync inherits Rectangle {
                         height: 26px;
                         horizontal-stretch: 1;
                         border-radius: 6px;
-                        background: i900-selected ? accent : (i900-ta.has-hover ? accent-soft : transparent);
+                        background: i1800-selected ? accent : (i1800-ta.has-hover ? accent-soft : transparent);
                         animate background { duration: 200ms; }
-                        property <bool> i900-selected: root.sync-interval-secs == 900;
-                        i900-ta := TouchArea {
+                        property <bool> i1800-selected: root.sync-interval-secs == 1800;
+                        i1800-ta := TouchArea {
                             width: parent.width;
                             height: parent.height;
-                            clicked => { root.set-sync-interval(900); }
+                            clicked => { root.set-sync-interval(1800); }
                         }
                         Text {
-                            text: "15分"; font-size: 10px; font-weight: 600;
-                            color: i900-selected ? #ffffff : (i900-ta.has-hover ? accent : text-2);
+                            text: "30分"; font-size: 10px; font-weight: 600;
+                            color: i1800-selected ? #ffffff : (i1800-ta.has-hover ? accent : text-2);
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                     }
@@ -259,9 +259,8 @@ export component SettingsTabSync inherits Rectangle {
 
                 // 服务卡片滚动列表
                 if root.sync-backends.length > 0 : ScrollView {
-                    height: 220px;
+                    height: 190px;
                     viewport-width: parent.width;
-                    viewport-height: svc-list.preferred-height;
 
                     svc-list := VerticalLayout {
                         spacing: 6px;
