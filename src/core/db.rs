@@ -383,32 +383,34 @@ impl Database {
     }
 
     /// Insert a full item row (used during sync merge for new remote items).
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_sync_item_raw(
         &self,
-        full_text: &str,
-        content_type: &str,
-        content_hash: u64,
-        created_at: chrono::DateTime<chrono::Utc>,
-        updated_at: chrono::DateTime<chrono::Utc>,
-        rich_data: &str,
-        is_favorite: bool,
-        note: &str,
-        source_app_name: &str,
+        item: &crate::core::sync::SyncItem,
     ) -> SqlResult<i64> {
+        let created_at: chrono::DateTime<chrono::Utc> = item
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let updated_at: chrono::DateTime<chrono::Utc> = item
+            .updated_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+
         self.conn.execute(
             "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at,
              rich_data, is_favorite, note, source_app_name)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
-                content_type,
-                full_text,
-                content_hash as i64,
+                item.content_type,
+                item.full_text,
+                item.content_hash as i64,
                 created_at.to_rfc3339(),
                 updated_at.to_rfc3339(),
-                rich_data,
-                is_favorite as i32,
-                note,
-                source_app_name,
+                item.rich_data,
+                item.is_favorite as i32,
+                item.note,
+                "", // source_app_name not in sync payload
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -418,26 +420,20 @@ impl Database {
     pub fn update_sync_item(
         &self,
         id: i64,
-        full_text: &str,
-        content_type: &str,
-        updated_at: String,
-        rich_data: &str,
-        is_favorite: bool,
-        note: &str,
-        source_app_name: &str,
+        item: &crate::core::sync::SyncItem,
     ) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
              rich_data = ?4, is_favorite = ?5, note = ?6, source_app_name = ?7
              WHERE id = ?8",
             rusqlite::params![
-                full_text,
-                content_type,
-                updated_at,
-                rich_data,
-                is_favorite as i32,
-                note,
-                source_app_name,
+                item.full_text,
+                item.content_type,
+                item.updated_at,
+                item.rich_data,
+                item.is_favorite as i32,
+                item.note,
+                "", // source_app_name not in sync payload
                 id,
             ],
         )?;

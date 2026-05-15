@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use global_hotkey::hotkey::Code;
+
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
 pub trait HotkeyListener {
     fn stop(&mut self);
@@ -10,6 +12,61 @@ pub trait HotkeyListener {
     fn finish_recording(&mut self);
     fn poll_pressed(&self) -> bool;
     fn poll_recording_pressed(&mut self) -> Option<String>;
+}
+
+/// Shared keycode mapping: name string → Code variant (platform-agnostic).
+pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
+    match name {
+        "a" => Some(Code::KeyA), "b" => Some(Code::KeyB), "c" => Some(Code::KeyC),
+        "d" => Some(Code::KeyD), "e" => Some(Code::KeyE), "f" => Some(Code::KeyF),
+        "g" => Some(Code::KeyG), "h" => Some(Code::KeyH), "i" => Some(Code::KeyI),
+        "j" => Some(Code::KeyJ), "k" => Some(Code::KeyK), "l" => Some(Code::KeyL),
+        "m" => Some(Code::KeyM), "n" => Some(Code::KeyN), "o" => Some(Code::KeyO),
+        "p" => Some(Code::KeyP), "q" => Some(Code::KeyQ), "r" => Some(Code::KeyR),
+        "s" => Some(Code::KeyS), "t" => Some(Code::KeyT), "u" => Some(Code::KeyU),
+        "v" => Some(Code::KeyV), "w" => Some(Code::KeyW), "x" => Some(Code::KeyX),
+        "y" => Some(Code::KeyY), "z" => Some(Code::KeyZ),
+        "0" => Some(Code::Digit0), "1" => Some(Code::Digit1), "2" => Some(Code::Digit2),
+        "3" => Some(Code::Digit3), "4" => Some(Code::Digit4), "5" => Some(Code::Digit5),
+        "6" => Some(Code::Digit6), "7" => Some(Code::Digit7), "8" => Some(Code::Digit8),
+        "9" => Some(Code::Digit9),
+        "f1" => Some(Code::F1), "f2" => Some(Code::F2), "f3" => Some(Code::F3),
+        "f4" => Some(Code::F4), "f5" => Some(Code::F5), "f6" => Some(Code::F6),
+        "f7" => Some(Code::F7), "f8" => Some(Code::F8), "f9" => Some(Code::F9),
+        "f10" => Some(Code::F10), "f11" => Some(Code::F11), "f12" => Some(Code::F12),
+        "space" => Some(Code::Space),
+        "tab" => Some(Code::Tab),
+        "enter" | "return" => Some(Code::Enter),
+        "esc" | "escape" => Some(Code::Escape),
+        "backspace" => Some(Code::Backspace),
+        _ => None,
+    }
+}
+
+/// Shared keycode mapping: Code variant → display name (platform-agnostic).
+pub(crate) fn key_code_to_name(code: Code) -> &'static str {
+    match code {
+        Code::KeyA => "A", Code::KeyB => "B", Code::KeyC => "C",
+        Code::KeyD => "D", Code::KeyE => "E", Code::KeyF => "F",
+        Code::KeyG => "G", Code::KeyH => "H", Code::KeyI => "I",
+        Code::KeyJ => "J", Code::KeyK => "K", Code::KeyL => "L",
+        Code::KeyM => "M", Code::KeyN => "N", Code::KeyO => "O",
+        Code::KeyP => "P", Code::KeyQ => "Q", Code::KeyR => "R",
+        Code::KeyS => "S", Code::KeyT => "T", Code::KeyU => "U",
+        Code::KeyV => "V", Code::KeyW => "W", Code::KeyX => "X",
+        Code::KeyY => "Y", Code::KeyZ => "Z",
+        Code::Digit0 => "0", Code::Digit1 => "1", Code::Digit2 => "2",
+        Code::Digit3 => "3", Code::Digit4 => "4", Code::Digit5 => "5",
+        Code::Digit6 => "6", Code::Digit7 => "7", Code::Digit8 => "8",
+        Code::Digit9 => "9",
+        Code::F1 => "F1", Code::F2 => "F2", Code::F3 => "F3",
+        Code::F4 => "F4", Code::F5 => "F5", Code::F6 => "F6",
+        Code::F7 => "F7", Code::F8 => "F8", Code::F9 => "F9",
+        Code::F10 => "F10", Code::F11 => "F11", Code::F12 => "F12",
+        Code::Space => "Space", Code::Tab => "Tab", Code::Enter => "Enter",
+        Code::Escape => "Esc", Code::Backspace => "Backspace",
+        _ => "?",
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -193,56 +250,11 @@ mod windows {
     }
 
     fn name_to_code(name: &str) -> Option<Code> {
-        match name {
-            "a" => Some(Code::KeyA), "b" => Some(Code::KeyB), "c" => Some(Code::KeyC),
-            "d" => Some(Code::KeyD), "e" => Some(Code::KeyE), "f" => Some(Code::KeyF),
-            "g" => Some(Code::KeyG), "h" => Some(Code::KeyH), "i" => Some(Code::KeyI),
-            "j" => Some(Code::KeyJ), "k" => Some(Code::KeyK), "l" => Some(Code::KeyL),
-            "m" => Some(Code::KeyM), "n" => Some(Code::KeyN), "o" => Some(Code::KeyO),
-            "p" => Some(Code::KeyP), "q" => Some(Code::KeyQ), "r" => Some(Code::KeyR),
-            "s" => Some(Code::KeyS), "t" => Some(Code::KeyT), "u" => Some(Code::KeyU),
-            "v" => Some(Code::KeyV), "w" => Some(Code::KeyW), "x" => Some(Code::KeyX),
-            "y" => Some(Code::KeyY), "z" => Some(Code::KeyZ),
-            "0" => Some(Code::Digit0), "1" => Some(Code::Digit1), "2" => Some(Code::Digit2),
-            "3" => Some(Code::Digit3), "4" => Some(Code::Digit4), "5" => Some(Code::Digit5),
-            "6" => Some(Code::Digit6), "7" => Some(Code::Digit7), "8" => Some(Code::Digit8),
-            "9" => Some(Code::Digit9),
-            "f1" => Some(Code::F1), "f2" => Some(Code::F2), "f3" => Some(Code::F3),
-            "f4" => Some(Code::F4), "f5" => Some(Code::F5), "f6" => Some(Code::F6),
-            "f7" => Some(Code::F7), "f8" => Some(Code::F8), "f9" => Some(Code::F9),
-            "f10" => Some(Code::F10), "f11" => Some(Code::F11), "f12" => Some(Code::F12),
-            "space" => Some(Code::Space),
-            "tab" => Some(Code::Tab),
-            "enter" | "return" => Some(Code::Enter),
-            "esc" | "escape" => Some(Code::Escape),
-            "backspace" => Some(Code::Backspace),
-            _ => None,
-        }
+        key_name_to_code(name)
     }
 
     fn code_to_name(code: Code) -> &'static str {
-        match code {
-            Code::KeyA => "A", Code::KeyB => "B", Code::KeyC => "C",
-            Code::KeyD => "D", Code::KeyE => "E", Code::KeyF => "F",
-            Code::KeyG => "G", Code::KeyH => "H", Code::KeyI => "I",
-            Code::KeyJ => "J", Code::KeyK => "K", Code::KeyL => "L",
-            Code::KeyM => "M", Code::KeyN => "N", Code::KeyO => "O",
-            Code::KeyP => "P", Code::KeyQ => "Q", Code::KeyR => "R",
-            Code::KeyS => "S", Code::KeyT => "T", Code::KeyU => "U",
-            Code::KeyV => "V", Code::KeyW => "W", Code::KeyX => "X",
-            Code::KeyY => "Y", Code::KeyZ => "Z",
-            Code::Digit0 => "0", Code::Digit1 => "1", Code::Digit2 => "2",
-            Code::Digit3 => "3", Code::Digit4 => "4", Code::Digit5 => "5",
-            Code::Digit6 => "6", Code::Digit7 => "7", Code::Digit8 => "8",
-            Code::Digit9 => "9",
-            Code::F1 => "F1", Code::F2 => "F2", Code::F3 => "F3",
-            Code::F4 => "F4", Code::F5 => "F5", Code::F6 => "F6",
-            Code::F7 => "F7", Code::F8 => "F8", Code::F9 => "F9",
-            Code::F10 => "F10", Code::F11 => "F11", Code::F12 => "F12",
-            Code::Space => "Space", Code::Tab => "Tab", Code::Enter => "Enter",
-            Code::Escape => "Esc", Code::Backspace => "Backspace",
-            _ => "?",
-        }
+        key_code_to_name(code)
     }
 }
 
@@ -439,56 +451,11 @@ mod macos {
     }
 
     fn name_to_code(name: &str) -> Option<Code> {
-        match name {
-            "a" => Some(Code::KeyA), "b" => Some(Code::KeyB), "c" => Some(Code::KeyC),
-            "d" => Some(Code::KeyD), "e" => Some(Code::KeyE), "f" => Some(Code::KeyF),
-            "g" => Some(Code::KeyG), "h" => Some(Code::KeyH), "i" => Some(Code::KeyI),
-            "j" => Some(Code::KeyJ), "k" => Some(Code::KeyK), "l" => Some(Code::KeyL),
-            "m" => Some(Code::KeyM), "n" => Some(Code::KeyN), "o" => Some(Code::KeyO),
-            "p" => Some(Code::KeyP), "q" => Some(Code::KeyQ), "r" => Some(Code::KeyR),
-            "s" => Some(Code::KeyS), "t" => Some(Code::KeyT), "u" => Some(Code::KeyU),
-            "v" => Some(Code::KeyV), "w" => Some(Code::KeyW), "x" => Some(Code::KeyX),
-            "y" => Some(Code::KeyY), "z" => Some(Code::KeyZ),
-            "0" => Some(Code::Digit0), "1" => Some(Code::Digit1), "2" => Some(Code::Digit2),
-            "3" => Some(Code::Digit3), "4" => Some(Code::Digit4), "5" => Some(Code::Digit5),
-            "6" => Some(Code::Digit6), "7" => Some(Code::Digit7), "8" => Some(Code::Digit8),
-            "9" => Some(Code::Digit9),
-            "f1" => Some(Code::F1), "f2" => Some(Code::F2), "f3" => Some(Code::F3),
-            "f4" => Some(Code::F4), "f5" => Some(Code::F5), "f6" => Some(Code::F6),
-            "f7" => Some(Code::F7), "f8" => Some(Code::F8), "f9" => Some(Code::F9),
-            "f10" => Some(Code::F10), "f11" => Some(Code::F11), "f12" => Some(Code::F12),
-            "space" => Some(Code::Space),
-            "tab" => Some(Code::Tab),
-            "enter" | "return" => Some(Code::Enter),
-            "esc" | "escape" => Some(Code::Escape),
-            "backspace" => Some(Code::Backspace),
-            _ => None,
-        }
+        key_name_to_code(name)
     }
 
     fn code_to_name(code: Code) -> &'static str {
-        match code {
-            Code::KeyA => "A", Code::KeyB => "B", Code::KeyC => "C",
-            Code::KeyD => "D", Code::KeyE => "E", Code::KeyF => "F",
-            Code::KeyG => "G", Code::KeyH => "H", Code::KeyI => "I",
-            Code::KeyJ => "J", Code::KeyK => "K", Code::KeyL => "L",
-            Code::KeyM => "M", Code::KeyN => "N", Code::KeyO => "O",
-            Code::KeyP => "P", Code::KeyQ => "Q", Code::KeyR => "R",
-            Code::KeyS => "S", Code::KeyT => "T", Code::KeyU => "U",
-            Code::KeyV => "V", Code::KeyW => "W", Code::KeyX => "X",
-            Code::KeyY => "Y", Code::KeyZ => "Z",
-            Code::Digit0 => "0", Code::Digit1 => "1", Code::Digit2 => "2",
-            Code::Digit3 => "3", Code::Digit4 => "4", Code::Digit5 => "5",
-            Code::Digit6 => "6", Code::Digit7 => "7", Code::Digit8 => "8",
-            Code::Digit9 => "9",
-            Code::F1 => "F1", Code::F2 => "F2", Code::F3 => "F3",
-            Code::F4 => "F4", Code::F5 => "F5", Code::F6 => "F6",
-            Code::F7 => "F7", Code::F8 => "F8", Code::F9 => "F9",
-            Code::F10 => "F10", Code::F11 => "F11", Code::F12 => "F12",
-            Code::Space => "Space", Code::Tab => "Tab", Code::Enter => "Enter",
-            Code::Escape => "Esc", Code::Backspace => "Backspace",
-            _ => "?",
-        }
+        key_code_to_name(code)
     }
 }
 

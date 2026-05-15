@@ -185,7 +185,7 @@ impl SyncManager {
         {
             let mut s = self.settings.lock().expect("settings lock");
             s.sync_backends.push(config.clone());
-            let _ = s.save();
+            s.save();
         }
 
         self.add_state_for_config(config);
@@ -206,7 +206,7 @@ impl SyncManager {
         {
             let mut s = self.settings.lock().expect("settings lock");
             s.sync_backends.retain(|c| c.id != id);
-            let _ = s.save();
+            s.save();
         }
 
         self.refresh_model();
@@ -219,7 +219,7 @@ impl SyncManager {
             for cfg in &mut s.sync_backends {
                 if cfg.id == id {
                     cfg.enabled = !cfg.enabled;
-                    let _ = s.save();
+                    s.save();
                     break;
                 }
             }
@@ -244,7 +244,7 @@ impl SyncManager {
                 if cfg.id == id {
                     cfg.name = new_name.to_string();
                     cfg.folder_path = new_path.to_string();
-                    let _ = s.save();
+                    s.save();
                     break;
                 }
             }

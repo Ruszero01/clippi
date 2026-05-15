@@ -154,7 +154,6 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
 
 /// Try to detect the iCloud Drive folder path on macOS.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 pub fn detect_icloud_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join("Library/Mobile Documents/com~apple~CloudDocs");
@@ -170,7 +169,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
     None
 }
 
-/// Try to detect the iCloud path. On Windows this is a no-op (use OneDrive instead).
+/// Try to detect the iCloud path. On non-macOS this is a no-op (use OneDrive instead).
 #[cfg(not(target_os = "macos"))]
 #[allow(dead_code)]
 pub fn detect_icloud_path() -> Option<PathBuf> {

@@ -236,13 +236,12 @@ pub fn merge_remote_into_local(
         // Delete local item if exists and is older than the tombstone
         if let Ok(Some(local_item)) = db.get_by_hash(tombstone.content_hash) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
-            if remote_ts.is_some_and(|r| r > local_item.updated_at) {
-                if db
+            if remote_ts.is_some_and(|r| r > local_item.updated_at)
+                && db
                     .delete_item_by_hash(tombstone.content_hash)
                     .unwrap_or(false)
-                {
-                    stats.items_deleted += 1;
-                }
+            {
+                stats.items_deleted += 1;
             }
         }
     }
@@ -333,7 +332,8 @@ pub fn merge_remote_into_local(
         match local {
             None => {
                 // New item from remote — insert
-                let item_id = insert_sync_item(&db, remote_item)?;
+                let item_id = db.insert_sync_item_raw(remote_item)
+                    .map_err(|e| format!("insert item: {e}"))?;
                 stats.items_added += 1;
 
                 for tag_ref in &remote_item.tags {
@@ -347,17 +347,8 @@ pub fn merge_remote_into_local(
                 let local_ts = Some(local_item.updated_at);
 
                 if remote_ts > local_ts {
-                    db.update_sync_item(
-                        local_item.id,
-                        &remote_item.full_text,
-                        &remote_item.content_type,
-                        remote_item.updated_at.clone(),
-                        &remote_item.rich_data,
-                        remote_item.is_favorite,
-                        &remote_item.note,
-                        "",
-                    )
-                    .map_err(|e| format!("update item: {e}"))?;
+                    db.update_sync_item(local_item.id, remote_item)
+                        .map_err(|e| format!("update item: {e}"))?;
 
                     db.clear_item_tags(local_item.id)
                         .map_err(|e| format!("clear tags: {e}"))?;
@@ -379,32 +370,6 @@ pub fn merge_remote_into_local(
 /// Parse an RFC3339 string to Utc DateTime, returning None on failure.
 fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     s.parse::<chrono::DateTime<chrono::Utc>>().ok()
-}
-
-/// Insert a SyncItem as a new row in clipboard_items.
-/// Returns the new row id.
-fn insert_sync_item(db: &Database, item: &SyncItem) -> Result<i64, String> {
-    let created_at: chrono::DateTime<chrono::Utc> = item
-        .created_at
-        .parse()
-        .unwrap_or_else(|_| chrono::Utc::now());
-    let updated_at: chrono::DateTime<chrono::Utc> = item
-        .updated_at
-        .parse()
-        .unwrap_or_else(|_| chrono::Utc::now());
-
-    db.insert_sync_item_raw(
-        &item.full_text,
-        &item.content_type,
-        item.content_hash,
-        created_at,
-        updated_at,
-        &item.rich_data,
-        item.is_favorite,
-        &item.note,
-        "",
-    )
-    .map_err(|e| format!("insert item: {e}"))
 }
 
 #[cfg(test)]

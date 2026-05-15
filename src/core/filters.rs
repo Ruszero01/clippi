@@ -80,18 +80,12 @@ impl ClipboardFilters {
 
     /// Check if a specific tag filter is active
     pub fn is_tag_active(&self, tag_id: i64) -> bool {
-        self.tag_ids.iter().any(|&t| t == tag_id)
+        self.tag_ids.contains(&tag_id)
     }
 
     /// Check if any tag filter is active
     pub fn has_tag_filters(&self) -> bool {
         !self.tag_ids.is_empty()
-    }
-
-    /// Clear only tag filters
-    #[allow(dead_code)]
-    pub fn clear_tags(&mut self) {
-        self.tag_ids.clear();
     }
 
     /// Check if an in-memory item matches all active filters (AND logic).
@@ -102,10 +96,10 @@ impl ClipboardFilters {
             return false;
         }
         // Tag filter dimension: item must have at least one of the selected tags (OR logic)
-        if !self.tag_ids.is_empty() {
-            if !item.tags.iter().any(|t| self.tag_ids.contains(&t.id)) {
-                return false;
-            }
+        if !self.tag_ids.is_empty()
+            && !item.tags.iter().any(|t| self.tag_ids.contains(&t.id))
+        {
+            return false;
         }
         // Type filter dimension
         if !self.type_filters.is_empty() {

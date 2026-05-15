@@ -217,22 +217,20 @@ impl PollingClipboardListener {
 
     fn capture_baseline(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
+        *self.startup_end.lock().unwrap() = Some(Instant::now());
         if let Ok(ctx) = ClipboardContext::new() {
             if let Ok(text) = ctx.get_text() {
                 if !text.is_empty() {
                     text.hash(&mut hasher);
-                    *self.startup_end.lock().unwrap() = Some(Instant::now());
                 }
             }
             if ctx.has(ContentFormat::Image) {
                 hasher.write(b"[img]");
-                // Include image bytes in hash for change detection
                 if let Ok(img) = ctx.get_image() {
                     if let Ok(png) = img.to_png() {
                         hasher.write(png.get_bytes());
                     }
                 }
-                *self.startup_end.lock().unwrap() = Some(Instant::now());
             }
             if ctx.has(ContentFormat::Files) {
                 hasher.write(b"[files]");
@@ -241,7 +239,6 @@ impl PollingClipboardListener {
                         path.hash(&mut hasher);
                     }
                 }
-                *self.startup_end.lock().unwrap() = Some(Instant::now());
             }
         }
         hasher.finish()
@@ -263,7 +260,7 @@ impl ClipboardListener for PollingClipboardListener {
                 let startup_done = startup_end
                     .lock()
                     .unwrap()
-                    .is_some_and(|end| end.elapsed().as_millis() > 500);
+                    .is_none_or(|end| end.elapsed().as_millis() > 500);
 
                 // 批量粘贴期间跳过记录，避免产生冗余条目
                 if batch_pasting.load(Ordering::SeqCst) {
