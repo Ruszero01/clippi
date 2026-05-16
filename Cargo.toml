@@ -12,6 +12,7 @@ build = "build.rs"
 upgrade-guid = "66941EB2-9E76-47FE-93C4-E29C1CE863C8"
 license = false
 eula = false
+path-guid = "DFAC08E5-F4EF-4907-9424-79708970616D"
 
 [package.metadata.bundle]
 name = "Clippi"

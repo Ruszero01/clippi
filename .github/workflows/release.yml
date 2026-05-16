@@ -139,6 +139,11 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      - name: Configure WiX
+        if: runner.os == 'Windows'
+        run: |
+          echo "WIX=C:\Program Files (x86)\WiX Toolset v3.14" >> $env:GITHUB_ENV
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
@@ -147,12 +152,53 @@ jobs:
       - name: Build macOS .dmg
         if: runner.os == 'macOS'
         run: |
-          cargo install cargo-bundle
-          cargo bundle --release --target aarch64-apple-darwin
-          APP_PATH="target/aarch64-apple-darwin/release/bundle/osx/Clippi.app"
+          BIN_PATH="target/aarch64-apple-darwin/dist/clippi"
+          APP_DIR="target/Clippi.app"
+          mkdir -p "$APP_DIR/Contents/MacOS"
+          mkdir -p "$APP_DIR/Contents/Resources"
+          cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/clippi"
+          cp "assets/LOGO.icns" "$APP_DIR/Contents/Resources/clippi.icns"
+          cat > "$APP_DIR/Contents/Info.plist" << 'PLISTEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>English</string>
+              <key>CFBundleDisplayName</key>
+              <string>Clippi</string>
+              <key>CFBundleExecutable</key>
+              <string>clippi</string>
+              <key>CFBundleIconFile</key>
+              <string>clippi</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.clippi.app</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>Clippi</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>CFBundleVersion</key>
+              <string>0.1.0</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>12.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLISTEOF
+          # Create staging directory with .app + Applications symlink
+          STAGING="target/dmg-staging"
           DMG_PATH="target/distrib/Clippi_aarch64.dmg"
           mkdir -p target/distrib
-          hdiutil create -volname "Clippi" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R "$APP_DIR" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname "Clippi" -srcfolder "$STAGING" -ov -format UDZO -fs HFS+ "$DMG_PATH"
           echo "Built macOS .dmg: $DMG_PATH"
       - id: cargo-dist
         name: Post-build
@@ -287,6 +333,7 @@ jobs:
           # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
 
+          gh release delete "${{ needs.plan.outputs.tag }}" --cleanup-tag -y || true
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
   announce:

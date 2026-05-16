@@ -11,5 +11,5 @@ ci = "github"
 installers = ["msi"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
-# Allow customized installer templates
+# Allow customized MSI template and CI workflow
 allow-dirty = ["msi", "ci"]
