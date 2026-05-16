@@ -930,9 +930,8 @@ fn build_link_preview(item: &crate::core::types::ClipboardItem) -> (SharedString
     }
 }
 
-/// Build tag dot display data: up to 3 colored dots, names, overflow count, JSON.
-fn build_tag_dots(tags: &[crate::core::types::TagInfo]) -> (bool, slint::Color, slint::Color, slint::Color, SharedString, SharedString, SharedString, i32, SharedString) {
-    let json = serde_json::to_string(tags).unwrap_or_default();
+/// Build tag dot display data: up to 3 colored dots, names, overflow count.
+fn build_tag_dots(tags: &[crate::core::types::TagInfo]) -> (bool, slint::Color, slint::Color, slint::Color, SharedString, SharedString, SharedString, i32) {
     let mut colors: Vec<slint::Color> = Vec::new();
     let mut names: Vec<SharedString> = Vec::new();
     for t in tags.iter().take(3) {
@@ -946,7 +945,7 @@ fn build_tag_dots(tags: &[crate::core::types::TagInfo]) -> (bool, slint::Color, 
     while colors.len() < 3 { colors.push(slint::Color::default()); }
     while names.len() < 3 { names.push(SharedString::default()); }
     let overflow = if tags.len() > 3 { (tags.len() - 3) as i32 } else { 0 };
-    (!tags.is_empty(), colors[0], colors[1], colors[2], names.remove(0), names.remove(0), names.remove(0), overflow, SharedString::from(json))
+    (!tags.is_empty(), colors[0], colors[1], colors[2], names.remove(0), names.remove(0), names.remove(0), overflow)
 }
 
 fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
@@ -971,7 +970,7 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
     let (file_count, file_icon_text, file_name_1, file_name_2, file_name_3, file_overflow) = build_file_fields(item);
     let (file_icon_path, file_icon_image) = build_file_icon(item);
     let (link_domain, link_path, favicon_path, favicon_image, folder_icon_path, folder_icon_image) = build_link_preview(item);
-    let (has_tags, tag_dot_0, tag_dot_1, tag_dot_2, tag_name_0, tag_name_1, tag_name_2, tags_overflow, tags_json) = build_tag_dots(&item.tags);
+    let (has_tags, tag_dot_0, tag_dot_1, tag_dot_2, tag_name_0, tag_name_1, tag_name_2, tags_overflow) = build_tag_dots(&item.tags);
 
     ClipboardEntry {
         id: item.id as i32,
@@ -1013,6 +1012,5 @@ fn item_to_entry(item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         tag_name_1,
         tag_name_2,
         tags_overflow,
-        tags_json,
     }
 }
