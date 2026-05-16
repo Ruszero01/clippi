@@ -1,9 +1,18 @@
+import { ScrollView } from "std-widgets.slint";
+import { BlacklistEntry } from "types.slint";
+
 export component SettingsTabHotkey inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <string> hotkey-display: "";
     in property <bool> recording-hotkey: false;
+    in property <string> foreground-app-name: "";
+    in property <string> foreground-window-title: "";
+    in property <image> foreground-app-icon: @image-url("../assets/blank.png");
+    in property <[BlacklistEntry]> hotkey-blacklist: [];
 
     callback start-recording-hotkey();
+    callback remove-hotkey-blacklist(string);
+    callback show-hotkey-blacklist-panel();
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -12,6 +21,9 @@ export component SettingsTabHotkey inherits Rectangle {
     property <color> accent:       dark-mode ? #7ecba3 : #6ab890;
     property <color> accent-soft:  dark-mode ? #1a2e24 : #e8f5ee;
     property <color> divider:      dark-mode ? #2b2c2d : #e6e8f0;
+    property <color> danger:       dark-mode ? #e06c75 : #c0392b;
+    property <color> danger-soft:  dark-mode ? #3e0005 : #ffeaea;
+    property <color> info-surface: dark-mode ? #1e1f20 : #f8f9fc;
 
     background: transparent;
 
@@ -19,7 +31,7 @@ export component SettingsTabHotkey inherits Rectangle {
         spacing: 12px;
         padding-top: 8px;
 
-        // 呼出快捷键
+        // ── 呼出快捷键录制 ──
         Rectangle {
             height: 66px;
             border-radius: 10px;
@@ -73,6 +85,199 @@ export component SettingsTabHotkey inherits Rectangle {
                         font-size: 11px;
                         font-weight: 600;
                         color: root.recording-hotkey ? accent : #ffffff;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ── 快捷键黑名单 ──
+        Rectangle {
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            VerticalLayout {
+                spacing: 0;
+
+                // 信息条：当前前台应用
+                Rectangle {
+                    height: 44px;
+                    border-radius: 10px;
+                    background: info-surface;
+
+                    HorizontalLayout {
+                        width: parent.width;
+                        height: parent.height;
+                        padding-left: 12px;
+                        padding-right: 6px;
+                        alignment: space-between;
+
+                        // 左侧: icon + 程序名 + 窗口名
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            // 窗口图标
+                            Image {
+                                source: root.foreground-app-icon;
+                                width: 20px;
+                                height: 20px;
+                                y: (parent.height - self.height) / 2;
+                                image-fit: contain;
+                            }
+
+                            // 应用名 + 窗口名（同行动态区分，参考链接卡片样式）
+                            if root.foreground-app-name != "" : HorizontalLayout {
+                                spacing: 0px;
+                                y: (parent.height - self.height) / 2;
+
+                                Text {
+                                    text: root.foreground-app-name;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    color: text-1;
+                                    vertical-alignment: center;
+                                }
+
+                                if root.foreground-window-title != "" : Text {
+                                    text: " \u{2014} " + root.foreground-window-title;
+                                    font-size: 11px;
+                                    color: text-3;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+
+                            if root.foreground-app-name == "" : Text {
+                                text: "无前台应用";
+                                font-size: 12px;
+                                color: text-3;
+                                vertical-alignment: center;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+
+                        // 右侧：禁止按钮
+                        if root.foreground-app-name != "" : Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            border-radius: 6px;
+                            background: block-btn.has-hover ? danger-soft : transparent;
+                            y: (parent.height - self.height) / 2;
+
+                            block-btn := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    root.show-hotkey-blacklist-panel();
+                                }
+                            }
+
+                            Text {
+                                text: "\u{e6a7}";
+                                font-family: "iconfont";
+                                font-size: 14px;
+                                color: block-btn.has-hover ? danger : text-2;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // 分割线（有黑名单条目时显示）
+                if root.hotkey-blacklist.length > 0 : Rectangle {
+                    width: parent.width;
+                    height: 1px;
+                    background: divider;
+                }
+
+                // 黑名单列表
+                if root.hotkey-blacklist.length > 0 : ScrollView {
+                    height: 160px;
+                    viewport-width: parent.width;
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        padding: 8px;
+
+                        for entry in root.hotkey-blacklist: Rectangle {
+                            height: 36px;
+                            border-radius: 8px;
+                            background: dark-mode ? #1e1f20 : #f8f9fc;
+                            border-width: 1px;
+                            border-color: divider;
+
+                            HorizontalLayout {
+                                width: parent.width;
+                                height: parent.height;
+                                padding-left: 10px;
+                                padding-right: 6px;
+                                alignment: space-between;
+
+                                // 左侧: 图标 + 应用名
+                                HorizontalLayout {
+                                    spacing: 8px;
+
+                                    Image {
+                                        source: entry.icon;
+                                        width: 20px;
+                                        height: 20px;
+                                        y: (parent.height - self.height) / 2;
+                                        image-fit: contain;
+                                    }
+
+                                    Text {
+                                        text: entry.name;
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        color: text-1;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                // 删除按钮
+                                Rectangle {
+                                    width: 24px;
+                                    height: 24px;
+                                    border-radius: 5px;
+                                    background: del-btn.has-hover ? danger-soft : transparent;
+                                    y: (parent.height - self.height) / 2;
+
+                                    del-btn := TouchArea {
+                                        width: 100%;
+                                        height: 100%;
+                                        clicked => {
+                                            root.remove-hotkey-blacklist(entry.name);
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "\u{e8b6}";
+                                        font-family: "iconfont";
+                                        font-size: 14px;
+                                        color: del-btn.has-hover ? danger : text-2;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 空状态提示
+                if root.hotkey-blacklist.length == 0 : Rectangle {
+                    height: 40px;
+
+                    Text {
+                        text: root.foreground-app-name != "" ? "暂无黑名单应用，点击右侧按钮添加当前应用" : "暂无黑名单应用";
+                        font-size: 11px;
+                        color: text-3;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

@@ -1,5 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
-import { SyncBackendInfo } from "types.slint";
+import { SyncBackendInfo, BlacklistEntry } from "types.slint";
 import { SettingsTabGeneral } from "SettingsTabGeneral.slint";
 import { SettingsTabClipboard } from "SettingsTabClipboard.slint";
 import { SettingsTabHotkey } from "SettingsTabHotkey.slint";
@@ -33,6 +33,10 @@ export component SettingsPanel inherits Rectangle {
     in property <int> sync-items-updated: 0;
     in property <int> sync-tags-added: 0;
     in property <[SyncBackendInfo]> sync-backends: [];
+    in property <string> foreground-app-name: "";
+    in property <string> foreground-window-title: "";
+    in property <image> foreground-app-icon: @image-url("../assets/blank.png");
+    in property <[BlacklistEntry]> hotkey-blacklist: [];
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -62,6 +66,8 @@ export component SettingsPanel inherits Rectangle {
     callback remove-sync-backend(string);
     callback toggle-sync-backend(string);
     callback edit-sync-backend(string);
+    callback remove-hotkey-blacklist(string);
+    callback show-hotkey-blacklist-panel();
 
     // ========== 主题色板 ==========
     property <color> text-2:        dark-mode ? #919496 : #7c809a;
@@ -320,7 +326,13 @@ export component SettingsPanel inherits Rectangle {
             dark-mode: root.dark-mode;
             hotkey-display: root.hotkey-display;
             recording-hotkey: root.recording-hotkey;
+            foreground-app-name: root.foreground-app-name;
+            foreground-window-title: root.foreground-window-title;
+            foreground-app-icon: root.foreground-app-icon;
+            hotkey-blacklist: root.hotkey-blacklist;
             start-recording-hotkey => { root.start-recording-hotkey(); }
+            remove-hotkey-blacklist(app) => { root.remove-hotkey-blacklist(app); }
+            show-hotkey-blacklist-panel => { root.show-hotkey-blacklist-panel(); }
         }
 
         if (root.active-tab == 3) : SettingsTabData {

@@ -1,4 +1,4 @@
-import { ClipboardEntry, TagItem, SyncBackendInfo } from "types.slint";
+import { ClipboardEntry, TagItem, SyncBackendInfo, BlacklistEntry } from "types.slint";
 import { ClipboardList } from "ClipboardList.slint";
 import { SettingsPanel } from "SettingsPanel.slint";
 import { EditPanel } from "EditPanel.slint";
@@ -40,6 +40,13 @@ export component App inherits Window {
     in-out property <int> active-tab: 0;
     in-out property <string> hotkey-display: "";
     in-out property <bool> recording-hotkey: false;
+    // 快捷键黑名单
+    in-out property <bool> hotkey-blacklist-panel-visible: false;
+    in-out property <string> blacklist-pending-app: "";
+    in property <[BlacklistEntry]> hotkey-blacklist: [];
+    in-out property <string> foreground-app-name: "";
+    in-out property <string> foreground-window-title: "";
+    in-out property <image> foreground-app-icon: @image-url("../assets/blank.png");
     in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
     in-out property <string> card-height-mode: "medium";
     in-out property <bool> silent-start: true;
@@ -134,6 +141,10 @@ export component App inherits Window {
     callback resize-window(float, float);
     callback set-hotkey(string);
     callback start-recording-hotkey();
+    callback remove-hotkey-blacklist(string);
+    callback show-hotkey-blacklist-panel();
+    callback hide-hotkey-blacklist-panel();
+    callback confirm-add-blacklist();
     callback set-theme(int);
     callback set-position-mode(int);
     callback set-card-height-mode(string);
@@ -492,6 +503,10 @@ export component App inherits Window {
                     active-tab: root.active-tab;
                     hotkey-display: root.hotkey-display;
                     recording-hotkey: root.recording-hotkey;
+                    foreground-app-name: root.foreground-app-name;
+                    foreground-window-title: root.foreground-window-title;
+                    foreground-app-icon: root.foreground-app-icon;
+                    hotkey-blacklist: root.hotkey-blacklist;
                     position-mode: root.position-mode;
                     card-height-mode: root.card-height-mode;
                     silent-start: root.silent-start;
@@ -516,6 +531,8 @@ export component App inherits Window {
                     reset-db-path => { root.reset-db-path(); }
                     set-hotkey(s) => { root.set-hotkey(s); }
                     start-recording-hotkey => { root.start-recording-hotkey(); }
+                    remove-hotkey-blacklist(app) => { root.remove-hotkey-blacklist(app); }
+                    show-hotkey-blacklist-panel => { root.show-hotkey-blacklist-panel(); }
                     set-theme(mode) => { root.set-theme(mode); }
                     set-position-mode(mode) => { root.set-position-mode(mode); }
                     set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
@@ -607,6 +624,112 @@ export component App inherits Window {
             batch-add-tag(tag-id) => { root.batch-add-tag(tag-id); }
             batch-remove-tag(tag-id) => { root.batch-remove-tag(tag-id); }
             clear-all-tags => { root.clear-all-tags(); }
+        }
+
+        // ========== 添加黑名单确认浮层 ==========
+        if root.hotkey-blacklist-panel-visible: Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+
+            // event blocker
+            blocker := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => { }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 280px;
+                height: 120px;
+                border-radius: 12px;
+                background: panel-bg;
+                drop-shadow-blur: 16px;
+                drop-shadow-color: #00000060;
+                drop-shadow-offset-y: 4px;
+
+                property <color> panel-bg: root.dark-mode ? #2c2d2f : #ffffff;
+                property <color> panel-text-1: root.dark-mode ? #eaebec : #1a1c2e;
+                property <color> panel-text-2: root.dark-mode ? #919496 : #7c809a;
+                property <color> panel-btn-hover: root.dark-mode ? #363738 : #f0f1f5;
+                property <color> panel-danger: root.dark-mode ? #e06c75 : #c0392b;
+                property <color> panel-accent: root.dark-mode ? #7ecba3 : #6ab890;
+                property <color> panel-divider: root.dark-mode ? #3a3b3d : #e6e8f0;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "将 " + root.blacklist-pending-app + " 加入快捷键黑名单？";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: panel-text-1;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: "加入后在该应用中不会触发 Clippi 快捷键";
+                        font-size: 11px;
+                        color: panel-text-2;
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: panel-divider;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+
+                        Rectangle {
+                            height: 28px;
+                            border-radius: 6px;
+                            background: cancel-ta.has-hover ? panel-btn-hover : transparent;
+
+                            cancel-ta := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => { root.hide-hotkey-blacklist-panel(); }
+                            }
+
+                            Text {
+                                text: "取消";
+                                font-size: 11px;
+                                color: panel-text-2;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 28px;
+                            min-width: 80px;
+                            border-radius: 6px;
+                            background: confirm-ta.has-hover ? panel-danger : panel-accent;
+
+                            confirm-ta := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => { root.confirm-add-blacklist(); }
+                            }
+
+                            Text {
+                                text: "确认加入";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: #ffffff;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ========== 添加同步服务浮层 ==========

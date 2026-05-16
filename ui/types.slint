@@ -12,6 +12,17 @@ export struct SyncBackendInfo {
     service-label: string,
 }
 
+export struct ForegroundAppInfo {
+    app-name: string,
+    window-title: string,
+    icon-base64: string,
+}
+
+export struct BlacklistEntry {
+    name: string,
+    icon: image,
+}
+
 export struct TagItem {
     id: int,
     name: string,

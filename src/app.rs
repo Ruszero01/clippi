@@ -70,6 +70,7 @@ impl AppController {
         // Wrap in Arc<Mutex<>> so callbacks and shutdown share live settings
         let auto_hide_setting = settings.auto_hide;
         let hotkey_str = settings.hotkey.clone();
+        let blacklist = settings.hotkey_blacklist.clone();
         let sort_by_created_setting = settings.sort_by_created;
         let copy_as_plain_text_setting = settings.copy_as_plain_text;
         let max_items_setting = settings.max_items;
@@ -97,17 +98,31 @@ impl AppController {
         let mut listener = create_listener();
         listener.start(clipboard_service.shared())?;
 
+        // Create shared foreground app name for blacklist coordination
+        let foreground_app_name = crate::services::focus::shared_foreground_app_name();
+
         // Create hotkey service
-        let mut hotkey_service = HotkeyService::new(frontend.clone(), app.clone());
+        let mut hotkey_service = HotkeyService::new(
+            frontend.clone(),
+            app.clone(),
+            foreground_app_name.clone(),
+        );
         if let Ok(h) = create_hotkey_listener(&hotkey_str) {
             hotkey_service.set_hotkey(h);
         }
+        hotkey_service.load_blacklist(&blacklist);
+        // Bind blacklist model to Slint
+        slint_app.set_hotkey_blacklist(hotkey_service.blacklist_model());
 
         // Create tray service (use shared frontend)
         let tray_service = TrayService::new(frontend.clone());
 
         // Create focus service
-        let mut focus_service = match FocusService::new(frontend.clone(), app.clone()) {
+        let mut focus_service = match FocusService::new(
+            frontend.clone(),
+            app.clone(),
+            foreground_app_name,
+        ) {
             Ok(fs) => fs,
             Err(e) => {
                 return Err(e.into());
@@ -288,6 +303,11 @@ impl AppController {
                     if let Some(app) = ctx_set.app.upgrade() {
                         app.set_settings_error(SharedString::from(e));
                     }
+                } else {
+                    if let Ok(mut settings) = ctx_set.settings.lock() {
+                        settings.hotkey = s.to_string();
+                        settings.save();
+                    }
                 }
             });
         });
@@ -298,6 +318,66 @@ impl AppController {
                 hk.start_recording();
                 if let Some(app) = ctx_rec.app.upgrade() {
                     app.set_recording_hotkey(true);
+                }
+            });
+        });
+
+        // ── Blacklist callbacks ──
+
+        // Show confirmation panel for the current foreground app
+        let ctx_bl_show = ctx.clone();
+        slint_app.on_show_hotkey_blacklist_panel(move || {
+            if let Some(app) = ctx_bl_show.app.upgrade() {
+                let fg_name = app.get_foreground_app_name();
+                if fg_name.is_empty() {
+                    return;
+                }
+                app.set_blacklist_pending_app(fg_name);
+                app.set_hotkey_blacklist_panel_visible(true);
+            }
+        });
+
+        // Hide confirmation panel
+        let ctx_bl_hide = ctx.clone();
+        slint_app.on_hide_hotkey_blacklist_panel(move || {
+            if let Some(app) = ctx_bl_hide.app.upgrade() {
+                app.set_hotkey_blacklist_panel_visible(false);
+                app.set_blacklist_pending_app(SharedString::default());
+            }
+        });
+
+        // Confirm add to blacklist
+        let ctx_bl_confirm = ctx.clone();
+        slint_app.on_confirm_add_blacklist(move || {
+            if let Some(app) = ctx_bl_confirm.app.upgrade() {
+                let pending = app.get_blacklist_pending_app();
+                if pending.is_empty() {
+                    return;
+                }
+                let _ = ctx_bl_confirm.looper.try_with_hotkey_service(|hk| {
+                    if hk.add_to_blacklist(&pending) {
+                        // Persist to settings
+                        let blacklist = hk.blacklist_apps();
+                        if let Ok(mut s) = ctx_bl_confirm.settings.lock() {
+                            s.hotkey_blacklist = blacklist;
+                            s.save();
+                        }
+                    }
+                });
+                app.set_hotkey_blacklist_panel_visible(false);
+                app.set_blacklist_pending_app(SharedString::default());
+            }
+        });
+
+        // Remove from blacklist
+        let ctx_bl_remove = ctx.clone();
+        slint_app.on_remove_hotkey_blacklist(move |app_name: SharedString| {
+            let _ = ctx_bl_remove.looper.try_with_hotkey_service(|hk| {
+                hk.remove_from_blacklist(&app_name);
+                let blacklist = hk.blacklist_apps();
+                if let Ok(mut s) = ctx_bl_remove.settings.lock() {
+                    s.hotkey_blacklist = blacklist;
+                    s.save();
                 }
             });
         });

@@ -10,22 +10,44 @@ use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWI
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, PeekMessageW, PostThreadMessageW, TranslateMessage,
-    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
-    MSG, PM_REMOVE, WM_QUIT,
+    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
+    PostThreadMessageW, TranslateMessage, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
+    WINEVENT_OUTOFCONTEXT, MSG, PM_REMOVE, WM_QUIT,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::CloseHandle;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHGFI_ICON, SHGFI_LARGEICON, SHFILEINFOW};
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
+
+/// Foreground application information used by the hotkey blacklist UI.
+#[derive(Debug, Clone)]
+pub struct ForegroundAppInfo {
+    pub app_name: String,
+    pub window_title: String,
+    pub icon_base64: String,
+}
 
 /// Last non-Clippi foreground window (paste target)
 #[cfg(target_os = "windows")]
 static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Last foreground window title (raw UTF-16 buffer)
+#[cfg(target_os = "windows")]
+static LAST_FOREGROUND_TITLE: Mutex<[u16; 512]> = Mutex::new([0u16; 512]);
 
 /// Last non-Clippi foreground PID (paste target)
 #[cfg(target_os = "macos")]
@@ -176,7 +198,7 @@ pub fn get_last_non_clippi_pid() -> Option<i32> {
 #[cfg(target_os = "windows")]
 fn is_clippi_window(hwnd: HWND) -> bool {
     let mut buffer: [u16; 256] = [0; 256];
-    let len = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, buffer.as_mut_ptr(), 256) };
+    let len = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), 256) };
     if len > 0 {
         let title = String::from_utf16_lossy(&buffer[..len as usize]);
         title == "Clippi"
@@ -204,8 +226,161 @@ unsafe extern "system" fn win_event_proc(
     if is_clippi_now {
         // LAST_NON_CLIPPI_WINDOW already holds the correct paste target from
         // the most recent non-Clippi focus event. Do not overwrite it.
-        return;
+    } else {
+        LAST_NON_CLIPPI_WINDOW.store(current_fg as usize, Ordering::SeqCst);
+        // Capture window title alongside HWND
+        if let Ok(mut buf) = LAST_FOREGROUND_TITLE.lock() {
+            let len = GetWindowTextW(current_fg, buf.as_mut_ptr(), 512);
+            if len > 0 {
+                // Fill remaining with zeros
+                for i in len as usize..512 {
+                    buf[i] = 0;
+                }
+            } else {
+                buf[0] = 0;
+            }
+        }
     }
+}
 
-    LAST_NON_CLIPPI_WINDOW.store(current_fg as usize, Ordering::SeqCst);
+// ── Foreground app info extraction ──
+
+/// Get information about the current foreground application.
+/// Returns None on unsupported platforms or if the info is unavailable.
+pub fn get_foreground_app_info() -> Option<ForegroundAppInfo> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_foreground_info()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_foreground_info()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_foreground_info() -> Option<ForegroundAppInfo> {
+    unsafe {
+        // Use the stored non-Clippi window; fall back to current foreground
+        let hwnd = get_last_non_clippi_window()
+            .or_else(|| {
+                let fg = GetForegroundWindow();
+                if fg.is_null() || is_clippi_window(fg) { None } else { Some(fg) }
+            })?;
+
+        // Window title from stored buffer
+        let window_title = if let Ok(buf) = LAST_FOREGROUND_TITLE.lock() {
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(512);
+            String::from_utf16_lossy(&buf[..end])
+        } else {
+            String::new()
+        };
+
+        // Get PID
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return Some(ForegroundAppInfo {
+                app_name: String::new(),
+                window_title,
+                icon_base64: String::new(),
+            });
+        }
+
+        // Get exe path
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return Some(ForegroundAppInfo {
+                app_name: String::new(),
+                window_title,
+                icon_base64: String::new(),
+            });
+        }
+        let mut exe_buf = [0u16; 260];
+        let mut exe_len = exe_buf.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            process,
+            0, // PROCESS_NAME_WIN32
+            exe_buf.as_mut_ptr(),
+            &mut exe_len,
+        );
+        CloseHandle(process);
+        if result == 0 {
+            return Some(ForegroundAppInfo {
+                app_name: String::new(),
+                window_title,
+                icon_base64: String::new(),
+            });
+        }
+
+        let exe_path = String::from_utf16_lossy(&exe_buf[..exe_len as usize]);
+        let app_name = std::path::Path::new(&exe_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| {
+                let mut chars = s.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .unwrap_or_default();
+
+        // Extract icon
+        let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut shfi: SHFILEINFOW = std::mem::zeroed();
+        let icon_result = SHGetFileInfoW(
+            wide_path.as_ptr(),
+            0,
+            &mut shfi,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_LARGEICON,
+        );
+        let icon_base64 = if icon_result != 0 && !shfi.hIcon.is_null() {
+            super::util::hicon_to_base64_png(shfi.hIcon, 32).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        Some(ForegroundAppInfo {
+            app_name,
+            window_title,
+            icon_base64,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_foreground_info() -> Option<ForegroundAppInfo> {
+    unsafe {
+        use objc2::msg_send;
+        use objc2::rc::Retained;
+        use objc2_app_kit::NSImage;
+
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let app = workspace.frontmostApplication()?;
+
+        if app.processIdentifier() == std::process::id() as i32 {
+            // Clippi itself — no foreground info to show
+            return None;
+        }
+
+        let name: Retained<objc2_foundation::NSString> = msg_send![&app, localizedName];
+        let app_name = name.to_string();
+
+        let icon: Option<Retained<NSImage>> = msg_send![&app, icon];
+        let icon_base64 = icon
+            .and_then(|i| super::util::nsimage_to_base64_png(&i, 32))
+            .unwrap_or_default();
+
+        Some(ForegroundAppInfo {
+            app_name,
+            window_title: String::new(), // macOS window title extraction requires extra permissions
+            icon_base64,
+        })
+    }
 }

@@ -25,6 +25,23 @@ pub fn resolve_db_path(db_setting: &str) -> PathBuf {
     }
 }
 
+pub fn app_icon_dir() -> PathBuf {
+    let dir = images_dir().join("icons");
+    if !dir.exists() {
+        let _ = fs::create_dir_all(&dir);
+    }
+    dir
+}
+
+/// File path for a cached app icon (sanitized app name → PNG filename).
+pub fn app_icon_path(app_name: &str) -> PathBuf {
+    let sanitized: String = app_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .collect();
+    app_icon_dir().join(format!("{sanitized}.png"))
+}
+
 pub fn images_dir() -> PathBuf {
     let dir = app_data_dir().join("images");
     if !dir.exists() {

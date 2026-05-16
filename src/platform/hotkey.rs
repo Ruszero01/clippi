@@ -12,6 +12,12 @@ pub trait HotkeyListener {
     fn finish_recording(&mut self);
     fn poll_pressed(&self) -> bool;
     fn poll_recording_pressed(&mut self) -> Option<String>;
+    /// Temporarily unregister the hotkey (for blacklist).
+    /// Does nothing if already unregistered.
+    fn unregister(&mut self);
+    /// Re-register the hotkey after unregister().
+    /// Does nothing if already registered.
+    fn register(&mut self);
 }
 
 /// Shared keycode mapping: name string → Code variant (platform-agnostic).
@@ -83,6 +89,7 @@ mod windows {
         manager: GlobalHotKeyManager,
         hotkey: HotKey,
         is_recording: AtomicBool,
+        registered: AtomicBool,
     }
 
     impl WindowsHotkeyListener {
@@ -98,6 +105,7 @@ mod windows {
                 manager,
                 hotkey,
                 is_recording: AtomicBool::new(false),
+                registered: AtomicBool::new(true),
             })
         }
     }
@@ -116,6 +124,7 @@ mod windows {
             let new_hotkey = parse_hotkey(hotkey_str)?;
             self.manager.register(new_hotkey).map_err(|e| format!("注册快捷键失败: {e}"))?;
             self.hotkey = new_hotkey;
+            self.registered.store(true, Ordering::SeqCst);
             Ok(())
         }
 
@@ -125,6 +134,26 @@ mod windows {
 
         fn finish_recording(&mut self) {
             self.is_recording.store(false, Ordering::SeqCst);
+        }
+
+        fn unregister(&mut self) {
+            if self.registered.load(Ordering::SeqCst) {
+                let _ = self.manager.unregister(self.hotkey);
+                self.registered.store(false, Ordering::SeqCst);
+            }
+        }
+
+        fn register(&mut self) {
+            if !self.registered.load(Ordering::SeqCst) {
+                match self.manager.register(self.hotkey) {
+                    Ok(()) => {
+                        self.registered.store(true, Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        eprintln!("hotkey register failed: {e}");
+                    }
+                }
+            }
         }
 
         fn poll_pressed(&self) -> bool {
@@ -286,6 +315,7 @@ mod macos {
         manager: GlobalHotKeyManager,
         hotkey: HotKey,
         is_recording: AtomicBool,
+        registered: AtomicBool,
     }
 
     impl MacosHotkeyListener {
@@ -301,6 +331,7 @@ mod macos {
                 manager,
                 hotkey,
                 is_recording: AtomicBool::new(false),
+                registered: AtomicBool::new(true),
             })
         }
     }
@@ -319,6 +350,7 @@ mod macos {
             let new_hotkey = parse_hotkey(hotkey_str)?;
             self.manager.register(new_hotkey).map_err(|e| format!("注册快捷键失败: {e}"))?;
             self.hotkey = new_hotkey;
+            self.registered.store(true, Ordering::SeqCst);
             Ok(())
         }
 
@@ -328,6 +360,26 @@ mod macos {
 
         fn finish_recording(&mut self) {
             self.is_recording.store(false, Ordering::SeqCst);
+        }
+
+        fn unregister(&mut self) {
+            if self.registered.load(Ordering::SeqCst) {
+                let _ = self.manager.unregister(self.hotkey);
+                self.registered.store(false, Ordering::SeqCst);
+            }
+        }
+
+        fn register(&mut self) {
+            if !self.registered.load(Ordering::SeqCst) {
+                match self.manager.register(self.hotkey) {
+                    Ok(()) => {
+                        self.registered.store(true, Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        eprintln!("hotkey register failed: {e}");
+                    }
+                }
+            }
         }
 
         fn poll_pressed(&self) -> bool {
@@ -484,6 +536,8 @@ mod linux {
         fn poll_recording_pressed(&mut self) -> Option<String> {
             None
         }
+        fn unregister(&mut self) {}
+        fn register(&mut self) {}
     }
 }
 
