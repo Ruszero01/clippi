@@ -124,6 +124,10 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
 
 #[cfg(target_os = "macos")]
 const SLEEP_MS: u64 = 100;
+#[cfg(target_os = "macos")]
+const FOCUS_CHECK_INTERVAL_MS: u64 = 10;
+#[cfg(target_os = "macos")]
+const FOCUS_TIMEOUT_MS: u64 = 500;
 
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
@@ -159,8 +163,34 @@ pub fn paste_sync() {
 }
 
 #[cfg(target_os = "macos")]
+fn wait_for_focus(pid: i32) {
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    loop {
+        let apps = workspace.runningApplications();
+        let mut active = false;
+        for i in 0..apps.count() {
+            let app = apps.objectAtIndex(i);
+            if app.processIdentifier() == pid {
+                active = app.isActive();
+                break;
+            }
+        }
+        if active || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn send_cmd_v() {
     std::thread::sleep(std::time::Duration::from_millis(SLEEP_MS));
+    // Verify target app has focus before pasting (same logic as Windows)
+    if let Some(pid) = crate::platform::focus::get_last_non_clippi_pid() {
+        wait_for_focus(pid);
+    }
     let source = core_graphics::event_source::CGEventSource::new(
         core_graphics::event_source::CGEventSourceStateID::CombinedSessionState
     );

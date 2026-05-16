@@ -63,7 +63,7 @@ pub struct AppSettings {
     pub sync_device_name: String,    // 设备名 — deprecated, use sync_backends
     #[serde(default)]
     pub sync_last_at: String,        // 上次同步时间 RFC3339 — deprecated
-    #[serde(default)]
+    #[serde(default = "default_sync_interval")]
     pub sync_interval_secs: u64,     // 同步间隔秒数 (默认60)
     #[serde(default)]
     pub sync_backends: Vec<BackendConfig>, // 多后端配置列表 (new)
@@ -73,6 +73,10 @@ pub struct AppSettings {
     pub max_items: u32,                    // 最大保存条目数 (0=不限制, 默认0)
     #[serde(default)]
     pub hotkey_blacklist: Vec<String>,     // 快捷键黑名单应用名列表
+}
+
+fn default_sync_interval() -> u64 {
+    60
 }
 
 impl Default for AppSettings {

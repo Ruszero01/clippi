@@ -113,17 +113,19 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
 #[cfg(target_os = "macos")]
 pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Option<String> {
     unsafe {
+        use base64::Engine;
         use objc2::msg_send;
         use objc2::rc::Retained;
 
         // Extract TIFF data from NSImage
         let tiff: Retained<objc2::runtime::NSObject> = msg_send![image, TIFFRepresentation];
-        let bytes: *const u8 = msg_send![&tiff, bytes] as *const u8;
+        let bytes: *const std::ffi::c_void = msg_send![&tiff, bytes];
+        let bytes = bytes as *const u8;
         let len: usize = msg_send![&tiff, length];
         let tiff_bytes = std::slice::from_raw_parts(bytes, len);
 
         // Decode TIFF → resize → encode PNG → base64
-        let img = image::load_from_memory(tiff_bytes)?;
+        let img = image::load_from_memory(tiff_bytes).ok()?;
         let resized = img.resize_exact(size as u32, size as u32, image::imageops::FilterType::Lanczos3);
         let mut png_bytes = Vec::new();
         resized.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).ok()?;

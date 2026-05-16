@@ -29,6 +29,7 @@ pub struct ClipboardService {
     selected_ids: Vec<i32>,
     anchor_id: i32,
     sync_dirty: Arc<AtomicBool>,
+    needs_model_refresh: Arc<AtomicBool>,
     max_items: usize,
     /// Cache of ClipboardEntry keyed by item id, with updated_at for invalidation.
     entry_cache: HashMap<i64, (String, ClipboardEntry)>,
@@ -40,6 +41,7 @@ impl ClipboardService {
         db: Arc<Mutex<Database>>,
         app: slint::Weak<App>,
         sync_dirty: Arc<AtomicBool>,
+        needs_model_refresh: Arc<AtomicBool>,
     ) -> Self {
         let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
         let service = Self {
@@ -53,6 +55,7 @@ impl ClipboardService {
             selected_ids: Vec::new(),
             anchor_id: -1,
             sync_dirty,
+            needs_model_refresh,
             max_items: 100, // 历史默认值
             entry_cache: HashMap::new(),
         };
@@ -675,6 +678,11 @@ impl Pollable for ClipboardService {
         // Check if batch paste completed and wants selection cleared
         if self.shared.clear_selection_requested.swap(false, Ordering::SeqCst) {
             self.clear_selection();
+        }
+
+        // Reload model if sync externally modified the database
+        if self.needs_model_refresh.swap(false, Ordering::SeqCst) {
+            self.refresh_with_current_filter();
         }
 
         let pending = {

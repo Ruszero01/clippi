@@ -82,11 +82,13 @@ impl AppController {
         let batch_pasting_flag = clipboard_shared.batch_pasting.clone();
         let clear_selection_flag = clipboard_shared.clear_selection_requested.clone();
         let sync_dirty_flag = Arc::new(AtomicBool::new(false));
+        let needs_model_refresh_flag = Arc::new(AtomicBool::new(false));
         let mut clipboard_service = ClipboardService::new(
             clipboard_shared,
             db.clone(),
             app.clone(),
             sync_dirty_flag.clone(),
+            needs_model_refresh_flag.clone(),
         );
         let clipboard_service_for_callbacks = clipboard_service.clone();
         // Load initial data and apply settings
@@ -137,6 +139,7 @@ impl AppController {
             shared_settings.clone(),
             app.clone(),
             sync_dirty_flag,
+            needs_model_refresh_flag,
         );
 
         // Detect preset paths for AddBackendPanel

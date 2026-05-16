@@ -119,6 +119,9 @@ pub struct SyncManager {
     /// Shared with ClipboardService — true when local data has changed.
     pub dirty: Arc<AtomicBool>,
 
+    /// Shared with ClipboardService — true when sync externally modified the DB.
+    needs_model_refresh: Arc<AtomicBool>,
+
     /// Backend states (only enabled backends are live here).
     backends: Vec<BackendState>,
 
@@ -141,6 +144,7 @@ impl SyncManager {
         settings: Arc<Mutex<AppSettings>>,
         app: slint::Weak<App>,
         dirty: Arc<AtomicBool>,
+        needs_model_refresh: Arc<AtomicBool>,
     ) -> Self {
         let model: Rc<VecModel<SyncBackendInfo>> = Rc::new(VecModel::default());
 
@@ -154,6 +158,7 @@ impl SyncManager {
             settings,
             app,
             dirty,
+            needs_model_refresh,
             backends: Vec::new(),
             model,
             manual_trigger: Arc::new(AtomicBool::new(false)),
@@ -423,6 +428,11 @@ impl SyncManager {
         self.last_sync_items_added = items_added;
         self.last_sync_items_updated = items_updated;
         self.last_sync_tags_added = tags_added;
+
+        // Notify ClipboardService to reload its model if the DB was modified
+        if has_merge {
+            self.needs_model_refresh.store(true, Ordering::SeqCst);
+        }
 
         // Update the specific backend's state
         if let Some(state) = self
