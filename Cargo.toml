@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.5"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
