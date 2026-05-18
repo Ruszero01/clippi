@@ -1366,7 +1366,7 @@ fn write_item_to_clipboard(
 
             #[cfg(not(target_os = "windows"))]
             {
-                use clipboard_rs::common::RustImageData;
+                use clipboard_rs::common::{RustImageData, RustImage};
                 if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
                     let _ = ctx.set_image(img_data);
                     pushed = true;
