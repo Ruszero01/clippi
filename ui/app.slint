@@ -177,6 +177,7 @@ export component App inherits Window {
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
+    callback open-item-location(int);
     callback paste-as-rgb(int);
     callback paste-as-hex(int);
     callback select-single(int);
@@ -458,6 +459,7 @@ export component App inherits Window {
                     show-context-menu(id) => { root.show-context-menu(id); }
                     hide-context-menu => { root.hide-context-menu(); }
                     open-original-image(id) => { root.open-original-image(id); }
+                    open-item-location(id) => { root.open-item-location(id); }
                     selected-count: root.selected-count;
                     context-menu-is-batch <=> root.context-menu-is-batch;
                     select-single(id) => { root.select-single(id); }

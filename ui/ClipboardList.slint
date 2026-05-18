@@ -51,6 +51,7 @@ export component ClipboardList inherits Rectangle {
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
+    callback open-item-location(int);
     callback select-single(int);
     callback toggle-selection(int);
     callback range-select(int);
@@ -1063,6 +1064,37 @@ export component ClipboardList inherits Rectangle {
                                             font-family: "iconfont";
                                             font-size: 12px;
                                             color: open-img-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 跳转按钮（链接、路径、文件类型显示）
+                                    if entry.content-type == "link" || entry.content-type == "path" || entry.content-type == "file" : Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        open-loc-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.toolbar-action = false;
+                                                root.open-item-location(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e6d7}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: open-loc-ta.has-hover ? accent : text-2;
                                         }
                                     }
 

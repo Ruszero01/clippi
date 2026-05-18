@@ -332,6 +332,77 @@ impl AppController {
             }
         });
 
+        let ctx_open_loc = ctx.clone();
+        slint_app.on_open_item_location(move |id| {
+            use crate::core::types::{ContentType, FileData};
+            if let Ok(db) = ctx_open_loc.db.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    match item.content_type {
+                        ContentType::Link | ContentType::Path => {
+                            let target = item.full_text.clone();
+                            #[cfg(target_os = "windows")]
+                            {
+                                let target_utf16: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+                                unsafe {
+                                    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+                                    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
+                                    ShellExecuteW(
+                                        std::ptr::null_mut(),
+                                        "open\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
+                                        target_utf16.as_ptr(),
+                                        std::ptr::null(),
+                                        std::ptr::null(),
+                                        SW_SHOW,
+                                    );
+                                }
+                            }
+                            #[cfg(target_os = "macos")]
+                            { let _ = std::process::Command::new("open").arg(&target).spawn(); }
+                            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                            { let _ = std::process::Command::new("xdg-open").arg(&target).spawn(); }
+                        }
+                        ContentType::File => {
+                            let file_data = FileData::from_json(&item.file_data);
+                            if let Some(first) = file_data.files.first() {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    let arg = format!("/select,\"{}\"", first.path);
+                                    let arg_utf16: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
+                                    unsafe {
+                                        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+                                        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
+                                        ShellExecuteW(
+                                            std::ptr::null_mut(),
+                                            "open\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
+                                            "explorer\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
+                                            arg_utf16.as_ptr(),
+                                            std::ptr::null(),
+                                            SW_SHOW,
+                                        );
+                                    }
+                                }
+                                #[cfg(target_os = "macos")]
+                                {
+                                    let parent = std::path::Path::new(&first.path).parent();
+                                    if let Some(p) = parent {
+                                        let _ = std::process::Command::new("open").arg(p).spawn();
+                                    }
+                                }
+                                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                                {
+                                    let parent = std::path::Path::new(&first.path).parent();
+                                    if let Some(p) = parent {
+                                        let _ = std::process::Command::new("xdg-open").arg(p).spawn();
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+
         let ctx_close = ctx.clone();
         slint_app.on_close_window(move || {
             if let Some(app) = ctx_close.app.upgrade() {
