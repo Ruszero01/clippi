@@ -12,6 +12,23 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// Trim the process working set so the OS reclaims idle pages.
+/// This is a hint — it resets WS limits and lets Windows evict pages
+/// that are no longer actively used. Safe to call at any time.
+#[cfg(target_os = "windows")]
+pub fn trim_process_working_set() {
+    unsafe {
+        use windows_sys::Win32::System::Memory::SetProcessWorkingSetSizeEx;
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, 0);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn trim_process_working_set() {
+    // no-op on non-Windows
+}
+
 /// Render an HICON to a 32x32 BGRA DIB, convert to RGBA PNG, and base64-encode.
 /// Shared by source app icon extraction and file icon extraction on Windows.
 #[cfg(target_os = "windows")]
@@ -21,8 +38,9 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
         ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-        HDC, HGDIOBJ, HBRUSH,
+        HDC, HBRUSH,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     extern "system" {
         fn DrawIconEx(
@@ -46,7 +64,7 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
         ReleaseDC(std::ptr::null_mut(), screen_dc);
 
         if mem_dc.is_null() {
-            DeleteObject(hicon as HGDIOBJ);
+            DestroyIcon(hicon);
             return None;
         }
 
@@ -78,7 +96,7 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
         );
         if dib.is_null() || pixels.is_null() {
             DeleteDC(mem_dc);
-            DeleteObject(hicon as HGDIOBJ);
+            DestroyIcon(hicon);
             return None;
         }
 
@@ -92,7 +110,7 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
         SelectObject(mem_dc, old_bmp);
         DeleteObject(dib);
         DeleteDC(mem_dc);
-        DeleteObject(hicon as HGDIOBJ);
+        DestroyIcon(hicon);
 
         // BGRA → RGBA
         let mut rgba = Vec::with_capacity(pixel_count * 4);

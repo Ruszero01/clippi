@@ -25,6 +25,7 @@ pub struct ClipboardShared {
     pub pending: Arc<Mutex<Vec<ClipboardItem>>>,
     pub batch_pasting: Arc<AtomicBool>,
     pub clear_selection_requested: Arc<AtomicBool>,
+    pub skip_next: Arc<AtomicBool>,
 }
 
 impl ClipboardShared {
@@ -33,6 +34,7 @@ impl ClipboardShared {
             pending: Arc::new(Mutex::new(Vec::new())),
             batch_pasting: Arc::new(AtomicBool::new(false)),
             clear_selection_requested: Arc::new(AtomicBool::new(false)),
+            skip_next: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -77,6 +79,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                 if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path) {
                     if let Ok(img) = RustImageData::from_path(&entries[0].path) {
                         if !img.is_empty() {
+                            let (iw, ih) = img.get_size();
                             if let Ok(png_bytes) = img.to_png() {
                                 let mut hasher = DefaultHasher::new();
                                 hasher.write(png_bytes.get_bytes());
@@ -87,24 +90,24 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                                 let file_path = img_dir.join(&file_name);
 
                                 if !file_path.exists() {
-                                    if png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err() {
-                                        // Fall through to File type below
-                                    } else {
-                                        return Some(ClipboardItem::new_image(
-                                            0,
-                                            file_path.to_str().unwrap_or(""),
-                                            hash,
-                                            source_info.as_ref(),
-                                        ));
-                                    }
+                                    let path = file_path.clone();
+                                    let dir = img_dir.clone();
+                                    std::thread::spawn(move || {
+                                        if png_bytes.save_to_path(path.to_str().unwrap_or("")).is_ok() {
+                                            generate_thumbnail(&path, &dir, hash);
+                                        }
+                                    });
                                 } else {
-                                    return Some(ClipboardItem::new_image(
-                                        0,
-                                        file_path.to_str().unwrap_or(""),
-                                        hash,
-                                        source_info.as_ref(),
-                                    ));
+                                    generate_thumbnail(&file_path, &img_dir, hash);
                                 }
+
+                                return Some(ClipboardItem::new_image(
+                                    0,
+                                    file_path.to_str().unwrap_or(""),
+                                    hash,
+                                    iw, ih,
+                                    source_info.as_ref(),
+                                ));
                             }
                         }
                     }
@@ -132,6 +135,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     if ctx.has(ContentFormat::Image) {
         if let Ok(img) = ctx.get_image() {
             if !img.is_empty() {
+                let (iw, ih) = img.get_size();
                 let png_bytes = img.to_png().ok()?;
                 let mut hasher = DefaultHasher::new();
                 hasher.write(png_bytes.get_bytes());
@@ -141,16 +145,23 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                 let file_name = format!("{:016x}.png", hash);
                 let file_path = img_dir.join(&file_name);
 
-                if !file_path.exists()
-                    && png_bytes.save_to_path(file_path.to_str().unwrap_or("")).is_err()
-                {
-                    return None;
+                if !file_path.exists() {
+                    let path = file_path.clone();
+                    let dir = img_dir.clone();
+                    std::thread::spawn(move || {
+                        if png_bytes.save_to_path(path.to_str().unwrap_or("")).is_ok() {
+                            generate_thumbnail(&path, &dir, hash);
+                        }
+                    });
+                } else {
+                    generate_thumbnail(&file_path, &img_dir, hash);
                 }
 
                 return Some(ClipboardItem::new_image(
                     0,
                     file_path.to_str().unwrap_or(""),
                     hash,
+                    iw, ih,
                     source_info.as_ref(),
                 ));
             }
@@ -196,6 +207,30 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     None
 }
 
+/// Target thumbnail width matching the card content area logical-pixel width.
+const THUMB_WIDTH: u32 = 310;
+
+/// Generate a thumbnail by scaling the full image to match the card width,
+/// preserving aspect ratio. Small images (≤ target width) are kept as-is.
+fn generate_thumbnail(image_path: &std::path::Path, img_dir: &std::path::Path, hash: u64) {
+    let thumb_path = img_dir.join(format!("thumb_{:016x}.png", hash));
+    if thumb_path.exists() || !image_path.exists() {
+        return;
+    }
+    if let Ok(img) = image::open(image_path) {
+        use image::GenericImageView;
+        let (w, h) = img.dimensions();
+        let thumb = if w <= THUMB_WIDTH {
+            img
+        } else {
+            let ratio = THUMB_WIDTH as f64 / w as f64;
+            let nh = (h as f64 * ratio) as u32;
+            img.resize(THUMB_WIDTH, nh, image::imageops::FilterType::Lanczos3)
+        };
+        let _ = thumb.save(&thumb_path);
+    }
+}
+
 // ============================================================================
 // Generic Polling Listener (used by both Windows and macOS)
 // ============================================================================
@@ -226,10 +261,8 @@ impl PollingClipboardListener {
             }
             if ctx.has(ContentFormat::Image) {
                 hasher.write(b"[img]");
-                if let Ok(img) = ctx.get_image() {
-                    if let Ok(png) = img.to_png() {
-                        hasher.write(png.get_bytes());
-                    }
+                if let Ok(png_bytes) = ctx.get_buffer("PNG") {
+                    hasher.write(&png_bytes);
                 }
             }
             if ctx.has(ContentFormat::Files) {
@@ -254,19 +287,49 @@ impl ClipboardListener for PollingClipboardListener {
         let startup_end = self.startup_end.clone();
         let pending = shared.pending.clone();
         let batch_pasting = shared.batch_pasting.clone();
+        let skip_next = shared.skip_next.clone();
+
+        // Windows: use cheap sequence-number check to avoid opening the clipboard
+        // and encoding large bitmaps to PNG every 50ms when nothing changed.
+        #[cfg(target_os = "windows")]
+        let last_seq = Arc::new(Mutex::new(unsafe {
+            windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
+        }));
 
         thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
-                let startup_done = startup_end
-                    .lock()
-                    .unwrap()
-                    .is_none_or(|end| end.elapsed().as_millis() > 500);
-
                 // 批量粘贴期间跳过记录，避免产生冗余条目
                 if batch_pasting.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                     continue;
                 }
+
+                // 内部复制：调用方已直接推入 pending，监听器跳过本轮检测
+                if skip_next.swap(false, Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+
+                // Fast-path: if the clipboard sequence number hasn't changed,
+                // skip the expensive clipboard open + image encoding entirely.
+                #[cfg(target_os = "windows")]
+                {
+                    let seq = unsafe {
+                        windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
+                    };
+                    let mut last = last_seq.lock().unwrap();
+                    if seq == *last {
+                        drop(last);
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                    *last = seq;
+                }
+
+                let startup_done = startup_end
+                    .lock()
+                    .unwrap()
+                    .is_none_or(|end| end.elapsed().as_millis() > 500);
 
                 if let Ok(ctx) = ClipboardContext::new() {
                     let mut hasher = DefaultHasher::new();
@@ -282,11 +345,8 @@ impl ClipboardListener for PollingClipboardListener {
                     let has_img = ctx.has(ContentFormat::Image);
                     if has_img {
                         hasher.write(b"[img]");
-                        // Include image bytes in hash for change detection
-                        if let Ok(img) = ctx.get_image() {
-                            if let Ok(png) = img.to_png() {
-                                hasher.write(png.get_bytes());
-                            }
+                        if let Ok(png_bytes) = ctx.get_buffer("PNG") {
+                            hasher.write(&png_bytes);
                         }
                     }
 

@@ -11,6 +11,8 @@ pub struct Database {
 impl Database {
     pub fn open(path: &str) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
+        // WAL mode improves concurrency and reduces memory pressure.
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA cache_size = -2000;")?;
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
@@ -31,22 +33,20 @@ impl Database {
                 is_favorite INTEGER NOT NULL DEFAULT 0,
                 note TEXT NOT NULL DEFAULT '',
                 source_app_name TEXT NOT NULL DEFAULT '',
-                source_app_icon TEXT NOT NULL DEFAULT ''
+                source_app_icon TEXT NOT NULL DEFAULT '',
+                image_width INTEGER NOT NULL DEFAULT 0,
+                image_height INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
             CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
         )?;
-        // Add columns to existing databases (ignore error if already present)
-        let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN source_app_name TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN source_app_icon TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN rich_data TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE clipboard_items ADD COLUMN note TEXT NOT NULL DEFAULT ''", []);
         // Tags tables
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
-                color TEXT NOT NULL DEFAULT ''
+                color TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS item_tags (
                 tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
@@ -56,10 +56,6 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_item_tags_item ON item_tags(item_id);
             CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);",
-        );
-        // Add updated_at to tags for sync conflict resolution
-        let _ = self.conn.execute(
-            "ALTER TABLE tags ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''", [],
         );
         // Tombstone tables for sync deletion propagation
         let _ = self.conn.execute_batch(
@@ -83,13 +79,13 @@ impl Database {
 
     pub fn upsert(&self, item: &ClipboardItem) -> SqlResult<()> {
         let changed = self.conn.execute(
-            "UPDATE clipboard_items SET updated_at = ?1, image_path = ?3, rich_data = ?4, file_data = ?5 WHERE content_hash = ?2",
-            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.image_path, item.rich_data, item.file_data],
+            "UPDATE clipboard_items SET updated_at = ?1, image_path = ?3, rich_data = ?4, file_data = ?5, image_width = ?6, image_height = ?7 WHERE content_hash = ?2",
+            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64],
         )?;
         if changed == 0 {
             self.conn.execute(
-                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, source_app_name, source_app_icon)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, source_app_name, source_app_icon, image_width, image_height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     item.content_type.as_str(),
                     item.full_text,
@@ -101,6 +97,8 @@ impl Database {
                     item.file_data,
                     item.source_app_name,
                     item.source_app_icon,
+                    item.image_width as i64,
+                    item.image_height as i64,
                 ],
             )?;
         }
@@ -117,7 +115,7 @@ impl Database {
     ) -> SqlResult<Vec<ClipboardItem>> {
         let (where_clause, mut filter_params) = filters.db_where();
         let query = format!(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
              FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
             where_clause, order_by
         );
@@ -129,7 +127,7 @@ impl Database {
 
     pub fn get_by_id(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
              FROM clipboard_items WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -142,7 +140,7 @@ impl Database {
 
     pub fn get_by_hash(&self, hash: u64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
              FROM clipboard_items WHERE content_hash = ?1",
         )?;
         let mut rows = stmt.query(params![hash as i64])?;
@@ -364,7 +362,7 @@ impl Database {
     pub fn get_all_sync_items_with_tags(&self) -> SqlResult<Vec<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, content_type, full_text, content_hash, created_at, updated_at,
-             image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon
+             image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
              FROM clipboard_items
              WHERE content_type NOT IN ('image', 'file')
              ORDER BY updated_at DESC",
@@ -600,6 +598,8 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let note: String = row.get(10).unwrap_or_default();
     let source_app_name: String = row.get(11).unwrap_or_default();
     let source_app_icon: String = row.get(12).unwrap_or_default();
+    let image_width: i32 = row.get(13).unwrap_or(0);
+    let image_height: i32 = row.get(14).unwrap_or(0);
     Ok(ClipboardItem {
         id: row.get(0)?,
         content_type: ContentType::from_str(&ct_str),
@@ -608,6 +608,8 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         created_at: created_str.parse().unwrap_or_default(),
         updated_at: updated_str.parse().unwrap_or_default(),
         image_path,
+        image_width: image_width as u32,
+        image_height: image_height as u32,
         rich_data,
         file_data,
         is_favorite: is_favorite != 0,

@@ -104,6 +104,8 @@ pub struct ClipboardItem {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub image_path: String,
+    pub image_width: u32,
+    pub image_height: u32,
     pub rich_data: String, // JSON: {"html":"...","rtf":"..."} or empty
     pub file_data: String, // JSON: [{"name":"...","path":"...","is_dir":false}, ...]
     pub is_favorite: bool,
@@ -201,6 +203,8 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
             rich_data: rd,
             file_data: String::new(),
             is_favorite: false,
@@ -211,7 +215,7 @@ impl ClipboardItem {
         }
     }
 
-    pub fn new_image(id: i64, image_path: &str, hash: u64, source: Option<&SourceAppInfo>) -> Self {
+    pub fn new_image(id: i64, image_path: &str, hash: u64, w: u32, h: u32, source: Option<&SourceAppInfo>) -> Self {
         let now = Utc::now();
         let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
         Self {
@@ -222,6 +226,8 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: image_path.to_string(),
+            image_width: w,
+            image_height: h,
             rich_data: String::new(),
             file_data: String::new(),
             is_favorite: false,
@@ -243,6 +249,8 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
             rich_data: String::new(),
             file_data: String::new(),
             is_favorite: false,
@@ -265,6 +273,8 @@ impl ClipboardItem {
             created_at: now,
             updated_at: now,
             image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
             rich_data: String::new(),
             file_data: file_data.to_json(),
             is_favorite: false,

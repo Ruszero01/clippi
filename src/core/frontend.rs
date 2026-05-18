@@ -3,6 +3,8 @@
 use crate::platform::monitor;
 use crate::App;
 use slint::{ComponentHandle, LogicalSize, PhysicalPosition};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Default window size (width, height) in logical pixels.
 pub const DEFAULT_WINDOW_WIDTH: f32 = 320.0;
@@ -50,10 +52,12 @@ pub struct Frontend {
     saved_window_y: i32,
     saved_window_width: f32,
     saved_window_height: f32,
+    needs_reload: Arc<AtomicBool>,
+    needs_release: Arc<AtomicBool>,
 }
 
 impl Frontend {
-    pub fn new(app: &App) -> Self {
+    pub fn new(app: &App, needs_reload: Arc<AtomicBool>, needs_release: Arc<AtomicBool>) -> Self {
         Self {
             app: app.as_weak(),
             visible: true,
@@ -63,6 +67,8 @@ impl Frontend {
             saved_window_y: -1,
             saved_window_width: 0.0,
             saved_window_height: 0.0,
+            needs_reload,
+            needs_release,
         }
     }
 
@@ -151,6 +157,7 @@ impl Frontend {
     pub fn show_and_focus(&mut self) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
 
+        self.needs_reload.store(true, Ordering::SeqCst);
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
@@ -178,6 +185,7 @@ impl Frontend {
     #[cfg(target_os = "macos")]
     #[allow(deprecated)] // TODO: migrate to NSApp.activate once objc2 binding is available
     pub fn show_and_focus(&mut self) {
+        self.needs_reload.store(true, Ordering::SeqCst);
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
@@ -200,6 +208,7 @@ impl Frontend {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn show_and_focus(&mut self) {
+        self.needs_reload.store(true, Ordering::SeqCst);
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
@@ -226,6 +235,9 @@ impl Frontend {
             self.saved_window_height = size.height as f32 / scale;
         }
         self.visible = false;
+        // Signal ClipboardService to release model resources (images, cache)
+        // so memory drops back to baseline while the window is hidden.
+        self.needs_release.store(true, Ordering::SeqCst);
         if let Some(app) = self.app.upgrade() {
             app.window().hide().ok();
         }

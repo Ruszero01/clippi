@@ -419,6 +419,8 @@ export component App inherits Window {
             Rectangle {
                 // 两个视图重叠放置，通过 opacity 切换
                 ClipboardList {
+                    width: parent.width;
+                    height: parent.height;
                     visible: root.current-view == "clipboard";
                     opacity: root.current-view == "clipboard" ? 1 : 0;
                     x: root.current-view == "clipboard" ? 0 : -20px;

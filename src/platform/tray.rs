@@ -17,6 +17,10 @@ pub enum TrayAction {
 pub struct TrayManager {
     #[allow(dead_code)]
     tray: TrayIcon,
+    /// Keep MenuItem objects alive — dropping them may invalidate
+    /// internal muda references and cause menu text to disappear.
+    #[allow(dead_code)]
+    _items: [MenuItem; 3],
     show_id: tray_icon::menu::MenuId,
     settings_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
@@ -46,6 +50,7 @@ impl TrayManager {
 
         Self {
             tray,
+            _items: [show_item, settings_item, quit_item],
             show_id,
             settings_id,
             quit_id,

@@ -40,21 +40,22 @@ fn main() {
     // Show window first to initialize layout, then apply physical-pixel sizing
     // to prevent DPI-scaling from inflating the window (logical px * scale factor).
     // This runs before the event loop, so no visible flash occurs.
-    #[cfg(target_os = "macos")]
-    {
-        slint_app.window().show().unwrap();
-        slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
-        let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
-        let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-        ns_app.activate();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        slint_app.window().show().unwrap();
-        slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
-    }
-    if slint_app.get_silent_start() {
-        slint_app.window().hide().unwrap();
+    // When silent_start is enabled, skip showing the window entirely — avoids
+    // creating GPU textures just to immediately hide the window.
+    if !slint_app.get_silent_start() {
+        #[cfg(target_os = "macos")]
+        {
+            slint_app.window().show().unwrap();
+            slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+            let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+            let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            ns_app.activate();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            slint_app.window().show().unwrap();
+            slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+        }
     }
 
     slint::run_event_loop_until_quit().unwrap();

@@ -19,8 +19,7 @@ use crate::services::hotkey::HotkeyService;
 use crate::services::sync::SyncManager;
 use crate::services::tray::TrayService;
 use crate::App;
-use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent, common::RustImageData};
-use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent};
 use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +36,7 @@ struct CallbackCtx {
     copy_as_plain_text: Arc<AtomicBool>,
     batch_pasting: Arc<AtomicBool>,
     clear_selection: Arc<AtomicBool>,
+    shared: ClipboardShared,
 }
 
 pub struct AppController {
@@ -57,7 +57,9 @@ impl AppController {
         // Initialize shared state
         let db_path = settings.resolve_db_path();
         let db = Arc::new(Mutex::new(Database::open(db_path.to_str().unwrap())?));
-        let mut frontend = Frontend::new(slint_app);
+        let needs_reload_flag = Arc::new(AtomicBool::new(false));
+        let needs_release_flag = Arc::new(AtomicBool::new(false));
+        let mut frontend = Frontend::new(slint_app, needs_reload_flag.clone(), needs_release_flag.clone());
         frontend.set_position_mode(PositionMode::from_str(&settings.window_position_mode));
         frontend.set_saved_position(settings.saved_window_x, settings.saved_window_y);
         frontend.set_saved_size(settings.saved_window_width, settings.saved_window_height);
@@ -79,6 +81,7 @@ impl AppController {
 
         // Create clipboard service (sets up model in new())
         let clipboard_shared = ClipboardShared::new();
+        let callback_shared = clipboard_shared.clone();
         let batch_pasting_flag = clipboard_shared.batch_pasting.clone();
         let clear_selection_flag = clipboard_shared.clear_selection_requested.clone();
         let sync_dirty_flag = Arc::new(AtomicBool::new(false));
@@ -89,8 +92,9 @@ impl AppController {
             app.clone(),
             sync_dirty_flag.clone(),
             needs_model_refresh_flag.clone(),
+            needs_release_flag.clone(),
+            needs_reload_flag.clone(),
         );
-        let clipboard_service_for_callbacks = clipboard_service.clone();
         // Load initial data and apply settings
         clipboard_service.load_initial();
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
@@ -175,10 +179,11 @@ impl AppController {
             copy_as_plain_text: copy_as_plain_text_flag,
             batch_pasting: batch_pasting_flag,
             clear_selection: clear_selection_flag,
+            shared: callback_shared,
         };
 
         // Bind all Slint callbacks by category
-        Self::bind_window_callbacks(slint_app, &ctx, &clipboard_service_for_callbacks);
+        Self::bind_window_callbacks(slint_app, &ctx);
         Self::bind_hotkey_callbacks(slint_app, &ctx);
         Self::bind_settings_callbacks(slint_app, &ctx);
         Self::bind_sync_callbacks(slint_app, &ctx);
@@ -195,6 +200,11 @@ impl AppController {
             fe.apply_position();
             fe.set_initial_suppress();
         }
+
+        // Trim working set after startup — initialization (Slint renderer,
+        // font loading, DB setup) allocates temporary memory that the
+        // allocator won't return to the OS without a hint.
+        crate::platform::util::trim_process_working_set();
 
         Ok(Self {
             looper,
@@ -223,7 +233,6 @@ impl AppController {
     fn bind_window_callbacks(
         slint_app: &App,
         ctx: &CallbackCtx,
-        cs: &ClipboardService,
     ) {
         let ctx_move = ctx.clone();
         slint_app.on_move_window(move |dx, dy| {
@@ -250,14 +259,16 @@ impl AppController {
         });
 
         let ctx_copy = ctx.clone();
-        let mut cs_for_copy = cs.clone();
+        let looper_for_copy = ctx.looper.clone();
         slint_app.on_copy_item(move |id| {
             if let Ok(db) = ctx_copy.db.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                    write_item_to_clipboard(&item, ctx_copy.copy_as_plain_text.load(Ordering::Relaxed));
+                    write_item_to_clipboard(&item, ctx_copy.copy_as_plain_text.load(Ordering::Relaxed), &ctx_copy.shared);
                 }
             }
-            cs_for_copy.refresh_row(id);
+            let _ = looper_for_copy.try_with_clipboard_service(|cs| {
+                cs.refresh_row(id);
+            });
         });
 
         let ctx_paste = ctx.clone();
@@ -269,7 +280,7 @@ impl AppController {
                     let plain = ctx_paste.copy_as_plain_text.load(Ordering::Relaxed);
                     expected = item.full_text.clone();
                     is_file = item.content_type == ContentType::File;
-                    write_item_to_clipboard(&item, plain);
+                    write_item_to_clipboard(&item, plain, &ctx_paste.shared);
                 }
             }
             if !expected.is_empty() && !is_file {
@@ -288,7 +299,7 @@ impl AppController {
                 app.set_pinned(false);
             }
             if let Ok(mut fe) = ctx_close.frontend.lock() {
-                fe.hide();
+                fe.hide(); // sets needs_release internally
                 let mut s = ctx_close.settings.lock().expect("settings lock poisoned");
                 fe.apply_saved_position_to_settings(&mut s);
                 s.save();
@@ -946,10 +957,11 @@ impl AppController {
             let owned_items: Vec<_> = items.into_iter().collect();
             let bp = c.batch_pasting.clone();
             let clear_sel = c.clear_selection.clone();
+            let shared = c.shared.clone();
 
             std::thread::spawn(move || {
                 bp.store(true, Ordering::SeqCst);
-                batch_paste_sequential(&owned_items, plain_flag);
+                batch_paste_sequential(&owned_items, plain_flag, &shared);
                 bp.store(false, Ordering::SeqCst);
                 clear_sel.store(true, Ordering::SeqCst);
             });
@@ -1199,18 +1211,56 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
 /// HTML and RTF formats are also restored from rich_data.
 /// For images, the PNG file is loaded and written as an image format.
 /// For files, file paths are written via ClipboardContent::Files (CF_HDROP).
-fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_plain_text: bool) {
+fn write_item_to_clipboard(
+    item: &crate::core::types::ClipboardItem,
+    copy_as_plain_text: bool,
+    shared: &ClipboardShared,
+) {
+    let mut pushed = false;
+
     if let Ok(ctx) = ClipboardContext::new() {
         if item.content_type == ContentType::Image && !item.image_path.is_empty() {
-            // Write image + file path text
-            if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
-                let mut contents = vec![
-                    ClipboardContent::Text(item.full_text.clone()),
-                    ClipboardContent::Image(img_data),
-                ];
-                // Also add Files for drag-and-drop compatibility
-                contents.push(ClipboardContent::Files(vec![item.image_path.clone()]));
-                let _ = Clipboard::set(&ctx, contents);
+            #[cfg(target_os = "windows")]
+            {
+                use windows_sys::Win32::System::DataExchange::{
+                    OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData,
+                    RegisterClipboardFormatW,
+                };
+                use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+                let png_bytes = std::fs::read(&item.image_path).unwrap_or_default();
+                if !png_bytes.is_empty() {
+                    let png_name: Vec<u16> = "PNG\0".encode_utf16().collect();
+                    let png_fmt = unsafe { RegisterClipboardFormatW(png_name.as_ptr()) };
+
+                    unsafe {
+                        if OpenClipboard(std::ptr::null_mut()) != 0 {
+                            EmptyClipboard();
+                            if png_fmt != 0 {
+                                let mem = GlobalAlloc(GMEM_MOVEABLE, png_bytes.len());
+                                if !mem.is_null() {
+                                    let ptr = GlobalLock(mem);
+                                    if !ptr.is_null() {
+                                        std::ptr::copy_nonoverlapping(png_bytes.as_ptr(), ptr as *mut u8, png_bytes.len());
+                                        GlobalUnlock(mem);
+                                        SetClipboardData(png_fmt as u32, mem);
+                                    }
+                                }
+                            }
+                            CloseClipboard();
+                            pushed = true;
+                        }
+                    }
+                }
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                use clipboard_rs::common::RustImageData;
+                if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
+                    let _ = ctx.set_image(img_data);
+                    pushed = true;
+                }
             }
         } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
             // Write file paths to clipboard (CF_HDROP on Windows)
@@ -1218,8 +1268,10 @@ fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_pla
             let paths: Vec<String> = file_data.files.iter().map(|f| f.path.clone()).collect();
             let contents = vec![ClipboardContent::Files(paths)];
             let _ = Clipboard::set(&ctx, contents);
+            pushed = true;
         } else if copy_as_plain_text {
             let _ = Clipboard::set_text(&ctx, item.full_text.clone());
+            pushed = true;
         } else {
             let mut contents = vec![ClipboardContent::Text(item.full_text.clone())];
             let rich = RichData::from_json(&item.rich_data);
@@ -1230,7 +1282,13 @@ fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_pla
                 contents.push(ClipboardContent::Rtf(rtf));
             }
             let _ = Clipboard::set(&ctx, contents);
+            pushed = true;
         }
+    }
+
+    if pushed {
+        shared.skip_next.store(true, Ordering::SeqCst);
+        shared.pending.lock().unwrap().push(item.clone());
     }
 }
 
@@ -1238,7 +1296,7 @@ fn write_item_to_clipboard(item: &crate::core::types::ClipboardItem, copy_as_pla
 /// For each non-first item, a literal `\n` is pasted first to move the cursor to a
 /// new line, then the actual item is written and pasted. This works for all content
 /// types (text, rich text, images) because the newline is a separate paste operation.
-fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_flag: bool) {
+fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_flag: bool, shared: &ClipboardShared) {
     let n = items.len();
     for (i, item) in items.iter().enumerate() {
         // For non-first items, paste a newline to move to the next line.
@@ -1256,7 +1314,7 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         }
 
         let expected = item.full_text.clone();
-        write_item_to_clipboard(item, plain_flag);
+        write_item_to_clipboard(item, plain_flag, shared);
 
         // Verify clipboard content before pasting (up to 300ms timeout)
         // Skip text verification for File items (file paths, not text-based)

@@ -407,8 +407,11 @@ export component ClipboardList inherits Rectangle {
                                 (entry.content-type == "link" || entry.content-type == "path" ? 68px :
                                  entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
-                                        (parent.width * entry.image-height / entry.image-width <= 82px ? 68px :
-                                         parent.width * entry.image-height / entry.image-width <= 112px ? 96px : 128px) :
+                                        (entry.image-height * 100 / entry.image-width <= 25 ? 68px :
+                                         entry.image-height * 100 / entry.image-width <= 50 ? 80px :
+                                         entry.image-height * 100 / entry.image-width <= 80 ? 104px :
+                                         entry.image-height * 100 / entry.image-width <= 130 ? 130px :
+                                         200px) :
                                         96px) :
                                     (entry.preview-length <= 50 ? 68px :
                                      entry.preview-length <= 150 ? 80px :
@@ -1364,6 +1367,24 @@ export component ClipboardList inherits Rectangle {
                                         text: "+" + entry.tags-overflow;
                                         font-size: 9px;
                                         color: text-2;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // 图片尺寸标签
+                                if entry.content-type == "image" && entry.image-width > 0 : Rectangle {
+                                    height: 18px;
+                                    width: dims-text.preferred-width + 10px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 1px;
+                                    border-color: dark-mode ? #ffffff20 : #0000000c;
+
+                                    dims-text := Text {
+                                        text: entry.image-width + "×" + entry.image-height;
+                                        font-size: 9px;
+                                        color: text-2;
+                                        x: 5px;
                                         vertical-alignment: center;
                                     }
                                 }
