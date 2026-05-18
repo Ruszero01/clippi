@@ -176,6 +176,7 @@ export component App inherits Window {
     callback save-content(int, string);
     callback show-context-menu(int);
     callback hide-context-menu();
+    callback open-original-image(int);
     callback paste-as-rgb(int);
     callback paste-as-hex(int);
     callback select-single(int);
@@ -456,6 +457,7 @@ export component App inherits Window {
                     update-note(id, text) => { root.update-note(id, text); }
                     show-context-menu(id) => { root.show-context-menu(id); }
                     hide-context-menu => { root.hide-context-menu(); }
+                    open-original-image(id) => { root.open-original-image(id); }
                     selected-count: root.selected-count;
                     context-menu-is-batch <=> root.context-menu-is-batch;
                     select-single(id) => { root.select-single(id); }
@@ -586,6 +588,7 @@ export component App inherits Window {
             batch-paste => { root.batch-paste(); }
             batch-favorite => { root.batch-favorite(); }
             batch-delete => { root.batch-delete(); }
+            open-original-image(id) => { root.open-original-image(id); }
             show-tag-picker(id) => { root.show-tag-picker(id); }
         }
 

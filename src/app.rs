@@ -293,6 +293,45 @@ impl AppController {
             paste_after_delay();
         });
 
+        let ctx_open = ctx.clone();
+        slint_app.on_open_original_image(move |id| {
+            if let Ok(db) = ctx_open.db.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    if !item.image_path.is_empty() {
+                        #[cfg(target_os = "windows")]
+                        {
+                            use windows_sys::Win32::UI::Shell::ShellExecuteW;
+                            use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
+                            let path_utf16: Vec<u16> = item.image_path.encode_utf16().chain(std::iter::once(0)).collect();
+                            let operation: Vec<u16> = "open\0".encode_utf16().collect();
+                            unsafe {
+                                ShellExecuteW(
+                                    std::ptr::null_mut(),
+                                    operation.as_ptr(),
+                                    path_utf16.as_ptr(),
+                                    std::ptr::null(),
+                                    std::ptr::null(),
+                                    SW_SHOW,
+                                );
+                            }
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = std::process::Command::new("open")
+                                .arg(&item.image_path)
+                                .spawn();
+                        }
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        {
+                            let _ = std::process::Command::new("xdg-open")
+                                .arg(&item.image_path)
+                                .spawn();
+                        }
+                    }
+                }
+            }
+        });
+
         let ctx_close = ctx.clone();
         slint_app.on_close_window(move || {
             if let Some(app) = ctx_close.app.upgrade() {
