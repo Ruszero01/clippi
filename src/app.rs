@@ -1423,12 +1423,29 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
             std::thread::sleep(std::time::Duration::from_millis(60));
         }
 
+        // Record expected image size before writing, for verification
+        let expected_img_size = if item.content_type == ContentType::Image {
+            std::fs::metadata(&item.image_path).map(|m| m.len()).ok()
+        } else {
+            None
+        };
+
         let expected = item.full_text.clone();
         write_item_to_clipboard(item, plain_flag, shared);
 
-        // Verify clipboard content before pasting (up to 300ms timeout)
-        // Skip text verification for File items (file paths, not text-based)
-        if item.content_type != ContentType::File {
+        // Verify clipboard content before pasting.
+        // Image items: verify PNG byte length (no text on clipboard).
+        // File items: skip — no reliable text-based check.
+        if item.content_type == ContentType::Image {
+            if let Some(size) = expected_img_size {
+                if !verify_clipboard_image(size, 300) {
+                    eprintln!("[WARN] batch_paste: image clipboard verification failed for item {}", item.id);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        } else if item.content_type != ContentType::File {
             if !verify_clipboard_content(&expected, 300) {
                 eprintln!("[WARN] batch_paste: clipboard verification timed out for item {}", item.id);
             }
@@ -1437,11 +1454,13 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         }
 
         restore_paste_target();
-        paste_after_delay();
+        paste_sync();
 
-        // Wait for target app to process the paste before writing next item
+        // Wait for target app to process the paste before writing next item.
+        // Images need longer — the app may be decoding/rendering a large PNG.
         if i < n - 1 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            let delay = if item.content_type == ContentType::Image { 200 } else { 100 };
+            std::thread::sleep(std::time::Duration::from_millis(delay));
         }
     }
 }
@@ -1453,6 +1472,24 @@ fn verify_clipboard_content(expected: &str, timeout_ms: u64) -> bool {
         if let Ok(ctx) = ClipboardContext::new() {
             if let Ok(text) = ctx.get_text() {
                 if text == expected {
+                    return true;
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Poll-read clipboard PNG buffer until its length matches expected_size or timeout expires.
+fn verify_clipboard_image(expected_size: u64, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        if let Ok(ctx) = ClipboardContext::new() {
+            if let Ok(png_bytes) = ctx.get_buffer("PNG") {
+                if png_bytes.len() as u64 == expected_size {
                     return true;
                 }
             }

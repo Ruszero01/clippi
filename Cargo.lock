@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "clippi"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.5"
 dependencies = [
  "base64",
  "chrono",
