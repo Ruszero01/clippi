@@ -375,8 +375,13 @@ impl SyncManager {
         true
     }
 
-    fn start_sync_cycle(&mut self, state_index: usize, _interval_secs: u64) {
+    fn start_sync_cycle(&mut self, state_index: usize, _interval_secs: u64, is_manual: bool) {
         let state = &mut self.backends[state_index];
+
+        // Capture dirty before spawning thread — if local data changed since last push,
+        // this cycle must push regardless of remote state.
+        let was_dirty = self.dirty.swap(false, Ordering::SeqCst);
+        let force_push = was_dirty || is_manual;
 
         state.cancel_flag.store(false, Ordering::SeqCst);
         state.is_running.store(true, Ordering::SeqCst);
@@ -393,7 +398,7 @@ impl SyncManager {
 
         std::thread::spawn(move || {
             let (success, message, stats, pushed_items, pushed_tags) =
-                run_sync_cycle_for_backend(backend.as_ref(), &db, &cancel, favorites_only);
+                run_sync_cycle_for_backend(backend.as_ref(), &db, &cancel, favorites_only, force_push);
 
             *pending.lock().expect("pending lock") = Some(BackendSyncResult {
                 backend_id,
@@ -514,7 +519,7 @@ impl Pollable for SyncManager {
         let count = self.backends.len();
         for i in 0..count {
             if self.should_sync(&self.backends[i], interval_secs, manual) {
-                self.start_sync_cycle(i, interval_secs);
+                self.start_sync_cycle(i, interval_secs, manual);
             }
         }
 
@@ -536,14 +541,18 @@ fn run_sync_cycle_for_backend(
     db: &Mutex<Database>,
     cancel: &AtomicBool,
     favorites_only: bool,
+    force_push: bool,
 ) -> (bool, String, MergeStats, u32, u32) {
     let device_name = backend.name().to_string();
     let local_device = crate::services::backends::local_folder::hostname();
 
     // Phase 1: Pull — read remote data and merge into local DB
     let mut stats = MergeStats::default();
+    let mut remote_hash: Option<u64> = None;
+    let mut remote_unchanged = false;
     match backend.pull() {
         Ok(remote) => {
+            remote_hash = Some(sync::payload_semantic_hash(&remote));
             match sync::merge_remote_into_local(db, &remote, &local_device) {
                 Ok(s) => stats = s,
                 Err(e) => {
@@ -552,7 +561,9 @@ fn run_sync_cycle_for_backend(
             }
         }
         Err(e) => {
-            if !e.contains("不存在") && !e.contains("not found") && e != "@@unchanged" {
+            if e == "@@unchanged" {
+                remote_unchanged = true;
+            } else if !e.contains("不存在") && !e.contains("not found") {
                 return (false, format!("拉取失败: {e}"), stats, 0, 0);
             }
         }
@@ -560,6 +571,12 @@ fn run_sync_cycle_for_backend(
 
     if cancel.load(Ordering::Relaxed) {
         return (false, "同步已取消".into(), stats, 0, 0);
+    }
+
+    // Fast path: if remote file wasn't even touched (same mtime) and there's
+    // nothing new to push, skip building the snapshot entirely.
+    if !force_push && remote_unchanged && stats.is_empty() {
+        return (true, "已是最新".into(), stats, 0, 0);
     }
 
     // Phase 2: Push — build local snapshot and write to backend
@@ -572,6 +589,19 @@ fn run_sync_cycle_for_backend(
 
     let pushed_items = payload.items.len() as u32;
     let pushed_tags = payload.tags.len() as u32;
+
+    // Content-hash gate: if the local snapshot is semantically identical to
+    // the remote payload we just pulled from, skip the push. This prevents
+    // self-perpetuating sync loops when cloud providers change file mtime
+    // after sync without changing content.
+    if !force_push {
+        if let Some(rh) = remote_hash {
+            let local_hash = sync::payload_semantic_hash(&payload);
+            if rh == local_hash {
+                return (true, "已是最新".into(), stats, pushed_items, pushed_tags);
+            }
+        }
+    }
 
     if let Err(e) = backend.push(&payload) {
         return (false, format!("推送失败: {e}"), stats, pushed_items, pushed_tags);

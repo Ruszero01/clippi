@@ -50,6 +50,9 @@ pub struct SyncPayload {
     /// Deleted tag tombstones (v2+).
     #[serde(default)]
     pub deleted_tags: Vec<SyncDeletedTag>,
+    /// Unfavorite markers (v2+).
+    #[serde(default)]
+    pub unfavorited_items: Vec<SyncUnfavoritedItem>,
 }
 
 /// A single clipboard item in the sync payload.
@@ -102,6 +105,14 @@ pub struct SyncDeletedTag {
     pub device_name: String,
 }
 
+/// An unfavorite marker — notifies other devices that an item was unfavorited.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncUnfavoritedItem {
+    pub content_hash: u64,
+    pub unfavorited_at: String, // RFC3339
+    pub device_name: String,
+}
+
 /// Result of a merge operation reported back to UI.
 #[derive(Debug, Clone, Default)]
 pub struct MergeStats {
@@ -110,6 +121,16 @@ pub struct MergeStats {
     pub items_deleted: u32,
     pub tags_added: u32,
     pub tags_deleted: u32,
+}
+
+impl MergeStats {
+    pub fn is_empty(&self) -> bool {
+        self.items_added == 0
+            && self.items_updated == 0
+            && self.items_deleted == 0
+            && self.tags_added == 0
+            && self.tags_deleted == 0
+    }
 }
 
 // ── Snapshot building ──
@@ -198,6 +219,17 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
         })
         .collect();
 
+    let unfavorited_items: Vec<SyncUnfavoritedItem> = db
+        .get_unfavorited_recent(30)
+        .map_err(|e| format!("query unfavorite markers: {e}"))?
+        .into_iter()
+        .map(|(hash, at, dev)| SyncUnfavoritedItem {
+            content_hash: hash,
+            unfavorited_at: at,
+            device_name: dev,
+        })
+        .collect();
+
     Ok(SyncPayload {
         version: 2,
         device_name: device_name.to_string(),
@@ -206,6 +238,7 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
         tags: all_tags,
         deleted_items,
         deleted_tags,
+        unfavorited_items,
     })
 }
 
@@ -256,6 +289,24 @@ pub fn merge_remote_into_local(
                     .unwrap_or(false)
             {
                 stats.items_deleted += 1;
+            }
+        }
+    }
+
+    // Phase 2.5: Process remote unfavorite markers
+    for uf in &remote.unfavorited_items {
+        if uf.device_name == local_device_name {
+            continue; // own unfavorite, already handled
+        }
+        // Record locally for propagation
+        let _ = db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
+        // Unfavorite local item if it exists and is still favorited
+        if let Ok(Some(local_item)) = db.get_by_hash(uf.content_hash) {
+            if local_item.is_favorite {
+                let remote_ts = parse_rfc3339(&uf.unfavorited_at);
+                if remote_ts.is_some_and(|r| r > local_item.updated_at) {
+                    let _ = db.set_favorite(local_item.id, false);
+                }
             }
         }
     }
@@ -381,6 +432,51 @@ pub fn merge_remote_into_local(
     Ok(stats)
 }
 
+/// Compute a semantic content hash of the sync payload.
+///
+/// Hashes only the data fields (items, tags, tombstones) and ignores
+/// metadata that changes on every push (device_name, synced_at).
+/// Used to detect whether a local snapshot is semantically identical
+/// to a remote payload — if the hashes match, we can skip the push.
+pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for item in &payload.items {
+        item.content_hash.hash(&mut h);
+        item.updated_at.hash(&mut h);
+        item.is_favorite.hash(&mut h);
+        item.note.hash(&mut h);
+        item.tags.len().hash(&mut h);
+        for tag in &item.tags {
+            tag.name.hash(&mut h);
+            tag.color.hash(&mut h);
+        }
+    }
+    payload.items.len().hash(&mut h);
+    for tag in &payload.tags {
+        tag.name.hash(&mut h);
+        tag.color.hash(&mut h);
+        tag.updated_at.hash(&mut h);
+    }
+    payload.tags.len().hash(&mut h);
+    for d in &payload.deleted_items {
+        d.content_hash.hash(&mut h);
+        d.deleted_at.hash(&mut h);
+    }
+    payload.deleted_items.len().hash(&mut h);
+    for d in &payload.deleted_tags {
+        d.name.hash(&mut h);
+        d.deleted_at.hash(&mut h);
+    }
+    payload.deleted_tags.len().hash(&mut h);
+    for u in &payload.unfavorited_items {
+        u.content_hash.hash(&mut h);
+        u.unfavorited_at.hash(&mut h);
+    }
+    payload.unfavorited_items.len().hash(&mut h);
+    h.finish()
+}
+
 /// Parse an RFC3339 string to Utc DateTime, returning None on failure.
 fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     s.parse::<chrono::DateTime<chrono::Utc>>().ok()
@@ -417,6 +513,7 @@ mod tests {
             }],
             deleted_items: vec![],
             deleted_tags: vec![],
+            unfavorited_items: vec![],
         };
 
         let json = serde_json::to_string_pretty(&payload).unwrap();
@@ -426,6 +523,7 @@ mod tests {
         assert_eq!(parsed.items[0].tags[0].name, "work");
         assert!(parsed.deleted_items.is_empty());
         assert!(parsed.deleted_tags.is_empty());
+        assert!(parsed.unfavorited_items.is_empty());
     }
 
     #[test]

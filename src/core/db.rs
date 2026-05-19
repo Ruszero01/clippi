@@ -72,7 +72,14 @@ impl Database {
                 device_name TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_del_tags_name ON deleted_tags(name);
-            CREATE INDEX IF NOT EXISTS idx_del_tags_at ON deleted_tags(deleted_at);",
+            CREATE INDEX IF NOT EXISTS idx_del_tags_at ON deleted_tags(deleted_at);
+            CREATE TABLE IF NOT EXISTS unfavorited_items (
+                content_hash INTEGER NOT NULL,
+                unfavorited_at TEXT NOT NULL,
+                device_name TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_uf_items_hash ON unfavorited_items(content_hash);
+            CREATE INDEX IF NOT EXISTS idx_uf_items_at ON unfavorited_items(unfavorited_at);",
         );
         Ok(())
     }
@@ -152,9 +159,19 @@ impl Database {
     }
 
     pub fn toggle_favorite(&self, id: i64) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE clipboard_items SET is_favorite = CASE WHEN is_favorite = 0 THEN 1 ELSE 0 END WHERE id = ?1",
-            params![id],
+            "UPDATE clipboard_items SET is_favorite = CASE WHEN is_favorite = 0 THEN 1 ELSE 0 END, updated_at = ?2 WHERE id = ?1",
+            params![id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Set favorite status explicitly (used in sync merge).
+    pub fn set_favorite(&self, id: i64, value: bool) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET is_favorite = ?2 WHERE id = ?1",
+            params![id, value as i32],
         )?;
         Ok(())
     }
@@ -490,6 +507,51 @@ impl Database {
         rows.collect()
     }
 
+    /// Prune oldest non-favorite items when total exceeds max_items.
+    /// Returns the ids of deleted items. max_items == 0 means unlimited.
+    pub fn prune_excess_non_favorites(&self, max_items: u32) -> SqlResult<Vec<i64>> {
+        if max_items == 0 {
+            return Ok(Vec::new());
+        }
+        let non_fav_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if non_fav_count <= max_items as i64 {
+            return Ok(Vec::new());
+        }
+        let excess = (non_fav_count - max_items as i64) as usize;
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM clipboard_items WHERE is_favorite = 0 ORDER BY created_at ASC",
+        )?;
+        let all_ids: Vec<i64> = stmt.query_map([], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        let pruned_ids: Vec<i64> = all_ids.iter().take(excess).copied().collect();
+        if pruned_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Delete item_tags first (CASCADE may not be enforced without PRAGMA foreign_keys = ON),
+        // then delete clipboard_items. Use chunked IN clauses to stay within SQLITE_MAX_VARIABLE_NUMBER.
+        let tx = self.conn.unchecked_transaction()?;
+        for chunk in pruned_ids.chunks(500) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let ph = placeholders.join(",");
+            let params: Vec<rusqlite::types::Value> = chunk.iter().map(|&id| (id).into()).collect();
+            tx.execute(
+                &format!("DELETE FROM item_tags WHERE item_id IN ({})", ph),
+                rusqlite::params_from_iter(params.iter()),
+            )?;
+            tx.execute(
+                &format!("DELETE FROM clipboard_items WHERE id IN ({})", ph),
+                rusqlite::params_from_iter(params.iter()),
+            )?;
+        }
+        tx.commit()?;
+        Ok(pruned_ids)
+    }
+
     /// Clean up tombstones older than N days.
     pub fn cleanup_old_tombstones(&self, days: i64) -> SqlResult<()> {
         let cutoff = format!("-{days} days");
@@ -501,7 +563,40 @@ impl Database {
             "DELETE FROM deleted_tags WHERE deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
             params![&cutoff],
         )?;
+        self.conn.execute(
+            "DELETE FROM unfavorited_items WHERE unfavorited_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+            params![&cutoff],
+        )?;
         Ok(())
+    }
+
+    /// Record an unfavorite marker for sync propagation.
+    pub fn record_unfavorite(&self, content_hash: u64, unfavorited_at: &str, device_name: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO unfavorited_items (content_hash, unfavorited_at, device_name) VALUES (?1, ?2, ?3)",
+            params![content_hash as i64, unfavorited_at, device_name],
+        )?;
+        Ok(())
+    }
+
+    /// Remove an unfavorite marker (item was re-favorited).
+    pub fn remove_unfavorite(&self, content_hash: u64) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM unfavorited_items WHERE content_hash = ?1",
+            params![content_hash as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Get unfavorited items newer than N days for sync snapshot.
+    pub fn get_unfavorited_recent(&self, days: i64) -> SqlResult<Vec<(u64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content_hash, unfavorited_at, device_name FROM unfavorited_items WHERE unfavorited_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+        )?;
+        let rows = stmt.query_map(params![format!("-{days} days")], |row| {
+            Ok((row.get::<_, i64>(0)? as u64, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect()
     }
 
     /// Check if an item has a local tombstone (prevents re-import after delete).

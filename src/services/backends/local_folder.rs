@@ -14,6 +14,8 @@ const SYNC_FILENAME: &str = "clippi_sync.json";
 pub struct LocalFolderBackend {
     config: BackendConfig,
     /// Track remote file's last-modified time to skip unchanged pulls.
+    /// This is a read-path optimization — content hash is the authoritative
+    /// push-path gate (see `run_sync_cycle_for_backend`).
     last_remote_mtime: Mutex<Option<SystemTime>>,
 }
 
@@ -53,15 +55,7 @@ impl SyncBackend for LocalFolderBackend {
         if !dir.is_dir() {
             return BackendStatus::Error("路径不是目录".into());
         }
-        // Check writable by attempting to create a test file
-        let test = dir.join(".clippi_test");
-        match std::fs::write(&test, b"") {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&test);
-                BackendStatus::Online
-            }
-            Err(e) => BackendStatus::Error(format!("目录不可写: {e}")),
-        }
+        BackendStatus::Online
     }
 
     fn pull(&self) -> Result<SyncPayload, String> {
@@ -70,7 +64,9 @@ impl SyncBackend for LocalFolderBackend {
             return Err("同步文件不存在".into());
         }
 
-        // Check if remote file has changed since last pull
+        // Check if remote file has changed since last pull.
+        // This avoids unnecessary reads — content hash comparison in
+        // `run_sync_cycle_for_backend` is the authoritative gate for push.
         if let Ok(meta) = std::fs::metadata(&path) {
             if let Ok(mtime) = meta.modified() {
                 let mut last = self.last_remote_mtime.lock().unwrap();
@@ -104,7 +100,15 @@ impl SyncBackend for LocalFolderBackend {
             .map_err(|e| {
                 let _ = std::fs::remove_file(&tmp_path);
                 format!("替换同步文件失败: {e}")
-            })
+            })?;
+        // Cache new mtime so our own push doesn't trigger a changed-file
+        // detection on the next pull.
+        if let Ok(meta) = std::fs::metadata(&file_path) {
+            if let Ok(mtime) = meta.modified() {
+                *self.last_remote_mtime.lock().unwrap() = Some(mtime);
+            }
+        }
+        Ok(())
     }
 }
 

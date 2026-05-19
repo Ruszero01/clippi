@@ -129,14 +129,33 @@ impl ClipboardService {
         self.selected_ids.clear();
         self.anchor_id = -1;
         let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
-        let limit = if self.max_items == 0 { usize::MAX } else { self.max_items };
+
+        // Use a generous limit to ensure enough non-favorites are loaded after
+        // favorites are separated out. The DB prune keeps total under control.
+        let query_limit = if self.max_items == 0 {
+            usize::MAX
+        } else {
+            self.max_items.saturating_mul(2).max(200)
+        };
+
         let items = self.db.lock().expect("db lock poisoned")
-            .load_filtered_with_tags(&self.filters, limit, order_by)
+            .load_filtered_with_tags(&self.filters, query_limit, order_by)
             .unwrap_or_default();
+
+        // Separate favorites and non-favorites, preserving sort order
+        let non_fav_allowed = if self.max_items == 0 { usize::MAX } else { self.max_items };
+        let mut non_fav_seen = 0usize;
         for item in &items {
-            let entry = self.item_to_entry(item);
-            self.model.push(entry);
+            if item.is_favorite {
+                let entry = self.item_to_entry(item);
+                self.model.push(entry);
+            } else if non_fav_seen < non_fav_allowed {
+                let entry = self.item_to_entry(item);
+                self.model.push(entry);
+                non_fav_seen += 1;
+            }
         }
+
         if let Some(app) = self.app.upgrade() {
             app.set_item_count(self.model.row_count() as i32);
             app.set_selected_count(0);
@@ -156,7 +175,42 @@ impl ClipboardService {
 
     /// Set max items limit (0 = unlimited)
     pub fn set_max_items(&mut self, max_items: u32) {
+        let old = self.max_items;
         self.max_items = max_items as usize;
+        // If value decreased, prune immediately
+        if max_items > 0 && (max_items as usize) < old {
+            self.prune_and_clean_model();
+        }
+    }
+
+    /// Prune excess non-favorite items from DB and sync model.
+    fn prune_and_clean_model(&mut self) {
+        if self.max_items == 0 {
+            return;
+        }
+        let pruned_ids = match self.db.lock() {
+            Ok(db) => db.prune_excess_non_favorites(self.max_items as u32).unwrap_or_default(),
+            Err(_) => return,
+        };
+        if pruned_ids.is_empty() {
+            return;
+        }
+        // Remove pruned items from model (scan from end — pruned items are oldest)
+        let mut removed = 0;
+        let mut i = self.model.row_count();
+        while i > 0 && removed < pruned_ids.len() {
+            i -= 1;
+            if let Some(entry) = self.model.row_data(i) {
+                if pruned_ids.contains(&(entry.id as i64)) {
+                    self.model.remove(i);
+                    removed += 1;
+                }
+            }
+        }
+        self.selected_ids.retain(|id| !pruned_ids.contains(&(*id as i64)));
+        if let Some(app) = self.app.upgrade() {
+            app.set_item_count(self.model.row_count() as i32);
+        }
     }
 
     /// Load initial items from database (model starts empty; delegate to unified refresh)
@@ -433,7 +487,23 @@ impl ClipboardService {
         let needs_full_refresh = self.filters.is_favorites_active();
         {
             if let Ok(db) = self.db.lock() {
+                // Read current state before toggling
+                let was_fav = db.get_by_id(id as i64).ok().flatten().is_some_and(|item| item.is_favorite);
                 let _ = db.toggle_favorite(id as i64);
+                // Record or remove unfavorite tombstone
+                if was_fav {
+                    // Was favorited, now unfavorited — record tombstone
+                    if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let device = crate::services::backends::local_folder::hostname();
+                        let _ = db.record_unfavorite(item.content_hash, &now, &device);
+                    }
+                } else {
+                    // Was unfavorited, now favorited — remove tombstone
+                    if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                        let _ = db.remove_unfavorite(item.content_hash);
+                    }
+                }
             }
         }
         self.mark_dirty();
@@ -599,8 +669,20 @@ impl ClipboardService {
         let needs_full_refresh = self.filters.is_favorites_active();
         {
             let db = self.db.lock().expect("db lock poisoned");
+            let now = chrono::Utc::now().to_rfc3339();
+            let device = crate::services::backends::local_folder::hostname();
             for &id in &self.selected_ids {
+                let was_fav = db.get_by_id(id as i64).ok().flatten().is_some_and(|item| item.is_favorite);
                 let _ = db.toggle_favorite(id as i64);
+                if was_fav {
+                    if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                        let _ = db.record_unfavorite(item.content_hash, &now, &device);
+                    }
+                } else {
+                    if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                        let _ = db.remove_unfavorite(item.content_hash);
+                    }
+                }
             }
         }
         self.mark_dirty();
@@ -780,9 +862,23 @@ impl Pollable for ClipboardService {
             }
         }
 
+        // Prune excess non-favorite items from DB and sync model
+        self.prune_and_clean_model();
+
+        // Safety net: trim model from end, skipping favorites
         if self.max_items > 0 {
-            while self.model.row_count() > self.max_items {
-                self.model.remove(self.model.row_count() - 1);
+            let mut non_fav_count: usize = (0..self.model.row_count())
+                .filter(|i| self.model.row_data(*i).is_some_and(|e| !e.is_favorite))
+                .count();
+            let mut i = self.model.row_count();
+            while i > 0 && non_fav_count > self.max_items {
+                i -= 1;
+                if let Some(entry) = self.model.row_data(i) {
+                    if !entry.is_favorite {
+                        self.model.remove(i);
+                        non_fav_count -= 1;
+                    }
+                }
             }
         }
 
