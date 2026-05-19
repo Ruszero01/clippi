@@ -115,9 +115,10 @@ pub struct MergeStats {
 // ── Snapshot building ──
 
 /// Build a full `SyncPayload` from the local database.
-/// Excludes image and file type items. Includes ALL tags (not just used ones)
-/// and recent tombstones for deletion propagation (v2).
-pub fn build_snapshot(db: &Mutex<Database>, device_name: &str) -> Result<SyncPayload, String> {
+/// Excludes image and file type items.
+/// When `favorites_only` is true, only favorited items are included.
+/// Only tags referenced by the synced items are included.
+pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: bool) -> Result<SyncPayload, String> {
     let db = db.lock().map_err(|e| format!("db lock: {e}"))?;
 
     // Collect all live synced items
@@ -126,14 +127,22 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str) -> Result<SyncPay
         .map_err(|e| format!("query items: {e}"))?;
 
     let mut sync_items: Vec<SyncItem> = Vec::with_capacity(items.len());
+    let mut used_tag_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for item in items {
+        if favorites_only && !item.is_favorite {
+            continue;
+        }
+
         let tags: Vec<SyncTagRef> = item
             .tags
             .iter()
-            .map(|t| SyncTagRef {
-                name: t.name.clone(),
-                color: t.color.clone(),
+            .map(|t| {
+                used_tag_names.insert(t.name.clone());
+                SyncTagRef {
+                    name: t.name.clone(),
+                    color: t.color.clone(),
+                }
             })
             .collect();
 
@@ -150,16 +159,21 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str) -> Result<SyncPay
         });
     }
 
-    // Collect ALL tags from database (not just item-referenced ones)
-    let all_db_tags = db.get_all_tags().map_err(|e| format!("query all tags: {e}"))?;
-    let all_tags: Vec<SyncTag> = all_db_tags
-        .iter()
-        .map(|t| SyncTag {
-            name: t.name.clone(),
-            color: t.color.clone(),
-            updated_at: t.updated_at.clone(),
-        })
-        .collect();
+    // Only include tags that are referenced by the synced items
+    let all_tags: Vec<SyncTag> = if used_tag_names.is_empty() {
+        Vec::new()
+    } else {
+        db.get_all_tags()
+            .map_err(|e| format!("query all tags: {e}"))?
+            .into_iter()
+            .filter(|t| used_tag_names.contains(&t.name))
+            .map(|t| SyncTag {
+                name: t.name,
+                color: t.color,
+                updated_at: t.updated_at,
+            })
+            .collect()
+    };
 
     // Collect recent tombstones (30-day window)
     let deleted_items: Vec<SyncDeletedItem> = db

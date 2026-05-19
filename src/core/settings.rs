@@ -70,6 +70,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub sync_auto_enabled: bool,           // 自动同步开关 (dirty + interval)
     #[serde(default)]
+    pub sync_favorites_only: bool,          // 仅同步收藏的条目
+    #[serde(default)]
     pub max_items: u32,                    // 最大保存条目数 (0=不限制, 默认0)
     #[serde(default)]
     pub hotkey_blacklist: Vec<String>,     // 快捷键黑名单应用名列表
@@ -106,6 +108,7 @@ impl Default for AppSettings {
             sync_interval_secs: 60,
             sync_backends: Vec::new(),
             sync_auto_enabled: false,
+            sync_favorites_only: false,
             max_items: 0,
             hotkey_blacklist: Vec::new(),
         }

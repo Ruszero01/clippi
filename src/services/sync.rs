@@ -342,6 +342,14 @@ impl SyncManager {
             .unwrap_or(true)
     }
 
+    /// Whether sync-favorites-only is enabled.
+    fn sync_favorites_only(&self) -> bool {
+        self.settings
+            .lock()
+            .map(|s| s.sync_favorites_only)
+            .unwrap_or(false)
+    }
+
     fn should_sync(&self, state: &BackendState, interval_secs: u64, is_manual: bool) -> bool {
         if state.is_running.load(Ordering::SeqCst) {
             return false;
@@ -381,10 +389,11 @@ impl SyncManager {
         let running = Arc::clone(&state.is_running);
         let backend = Arc::clone(&state.backend);
         let backend_id = state.backend.id().to_string();
+        let favorites_only = self.sync_favorites_only();
 
         std::thread::spawn(move || {
             let (success, message, stats, pushed_items, pushed_tags) =
-                run_sync_cycle_for_backend(backend.as_ref(), &db, &cancel);
+                run_sync_cycle_for_backend(backend.as_ref(), &db, &cancel, favorites_only);
 
             *pending.lock().expect("pending lock") = Some(BackendSyncResult {
                 backend_id,
@@ -526,6 +535,7 @@ fn run_sync_cycle_for_backend(
     backend: &dyn SyncBackend,
     db: &Mutex<Database>,
     cancel: &AtomicBool,
+    favorites_only: bool,
 ) -> (bool, String, MergeStats, u32, u32) {
     let device_name = backend.name().to_string();
     let local_device = crate::services::backends::local_folder::hostname();
@@ -553,7 +563,7 @@ fn run_sync_cycle_for_backend(
     }
 
     // Phase 2: Push — build local snapshot and write to backend
-    let payload = match sync::build_snapshot(db, &device_name) {
+    let payload = match sync::build_snapshot(db, &device_name, favorites_only) {
         Ok(p) => p,
         Err(e) => {
             return (false, format!("构建快照失败: {e}"), stats, 0, 0);

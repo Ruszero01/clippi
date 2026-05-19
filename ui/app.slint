@@ -64,6 +64,7 @@ export component App inherits Window {
     in-out property <int> sync-items-added: 0;
     in-out property <int> sync-items-updated: 0;
     in-out property <int> sync-tags-added: 0;
+    in-out property <bool> sync-favorites-only: false;
     // 添加服务浮层
     in-out property <bool> add-backend-panel-visible: false;
     in-out property <length> add-backend-panel-x: 0px;
@@ -161,6 +162,7 @@ export component App inherits Window {
     callback toggle-show-original-on-hover();
     callback set-max-items(int);
     callback toggle-sync-auto-enabled();
+    callback toggle-sync-favorites-only();
     callback set-sync-interval(int);
     callback sync-now();
     callback show-add-backend-panel();
@@ -527,6 +529,7 @@ export component App inherits Window {
                     sync-items-added: root.sync-items-added;
                     sync-items-updated: root.sync-items-updated;
                     sync-tags-added: root.sync-tags-added;
+                    sync-favorites-only: root.sync-favorites-only;
                     sync-backends: root.sync-backends;
 
                     back => { root.current-view = "clipboard"; }
@@ -549,6 +552,7 @@ export component App inherits Window {
                     toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
                     set-max-items(v) => { root.set-max-items(v); }
                     toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
+                    toggle-sync-favorites-only => { root.toggle-sync-favorites-only(); }
                     set-sync-interval(i) => { root.set-sync-interval(i); }
                     sync-now => { root.sync-now(); }
                     show-add-backend-panel => { root.show-add-backend-panel(); }

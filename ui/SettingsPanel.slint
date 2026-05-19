@@ -32,6 +32,7 @@ export component SettingsPanel inherits Rectangle {
     in property <int> sync-items-added: 0;
     in property <int> sync-items-updated: 0;
     in property <int> sync-tags-added: 0;
+    in property <bool> sync-favorites-only: false;
     in property <[SyncBackendInfo]> sync-backends: [];
     in property <string> foreground-app-name: "";
     in property <string> foreground-window-title: "";
@@ -60,6 +61,7 @@ export component SettingsPanel inherits Rectangle {
     callback toggle-show-original-on-hover();
     callback set-max-items(int);
     callback toggle-sync-auto-enabled();
+    callback toggle-sync-favorites-only();
     callback set-sync-interval(int);
     callback sync-now();
     callback show-add-backend-panel();
@@ -353,8 +355,10 @@ export component SettingsPanel inherits Rectangle {
             sync-items-added: root.sync-items-added;
             sync-items-updated: root.sync-items-updated;
             sync-tags-added: root.sync-tags-added;
+            sync-favorites-only: root.sync-favorites-only;
             sync-backends: root.sync-backends;
             toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
+            toggle-sync-favorites-only => { root.toggle-sync-favorites-only(); }
             set-sync-interval(i) => { root.set-sync-interval(i); }
             sync-now => { root.sync-now(); }
             show-add-backend-panel => { root.show-add-backend-panel(); }

@@ -9,9 +9,11 @@ export component SettingsTabSync inherits Rectangle {
     in property <int> sync-items-added: 0;
     in property <int> sync-items-updated: 0;
     in property <int> sync-tags-added: 0;
+    in property <bool> sync-favorites-only: false;
     in property <[SyncBackendInfo]> sync-backends: [];
 
     callback toggle-sync-auto-enabled();
+    callback toggle-sync-favorites-only();
     callback set-sync-interval(int);
     callback sync-now();
     callback show-add-backend-panel();
@@ -86,6 +88,52 @@ export component SettingsTabSync inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             clicked => { root.toggle-sync-auto-enabled(); }
+                        }
+                    }
+                }
+
+                // 仅收藏开关行
+                if root.sync-auto-enabled : Rectangle {
+                    width: parent.width;
+                    height: 1px;
+                    background: divider;
+                }
+
+                if root.sync-auto-enabled : HorizontalLayout {
+                    height: 38px;
+                    padding-left: 14px;
+                    padding-right: 12px;
+                    alignment: space-between;
+
+                    Text {
+                        text: "仅收藏";
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 40px;
+                        height: 22px;
+                        border-radius: 11px;
+                        y: (parent.height - self.height) / 2;
+                        background: root.sync-favorites-only ? accent : divider;
+                        animate background { duration: 200ms; }
+
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            background: #ffffff;
+                            x: root.sync-favorites-only ? parent.width - self.width - 2px : 2px;
+                            animate x { duration: 200ms; }
+                        }
+
+                        fav-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.toggle-sync-favorites-only(); }
                         }
                     }
                 }

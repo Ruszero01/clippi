@@ -753,6 +753,17 @@ impl AppController {
         });
 
         let c = ctx.clone();
+        slint_app.on_toggle_sync_favorites_only(move || {
+            if let Some(app) = c.app.upgrade() {
+                let new_val = !app.get_sync_favorites_only();
+                app.set_sync_favorites_only(new_val);
+                let mut s = c.settings.lock().expect("settings lock poisoned");
+                s.sync_favorites_only = new_val;
+                s.save();
+            }
+        });
+
+        let c = ctx.clone();
         slint_app.on_set_sync_interval(move |secs: i32| {
             if let Some(app) = c.app.upgrade() {
                 app.set_sync_interval_secs(secs);
@@ -1313,6 +1324,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_show_original_on_hover(settings.show_original_on_hover);
     app.set_max_items(settings.max_items as i32);
     app.set_sync_auto_enabled(settings.sync_auto_enabled);
+    app.set_sync_favorites_only(settings.sync_favorites_only);
     app.set_sync_interval_secs(settings.sync_interval_secs as i32);
 }
 
