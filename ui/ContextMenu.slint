@@ -6,6 +6,7 @@ export component ContextMenu inherits Rectangle {
     in property <length> container-height: 0px;
     // 主题
     in property <bool> dark-mode: false;
+    in property <color> fav-color: #d8a155;
     // 条目属性
     in property <int> item-id: -1;
     in property <bool> is-color: false;
@@ -395,14 +396,14 @@ export component ContextMenu inherits Rectangle {
                     text: is-favorite ? "\u{e630}" : "\u{e68d}";
                     font-family: "iconfont";
                     font-size: 13px;
-                    color: is-favorite ? accent : (row-fav-ta.has-hover ? accent : text-2);
+                    color: is-favorite ? fav-color : (row-fav-ta.has-hover ? fav-color : text-2);
                     vertical-alignment: center;
                 }
 
                 Text {
                     text: is-favorite ? "取消收藏" : "收藏";
                     font-size: 13px;
-                    color: row-fav-ta.has-hover ? accent : text-1;
+                    color: row-fav-ta.has-hover ? fav-color : text-1;
                     vertical-alignment: center;
                 }
             }
@@ -576,14 +577,14 @@ export component ContextMenu inherits Rectangle {
                     text: "\u{e630}";
                     font-family: "iconfont";
                     font-size: 13px;
-                    color: row-bf-ta.has-hover ? accent : text-2;
+                    color: row-bf-ta.has-hover ? fav-color : text-2;
                     vertical-alignment: center;
                 }
 
                 Text {
                     text: "批量收藏";
                     font-size: 13px;
-                    color: row-bf-ta.has-hover ? accent : text-1;
+                    color: row-bf-ta.has-hover ? fav-color : text-1;
                     vertical-alignment: center;
                 }
             }

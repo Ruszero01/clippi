@@ -214,6 +214,7 @@ export component App inherits Window {
     property <color> text-3:        dark-mode ? #5f6264 : #b4b9ca;
     property <color> accent:        dark-mode ? #7ecba3 : #6ab890;
     property <color> accent-soft:   dark-mode ? #1a2e24 : #e8f5ee;
+    property <color> fav-color:     #d8a155;
     property <color> divider:       dark-mode ? #2b2c2d : #e6e8f0;
     property <color> titlebar-bg:   dark-mode ? #191a1b : #ffffff;
     property <color> btn-hover:     dark-mode ? #2b2c2d : #f0f1f8;
@@ -351,7 +352,7 @@ export component App inherits Window {
                                 text: "\u{e630}";
                                 font-family: "iconfont";
                                 font-size: 15px;
-                                color: filter-favorites ? accent : (fav-filter-ta.has-hover ? accent : text-2);
+                                color: filter-favorites ? fav-color : (fav-filter-ta.has-hover ? fav-color : text-2);
                             }
                         }
 
@@ -432,6 +433,7 @@ export component App inherits Window {
                     animate x { duration: 200ms; easing: ease-out; }
 
                     dark-mode: root.dark-mode;
+                    fav-color: root.fav-color;
                     items: root.clipboard-items;
                     item-count: root.item-count;
                     last-clicked-id <=> root.last-clicked-id;
@@ -570,6 +572,7 @@ export component App inherits Window {
             container-width: parent.width;
             container-height: parent.height;
             dark-mode: root.dark-mode;
+            fav-color: root.fav-color;
             item-id: root.context-menu-item-id;
             is-color: root.context-menu-is-color;
             is-hex: root.context-menu-is-hex;

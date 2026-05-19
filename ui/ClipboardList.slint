@@ -4,6 +4,7 @@ import { ClipboardEntry } from "types.slint";
 export component ClipboardList inherits Rectangle {
     // ========== 输入属性 ==========
     in property <bool> dark-mode: false;
+    in property <color> fav-color: #d8a155;
     in property <[ClipboardEntry]> items: [];
     in property <int> item-count: 0;
 
@@ -1188,7 +1189,7 @@ export component ClipboardList inherits Rectangle {
                                             text: entry.is-favorite ? "\u{e630}" : "\u{e68d}";
                                             font-family: "iconfont";
                                             font-size: 11px;
-                                            color: entry.is-favorite ? accent : (fav-ta.has-hover ? accent : (dark-mode ? text-2 : text-2));
+                                            color: entry.is-favorite ? fav-color : (fav-ta.has-hover ? fav-color : text-2);
                                         }
                                     }
 
@@ -1299,7 +1300,7 @@ export component ClipboardList inherits Rectangle {
                                             text: "\u{e630}";
                                             font-family: "iconfont";
                                             font-size: 11px;
-                                            color: bb-fav-ta.has-hover ? accent : text-2;
+                                            color: bb-fav-ta.has-hover ? fav-color : text-2;
                                         }
                                     }
 
@@ -1343,7 +1344,7 @@ export component ClipboardList inherits Rectangle {
                                 width: 3px;
                                 height: parent.height - 8px;
                                 border-radius: 2px;
-                                background: accent;
+                                background: fav-color;
                             }
 
                             // 选中序号徽章（置于顶层，缩小尺寸）
