@@ -44,6 +44,12 @@ fi
 
 echo "--- .app bundle created at $APP_PATH ---"
 
+# Ad-hoc sign the .app bundle for Gatekeeper
+# Without this, the linker's ad-hoc signature expects sealed resources
+# but cargo-bundle doesn't re-sign the final .app, causing "damaged" error
+echo "--- Signing .app bundle (ad-hoc) ---"
+codesign --deep --force --sign - "$APP_PATH"
+
 # Create .dmg
 DMG_NAME="${APP_NAME}_aarch64.dmg"
 DMG_PATH="$DMG_DIR/$DMG_NAME"

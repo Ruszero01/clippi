@@ -190,6 +190,11 @@ jobs:
           </dict>
           </plist>
           PLISTEOF
+          # Ad-hoc sign the .app bundle so Gatekeeper can validate it
+          # Without this, the linker's ad-hoc signature expects sealed resources
+          # but the manual assembly leaves them unsealed, causing "damaged" error
+          # that even right-click → Open cannot bypass
+          codesign --deep --force --sign - "$APP_DIR"
           # Create staging directory with .app + Applications symlink
           STAGING="target/dmg-staging"
           DMG_PATH="target/distrib/Clippi_aarch64.dmg"
