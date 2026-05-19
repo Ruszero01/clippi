@@ -105,39 +105,46 @@ impl Frontend {
         if let Some(app) = self.app.upgrade() {
             let window = app.window();
             let size = window.size();
-            let win_w = size.width as i32;
-            let win_h = size.height as i32;
+            let scale = window.scale_factor();
+            // window.size() returns physical pixels; divide by scale to get
+            // logical points that match platform monitor coordinates (AppKit, Win32).
+            let win_w = (size.width as f32 / scale) as i32;
+            let win_h = (size.height as f32 / scale) as i32;
 
-            if let Some(pos) = self.calculate_position(win_w, win_h) {
+            if let Some(pos) = self.calculate_position(win_w, win_h, scale) {
                 window.set_position(pos);
             }
         }
     }
 
-    fn calculate_position(&self, win_w: i32, win_h: i32) -> Option<PhysicalPosition> {
-        match self.position_mode {
+    fn calculate_position(&self, win_w: i32, win_h: i32, scale: f32) -> Option<PhysicalPosition> {
+        // Calc functions return logical coordinates; convert to physical for Slint.
+        let (x, y) = match self.position_mode {
             PositionMode::Center => self.calc_center(win_w, win_h),
             PositionMode::FollowMouse => self.calc_follow_mouse(win_w, win_h),
             PositionMode::Remember => self.calc_remember(win_w, win_h),
-        }
+        }?;
+        Some(PhysicalPosition::new(
+            (x as f32 * scale) as i32,
+            (y as f32 * scale) as i32,
+        ))
     }
 
-    fn calc_center(&self, win_w: i32, win_h: i32) -> Option<PhysicalPosition> {
+    fn calc_center(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
         let (cx, cy) = monitor::get_cursor_pos()?;
         let area = monitor::get_monitor_work_area(cx, cy)?;
         let x = area.x + (area.width - win_w) / 2;
         let y = area.y + (area.height - win_h) / 2;
-        Some(PhysicalPosition::new(x, y))
+        Some((x, y))
     }
 
-    fn calc_follow_mouse(&self, win_w: i32, win_h: i32) -> Option<PhysicalPosition> {
+    fn calc_follow_mouse(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
         let (cx, cy) = monitor::get_cursor_pos()?;
         let area = monitor::get_monitor_work_area(cx, cy)?;
-        let (x, y) = clamp_to_work_area(cx, cy, win_w, win_h, &area);
-        Some(PhysicalPosition::new(x, y))
+        Some(clamp_to_work_area(cx, cy, win_w, win_h, &area))
     }
 
-    fn calc_remember(&self, win_w: i32, win_h: i32) -> Option<PhysicalPosition> {
+    fn calc_remember(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
         let (sx, sy) = self.saved_position();
         if sx < 0 || sy < 0 {
             return self.calc_center(win_w, win_h);
@@ -146,8 +153,7 @@ impl Frontend {
             return self.calc_center(win_w, win_h);
         }
         if let Some(area) = monitor::get_monitor_work_area(sx, sy) {
-            let (x, y) = clamp_to_work_area(sx, sy, win_w, win_h, &area);
-            Some(PhysicalPosition::new(x, y))
+            Some(clamp_to_work_area(sx, sy, win_w, win_h, &area))
         } else {
             self.calc_center(win_w, win_h)
         }
