@@ -204,6 +204,7 @@ jobs:
           cp -R "$APP_DIR" "$STAGING/"
           ln -s /Applications "$STAGING/Applications"
           hdiutil create -volname "Clippi" -srcfolder "$STAGING" -ov -format UDZO -fs HFS+ "$DMG_PATH"
+          shasum -a 256 "$DMG_PATH" > "${DMG_PATH}.sha256"
           echo "Built macOS .dmg: $DMG_PATH"
       - id: cargo-dist
         name: Post-build
@@ -226,6 +227,7 @@ jobs:
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
             target/distrib/*.dmg
+            target/distrib/*.dmg.sha256
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:
@@ -340,6 +342,19 @@ jobs:
 
           gh release delete "${{ needs.plan.outputs.tag }}" --cleanup-tag -y || true
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+      - name: Add DMG to release notes
+        env:
+          TAG: "${{ needs.plan.outputs.tag }}"
+        run: |
+          DMG_FILE="Clippi_aarch64.dmg"
+          DMG_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}"
+          DMG_CHECK_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}.sha256"
+
+          DMG_ROW="| [${DMG_FILE}](${DMG_URL}) | Apple Silicon macOS (DMG) | [checksum](${DMG_CHECK_URL}) |"
+
+          BODY=$(gh release view "$TAG" --json body -q '.body')
+          NEW_BODY=$(echo "$BODY" | awk -v "row=${DMG_ROW}" '/Apple Silicon macOS.*tar\.xz/ { print; print row; next } 1')
+          gh release edit "$TAG" --notes "$NEW_BODY"
 
   announce:
     needs:
