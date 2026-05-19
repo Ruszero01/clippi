@@ -244,6 +244,9 @@ impl Frontend {
     }
 
     pub fn show_settings(&mut self) {
+        // When the window was hidden the model was released; reload so the
+        // clipboard list is populated if the user navigates back from settings.
+        self.needs_reload.store(true, Ordering::SeqCst);
         self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         if let Some(app) = self.app.upgrade() {
             app.set_current_view(slint::SharedString::from("settings"));

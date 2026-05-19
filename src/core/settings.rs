@@ -105,7 +105,7 @@ impl Default for AppSettings {
             sync_last_at: String::new(),
             sync_interval_secs: 60,
             sync_backends: Vec::new(),
-            sync_auto_enabled: true,
+            sync_auto_enabled: false,
             max_items: 0,
             hotkey_blacklist: Vec::new(),
         }
