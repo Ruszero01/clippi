@@ -1456,10 +1456,21 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         restore_paste_target();
         paste_sync();
 
-        // Wait for target app to process the paste before writing next item.
-        // Images need longer — the app may be decoding/rendering a large PNG.
+        // Wait for target app to fully retrieve clipboard data before we
+        // write the next item (which calls EmptyClipboard and frees current data).
+        // Images scale with file size — large PNGs can be 15-25 MB and the target
+        // app needs time to copy that out of the clipboard.
         if i < n - 1 {
-            let delay = if item.content_type == ContentType::Image { 200 } else { 100 };
+            let delay = if item.content_type == ContentType::Image {
+                let file_size = std::fs::metadata(&item.image_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                // ~1ms per 10 KB, floor 200ms, ceiling 3000ms
+                let size_delay = (file_size / 10_000) as u64;
+                size_delay.clamp(200, 3000)
+            } else {
+                100
+            };
             std::thread::sleep(std::time::Duration::from_millis(delay));
         }
     }
