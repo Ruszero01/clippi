@@ -300,7 +300,10 @@ mod macos {
     const KVK_OPTION: u16 = 0x3A;
     const KVK_COMMAND: u16 = 0x37;
 
-    // FFI binding for CGEventSourceKeyState (not wrapped by core-graphics 0.25)
+    // FFI binding for CGEventSourceKeyState.
+    // This function is part of the public CoreGraphics C API but is not yet
+    // wrapped by the core-graphics crate (checked v0.25). Using a raw extern
+    // binding avoids pulling in a second CG bindings crate just for one function.
     extern "C" {
         fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     }

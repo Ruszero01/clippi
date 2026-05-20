@@ -84,7 +84,7 @@ impl SyncBackend for LocalFolderBackend {
         BackendStatus::Online
     }
 
-    fn pull(&self) -> Result<SyncPayload, String> {
+    fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String> {
         let path = self.file_path();
         if !path.exists() {
             return Err("同步文件不存在".into());
@@ -92,14 +92,25 @@ impl SyncBackend for LocalFolderBackend {
 
         // Check if remote file has changed since last pull.
         // Only applies to the main file; conflict files always need processing.
-        let mut mtime_changed = true;
-        if let Ok(meta) = std::fs::metadata(&path) {
-            if let Ok(mtime) = meta.modified() {
-                let mut last = self.last_remote_mtime.lock().unwrap();
-                if *last == Some(mtime) {
-                    mtime_changed = false;
-                } else {
-                    *last = Some(mtime);
+        // When bypass_cache is true (local dirty, need to compare hashes),
+        // force mtime_changed so we always read the file.
+        let mut mtime_changed = bypass_cache;
+        if !bypass_cache {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if let Ok(mtime) = meta.modified() {
+                    let mut last = self.last_remote_mtime.lock().unwrap();
+                    if *last == Some(mtime) {
+                        mtime_changed = false;
+                    } else {
+                        *last = Some(mtime);
+                    }
+                }
+            }
+        } else {
+            // Still update the mtime cache so the next poll cycle can use it
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if let Ok(mtime) = meta.modified() {
+                    *self.last_remote_mtime.lock().unwrap() = Some(mtime);
                 }
             }
         }

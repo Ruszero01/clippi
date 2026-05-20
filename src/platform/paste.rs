@@ -130,7 +130,6 @@ const FOCUS_CHECK_INTERVAL_MS: u64 = 10;
 const FOCUS_TIMEOUT_MS: u64 = 500;
 
 #[cfg(target_os = "macos")]
-#[allow(deprecated)]
 pub fn restore_paste_target() {
     if let Some(pid) = crate::platform::focus::get_last_non_clippi_pid() {
         let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
@@ -138,9 +137,13 @@ pub fn restore_paste_target() {
         for i in 0..apps.count() {
             let app = apps.objectAtIndex(i);
             if app.processIdentifier() == pid {
-                let _ = app.activateWithOptions(
-                    objc2_app_kit::NSApplicationActivationOptions::ActivateIgnoringOtherApps,
-                );
+                // Use raw value to avoid deprecated NSApplicationActivateIgnoringOtherApps.
+                // This flag is a no-op on macOS 14+ but still required for correct
+                // activation behavior on macOS 12–13 (our minimum is 12.0).
+                let options = 1 << 1; // NSApplicationActivateIgnoringOtherApps
+                unsafe {
+                    let _: bool = objc2::msg_send![&app, activateWithOptions: options];
+                }
                 break;
             }
         }
@@ -157,7 +160,6 @@ pub fn paste_after_delay() {
 /// Synchronous paste — blocks until Cmd+V is sent (used for batch paste separators).
 /// Caller must call `restore_paste_target()` before invoking.
 #[cfg(target_os = "macos")]
-#[allow(deprecated)]
 pub fn paste_sync() {
     send_cmd_v();
 }

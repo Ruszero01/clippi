@@ -550,7 +550,7 @@ fn run_sync_cycle_for_backend(
     let mut stats = MergeStats::default();
     let mut remote_hash: Option<u64> = None;
     let mut remote_unchanged = false;
-    match backend.pull() {
+    match backend.pull(force_push) {
         Ok(remote) => {
             remote_hash = Some(sync::payload_semantic_hash(&remote));
             match sync::merge_remote_into_local(db, &remote, &local_device) {
@@ -593,13 +593,13 @@ fn run_sync_cycle_for_backend(
     // Content-hash gate: if the local snapshot is semantically identical to
     // the remote payload we just pulled from, skip the push. This prevents
     // self-perpetuating sync loops when cloud providers change file mtime
-    // after sync without changing content.
-    if !force_push {
-        if let Some(rh) = remote_hash {
-            let local_hash = sync::payload_semantic_hash(&payload);
-            if rh == local_hash {
-                return (true, "已是最新".into(), stats, pushed_items, pushed_tags);
-            }
+    // after sync without changing content, and also avoids rewrites when a
+    // local clipboard change is filtered out by favorites_only or other
+    // sync criteria (the dirty flag was set, but nothing sync-worthy changed).
+    if let Some(rh) = remote_hash {
+        let local_hash = sync::payload_semantic_hash(&payload);
+        if rh == local_hash {
+            return (true, "已是最新".into(), stats, pushed_items, pushed_tags);
         }
     }
 

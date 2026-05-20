@@ -32,7 +32,9 @@ pub trait SyncBackend: Send + Sync {
     fn name(&self) -> &str;
     fn backend_type(&self) -> BackendType;
     fn check_status(&self) -> BackendStatus;
-    fn pull(&self) -> Result<SyncPayload, String>;
+    /// Pull the remote payload. When `bypass_cache` is true, the backend
+    /// should skip any mtime/etag optimization and always read the file.
+    fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String>;
     fn push(&self, payload: &SyncPayload) -> Result<(), String>;
 
     /// Called after a successful push. Backends can override to clean up
@@ -73,12 +75,12 @@ pub struct SyncItem {
     pub rich_data: String,
     pub is_favorite: bool,
     pub note: String,
-    /// Tag associations carried on the item.
-    #[serde(default)]
-    pub tags: Vec<SyncTagRef>,
     /// Character count for text types; 0 for other types.
     #[serde(default)]
     pub size: i64,
+    /// Tag associations carried on the item.
+    #[serde(default)]
+    pub tags: Vec<SyncTagRef>,
 }
 
 /// Tag reference embedded in a SyncItem.
@@ -178,7 +180,7 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
 
         sync_items.push(SyncItem {
             content_type: item.content_type.as_str().to_string(),
-            full_text: item.full_text,
+            full_text: item.full_text.clone(),
             content_hash: item.content_hash,
             created_at: item.created_at.to_rfc3339(),
             updated_at: item.updated_at.to_rfc3339(),

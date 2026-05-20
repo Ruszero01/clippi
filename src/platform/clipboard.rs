@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSPasteboard;
+
 /// Shared clipboard buffer for passing data to services
 #[derive(Clone)]
 pub struct ClipboardShared {
@@ -296,6 +299,14 @@ impl ClipboardListener for PollingClipboardListener {
             windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
         }));
 
+        // macOS: use NSPasteboard.changeCount for the same fast-path purpose.
+        // changeCount increments on every pasteboard write, giving an efficient
+        // signal before the expensive clipboard open + PNG encode.
+        #[cfg(target_os = "macos")]
+        let last_cc = Arc::new(Mutex::new(
+            objc2_app_kit::NSPasteboard::generalPasteboard().changeCount(),
+        ));
+
         thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
                 // 批量粘贴期间跳过记录，避免产生冗余条目
@@ -324,6 +335,20 @@ impl ClipboardListener for PollingClipboardListener {
                         continue;
                     }
                     *last = seq;
+                }
+
+                // macOS equivalent: NSPasteboard.changeCount increments on every
+                // pasteboard write, serving the same role as the Windows sequence number.
+                #[cfg(target_os = "macos")]
+                {
+                    let cc = NSPasteboard::generalPasteboard().changeCount();
+                    let mut last = last_cc.lock().unwrap();
+                    if cc == *last {
+                        drop(last);
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                    *last = cc;
                 }
 
                 let startup_done = startup_end

@@ -413,7 +413,7 @@ impl Database {
     pub fn get_all_sync_items_with_tags(&self) -> SqlResult<Vec<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, content_type, full_text, content_hash, created_at, updated_at,
-             image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
+             image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size
              FROM clipboard_items
              WHERE content_type NOT IN ('image', 'file')
              ORDER BY updated_at DESC",
