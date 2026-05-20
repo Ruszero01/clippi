@@ -617,6 +617,7 @@ impl AppController {
                             let mut s = c.settings.lock().expect("settings lock poisoned");
                             s.db_path = path_str;
                             s.save();
+                            drop(s); // release lock before do_restart tries to acquire it
                             do_restart(&c);
                         }
                         Err(e) => {
@@ -645,6 +646,7 @@ impl AppController {
                     let mut s = c.settings.lock().expect("settings lock poisoned");
                     s.db_path = String::new();
                     s.save();
+                    drop(s); // release lock before do_restart tries to acquire it
                     do_restart(&c);
                 }
                 Err(e) => {
