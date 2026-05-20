@@ -148,6 +148,26 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      - name: Build NSIS installer (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION="${{ needs.plan.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          BIN="target/x86_64-pc-windows-msvc/dist/clippi.exe"
+          STAGING="target/nsis-staging"
+          mkdir -p "$STAGING"
+          cp "$BIN" "$STAGING/"
+          cp "assets/LOGO_notext.ico" "$STAGING/app.ico"
+          cp "LICENSE" "$STAGING/LICENSE.txt"
+          # Convert to Windows-style path for makensis
+          STAGING_WIN="$(cygpath -w "$PWD/$STAGING")"
+          "C:/Program Files (x86)/NSIS/makensis.exe" /DVERSION="$VERSION" "/DSTAGING=$STAGING_WIN" dist/nsis/installer.nsi
+          # Copy output to distrib for upload
+          mkdir -p target/distrib
+          cp "$STAGING"/Clippi_*_x64-setup.exe target/distrib/
+          shasum -a 256 target/distrib/Clippi_*_x64-setup.exe > target/distrib/Clippi_"${VERSION}"_x64-setup.exe.sha256
+          echo "Built NSIS installer: target/distrib/Clippi_${VERSION}_x64-setup.exe"
       - name: Build macOS .dmg
         if: runner.os == 'macOS'
         run: |
@@ -207,14 +227,19 @@ jobs:
           echo "Built macOS .dmg: $DMG_PATH"
       - id: cargo-dist
         name: Post-build
-        # We force bash here just because github makes it really hard to get values up
-        # to "real" actions without writing to env-vars, and writing to env-vars has
-        # inconsistent syntax between shell and powershell.
         shell: bash
         run: |
           # Parse out what we just built and upload it to scratch storage
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
           dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
+          # Include NSIS installer and DMG in upload paths
+          if [ -f target/distrib/Clippi_*_x64-setup.exe ]; then
+            ls target/distrib/Clippi_*_x64-setup.exe target/distrib/Clippi_*_x64-setup.exe.sha256 >> "$GITHUB_OUTPUT" 2>/dev/null || true
+          fi
+          if [ -f target/distrib/Clippi_aarch64.dmg ]; then
+            echo "target/distrib/Clippi_aarch64.dmg" >> "$GITHUB_OUTPUT"
+            echo "target/distrib/Clippi_aarch64.dmg.sha256" >> "$GITHUB_OUTPUT"
+          fi
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
@@ -227,6 +252,8 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
             target/distrib/*.dmg
             target/distrib/*.dmg.sha256
+            target/distrib/*_x64-setup.exe
+            target/distrib/*_x64-setup.exe.sha256
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:
@@ -341,18 +368,23 @@ jobs:
 
           gh release delete "${{ needs.plan.outputs.tag }}" --cleanup-tag -y || true
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
-      - name: Add DMG to release notes
+      - name: Add DMG and NSIS to release notes
         env:
           TAG: "${{ needs.plan.outputs.tag }}"
         run: |
+          VERSION="${TAG#v}"
           DMG_FILE="Clippi_aarch64.dmg"
           DMG_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}"
           DMG_CHECK_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}.sha256"
-
           DMG_ROW="| [${DMG_FILE}](${DMG_URL}) | Apple Silicon macOS (DMG) | [checksum](${DMG_CHECK_URL}) |"
 
+          NSIS_FILE="Clippi_${VERSION}_x64-setup.exe"
+          NSIS_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${NSIS_FILE}"
+          NSIS_CHECK_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${NSIS_FILE}.sha256"
+          NSIS_ROW="| [${NSIS_FILE}](${NSIS_URL}) | x64 Windows (NSIS) | [checksum](${NSIS_CHECK_URL}) |"
+
           BODY=$(gh release view "$TAG" --json body -q '.body')
-          NEW_BODY=$(echo "$BODY" | awk -v "row=${DMG_ROW}" '/Apple Silicon macOS.*tar\.xz/ { print; print row; next } 1')
+          NEW_BODY=$(echo "$BODY" | awk -v "dmg=${DMG_ROW}" -v "nsis=${NSIS_ROW}" '/Apple Silicon macOS.*tar\.xz/ { print; print dmg; print nsis; next } 1')
           gh release edit "$TAG" --notes "$NEW_BODY"
 
   announce:

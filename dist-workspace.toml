@@ -8,8 +8,8 @@ cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["nsis"]
+installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
-# Allow customized NSIS template and CI workflow
-allow-dirty = ["nsis", "ci"]
+# Allow customized CI workflow
+allow-dirty = ["ci"]
