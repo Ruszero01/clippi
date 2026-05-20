@@ -162,7 +162,8 @@ jobs:
           cp "LICENSE" "$STAGING/LICENSE.txt"
           # Convert to Windows-style path for makensis
           STAGING_WIN="$(cygpath -w "$PWD/$STAGING")"
-          "C:/Program Files (x86)/NSIS/makensis.exe" /DVERSION="$VERSION" "/DSTAGING=$STAGING_WIN" dist/nsis/installer.nsi
+          # //D prevents Git Bash from mangling /D into a drive-relative path
+          "C:/Program Files (x86)/NSIS/makensis.exe" //DVERSION="$VERSION" "//DSTAGING=$STAGING_WIN" dist/nsis/installer.nsi
           # Copy output to distrib for upload
           mkdir -p target/distrib
           cp "$STAGING"/Clippi_*_x64-setup.exe target/distrib/
