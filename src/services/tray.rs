@@ -3,18 +3,21 @@
 use crate::core::frontend::Frontend;
 use crate::looper::Pollable;
 use crate::platform::tray::{TrayAction, TrayManager};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct TrayService {
     tray: TrayManager,
     frontend: Arc<Mutex<Frontend>>,
+    restart_flag: Arc<AtomicBool>,
 }
 
 impl TrayService {
-    pub fn new(frontend: Arc<Mutex<Frontend>>) -> Self {
+    pub fn new(frontend: Arc<Mutex<Frontend>>, restart_flag: Arc<AtomicBool>) -> Self {
         Self {
             tray: TrayManager::new(),
             frontend,
+            restart_flag,
         }
     }
 }
@@ -32,6 +35,10 @@ impl Pollable for TrayService {
                     if let Ok(mut fe) = self.frontend.lock() {
                         fe.show_settings();
                     }
+                }
+                TrayAction::Restart => {
+                    self.restart_flag.store(true, Ordering::SeqCst);
+                    slint::quit_event_loop().ok();
                 }
                 TrayAction::Quit => {
                     slint::quit_event_loop().ok();

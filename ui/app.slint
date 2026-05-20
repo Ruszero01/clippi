@@ -64,7 +64,10 @@ export component App inherits Window {
     in-out property <int> sync-items-added: 0;
     in-out property <int> sync-items-updated: 0;
     in-out property <int> sync-tags-added: 0;
-    in-out property <bool> sync-favorites-only: false;
+    in-out property <bool> sync-favorites-only: true;
+    // Toast 提示
+    in-out property <string> toast-message: "";
+    in-out property <bool> toast-visible: false;
     // 添加服务浮层
     in-out property <bool> add-backend-panel-visible: false;
     in-out property <length> add-backend-panel-x: 0px;
@@ -764,6 +767,40 @@ export component App inherits Window {
             add-backend(name, path) => { root.add-sync-backend(name, path); }
             save-backend(id, name, path) => { root.save-sync-backend(id, name, path); }
             pick-folder => { root.pick-backend-folder(); }
+        }
+
+        // ========== Toast 提示（底部居中，自动消失） ==========
+        toast-timer := Timer {
+            interval: 2.5s;
+            running: root.toast-visible;
+            triggered => {
+                root.toast-visible = false;
+            }
+        }
+
+        if root.toast-visible : Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - 60px;
+            height: 32px;
+            width: min(toast-text.preferred-width + 32px, parent.width - 32px);
+            border-radius: 8px;
+            background: dark-mode ? #3a3b3de8 : #2c2d2fe8;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000040;
+
+            animate opacity { duration: 200ms; }
+            opacity: 1;
+
+            toast-text := Text {
+                text: root.toast-message;
+                font-size: 12px;
+                color: dark-mode ? #eaebec : #ffffff;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                x: 16px;
+                width: parent.width - 32px;
+                overflow: elide;
+            }
         }
 
         // ========== 缩放手柄（置于最顶层，优先接收鼠标事件） ==========

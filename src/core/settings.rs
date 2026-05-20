@@ -108,7 +108,7 @@ impl Default for AppSettings {
             sync_interval_secs: 60,
             sync_backends: Vec::new(),
             sync_auto_enabled: false,
-            sync_favorites_only: false,
+            sync_favorites_only: true,
             max_items: 0,
             hotkey_blacklist: Vec::new(),
         }

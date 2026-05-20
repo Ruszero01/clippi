@@ -36,6 +36,7 @@ fn main() {
     }
 
     let controller = app::AppController::new(&slint_app).expect("Failed to init");
+    let restart_flag = controller.restart_flag();
 
     // Show window first to initialize layout, then apply physical-pixel sizing
     // to prevent DPI-scaling from inflating the window (logical px * scale factor).
@@ -59,5 +60,11 @@ fn main() {
     }
 
     slint::run_event_loop_until_quit().unwrap();
+
+    if restart_flag.load(std::sync::atomic::Ordering::SeqCst) {
+        controller.prepare_restart();
+        crate::core::settings::spawn_new_process();
+    }
+
     controller.shutdown();
 }

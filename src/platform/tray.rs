@@ -10,6 +10,7 @@ use tray_icon::{
 pub enum TrayAction {
     Show,
     OpenSettings,
+    Restart,
     Quit,
 }
 
@@ -20,9 +21,10 @@ pub struct TrayManager {
     /// Keep MenuItem objects alive — dropping them may invalidate
     /// internal muda references and cause menu text to disappear.
     #[allow(dead_code)]
-    _items: [MenuItem; 3],
+    _items: [MenuItem; 4],
     show_id: tray_icon::menu::MenuId,
     settings_id: tray_icon::menu::MenuId,
+    restart_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
 }
 
@@ -33,13 +35,15 @@ impl TrayManager {
         let menu = Menu::new();
         let show_item = MenuItem::new("显示窗口", true, None);
         let settings_item = MenuItem::new("设置", true, None);
+        let restart_item = MenuItem::new("重启应用", true, None);
         let quit_item = MenuItem::new("退出", true, None);
 
         let show_id = show_item.id().clone();
         let settings_id = settings_item.id().clone();
+        let restart_id = restart_item.id().clone();
         let quit_id = quit_item.id().clone();
 
-        menu.append_items(&[&show_item, &settings_item, &quit_item]).unwrap();
+        menu.append_items(&[&show_item, &settings_item, &restart_item, &quit_item]).unwrap();
 
         let tray = TrayIconBuilder::new()
             .with_icon(icon)
@@ -50,9 +54,10 @@ impl TrayManager {
 
         Self {
             tray,
-            _items: [show_item, settings_item, quit_item],
+            _items: [show_item, settings_item, restart_item, quit_item],
             show_id,
             settings_id,
+            restart_id,
             quit_id,
         }
     }
@@ -73,6 +78,9 @@ impl TrayManager {
             }
             if event.id == self.settings_id {
                 return Some(TrayAction::OpenSettings);
+            }
+            if event.id == self.restart_id {
+                return Some(TrayAction::Restart);
             }
             if event.id == self.quit_id {
                 return Some(TrayAction::Quit);

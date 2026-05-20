@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 const APP_DIR_NAME: &str = "Clippi";
 const CONFIG_FILE: &str = "clippi.toml";
@@ -42,8 +43,24 @@ pub fn app_icon_path(app_name: &str) -> PathBuf {
     app_icon_dir().join(format!("{sanitized}.png"))
 }
 
+static RESOLVED_IMAGES_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Initialize the resolved images directory based on db_path.
+/// Must be called once at startup before any clipboard capture.
+pub fn init_images_dir(db_path: &str) {
+    let dir = if db_path.is_empty() {
+        app_data_dir().join("images")
+    } else {
+        PathBuf::from(db_path).parent().map(|p| p.join("images")).unwrap_or_else(|| app_data_dir().join("images"))
+    };
+    let _ = RESOLVED_IMAGES_DIR.set(dir);
+}
+
 pub fn images_dir() -> PathBuf {
-    let dir = app_data_dir().join("images");
+    let dir = RESOLVED_IMAGES_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| app_data_dir().join("images"));
     if !dir.exists() {
         let _ = fs::create_dir_all(&dir);
     }

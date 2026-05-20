@@ -11,11 +11,18 @@ pub struct Database {
 impl Database {
     pub fn open(path: &str) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
+        // Wait up to 5s if the database is locked (e.g. previous process still exiting).
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // WAL mode improves concurrency and reduces memory pressure.
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA cache_size = -2000;")?;
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
+    }
+
+    /// Flush WAL to main database file before copy/migration.
+    pub fn checkpoint(&self) -> SqlResult<()> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
     fn init_schema(&self) -> SqlResult<()> {

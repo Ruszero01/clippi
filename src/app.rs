@@ -44,6 +44,8 @@ pub struct AppController {
     listener: Option<Box<dyn crate::platform::clipboard::ClipboardListener>>,
     frontend: Arc<Mutex<Frontend>>,
     shared_settings: Arc<Mutex<AppSettings>>,
+    db: Arc<Mutex<Database>>,
+    restart_requested: Arc<AtomicBool>,
 }
 
 impl AppController {
@@ -53,6 +55,9 @@ impl AppController {
 
         // Load settings
         let settings = AppSettings::load();
+
+        // Initialize images cache directory (follows db_path if set)
+        crate::core::paths::init_images_dir(&settings.db_path);
 
         // Initialize shared state
         let db_path = settings.resolve_db_path();
@@ -121,7 +126,8 @@ impl AppController {
         slint_app.set_hotkey_blacklist(hotkey_service.blacklist_model());
 
         // Create tray service (use shared frontend)
-        let tray_service = TrayService::new(frontend.clone());
+        let restart_requested = Arc::new(AtomicBool::new(false));
+        let tray_service = TrayService::new(frontend.clone(), restart_requested.clone());
 
         // Create focus service
         let mut focus_service = match FocusService::new(
@@ -211,7 +217,21 @@ impl AppController {
             listener: Some(listener),
             shared_settings,
             frontend,
+            db,
+            restart_requested,
         })
+    }
+
+    /// Prepare for restart: flush WAL, save settings, release hotkey.
+    /// Call before spawning a new process.
+    pub fn prepare_restart(&self) {
+        let _ = self.db.lock().expect("db lock").checkpoint();
+        self.shared_settings.lock().expect("settings lock").save();
+        let _ = self.looper.try_with_hotkey_service(|hk| hk.unregister_hotkey());
+    }
+
+    pub fn restart_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.restart_requested)
     }
 
     pub fn shutdown(mut self) {
@@ -587,14 +607,17 @@ impl AppController {
             if let Some(new_path) = result {
                 if let Some(app) = c.app.upgrade() {
                     let old_path = c.settings.lock().expect("settings lock poisoned").resolve_db_path();
+                    if let Err(e) = c.db.lock().expect("db lock").checkpoint() {
+                        app.set_settings_error(SharedString::from(format!("准备迁移失败: {e}")));
+                        return;
+                    }
                     match migrate_database(&old_path, &new_path) {
                         Ok(()) => {
                             let path_str = new_path.to_string_lossy().to_string();
                             let mut s = c.settings.lock().expect("settings lock poisoned");
                             s.db_path = path_str;
                             s.save();
-                            spawn_new_process();
-                            slint::quit_event_loop().ok();
+                            do_restart(&c);
                         }
                         Err(e) => {
                             app.set_settings_error(SharedString::from(e));
@@ -611,13 +634,18 @@ impl AppController {
             if old_path == default_db_path {
                 return;
             }
+            if let Err(e) = c.db.lock().expect("db lock").checkpoint() {
+                if let Some(app) = c.app.upgrade() {
+                    app.set_settings_error(SharedString::from(format!("准备迁移失败: {e}")));
+                }
+                return;
+            }
             match migrate_database(&old_path, &default_db_path) {
                 Ok(()) => {
                     let mut s = c.settings.lock().expect("settings lock poisoned");
                     s.db_path = String::new();
                     s.save();
-                    spawn_new_process();
-                    slint::quit_event_loop().ok();
+                    do_restart(&c);
                 }
                 Err(e) => {
                     if let Some(app) = c.app.upgrade() {
@@ -745,6 +773,17 @@ impl AppController {
         slint_app.on_toggle_sync_auto_enabled(move || {
             if let Some(app) = c.app.upgrade() {
                 let new_val = !app.get_sync_auto_enabled();
+                // Require at least one backend before enabling auto-sync
+                if new_val {
+                    let s = c.settings.lock().expect("settings lock poisoned");
+                    if s.sync_backends.is_empty() {
+                        app.set_toast_visible(false);
+                        app.set_toast_message(SharedString::from("请先添加同步服务"));
+                        app.set_toast_visible(true);
+                        return;
+                    }
+                    drop(s);
+                }
                 app.set_sync_auto_enabled(new_val);
                 let mut s = c.settings.lock().expect("settings lock poisoned");
                 s.sync_auto_enabled = new_val;
@@ -1504,6 +1543,15 @@ fn verify_clipboard_content(expected: &str, timeout_ms: u64) -> bool {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+/// Common restart logic: save settings, release hotkey, spawn new process, quit.
+/// The caller should have already checkpointed WAL and saved any pending settings.
+fn do_restart(ctx: &CallbackCtx) {
+    ctx.settings.lock().expect("settings lock").save();
+    let _ = ctx.looper.try_with_hotkey_service(|hk| hk.unregister_hotkey());
+    spawn_new_process();
+    slint::quit_event_loop().ok();
 }
 
 /// Poll-read clipboard PNG buffer until its length matches expected_size or timeout expires.
