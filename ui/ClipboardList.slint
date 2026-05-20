@@ -544,23 +544,9 @@ export component ClipboardList inherits Rectangle {
                                         background: tag-bg;
 
                                         st-layout := HorizontalLayout {
-                                            padding-left: 3px;
-                                            padding-right: 3px;
-                                            spacing: 2px;
+                                            padding-left: 4px;
+                                            padding-right: 4px;
                                             alignment: center;
-
-                                            st-icon := Text {
-                                                text: entry.content-type == "plain_text" ? "\u{e60e}" :
-                                                      entry.content-type == "rich_text" ? "\u{e6ae}" :
-                                                      entry.content-type == "image" ? "\u{e626}" :
-                                                      entry.content-type == "file" ? "\u{e646}" :
-                                                      entry.content-type == "link" ? "\u{e6d7}" :
-                                                      entry.content-type == "path" ? "\u{e646}" : "";
-                                                font-family: "iconfont";
-                                                font-size: 8px;
-                                                color: tag-text;
-                                                vertical-alignment: center;
-                                            }
 
                                             st-label := Text {
                                                 text: entry.content-type == "plain_text" ? "文本" :
@@ -569,7 +555,7 @@ export component ClipboardList inherits Rectangle {
                                                       entry.content-type == "file" ? entry.file-icon-text :
                                                       entry.content-type == "link" ? "URL" :
                                                       entry.content-type == "path" ? "路径" : "";
-                                                font-size: 8px;
+                                                font-size: 10px;
                                                 font-weight: 500;
                                                 color: tag-text;
                                                 vertical-alignment: center;
@@ -635,22 +621,13 @@ export component ClipboardList inherits Rectangle {
                                             clip: true;
 
                                             HorizontalLayout {
-                                                padding-left: 3px;
-                                                padding-right: 3px;
-                                                spacing: 2px;
+                                                padding-left: 4px;
+                                                padding-right: 4px;
                                                 alignment: center;
 
                                                 Text {
-                                                    text: "\u{e646}";
-                                                    font-family: "iconfont";
-                                                    font-size: 8px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                Text {
                                                     text: entry.file-icon-text;
-                                                    font-size: 8px;
+                                                    font-size: 10px;
                                                     font-weight: 500;
                                                     color: tag-text;
                                                     vertical-alignment: center;
@@ -745,22 +722,13 @@ export component ClipboardList inherits Rectangle {
                                             clip: true;
 
                                             HorizontalLayout {
-                                                padding-left: 3px;
-                                                padding-right: 3px;
-                                                spacing: 2px;
+                                                padding-left: 4px;
+                                                padding-right: 4px;
                                                 alignment: center;
 
                                                 Text {
-                                                    text: "\u{e6d7}";
-                                                    font-family: "iconfont";
-                                                    font-size: 8px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                Text {
                                                     text: "URL";
-                                                    font-size: 8px;
+                                                    font-size: 10px;
                                                     font-weight: 500;
                                                     color: tag-text;
                                                     vertical-alignment: center;
@@ -807,22 +775,13 @@ export component ClipboardList inherits Rectangle {
                                             clip: true;
 
                                             HorizontalLayout {
-                                                padding-left: 3px;
-                                                padding-right: 3px;
-                                                spacing: 2px;
+                                                padding-left: 4px;
+                                                padding-right: 4px;
                                                 alignment: center;
 
                                                 Text {
-                                                    text: "\u{e646}";
-                                                    font-family: "iconfont";
-                                                    font-size: 8px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                Text {
                                                     text: "路径";
-                                                    font-size: 8px;
+                                                    font-size: 10px;
                                                     font-weight: 500;
                                                     color: tag-text;
                                                     vertical-alignment: center;

@@ -356,31 +356,23 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
 
 #[cfg(target_os = "macos")]
 fn macos_foreground_info() -> Option<ForegroundAppInfo> {
-    unsafe {
-        use objc2::msg_send;
-        use objc2::rc::Retained;
-        use objc2_app_kit::NSImage;
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let app = workspace.frontmostApplication()?;
 
-        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-        let app = workspace.frontmostApplication()?;
-
-        if app.processIdentifier() == std::process::id() as i32 {
-            // Clippi itself — no foreground info to show
-            return None;
-        }
-
-        let name: Retained<objc2_foundation::NSString> = msg_send![&app, localizedName];
-        let app_name = name.to_string();
-
-        let icon: Option<Retained<NSImage>> = msg_send![&app, icon];
-        let icon_base64 = icon
-            .and_then(|i| super::util::nsimage_to_base64_png(&i, 32))
-            .unwrap_or_default();
-
-        Some(ForegroundAppInfo {
-            app_name,
-            window_title: String::new(), // macOS window title extraction requires extra permissions
-            icon_base64,
-        })
+    if app.processIdentifier() == std::process::id() as i32 {
+        // Clippi itself — no foreground info to show
+        return None;
     }
+
+    // Use generated methods (nil-safe via Option)
+    let app_name = app.localizedName().map(|n| n.to_string()).unwrap_or_default();
+    let icon_base64 = app.icon()
+        .and_then(|i| super::util::nsimage_to_base64_png(&i, 32))
+        .unwrap_or_default();
+
+    Some(ForegroundAppInfo {
+        app_name,
+        window_title: String::new(), // macOS window title extraction requires extra permissions
+        icon_base64,
+    })
 }

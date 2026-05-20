@@ -102,31 +102,29 @@ mod macos_impl {
     use objc2_app_kit::NSWorkspace;
 
     pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
-        unsafe {
-            use objc2::msg_send;
-            use objc2::rc::Retained;
-            use objc2_app_kit::NSImage;
+        let workspace = NSWorkspace::sharedWorkspace();
+        let app = workspace.frontmostApplication()?;
 
-            let workspace = NSWorkspace::sharedWorkspace();
-            let app = workspace.frontmostApplication()?;
-
-            // Don't record Clippi itself as the source
-            if app.processIdentifier() == std::process::id() as i32 {
-                return None;
-            }
-
-            let name: Retained<objc2_foundation::NSString> = msg_send![&app, localizedName];
-            let app_name = name.to_string();
-
-            let icon: Option<Retained<NSImage>> = msg_send![&app, icon];
-            let icon = icon?;
-            let icon_base64 = nsimage_to_base64_png(&icon, 32)?;
-
-            Some(SourceAppInfo {
-                app_name,
-                icon_base64,
-            })
+        // Don't record Clippi itself as the source
+        if app.processIdentifier() == std::process::id() as i32 {
+            return None;
         }
+
+        // Use generated methods (nil-safe via Option)
+        let app_name = app.localizedName().map(|n| n.to_string()).unwrap_or_default();
+        let icon_base64 = app.icon()
+            .and_then(|i| nsimage_to_base64_png(&i, 32))
+            .unwrap_or_default();
+
+        // Require at least a name to show source info
+        if app_name.is_empty() {
+            return None;
+        }
+
+        Some(SourceAppInfo {
+            app_name,
+            icon_base64,
+        })
     }
 }
 
