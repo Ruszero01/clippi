@@ -404,6 +404,7 @@ impl ClipboardService {
                 }
             }
         }
+        self.mark_dirty();
         if needs_full_refresh {
             self.refresh_with_current_filter();
         } else {
@@ -423,6 +424,7 @@ impl ClipboardService {
         self.db.lock().expect("db lock poisoned")
             .add_item_tag(item_id as i64, tag_id)
             .ok()?;
+        self.mark_dirty();
         let needs_full = self.filters.has_tag_filters();
         if needs_full {
             self.refresh_with_current_filter();
