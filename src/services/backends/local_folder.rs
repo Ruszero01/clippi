@@ -4,7 +4,7 @@
 //! Dropbox, etc.). The OS/cloud-provider handles the actual network sync.
 
 use crate::core::settings::BackendConfig;
-use crate::core::sync::{BackendStatus, BackendType, SyncBackend, SyncPayload};
+use crate::core::sync::{self, BackendStatus, BackendType, SyncBackend, SyncPayload};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -31,6 +31,32 @@ impl LocalFolderBackend {
 
     fn file_path(&self) -> PathBuf {
         PathBuf::from(&self.config.folder_path).join(SYNC_FILENAME)
+    }
+
+    /// Find conflict files matching `clippi_sync-*.json` older than 5 seconds
+    /// (to skip files still being written by the cloud provider).
+    fn find_conflicts(&self) -> Vec<PathBuf> {
+        let dir = PathBuf::from(&self.config.folder_path);
+        let mut conflicts = Vec::new();
+        let now = SystemTime::now();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with("clippi_sync-") && name.ends_with(".json") {
+                    // Skip files modified within the last 5 seconds
+                    if let Ok(meta) = path.metadata() {
+                        if let Ok(mtime) = meta.modified() {
+                            if now.duration_since(mtime).map(|d| d.as_secs() < 5).unwrap_or(false) {
+                                continue;
+                            }
+                        }
+                    }
+                    conflicts.push(path);
+                }
+            }
+        }
+        conflicts
     }
 }
 
@@ -65,22 +91,57 @@ impl SyncBackend for LocalFolderBackend {
         }
 
         // Check if remote file has changed since last pull.
-        // This avoids unnecessary reads — content hash comparison in
-        // `run_sync_cycle_for_backend` is the authoritative gate for push.
+        // Only applies to the main file; conflict files always need processing.
+        let mut mtime_changed = true;
         if let Ok(meta) = std::fs::metadata(&path) {
             if let Ok(mtime) = meta.modified() {
                 let mut last = self.last_remote_mtime.lock().unwrap();
                 if *last == Some(mtime) {
-                    return Err("@@unchanged".into());
+                    mtime_changed = false;
+                } else {
+                    *last = Some(mtime);
                 }
-                *last = Some(mtime);
             }
         }
 
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("读取同步文件失败: {e}"))?;
-        serde_json::from_str::<SyncPayload>(&content)
-            .map_err(|e| format!("解析同步文件失败: {e}"))
+        // Read main payload
+        let mut payload = if mtime_changed {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("读取同步文件失败: {e}"))?;
+            serde_json::from_str::<SyncPayload>(&content)
+                .map_err(|e| format!("解析同步文件失败: {e}"))?
+        } else {
+            // Main file unchanged — return early only if no conflicts either
+            let conflicts = self.find_conflicts();
+            if conflicts.is_empty() {
+                return Err("@@unchanged".into());
+            }
+            // Re-read main payload to merge with conflicts
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("读取同步文件失败: {e}"))?;
+            serde_json::from_str::<SyncPayload>(&content)
+                .map_err(|e| format!("解析同步文件失败: {e}"))?
+        };
+
+        // Merge conflict files
+        let conflicts = self.find_conflicts();
+        for conflict_path in &conflicts {
+            match std::fs::read_to_string(conflict_path) {
+                Ok(json) => match serde_json::from_str::<SyncPayload>(&json) {
+                    Ok(conflict) => {
+                        payload = sync::merge_payloads(payload, conflict);
+                    }
+                    Err(e) => {
+                        eprintln!("[sync] 冲突文件解析失败 {}: {e}", conflict_path.display());
+                    }
+                },
+                Err(e) => {
+                    eprintln!("[sync] 冲突文件读取失败 {}: {e}", conflict_path.display());
+                }
+            }
+        }
+
+        Ok(payload)
     }
 
     fn push(&self, payload: &SyncPayload) -> Result<(), String> {
@@ -106,6 +167,15 @@ impl SyncBackend for LocalFolderBackend {
         if let Ok(meta) = std::fs::metadata(&file_path) {
             if let Ok(mtime) = meta.modified() {
                 *self.last_remote_mtime.lock().unwrap() = Some(mtime);
+            }
+        }
+        Ok(())
+    }
+
+    fn post_push_cleanup(&self) -> Result<(), String> {
+        for path in self.find_conflicts() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                eprintln!("[sync] 清理冲突文件失败 {}: {e}", path.display());
             }
         }
         Ok(())
