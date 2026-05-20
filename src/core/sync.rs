@@ -406,6 +406,9 @@ pub fn merge_remote_into_local(
                         let _ = db.add_item_tag(item_id, tag.id);
                     }
                 }
+
+                // Restore remote timestamp: add_item_tag may have bumped it.
+                let _ = db.set_item_updated_at(item_id, &remote_item.updated_at);
             }
             Some(local_item) => {
                 let remote_ts = parse_rfc3339(&remote_item.updated_at);
@@ -422,6 +425,11 @@ pub fn merge_remote_into_local(
                             let _ = db.add_item_tag(local_item.id, tag.id);
                         }
                     }
+
+                    // Restore remote timestamp: tag operations above may have
+                    // bumped updated_at via touch_item, but the item data is
+                    // semantically identical to what we just pulled from remote.
+                    let _ = db.set_item_updated_at(local_item.id, &remote_item.updated_at);
 
                     stats.items_updated += 1;
                 }
