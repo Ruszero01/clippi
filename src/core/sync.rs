@@ -34,6 +34,12 @@ pub trait SyncBackend: Send + Sync {
     fn check_status(&self) -> BackendStatus;
     fn pull(&self) -> Result<SyncPayload, String>;
     fn push(&self, payload: &SyncPayload) -> Result<(), String>;
+
+    /// Called after a successful push. Backends can override to clean up
+    /// temporary or conflict files (e.g., clippi_sync-*.json).
+    fn post_push_cleanup(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Top-level sync payload stored as JSON on the cloud folder.
@@ -485,6 +491,87 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
     h.finish()
 }
 
+/// Merge `other` into `base`. For items (by content_hash) and tags (by name),
+/// the version with the newer updated_at wins. Tombstones and unfavorite markers
+/// are deduplicated by their natural keys.
+pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload {
+    // Merge items: keep the newer version for each content_hash
+    let mut item_map: std::collections::HashMap<u64, SyncItem> =
+        std::collections::HashMap::with_capacity(base.items.len() + other.items.len());
+    for item in base.items {
+        item_map.insert(item.content_hash, item);
+    }
+    for item in other.items {
+        match item_map.get(&item.content_hash) {
+            Some(existing) => {
+                if item.updated_at.as_str() > existing.updated_at.as_str() {
+                    item_map.insert(item.content_hash, item);
+                }
+            }
+            None => {
+                item_map.insert(item.content_hash, item);
+            }
+        }
+    }
+    base.items = item_map.into_values().collect();
+
+    // Merge tags: keep the newer color for each name
+    let mut tag_map: std::collections::HashMap<String, SyncTag> =
+        std::collections::HashMap::with_capacity(base.tags.len() + other.tags.len());
+    for tag in base.tags {
+        tag_map.insert(tag.name.clone(), tag);
+    }
+    for tag in other.tags {
+        match tag_map.get(&tag.name) {
+            Some(existing) => {
+                if tag.updated_at.as_str() > existing.updated_at.as_str() {
+                    tag_map.insert(tag.name.clone(), tag);
+                }
+            }
+            None => {
+                tag_map.insert(tag.name.clone(), tag);
+            }
+        }
+    }
+    base.tags = tag_map.into_values().collect();
+
+    // Deduplicate tombstones
+    {
+        let mut seen: std::collections::HashSet<u64> =
+            base.deleted_items.iter().map(|d| d.content_hash).collect();
+        for d in other.deleted_items {
+            if seen.insert(d.content_hash) {
+                base.deleted_items.push(d);
+            }
+        }
+    }
+    {
+        let mut seen: std::collections::HashSet<String> =
+            base.deleted_tags.iter().map(|d| d.name.clone()).collect();
+        for d in other.deleted_tags {
+            if seen.insert(d.name.clone()) {
+                base.deleted_tags.push(d);
+            }
+        }
+    }
+    {
+        let mut seen: std::collections::HashSet<u64> =
+            base.unfavorited_items.iter().map(|u| u.content_hash).collect();
+        for u in other.unfavorited_items {
+            if seen.insert(u.content_hash) {
+                base.unfavorited_items.push(u);
+            }
+        }
+    }
+
+    // Use the newer synced_at and device_name from whichever payload has it
+    if other.synced_at > base.synced_at {
+        base.synced_at = other.synced_at;
+    }
+
+    base
+}
+
 /// Parse an RFC3339 string to Utc DateTime, returning None on failure.
 fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     s.parse::<chrono::DateTime<chrono::Utc>>().ok()
@@ -558,5 +645,118 @@ mod tests {
         assert_eq!(stats.items_updated, 0);
         assert_eq!(stats.items_deleted, 0);
         assert_eq!(stats.tags_deleted, 0);
+    }
+
+    fn make_payload(items: Vec<SyncItem>, tags: Vec<SyncTag>) -> SyncPayload {
+        SyncPayload {
+            version: 2,
+            device_name: "test".into(),
+            synced_at: "2026-05-14T10:00:00Z".into(),
+            items,
+            tags,
+            deleted_items: vec![],
+            deleted_tags: vec![],
+            unfavorited_items: vec![],
+        }
+    }
+
+    fn make_item(hash: u64, updated_at: &str, text: &str) -> SyncItem {
+        SyncItem {
+            content_type: "plain_text".into(),
+            full_text: text.into(),
+            content_hash: hash,
+            created_at: "2026-05-13T08:00:00Z".into(),
+            updated_at: updated_at.into(),
+            rich_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            tags: vec![],
+        }
+    }
+
+    fn make_tag(name: &str, color: &str, updated_at: &str) -> SyncTag {
+        SyncTag { name: name.into(), color: color.into(), updated_at: updated_at.into() }
+    }
+
+    #[test]
+    fn test_merge_payloads_newer_item_wins() {
+        let base = make_payload(
+            vec![make_item(1, "2026-05-14T09:00:00Z", "hello")],
+            vec![],
+        );
+        let other = make_payload(
+            vec![make_item(1, "2026-05-14T10:00:00Z", "hello updated")],
+            vec![],
+        );
+        let merged = merge_payloads(base, other);
+        assert_eq!(merged.items.len(), 1);
+        assert_eq!(merged.items[0].full_text, "hello updated");
+        assert_eq!(merged.items[0].updated_at, "2026-05-14T10:00:00Z");
+    }
+
+    #[test]
+    fn test_merge_payloads_older_item_ignored() {
+        let base = make_payload(
+            vec![make_item(1, "2026-05-14T10:00:00Z", "hello")],
+            vec![],
+        );
+        let other = make_payload(
+            vec![make_item(1, "2026-05-14T09:00:00Z", "hello old")],
+            vec![],
+        );
+        let merged = merge_payloads(base, other);
+        assert_eq!(merged.items.len(), 1);
+        // Base is newer, should be kept
+        assert_eq!(merged.items[0].full_text, "hello");
+    }
+
+    #[test]
+    fn test_merge_payloads_different_items_combined() {
+        let base = make_payload(
+            vec![make_item(1, "2026-05-14T09:00:00Z", "hello")],
+            vec![],
+        );
+        let other = make_payload(
+            vec![make_item(2, "2026-05-14T10:00:00Z", "world")],
+            vec![],
+        );
+        let merged = merge_payloads(base, other);
+        assert_eq!(merged.items.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_payloads_tags_deduplicated() {
+        let base = make_payload(
+            vec![],
+            vec![make_tag("work", "#FF0000", "2026-05-14T09:00:00Z")],
+        );
+        let other = make_payload(
+            vec![],
+            vec![make_tag("work", "#00FF00", "2026-05-14T10:00:00Z")],
+        );
+        let merged = merge_payloads(base, other);
+        assert_eq!(merged.tags.len(), 1);
+        assert_eq!(merged.tags[0].color, "#00FF00");
+        assert_eq!(merged.tags[0].updated_at, "2026-05-14T10:00:00Z");
+    }
+
+    #[test]
+    fn test_merge_payloads_tombstones_deduplicated() {
+        let mut base = make_payload(vec![], vec![]);
+        base.deleted_items = vec![SyncDeletedItem {
+            content_hash: 1,
+            deleted_at: "2026-05-14T09:00:00Z".into(),
+            device_name: "a".into(),
+        }];
+        let mut other = make_payload(vec![], vec![]);
+        other.deleted_items = vec![
+            SyncDeletedItem { content_hash: 1, deleted_at: "2026-05-14T10:00:00Z".into(), device_name: "b".into() },
+            SyncDeletedItem { content_hash: 2, deleted_at: "2026-05-14T10:00:00Z".into(), device_name: "b".into() },
+        ];
+        let merged = merge_payloads(base, other);
+        // Hash 1 should be deduplicated, hash 2 is new
+        assert_eq!(merged.deleted_items.len(), 2);
+        assert!(merged.deleted_items.iter().any(|d| d.content_hash == 1));
+        assert!(merged.deleted_items.iter().any(|d| d.content_hash == 2));
     }
 }

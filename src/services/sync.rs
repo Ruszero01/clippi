@@ -607,6 +607,9 @@ fn run_sync_cycle_for_backend(
         return (false, format!("推送失败: {e}"), stats, pushed_items, pushed_tags);
     }
 
+    // Best-effort cleanup of cloud conflict files (e.g. clippi_sync-*.json)
+    let _ = backend.post_push_cleanup();
+
     let mut parts: Vec<String> = Vec::new();
     if stats.items_added > 0 {
         parts.push(format!("新增{}条", stats.items_added));
