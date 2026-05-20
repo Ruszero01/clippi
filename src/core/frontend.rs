@@ -105,29 +105,45 @@ impl Frontend {
         if let Some(app) = self.app.upgrade() {
             let window = app.window();
             let size = window.size();
-            let scale = window.scale_factor();
-            // window.size() returns physical pixels; divide by scale to get
-            // logical points that match platform monitor coordinates (AppKit, Win32).
-            let win_w = (size.width as f32 / scale) as i32;
-            let win_h = (size.height as f32 / scale) as i32;
 
-            if let Some(pos) = self.calculate_position(win_w, win_h, scale) {
+            // macOS: NSScreen / CGEvent use logical points. Slint size() is
+            // physical pixels — convert to logical for coordinate calculation.
+            // Windows: GetMonitorInfo / GetCursorPos already return physical
+            // pixels matching Slint, so no conversion is needed.
+            #[cfg(target_os = "macos")]
+            let (win_w, win_h) = {
+                let scale = window.scale_factor();
+                ((size.width as f32 / scale) as i32,
+                 (size.height as f32 / scale) as i32)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let (win_w, win_h) = (size.width as i32, size.height as i32);
+
+            if let Some(pos) = self.calculate_position(win_w, win_h) {
                 window.set_position(pos);
             }
         }
     }
 
-    fn calculate_position(&self, win_w: i32, win_h: i32, scale: f32) -> Option<PhysicalPosition> {
-        // Calc functions return logical coordinates; convert to physical for Slint.
-        let (x, y) = match self.position_mode {
+    fn calculate_position(&self, win_w: i32, win_h: i32) -> Option<PhysicalPosition> {
+        // mut used on macOS for logical-to-physical conversion below
+        #[allow(unused_mut)]
+        let (mut x, mut y) = match self.position_mode {
             PositionMode::Center => self.calc_center(win_w, win_h),
             PositionMode::FollowMouse => self.calc_follow_mouse(win_w, win_h),
             PositionMode::Remember => self.calc_remember(win_w, win_h),
         }?;
-        Some(PhysicalPosition::new(
-            (x as f32 * scale) as i32,
-            (y as f32 * scale) as i32,
-        ))
+
+        // macOS: monitor APIs return logical points; convert to physical for
+        // Slint's set_position. On Windows, coords are already physical.
+        #[cfg(target_os = "macos")]
+        if let Some(app) = self.app.upgrade() {
+            let scale = app.window().scale_factor();
+            x = (x as f32 * scale) as i32;
+            y = (y as f32 * scale) as i32;
+        }
+
+        Some(PhysicalPosition::new(x, y))
     }
 
     fn calc_center(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
