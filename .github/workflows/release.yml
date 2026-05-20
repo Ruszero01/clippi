@@ -167,7 +167,7 @@ jobs:
           # Copy output to distrib for upload
           mkdir -p target/distrib
           cp "$STAGING"/Clippi_*_x64-setup.exe target/distrib/
-          shasum -a 256 target/distrib/Clippi_*_x64-setup.exe > target/distrib/Clippi_"${VERSION}"_x64-setup.exe.sha256
+          sha256sum target/distrib/Clippi_*_x64-setup.exe > target/distrib/Clippi_"${VERSION}"_x64-setup.exe.sha256
           echo "Built NSIS installer: target/distrib/Clippi_${VERSION}_x64-setup.exe"
       - name: Build macOS .dmg
         if: runner.os == 'macOS'
