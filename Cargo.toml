@@ -1,18 +1,12 @@
 [package]
 name = "clippi"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
 license = "MIT"
 edition = "2021"
 build = "build.rs"
-
-[package.metadata.wix]
-upgrade-guid = "66941EB2-9E76-47FE-93C4-E29C1CE863C8"
-license = false
-eula = false
-path-guid = "DFAC08E5-F4EF-4907-9424-79708970616D"
 
 [package.metadata.bundle]
 name = "Clippi"

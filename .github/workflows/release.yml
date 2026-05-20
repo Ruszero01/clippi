@@ -139,11 +139,10 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
-      - name: Configure WiX
+      - name: Configure NSIS
         if: runner.os == 'Windows'
         run: |
-          echo "WIX=C:\Program Files (x86)\WiX Toolset v3.14" >> $env:GITHUB_ENV
-          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
