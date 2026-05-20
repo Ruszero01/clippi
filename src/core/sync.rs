@@ -308,6 +308,12 @@ pub fn merge_remote_into_local(
         if uf.device_name == local_device_name {
             continue; // own unfavorite, already handled
         }
+        if db
+            .is_item_unfavorited(uf.content_hash)
+            .unwrap_or(false)
+        {
+            continue; // already marked
+        }
         // Record locally for propagation
         let _ = db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
         // Unfavorite local item if it exists and is still favorited

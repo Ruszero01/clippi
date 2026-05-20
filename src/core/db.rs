@@ -653,6 +653,16 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// Check if an item already has an unfavorite marker.
+    pub fn is_item_unfavorited(&self, content_hash: u64) -> SqlResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM unfavorited_items WHERE content_hash = ?1",
+            params![content_hash as i64],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     /// Check if a tag has a local tombstone.
     pub fn is_tag_tombstoned(&self, name: &str) -> SqlResult<bool> {
         let count: i64 = self.conn.query_row(
