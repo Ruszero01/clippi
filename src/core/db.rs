@@ -304,29 +304,35 @@ impl Database {
 
     pub fn add_item_tag(&self, item_id: i64, tag_id: i64) -> SqlResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO item_tags (tag_id, item_id, used_at) VALUES (?1, ?2, ?3)",
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO item_tags (tag_id, item_id, used_at) VALUES (?1, ?2, ?3)",
             params![tag_id, item_id, now],
         )?;
-        self.touch_item(item_id)?;
+        if changed > 0 {
+            self.touch_item(item_id)?;
+        }
         Ok(())
     }
 
     pub fn remove_item_tag(&self, item_id: i64, tag_id: i64) -> SqlResult<()> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM item_tags WHERE tag_id = ?1 AND item_id = ?2",
             params![tag_id, item_id],
         )?;
-        self.touch_item(item_id)?;
+        if deleted > 0 {
+            self.touch_item(item_id)?;
+        }
         Ok(())
     }
 
     pub fn clear_item_tags(&self, item_id: i64) -> SqlResult<()> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM item_tags WHERE item_id = ?1",
             params![item_id],
         )?;
-        self.touch_item(item_id)?;
+        if deleted > 0 {
+            self.touch_item(item_id)?;
+        }
         Ok(())
     }
 
@@ -398,7 +404,6 @@ impl Database {
     }
 
     /// Insert a full item row (used during sync merge for new remote items).
-    #[allow(clippy::too_many_arguments)]
     pub fn insert_sync_item_raw(
         &self,
         item: &crate::core::sync::SyncItem,
@@ -439,8 +444,8 @@ impl Database {
     ) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
-             rich_data = ?4, is_favorite = ?5, note = ?6, source_app_name = ?7
-             WHERE id = ?8",
+             rich_data = ?4, is_favorite = ?5, note = ?6
+             WHERE id = ?7",
             rusqlite::params![
                 item.full_text,
                 item.content_type,
@@ -448,7 +453,6 @@ impl Database {
                 item.rich_data,
                 item.is_favorite as i32,
                 item.note,
-                "", // source_app_name not in sync payload
                 id,
             ],
         )?;
@@ -461,6 +465,16 @@ impl Database {
         self.conn.execute(
             "UPDATE clipboard_items SET updated_at = ?1 WHERE id = ?2",
             rusqlite::params![now, item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Set updated_at to an explicit value (used after sync merge to preserve
+    /// remote timestamp when tag re-application has bumped it to now).
+    pub fn set_item_updated_at(&self, item_id: i64, timestamp: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![timestamp, item_id],
         )?;
         Ok(())
     }
