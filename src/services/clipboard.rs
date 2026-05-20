@@ -927,13 +927,59 @@ fn build_source_icon(item: &crate::core::types::ClipboardItem, cache: &mut HashM
     (path_str, img)
 }
 
-/// Build file type display fields: count, icon text, up to 3 filenames, overflow.
-fn build_file_fields(item: &crate::core::types::ClipboardItem) -> (i32, String, String, String, String, i32) {
+/// Truncate a filename: keep head + "..." + extension so the result fits
+/// within `max_len` characters. The stem middle is elided.
+fn truncate_filename(name: &str, max_len: usize) -> String {
+    if name.chars().count() <= max_len {
+        return name.to_string();
+    }
+    let path = std::path::Path::new(name);
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+
+    let ext_with_dot = if ext.is_empty() {
+        String::new()
+    } else {
+        format!(".{}", ext)
+    };
+    let available = max_len.saturating_sub(ext_with_dot.chars().count() + 3); // 3 for "..."
+    if available <= 2 {
+        return format!("...{}", ext_with_dot);
+    }
+    let prefix_len = available / 2;
+    let suffix_len = available - prefix_len;
+
+    let stem_chars: Vec<char> = stem.chars().collect();
+    let prefix: String = stem_chars.iter().take(prefix_len).collect();
+    let suffix: String = stem_chars
+        .iter()
+        .rev()
+        .take(suffix_len)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{}...{}{}", prefix, suffix, ext_with_dot)
+}
+
+/// Build file type display fields: count, icon text, up to 3 truncated filenames,
+/// raw names, overflow.
+fn build_file_fields(
+    item: &crate::core::types::ClipboardItem,
+) -> (i32, String, String, String, String, String, String, String, i32) {
     if item.content_type != crate::core::types::ContentType::File || item.file_data.is_empty() {
-        return (0, String::new(), String::new(), String::new(), String::new(), 0);
+        return (
+            0,
+            String::new(),
+            String::new(), String::new(), String::new(),
+            String::new(), String::new(), String::new(),
+            0,
+        );
     }
     let fd = crate::core::types::FileData::from_json(&item.file_data);
     let count = fd.files.len() as i32;
+    // Multi-file: show only the count (UI layer adds icon glyph).
+    // Single file: show extension or "文件夹".
     let icon_text = if count == 1 {
         if fd.files[0].is_dir {
             "文件夹".to_string()
@@ -941,35 +987,44 @@ fn build_file_fields(item: &crate::core::types::ClipboardItem) -> (i32, String, 
             crate::core::types::get_extension_label(&fd.files[0].name)
         }
     } else {
-        format!("{}个文件", count)
+        count.to_string()
     };
-    let n1 = fd.files.first().map(|f| f.name.clone()).unwrap_or_default();
-    let n2 = fd.files.get(1).map(|f| f.name.clone()).unwrap_or_default();
-    let n3 = fd.files.get(2).map(|f| f.name.clone()).unwrap_or_default();
+    let n1 = fd
+        .files
+        .first()
+        .map(|f| truncate_filename(&f.name, 60))
+        .unwrap_or_default();
+    let n2 = fd
+        .files
+        .get(1)
+        .map(|f| truncate_filename(&f.name, 60))
+        .unwrap_or_default();
+    let n3 = fd
+        .files
+        .get(2)
+        .map(|f| truncate_filename(&f.name, 60))
+        .unwrap_or_default();
+    let n1_raw = fd.files.first().map(|f| f.name.clone()).unwrap_or_default();
+    let n2_raw = fd.files.get(1).map(|f| f.name.clone()).unwrap_or_default();
+    let n3_raw = fd.files.get(2).map(|f| f.name.clone()).unwrap_or_default();
     let overflow = if count > 3 { count - 3 } else { 0 };
-    (count, icon_text, n1, n2, n3, overflow)
+    (count, icon_text, n1, n2, n3, n1_raw, n2_raw, n3_raw, overflow)
 }
 
-/// Extract and cache OS file icon for the first file in a file-type item.
-fn build_file_icon(item: &crate::core::types::ClipboardItem, cache: &mut HashMap<String, Image>) -> (String, Image) {
-    if item.content_type != crate::core::types::ContentType::File || item.file_data.is_empty() {
-        return (String::new(), Image::default());
-    }
-    let fd = crate::core::types::FileData::from_json(&item.file_data);
-    let first_file = match fd.files.first() {
-        Some(f) => f,
-        None => return (String::new(), Image::default()),
-    };
-    let cache_name = if first_file.is_dir {
+/// OS icon for a single file. Cached in memory (HashMap) and on disk (PNG).
+/// Disk cache is checked first — avoids the expensive Shell API call when
+/// the icon was already extracted in a previous session.
+fn icon_for_file(fi: &crate::core::types::FileInfo, cache: &mut HashMap<String, Image>) -> (String, Image) {
+    let cache_name = if fi.is_dir {
         "ext_folder".to_string()
     } else {
-        let ext = std::path::Path::new(&first_file.name)
+        let ext = std::path::Path::new(&fi.name)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
         if matches!(ext.as_str(), "exe" | "dll" | "msi" | "scr" | "cpl") {
-            let stem = std::path::Path::new(&first_file.name)
+            let stem = std::path::Path::new(&fi.name)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_lowercase())
@@ -981,27 +1036,52 @@ fn build_file_icon(item: &crate::core::types::ClipboardItem, cache: &mut HashMap
             format!("ext_{}", ext)
         }
     };
-    let icon_base64 = match file_icon::extract_file_icon_base64(&first_file.path) {
+    let icon_path = images_dir().join("icons").join(format!("{}.png", cache_name));
+    let path_str = icon_path.to_string_lossy().to_string();
+
+    // Memory cache hit — instant
+    if let Some(cached) = cache.get(&path_str) {
+        return (path_str, cached.clone());
+    }
+
+    // Disk cache hit — load without calling Shell API
+    if icon_path.exists() {
+        let img = Image::load_from_path(std::path::Path::new(&path_str)).unwrap_or_default();
+        cache.insert(path_str.clone(), img.clone());
+        return (path_str, img);
+    }
+
+    // Cold path: extract from OS, write to disk cache
+    let icon_base64 = match file_icon::extract_file_icon_base64(&fi.path) {
         Some(b64) => b64,
         None => return (String::new(), Image::default()),
     };
-    let icon_dir = images_dir().join("icons");
-    let _ = std::fs::create_dir_all(&icon_dir);
-    let icon_path = icon_dir.join(format!("{}.png", cache_name));
-    let path_str = icon_path.to_string_lossy().to_string();
-    if !icon_path.exists() {
-        if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&icon_base64) {
-            let _ = std::fs::write(&icon_path, png_bytes);
-        }
+    let _ = std::fs::create_dir_all(icon_path.parent().unwrap());
+    if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&icon_base64) {
+        let _ = std::fs::write(&icon_path, png_bytes);
     }
-    let img = if let Some(cached) = cache.get(&path_str) {
-        cached.clone()
-    } else {
-        let img = Image::load_from_path(std::path::Path::new(&path_str)).unwrap_or_default();
-        cache.insert(path_str.clone(), img.clone());
-        img
-    };
+    let img = Image::load_from_path(std::path::Path::new(&path_str)).unwrap_or_default();
+    cache.insert(path_str.clone(), img.clone());
     (path_str, img)
+}
+
+/// Extract OS file icons for up to 3 previewed files (cached by extension/app).
+fn build_file_icons(
+    item: &crate::core::types::ClipboardItem,
+    cache: &mut HashMap<String, Image>,
+) -> (String, Image, String, Image, String, Image) {
+    if item.content_type != crate::core::types::ContentType::File || item.file_data.is_empty() {
+        return (
+            String::new(), Image::default(),
+            String::new(), Image::default(),
+            String::new(), Image::default(),
+        );
+    }
+    let fd = crate::core::types::FileData::from_json(&item.file_data);
+    let (p1, img1) = fd.files.first().map(|f| icon_for_file(f, cache)).unwrap_or_default();
+    let (p2, img2) = fd.files.get(1).map(|f| icon_for_file(f, cache)).unwrap_or_default();
+    let (p3, img3) = fd.files.get(2).map(|f| icon_for_file(f, cache)).unwrap_or_default();
+    (p1, img1, p2, img2, p3, img3)
 }
 
 /// Build link/path preview fields: domain, path, favicon, folder icon.
@@ -1125,8 +1205,8 @@ impl ClipboardService {
             slint::Color::default()
         };
 
-        let (file_count, file_icon_text, file_name_1, file_name_2, file_name_3, file_overflow) = build_file_fields(item);
-        let (file_icon_path, file_icon_image) = build_file_icon(item, &mut self.image_cache);
+        let (file_count, file_icon_text, file_name_1, file_name_2, file_name_3, file_name_1_raw, file_name_2_raw, file_name_3_raw, file_overflow) = build_file_fields(item);
+        let (file_icon_path, file_icon_image, file_icon_path_2, file_icon_image_2, file_icon_path_3, file_icon_image_3) = build_file_icons(item, &mut self.image_cache);
         let (link_domain, link_path, favicon_path, favicon_image, folder_icon_path, folder_icon_image) = build_link_preview(item, &mut self.image_cache);
         let (has_tags, tag_dot_0, tag_dot_1, tag_dot_2, tag_name_0, tag_name_1, tag_name_2, tags_overflow) = build_tag_dots(&item.tags);
 
@@ -1159,9 +1239,16 @@ impl ClipboardService {
             file_name_1: SharedString::from(file_name_1),
             file_name_2: SharedString::from(file_name_2),
             file_name_3: SharedString::from(file_name_3),
+            file_name_1_raw: SharedString::from(file_name_1_raw),
+            file_name_2_raw: SharedString::from(file_name_2_raw),
+            file_name_3_raw: SharedString::from(file_name_3_raw),
             file_overflow,
             file_icon_path: SharedString::from(file_icon_path),
             file_icon_image,
+            file_icon_path_2: SharedString::from(file_icon_path_2),
+            file_icon_image_2,
+            file_icon_path_3: SharedString::from(file_icon_path_3),
+            file_icon_image_3,
             has_tags,
             tag_dot_0,
             tag_dot_1,
