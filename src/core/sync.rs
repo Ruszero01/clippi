@@ -76,6 +76,9 @@ pub struct SyncItem {
     /// Tag associations carried on the item.
     #[serde(default)]
     pub tags: Vec<SyncTagRef>,
+    /// Character count for text types; 0 for other types.
+    #[serde(default)]
+    pub size: i64,
 }
 
 /// Tag reference embedded in a SyncItem.
@@ -182,6 +185,7 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
             rich_data: item.rich_data,
             is_favorite: item.is_favorite,
             note: item.note,
+            size: item.size,
             tags,
         });
     }
@@ -596,6 +600,7 @@ mod tests {
                 rich_data: String::new(),
                 is_favorite: false,
                 note: String::new(),
+                size: 0,
                 tags: vec![SyncTagRef {
                     name: "work".into(),
                     color: "#EF4444".into(),
@@ -670,6 +675,7 @@ mod tests {
             rich_data: String::new(),
             is_favorite: false,
             note: String::new(),
+            size: 0,
             tags: vec![],
         }
     }

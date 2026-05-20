@@ -112,6 +112,7 @@ pub struct ClipboardItem {
     pub note: String,
     pub source_app_name: String,
     pub source_app_icon: String, // base64-encoded PNG icon
+    pub size: i64, // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
 }
 
@@ -211,6 +212,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            size: 0,
             tags: Vec::new(),
         }
     }
@@ -234,6 +236,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            size: 0,
             tags: Vec::new(),
         }
     }
@@ -257,6 +260,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            size: 0,
             tags: Vec::new(),
         }
     }
@@ -281,6 +285,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
+            size: 0,
             tags: Vec::new(),
         }
     }

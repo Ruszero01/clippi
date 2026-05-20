@@ -805,6 +805,9 @@ impl Pollable for ClipboardService {
                         item.rich_data = String::new();
                     }
 
+                    // Compute size once before upsert (file: byte sum, text: char count)
+                    item.size = compute_size(&item);
+
                     if let Err(e) = db.upsert(&item) {
                         eprintln!("[ERROR] ClipboardService: upsert error: {:?}", e);
                         continue;
@@ -960,6 +963,71 @@ fn truncate_filename(name: &str, max_len: usize) -> String {
         .rev()
         .collect();
     format!("{}...{}{}", prefix, suffix, ext_with_dot)
+}
+
+/// Build size label for the bottom-right corner tag from the stored `size` field.
+/// File types: total file size in bytes → human-readable (e.g. "2.5 MB").
+/// Text types: character count → human-readable (e.g. "1,234字").
+fn build_size_label(item: &crate::core::types::ClipboardItem) -> String {
+    if item.size <= 0 {
+        return String::new();
+    }
+    match item.content_type {
+        crate::core::types::ContentType::File => format_file_size(item.size as u64),
+        crate::core::types::ContentType::PlainText | crate::core::types::ContentType::RichText => {
+            format_char_count(item.size as usize)
+        }
+        _ => String::new(),
+    }
+}
+
+/// Compute the `size` value for a clipboard item to store in DB.
+/// File types: sum of all file sizes. Text types: char count. Other types: 0.
+fn compute_size(item: &crate::core::types::ClipboardItem) -> i64 {
+    match item.content_type {
+        crate::core::types::ContentType::File => {
+            let fd = crate::core::types::FileData::from_json(&item.file_data);
+            fd.files
+                .iter()
+                .filter_map(|f| std::fs::metadata(&f.path).ok())
+                .map(|m| m.len())
+                .sum::<u64>() as i64
+        }
+        crate::core::types::ContentType::PlainText | crate::core::types::ContentType::RichText => {
+            item.full_text.chars().count() as i64
+        }
+        _ => 0,
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    if unit_idx == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_idx])
+    }
+}
+
+fn format_char_count(count: usize) -> String {
+    if count < 1000 {
+        format!("{count}字")
+    } else if count < 10000 {
+        format!("{:.1}千字", count as f64 / 1000.0)
+    } else {
+        let wan = count as f64 / 10000.0;
+        if wan < 10.0 {
+            format!("{:.1}万字", wan)
+        } else {
+            format!("{:.0}万字", wan)
+        }
+    }
 }
 
 /// Build file type display fields: count, icon text, up to 3 truncated filenames,
@@ -1209,6 +1277,7 @@ impl ClipboardService {
         let (file_icon_path, file_icon_image, file_icon_path_2, file_icon_image_2, file_icon_path_3, file_icon_image_3) = build_file_icons(item, &mut self.image_cache);
         let (link_domain, link_path, favicon_path, favicon_image, folder_icon_path, folder_icon_image) = build_link_preview(item, &mut self.image_cache);
         let (has_tags, tag_dot_0, tag_dot_1, tag_dot_2, tag_name_0, tag_name_1, tag_name_2, tags_overflow) = build_tag_dots(&item.tags);
+        let size_label = build_size_label(item);
 
         ClipboardEntry {
             id: item.id as i32,
@@ -1257,6 +1326,7 @@ impl ClipboardService {
             tag_name_1,
             tag_name_2,
             tags_overflow,
+            size_label: SharedString::from(size_label),
         }
     }
 }

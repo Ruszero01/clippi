@@ -1660,6 +1660,24 @@ export component ClipboardList inherits Rectangle {
                                     }
                                 }
 
+                                // 大小/字数标签（文件大小 / 文本字符数）
+                                if entry.size-label != "" : Rectangle {
+                                    height: 18px;
+                                    width: size-text.preferred-width + 10px;
+                                    border-radius: 9px;
+                                    background: dark-mode ? #232425e8 : #ffffffe8;
+                                    border-width: 1px;
+                                    border-color: dark-mode ? #ffffff20 : #0000000c;
+
+                                    size-text := Text {
+                                        text: entry.size-label;
+                                        font-size: 9px;
+                                        color: text-2;
+                                        x: 5px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
                                 // 悬浮时间标签
                                 time-rect := Rectangle {
                                     height: 18px;

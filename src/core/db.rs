@@ -35,7 +35,8 @@ impl Database {
                 source_app_name TEXT NOT NULL DEFAULT '',
                 source_app_icon TEXT NOT NULL DEFAULT '',
                 image_width INTEGER NOT NULL DEFAULT 0,
-                image_height INTEGER NOT NULL DEFAULT 0
+                image_height INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
             CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
@@ -86,13 +87,13 @@ impl Database {
 
     pub fn upsert(&self, item: &ClipboardItem) -> SqlResult<()> {
         let changed = self.conn.execute(
-            "UPDATE clipboard_items SET updated_at = ?1, image_path = ?3, rich_data = ?4, file_data = ?5, image_width = ?6, image_height = ?7 WHERE content_hash = ?2",
-            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64],
+            "UPDATE clipboard_items SET updated_at = ?1, image_path = ?3, rich_data = ?4, file_data = ?5, image_width = ?6, image_height = ?7, size = ?8 WHERE content_hash = ?2",
+            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64, item.size],
         )?;
         if changed == 0 {
             self.conn.execute(
-                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, source_app_name, source_app_icon, image_width, image_height)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, source_app_name, source_app_icon, image_width, image_height, size)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     item.content_type.as_str(),
                     item.full_text,
@@ -106,6 +107,7 @@ impl Database {
                     item.source_app_icon,
                     item.image_width as i64,
                     item.image_height as i64,
+                    item.size,
                 ],
             )?;
         }
@@ -122,7 +124,7 @@ impl Database {
     ) -> SqlResult<Vec<ClipboardItem>> {
         let (where_clause, mut filter_params) = filters.db_where();
         let query = format!(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size
              FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
             where_clause, order_by
         );
@@ -134,7 +136,7 @@ impl Database {
 
     pub fn get_by_id(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size
              FROM clipboard_items WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -147,7 +149,7 @@ impl Database {
 
     pub fn get_by_hash(&self, hash: u64) -> SqlResult<Option<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height
+            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size
              FROM clipboard_items WHERE content_hash = ?1",
         )?;
         let mut rows = stmt.query(params![hash as i64])?;
@@ -419,8 +421,8 @@ impl Database {
 
         self.conn.execute(
             "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at,
-             rich_data, is_favorite, note, source_app_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             rich_data, is_favorite, note, source_app_name, size)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 item.content_type,
                 item.full_text,
@@ -431,6 +433,7 @@ impl Database {
                 item.is_favorite as i32,
                 item.note,
                 "", // source_app_name not in sync payload
+                item.size,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -444,8 +447,8 @@ impl Database {
     ) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
-             rich_data = ?4, is_favorite = ?5, note = ?6
-             WHERE id = ?7",
+             rich_data = ?4, is_favorite = ?5, note = ?6, size = ?7
+             WHERE id = ?8",
             rusqlite::params![
                 item.full_text,
                 item.content_type,
@@ -453,6 +456,7 @@ impl Database {
                 item.rich_data,
                 item.is_favorite as i32,
                 item.note,
+                item.size,
                 id,
             ],
         )?;
@@ -709,6 +713,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let source_app_icon: String = row.get(12).unwrap_or_default();
     let image_width: i32 = row.get(13).unwrap_or(0);
     let image_height: i32 = row.get(14).unwrap_or(0);
+    let size: i64 = row.get(15).unwrap_or(0);
     Ok(ClipboardItem {
         id: row.get(0)?,
         content_type: ContentType::from_str(&ct_str),
@@ -725,6 +730,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         note,
         source_app_name,
         source_app_icon,
+        size,
         tags: Vec::new(), // filled later via batch query
     })
 }
