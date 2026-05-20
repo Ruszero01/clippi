@@ -28,9 +28,12 @@ SetCompressor /SOLID lzma
 !define MUI_ABORTWARNING
 !define MUI_ICON "${STAGING}\app.ico"
 !define MUI_UNICON "${STAGING}\app.ico"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
+!define MUI_FINISHPAGE_RUN_TEXT "启动 ${APP_NAME}"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${STAGING}\LICENSE.txt"
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -40,18 +43,18 @@ SetCompressor /SOLID lzma
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-Section "Install"
+LangString DESC_Core ${LANG_SIMPCHINESE} "核心程序文件（必需）"
+LangString DESC_StartMenu ${LANG_SIMPCHINESE} "在开始菜单创建快捷方式"
+LangString DESC_Desktop ${LANG_SIMPCHINESE} "在桌面创建快捷方式"
+
+Section "!Clippi" SectionCore
+  SectionIn RO
   SetOutPath "$INSTDIR"
 
   DetailPrint "Stopping running instance..."
   nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
 
   File "${STAGING}\${APP_EXE}"
-
-  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-  CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
-  CreateShortCut "$SMPROGRAMS\${APP_NAME}\卸载 Clippi.lnk" "$INSTDIR\uninstall.exe"
-  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -66,6 +69,22 @@ Section "Install"
   WriteRegDWORD HKLM "${REG_UNINST}" "NoModify" 1
   WriteRegDWORD HKLM "${REG_UNINST}" "NoRepair" 1
 SectionEnd
+
+Section "开始菜单快捷方式" SectionStartMenu
+  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+  CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+  CreateShortCut "$SMPROGRAMS\${APP_NAME}\卸载 Clippi.lnk" "$INSTDIR\uninstall.exe"
+SectionEnd
+
+Section "桌面快捷方式" SectionDesktop
+  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SectionCore} $(DESC_Core)
+  !insertmacro MUI_DESCRIPTION_TEXT ${SectionStartMenu} $(DESC_StartMenu)
+  !insertmacro MUI_DESCRIPTION_TEXT ${SectionDesktop} $(DESC_Desktop)
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
   nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
