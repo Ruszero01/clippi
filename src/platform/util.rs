@@ -127,120 +127,125 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
     }
 }
 
-/// Convert an NSImage to a base64-encoded PNG.
+// macOS geometry types for NSImage drawing (CGRect/CGSize equivalents
+// with objc2::Encode impls, since core_graphics types use a different objc2 version).
+#[cfg(target_os = "macos")]
+mod macos_geometry {
+    use objc2::encode::{Encode, Encoding, RefEncode};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGSize {
+        pub width: f64,
+        pub height: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGRect {
+        pub origin: CGPoint,
+        pub size: CGSize,
+    }
+
+    impl CGPoint {
+        pub const fn new(x: f64, y: f64) -> Self {
+            Self { x, y }
+        }
+    }
+
+    impl CGSize {
+        pub const fn new(width: f64, height: f64) -> Self {
+            Self { width, height }
+        }
+    }
+
+    impl CGRect {
+        pub const fn new(origin: CGPoint, size: CGSize) -> Self {
+            Self { origin, size }
+        }
+    }
+
+    // f64 = CGFloat on 64-bit macOS → encoding "d"
+    unsafe impl Encode for CGPoint {
+        const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+    }
+    unsafe impl RefEncode for CGPoint {
+        const ENCODING_REF: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+    }
+
+    unsafe impl Encode for CGSize {
+        const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+    }
+    unsafe impl RefEncode for CGSize {
+        const ENCODING_REF: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+    }
+
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
+    unsafe impl RefEncode for CGRect {
+        const ENCODING_REF: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
+}
+
+/// Convert an NSImage to a base64-encoded PNG at the target size.
 ///
-/// Uses the highest-resolution NSBitmapImageRep from the image's representations
-/// to avoid multi-page TIFF first-page issues (which can pick a tiny 16px icon).
-/// Trims transparent padding before resizing so the icon fills its display area.
+/// Uses native NSImage drawing (GPU-accelerated) to scale the source icon
+/// into a new 32×32 image, then encodes via TIFF → NSBitmapImageRep → PNG.
+/// Avoids the `image` crate decode/encode cycle entirely (no Lanczos3 in
+/// software, no transparent-edge trimming ― NSImage scaling handles it).
 #[cfg(target_os = "macos")]
 pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Option<String> {
     unsafe {
         use base64::Engine;
+        use objc2::class;
         use objc2::msg_send;
         use objc2::rc::Retained;
-        use objc2::sel;
+        use macos_geometry::{CGPoint, CGRect, CGSize};
 
-        // 1. Iterate representations to find the highest-resolution NSBitmapImageRep
-        let reps: *mut objc2::runtime::NSObject = msg_send![image, representations];
-        let count: usize = msg_send![reps, count];
-        if count == 0 {
-            return None;
-        }
+        let size_f = size as f64;
 
-        let png_sel = sel!(representationUsingType:properties:);
-        let mut png_data: Option<Retained<objc2::runtime::NSObject>> = None;
-        let mut best_w: i32 = 0;
+        // 1. Create target NSImage and draw source into it (GPU-accelerated scale)
+        let target: Retained<objc2::runtime::NSObject> = msg_send![
+            msg_send![class!(NSImage), alloc],
+            initWithSize: CGSize::new(size_f, size_f)
+        ];
+        let _: () = msg_send![&target, lockFocus];
 
-        for i in 0..count {
-            let rep: *mut objc2::runtime::NSObject = msg_send![reps, objectAtIndex: i];
-            let responds: bool = msg_send![rep, respondsToSelector: png_sel];
-            if !responds {
-                continue;
-            }
-            let pw: i32 = msg_send![rep, pixelsWide];
-            if pw > best_w {
-                let data: Option<Retained<objc2::runtime::NSObject>> =
-                    msg_send![rep, representationUsingType: 4usize, properties: std::ptr::null::<objc2::runtime::NSObject>()];
-                if data.is_some() {
-                    best_w = pw;
-                    png_data = data;
-                }
-            }
-        }
+        let src_size: CGSize = msg_send![image, size];
+        let dest_rect = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(size_f, size_f));
+        let src_rect = CGRect::new(CGPoint::new(0.0, 0.0), src_size);
+        // NSCompositingOperationCopy = 2
+        let _: () = msg_send![image, drawInRect: dest_rect, fromRect: src_rect, operation: 2usize, fraction: 1.0f64];
+        let _: () = msg_send![&target, unlockFocus];
 
-        // Fallback: TIFF → NSBitmapImageRep if no bitmap rep found
-        if png_data.is_none() {
-            let tiff: Retained<objc2::runtime::NSObject> = msg_send![image, TIFFRepresentation];
-            let rep: Retained<objc2::runtime::NSObject> = msg_send![
-                msg_send![objc2::class!(NSBitmapImageRep), alloc],
-                initWithData: &*tiff
-            ];
-            png_data = msg_send![&rep, representationUsingType: 4usize, properties: std::ptr::null::<objc2::runtime::NSObject>()];
-        }
-
+        // 2. TIFF → NSBitmapImageRep → PNG
+        let tiff: Retained<objc2::runtime::NSObject> = msg_send![&target, TIFFRepresentation];
+        let rep: Retained<objc2::runtime::NSObject> = msg_send![
+            msg_send![class!(NSBitmapImageRep), alloc],
+            initWithData: &*tiff
+        ];
+        let png_data: Option<Retained<objc2::runtime::NSObject>> = msg_send![
+            &rep,
+            representationUsingType: 4usize,
+            properties: std::ptr::null::<objc2::runtime::NSObject>()
+        ];
         let png_data = png_data?;
 
-        // 2. Extract PNG bytes from NSData
+        // 3. Base64 encode PNG bytes directly (no image crate round-trip)
         let bytes: *const std::ffi::c_void = msg_send![&png_data, bytes];
         let len: usize = msg_send![&png_data, length];
         if bytes.is_null() || len == 0 {
             return None;
         }
         let png_bytes = std::slice::from_raw_parts(bytes as *const u8, len);
-
-        // 3. Decode → trim transparent padding → resize → re-encode → base64
-        let img = image::load_from_memory(png_bytes).ok()?;
-        let trimmed = trim_transparent_edges(&img);
-        let resized = trimmed.resize_exact(size as u32, size as u32, image::imageops::FilterType::Lanczos3);
-        let mut out = Vec::new();
-        resized.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
-
-        Some(base64::engine::general_purpose::STANDARD.encode(&out))
+        Some(base64::engine::general_purpose::STANDARD.encode(png_bytes))
     }
-}
-
-/// Crop transparent edges from an RGBA image so the content fills the frame.
-#[cfg(target_os = "macos")]
-fn trim_transparent_edges(img: &image::DynamicImage) -> image::DynamicImage {
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    if w == 0 || h == 0 {
-        return img.clone();
-    }
-
-    let threshold: u8 = 10; // treat alpha <= 10 as fully transparent
-
-    // Find bounds of non-transparent pixels
-    let mut min_x = w;
-    let mut min_y = h;
-    let mut max_x: u32 = 0;
-    let mut max_y: u32 = 0;
-
-    for y in 0..h {
-        for x in 0..w {
-            let alpha = rgba.get_pixel(x, y).0[3];
-            if alpha > threshold {
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x);
-                max_y = max_y.max(y);
-            }
-        }
-    }
-
-    // If no non-transparent pixels found, keep the original
-    if max_x < min_x || max_y < min_y {
-        return img.clone();
-    }
-
-    let crop_w = max_x - min_x + 1;
-    let crop_h = max_y - min_y + 1;
-
-    // Never crop to something unreasonably small
-    if crop_w < 8 || crop_h < 8 {
-        return img.clone();
-    }
-
-    let cropped = image::imageops::crop_imm(&rgba, min_x, min_y, crop_w, crop_h).to_image();
-    image::DynamicImage::ImageRgba8(cropped)
 }

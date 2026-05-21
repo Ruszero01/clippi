@@ -987,14 +987,9 @@ fn build_size_label(item: &crate::core::types::ClipboardItem) -> String {
 /// File types: sum of all file sizes. Text types: char count. Other types: 0.
 fn compute_size(item: &crate::core::types::ClipboardItem) -> i64 {
     match item.content_type {
-        crate::core::types::ContentType::File => {
-            let fd = crate::core::types::FileData::from_json(&item.file_data);
-            fd.files
-                .iter()
-                .filter_map(|f| std::fs::metadata(&f.path).ok())
-                .map(|m| m.len())
-                .sum::<u64>() as i64
-        }
+        // File size is now computed during detection (in the background listener thread).
+        // No fs::metadata() here to avoid blocking the main thread on network/cloud volumes.
+        crate::core::types::ContentType::File => item.size,
         crate::core::types::ContentType::PlainText | crate::core::types::ContentType::RichText => {
             item.full_text.chars().count() as i64
         }

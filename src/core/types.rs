@@ -265,7 +265,7 @@ impl ClipboardItem {
         }
     }
 
-    pub fn new_file(id: i64, file_data: &FileData, hash: u64, source: Option<&SourceAppInfo>) -> Self {
+    pub fn new_file(id: i64, file_data: &FileData, hash: u64, source: Option<&SourceAppInfo>, size: i64) -> Self {
         let now = Utc::now();
         let display = file_data.display_text();
         let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
@@ -285,7 +285,7 @@ impl ClipboardItem {
             note: String::new(),
             source_app_name: app_name,
             source_app_icon: icon,
-            size: 0,
+            size,
             tags: Vec::new(),
         }
     }

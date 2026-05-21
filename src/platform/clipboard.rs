@@ -77,6 +77,12 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                         is_dir: p.is_dir(),
                     }
                 }).collect();
+                // Compute total file size in background thread (avoids blocking main thread poll)
+                let total_size: i64 = entries
+                    .iter()
+                    .filter_map(|f| std::fs::metadata(&f.path).ok())
+                    .map(|m| m.len())
+                    .sum::<u64>() as i64;
 
                 // Single image file → treat as Image type for thumbnail preview
                 if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path) {
@@ -130,6 +136,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                     &file_data,
                     hash,
                     source_info.as_ref(),
+                    total_size,
                 ));
             }
         }
