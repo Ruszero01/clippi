@@ -178,7 +178,7 @@ export component App inherits Window {
     callback edit-sync-backend(string);
     callback update-note(int, string);
     callback edit-item(int);
-    callback save-content(int, string);
+    callback save-content(int, string, string);
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
@@ -496,7 +496,7 @@ export component App inherits Window {
                     content-type: root.editing-item-type;
 
                     cancel => { root.current-view = "clipboard"; }
-                    save-content(id, text) => { root.save-content(id, text); }
+                    save-content(id, text, sel_type) => { root.save-content(id, text, sel_type); }
                 }
 
                 SettingsPanel {

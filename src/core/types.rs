@@ -309,20 +309,35 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     }
 }
 
-/// Check if text is a web URL (http:// or https:// only).
+/// Check if text is solely a web URL (http:// or https:// only).
+/// Rejects text that merely starts with a URL but contains extra content.
 pub fn is_url(text: &str) -> bool {
     let text = text.trim();
-    if text.contains('\n') {
+    if text.is_empty() {
+        return false;
+    }
+    if text.contains('\n') || text.contains(' ') {
         return false;
     }
     (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10
 }
 
-/// Check if text is a file system path (Windows absolute, UNC, or Unix absolute).
+/// Check if text is solely a file system path (Windows absolute, UNC, or Unix absolute).
+/// Rejects text that starts with a path but has extra descriptive content after it.
 pub fn is_path(text: &str) -> bool {
     let text = text.trim();
-    if text.contains('\n') {
+    if text.is_empty() || text.contains('\n') {
         return false;
+    }
+    // If the text contains a space, the content after the last path separator
+    // must not itself contain a space — otherwise it's likely "path + description".
+    if text.contains(' ') {
+        let last_sep = text.rfind('\\').or_else(|| text.rfind('/'));
+        if let Some(pos) = last_sep {
+            if text[pos + 1..].contains(' ') {
+                return false;
+            }
+        }
     }
     // Windows absolute path: C:\..., D:/...
     if text.len() >= 3

@@ -7,7 +7,7 @@ use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
 };
-use crate::core::types::{is_url, is_path, ContentType, RichData};
+use crate::core::types::{ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::monitor::get_cursor_pos;
@@ -927,14 +927,8 @@ impl AppController {
         });
 
         let c = ctx.clone();
-        slint_app.on_save_content(move |id, text: SharedString| {
-            let content_type = if is_url(&text) {
-                "link"
-            } else if is_path(&text) {
-                "path"
-            } else {
-                "plain_text"
-            };
+        slint_app.on_save_content(move |id, text: SharedString, sel_type: SharedString| {
+            let content_type = sel_type.as_str();
             let _ = c.looper.try_with_clipboard_service(|cs| {
                 cs.update_content(id, &text, content_type);
             });

@@ -7,15 +7,33 @@ export component EditPanel inherits Rectangle {
 
     // ========== 内部状态 ==========
     in-out property <string> editor-text: "";
+    in-out property <string> selected-type: "plain_text";
+    in-out property <bool> type-menu-open: false;
+    property <bool> type-manually-set: false;
 
-    // 当外部传入新内容时，同步到编辑器
+    // 当外部传入新内容时，同步到编辑器并设置初始类型
     changed editing-content => {
         root.editor-text = root.editing-content;
+    }
+    changed editing-item-id => {
+        root.type-manually-set = false;
+    }
+    // 仅在用户未手动选择时，根据自动检测结果设置初始类型
+    changed content-type => {
+        if root.type-manually-set {
+            return;
+        }
+        // rich_text 暂不支持手动编辑，归为 plain_text
+        if root.content-type == "rich_text" {
+            root.selected-type = "plain_text";
+            return;
+        }
+        root.selected-type = root.content-type;
     }
 
     // ========== 回调 ==========
     callback cancel();
-    callback save-content(int, string);
+    callback save-content(int, string, string);
 
     // ========== 主题色板 ==========
     property <color> text-1:   dark-mode ? #eaebec : #1a1c2e;
@@ -66,29 +84,33 @@ export component EditPanel inherits Rectangle {
             }
         }
 
-        // ========== 类型标签 ==========
+        // ========== 类型选择下拉 ==========
         HorizontalLayout {
-            height: 20px;
-            spacing: 6px;
+            height: 24px;
 
-            Rectangle {
-                height: 20px;
-                width: type-label.preferred-width + 12px;
+            type-btn := Rectangle {
+                height: 22px;
+                width: type-text.preferred-width + 14px;
                 border-radius: 4px;
-                background: dark-mode ? #232b26 : #e8f5ee;
+                border-width: 1px;
+                border-color: type-ta.has-hover ? accent : divider;
+                background: type-ta.has-hover ? (dark-mode ? #2a2b2c : #f0f1f5) : surface;
 
-                type-label := Text {
-                    x: 6px;
+                type-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.type-menu-open = !root.type-menu-open; }
+                }
+
+                type-text := Text {
+                    x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: root.content-type == "plain_text" ? "纯文本" :
-                          root.content-type == "rich_text" ? "格式文本（编辑后将丢失格式）" :
-                          root.content-type == "link" ? "URL链接" :
-                          root.content-type == "path" ? "文件路径（编辑后将解除路径关联）" :
-                          root.content-type == "image" ? "图片路径（编辑后将解除图片关联）" :
-                          root.content-type == "file" ? "文件路径（编辑后将解除文件关联）" : "未知";
+                    text: root.selected-type == "link" ? "URL" :
+                          root.selected-type == "path" ? "路径" :
+                          root.selected-type == "color" ? "颜色" : "文本";
                     font-size: 10px;
                     color: accent;
-                    vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
             }
         }
@@ -154,7 +176,7 @@ export component EditPanel inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     clicked => {
-                        root.save-content(root.editing-item-id, root.editor-text);
+                        root.save-content(root.editing-item-id, root.editor-text, root.selected-type);
                     }
                 }
 
@@ -166,6 +188,72 @@ export component EditPanel inherits Rectangle {
                     font-weight: 600;
                     color: #ffffff;
                     horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // ========== 类型下拉菜单（覆盖层） ==========
+    if root.type-menu-open : Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+
+        // 点击外部关闭
+        backdrop-ta := TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => { root.type-menu-open = false; }
+        }
+
+        Rectangle {
+            x: 8px;
+            y: 80px;
+            width: 90px;
+            height: 118px;
+            border-radius: 6px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000030;
+            drop-shadow-offset-y: 2px;
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+
+                for opt[idx] in ["文本", "URL", "路径", "颜色"]: Rectangle {
+                    height: 26px;
+                    border-radius: 4px;
+                    background: item-ta.has-hover ? divider : transparent;
+
+                    item-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            if idx == 0 { root.selected-type = "plain_text"; }
+                            else if idx == 1 { root.selected-type = "link"; }
+                            else if idx == 2 { root.selected-type = "path"; }
+                            else { root.selected-type = "color"; }
+                            root.type-manually-set = true;
+                            root.type-menu-open = false;
+                        }
+                    }
+
+                    Text {
+                        x: 8px;
+                        y: (parent.height - self.height) / 2;
+                        text: opt;
+                        font-size: 11px;
+                        color: root.selected-type == "plain_text" && idx == 0 ? accent :
+                               root.selected-type == "link" && idx == 1 ? accent :
+                               root.selected-type == "path" && idx == 2 ? accent :
+                               root.selected-type == "color" && idx == 3 ? accent : text-1;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
