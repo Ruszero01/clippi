@@ -9,6 +9,10 @@
   支持 Windows 和 macOS
 
   <p>
+    <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
+  </p>
+
+  <p>
     <a href="https://github.com/Ruszero01/clippi/issues">反馈问题</a> ·
     <a href="https://github.com/Ruszero01/clippi/releases">更新日志</a>
   </p>
@@ -99,7 +103,7 @@
 - 仅收藏条目同步模式
 
 ### 设置
-- 通用：开机自启、失焦隐藏、静默启动、主题模式、窗口位置
+- 通用：开机自启、失焦隐藏、静默启动、主题模式、窗口位置、界面语言
 - 剪贴板：排序、卡片高度、来源应用、自动滚顶、纯文本复制、悬停原文
 - 快捷键：呼出快捷键录制、应用黑名单管理
 - 数据：数据库路径自定义与迁移、最大保存条目数
@@ -147,3 +151,4 @@ cargo run
 | 系统深色模式检测 | ✅ | ✅ |
 | OneDrive 预设检测 | ✅ | ✅ |
 | iCloud 预设检测 | ❌ | ✅ |
+| 界面语言 (中文/英文) | ✅ | ✅ |
