@@ -105,7 +105,7 @@ export component EditPanel inherits Rectangle {
                 type-text := Text {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: root.selected-type == "link" ? "URL" :
+                    text: root.selected-type == "link" ? @tr("URL") :
                           root.selected-type == "path" ? @tr("Path") :
                           root.selected-type == "color" ? @tr("Color") : @tr("Text");
                     font-size: 10px;
@@ -225,7 +225,7 @@ export component EditPanel inherits Rectangle {
                 padding: 4px;
                 spacing: 2px;
 
-                for opt[idx] in [@tr("Text"), "URL", @tr("Path"), @tr("Color")]: Rectangle {
+                for opt[idx] in [@tr("Text"), @tr("URL"), @tr("Path"), @tr("Color")]: Rectangle {
                     height: 26px;
                     border-radius: 4px;
                     background: item-ta.has-hover ? divider : transparent;

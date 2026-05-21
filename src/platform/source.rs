@@ -99,6 +99,7 @@ mod windows_impl {
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
+    use crate::core::i18n;
     use crate::core::types::SourceAppInfo;
     use crate::platform::util::nsimage_to_base64_png;
     use objc2_app_kit::NSWorkspace;
@@ -113,15 +114,13 @@ mod macos_impl {
         }
 
         // Use generated methods (nil-safe via Option)
-        let app_name = app.localizedName().map(|n| n.to_string()).unwrap_or_default();
+        let app_name = app.localizedName()
+            .map(|n| n.to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| i18n::tr("未知应用", "Unknown app").to_string());
         let icon_base64 = app.icon()
             .and_then(|i| nsimage_to_base64_png(&i, 32))
             .unwrap_or_default();
-
-        // Require at least a name to show source info
-        if app_name.is_empty() {
-            return None;
-        }
 
         Some(SourceAppInfo {
             app_name,

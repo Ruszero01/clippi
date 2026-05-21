@@ -222,7 +222,7 @@ impl Frontend {
             self.apply_position();
             let t = app.get_scroll_trigger();
             app.set_scroll_trigger(t + 1);
-            let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+            let mtm = objc2::MainThreadMarker::new().unwrap();
             let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             ns_app.activateIgnoringOtherApps(true);
         }

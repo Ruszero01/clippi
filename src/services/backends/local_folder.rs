@@ -200,6 +200,20 @@ impl SyncBackend for LocalFolderBackend {
 pub fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
+        .or_else(|_| {
+            #[cfg(unix)]
+            {
+                let mut buf = [0u8; 256];
+                let hostname = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+                if hostname == 0 {
+                    if let Some(end) = buf.iter().position(|&b| b == 0) {
+                        return Ok(String::from_utf8_lossy(&buf[..end]).into_owned());
+                    }
+                }
+            }
+            #[allow(unreachable_code)]
+            Err(std::env::VarError::NotPresent)
+        })
         .unwrap_or_else(|_| "unknown-device".into())
 }
 

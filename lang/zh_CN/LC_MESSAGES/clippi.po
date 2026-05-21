@@ -311,5 +311,11 @@ msgstr "编辑后端"
 msgid "Folder"
 msgstr "文件夹"
 
+msgid "URL"
+msgstr "链接"
+
+msgid "Unknown app"
+msgstr "未知应用"
+
 msgid "Browse"
 msgstr "浏览"

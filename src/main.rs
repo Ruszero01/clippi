@@ -98,7 +98,7 @@ fn main() {
         {
             slint_app.window().show().unwrap();
             slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
-            let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+            let mtm = objc2::MainThreadMarker::new().unwrap();
             let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             ns_app.activate();
         }

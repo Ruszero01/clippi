@@ -557,7 +557,7 @@ export component ClipboardList inherits Rectangle {
                                                       entry.content-type == "rich_text" ? @tr("RTF") :
                                                       entry.content-type == "image" ? @tr("Image") :
                                                       entry.content-type == "file" ? entry.file-icon-text :
-                                                      entry.content-type == "link" ? "URL" :
+                                                      entry.content-type == "link" ? @tr("URL") :
                                                       entry.content-type == "path" ? @tr("Path") : "";
                                                 font-size: 10px;
                                                 color: tag-text;

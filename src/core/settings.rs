@@ -246,11 +246,11 @@ pub fn detect_system_language() -> String {
     }
     #[cfg(target_os = "macos")]
     {
-        let mtm = match objc2::MainThreadMarker::new() {
-            Some(mtm) => mtm,
-            None => return "en".to_string(),
-        };
-        let locale = objc2_foundation::NSLocale::currentLocale(mtm);
+        // Safety: ensure we're on the main thread before calling currentLocale
+        if objc2::MainThreadMarker::new().is_none() {
+            return "en".to_string();
+        }
+        let locale = objc2_foundation::NSLocale::currentLocale();
         let lang = locale.languageCode().to_string();
         if lang.starts_with("zh") {
             "zh_CN".to_string()
