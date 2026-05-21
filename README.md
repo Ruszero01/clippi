@@ -135,23 +135,23 @@ cargo run
 
 ## 平台支持
 
-| 功能 | Windows | macOS | Linux |
-|------|---------|-------|-------|
-| 剪贴板监控 | ✅ 序列号优化 | ✅ changeCount 优化 | ❌ |
-| 粘贴模拟 | ✅ SendInput | ✅ CGEvent | ❌ |
-| 全局快捷键 | ✅ GetAsyncKeyState | ✅ CGEventSourceKeyState | ❌ |
-| 热键录制自定义 | ✅ | ✅ | ❌ |
-| 快捷键黑名单 | ✅ | ✅ | ❌ |
-| 系统托盘 | ✅ | ✅ | ✅ |
-| 开机自启 | ✅ 注册表 | ✅ LaunchAgent | ❌ |
-| 焦点监听（自动隐藏） | ✅ SetWinEventHook | ✅ NSWorkspace 轮询 | ❌ |
-| 来源应用检测 | ✅ GetClipboardOwner | ✅ NSWorkspace | ❌ |
-| 文件图标提取 | ✅ SHGetFileInfoW | ✅ NSWorkspace | ❌ |
-| 网站图标获取 | ✅ | ✅ | ✅ |
-| 多显示器支持 | ✅ | ✅ | ❌ |
-| 系统深色模式检测 | ✅ | ✅ | ❌ |
-| OneDrive 预设检测 | ✅ | ✅ | ❌ |
-| iCloud 预设检测 | ❌ | ✅ | ❌ |
+| 功能 | Windows | macOS |
+|------|---------|-------|
+| 剪贴板监控 | ✅ 序列号优化 | ✅ changeCount 优化 |
+| 粘贴模拟 | ✅ SendInput | ✅ CGEvent |
+| 全局快捷键 | ✅ GetAsyncKeyState | ✅ CGEventSourceKeyState |
+| 热键录制自定义 | ✅ | ✅ |
+| 快捷键黑名单 | ✅ | ✅ |
+| 系统托盘 | ✅ | ✅ |
+| 开机自启 | ✅ 注册表 | ✅ LaunchAgent |
+| 焦点监听（自动隐藏） | ✅ SetWinEventHook | ✅ NSWorkspace 轮询 |
+| 来源应用检测 | ✅ GetClipboardOwner | ✅ NSWorkspace |
+| 文件图标提取 | ✅ SHGetFileInfoW | ✅ NSWorkspace |
+| 网站图标获取 | ✅ | ✅ |
+| 多显示器支持 | ✅ | ✅ |
+| 系统深色模式检测 | ✅ | ✅ |
+| OneDrive 预设检测 | ✅ | ✅ |
+| iCloud 预设检测 | ❌ | ✅ |
 
 ## 许可
 
