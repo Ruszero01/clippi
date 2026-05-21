@@ -52,13 +52,13 @@ pub struct SyncPayload {
     pub synced_at: String, // RFC3339
     pub items: Vec<SyncItem>,
     pub tags: Vec<SyncTag>,
-    /// Deleted item tombstones (v2+).
+    /// Deleted item tombstones.
     #[serde(default)]
     pub deleted_items: Vec<SyncDeletedItem>,
-    /// Deleted tag tombstones (v2+).
+    /// Deleted tag tombstones.
     #[serde(default)]
     pub deleted_tags: Vec<SyncDeletedTag>,
-    /// Unfavorite markers (v2+).
+    /// Unfavorite markers.
     #[serde(default)]
     pub unfavorited_items: Vec<SyncUnfavoritedItem>,
 }
@@ -243,7 +243,7 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
         .collect();
 
     Ok(SyncPayload {
-        version: 2,
+        version: crate::core::migration::SYNC_VERSION,
         device_name: device_name.to_string(),
         synced_at: chrono::Utc::now().to_rfc3339(),
         items: sync_items,
@@ -256,7 +256,7 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
 
 // ── Merge logic ──
 
-/// Merge remote sync payload into the local database (v2, 4-phase).
+/// Merge remote sync payload into the local database (v1, 4-phase).
 ///
 /// Phases (in order):
 /// 0. Clean expired local tombstones
@@ -266,9 +266,10 @@ pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: b
 /// 4. Merge items — create/update with last-writer-wins, skip tombstoned
 pub fn merge_remote_into_local(
     db: &Mutex<Database>,
-    remote: &SyncPayload,
+    remote: &mut SyncPayload,
     local_device_name: &str,
 ) -> Result<MergeStats, String> {
+    crate::core::migration::migrate_sync_payload(remote);
     let mut db = db.lock().map_err(|e| format!("db lock: {e}"))?;
     let mut stats = MergeStats::default();
 
@@ -596,7 +597,7 @@ mod tests {
     #[test]
     fn test_sync_payload_roundtrip() {
         let payload = SyncPayload {
-            version: 2,
+            version: crate::core::migration::SYNC_VERSION,
             device_name: "test-pc".into(),
             synced_at: "2026-05-14T10:00:00Z".into(),
             items: vec![SyncItem {
@@ -626,7 +627,7 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&payload).unwrap();
         let parsed: SyncPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, 2);
+        assert_eq!(parsed.version, crate::core::migration::SYNC_VERSION);
         assert_eq!(parsed.items.len(), 1);
         assert_eq!(parsed.items[0].tags[0].name, "work");
         assert!(parsed.deleted_items.is_empty());
@@ -662,7 +663,7 @@ mod tests {
 
     fn make_payload(items: Vec<SyncItem>, tags: Vec<SyncTag>) -> SyncPayload {
         SyncPayload {
-            version: 2,
+            version: crate::core::migration::SYNC_VERSION,
             device_name: "test".into(),
             synced_at: "2026-05-14T10:00:00Z".into(),
             items,

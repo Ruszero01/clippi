@@ -90,24 +90,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_uf_items_at ON unfavorited_items(unfavorited_at);",
         );
 
-        // Schema migration: add UNIQUE constraints to tombstone tables
-        // Without UNIQUE, INSERT OR IGNORE always inserts, causing unbounded growth.
-        let version: i64 = self.conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version < 1 {
-            // Deduplicate existing rows (keep earliest entry per key)
-            self.conn.execute_batch(
-                "DELETE FROM deleted_items WHERE rowid NOT IN (SELECT MIN(rowid) FROM deleted_items GROUP BY content_hash);
-                 DELETE FROM deleted_tags WHERE rowid NOT IN (SELECT MIN(rowid) FROM deleted_tags GROUP BY name);
-                 DELETE FROM unfavorited_items WHERE rowid NOT IN (SELECT MIN(rowid) FROM unfavorited_items GROUP BY content_hash);",
-            )?;
-            // Add unique indexes so INSERT OR IGNORE actually ignores duplicates
-            self.conn.execute_batch(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_del_items_hash_uq ON deleted_items(content_hash);
-                 CREATE UNIQUE INDEX IF NOT EXISTS idx_del_tags_name_uq ON deleted_tags(name);
-                 CREATE UNIQUE INDEX IF NOT EXISTS idx_uf_items_hash_uq ON unfavorited_items(content_hash);",
-            )?;
-            self.conn.pragma_update(None, "user_version", 1)?;
-        }
+        crate::core::migration::run_db_migrations(&self.conn)?;
         Ok(())
     }
 
