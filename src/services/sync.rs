@@ -551,9 +551,9 @@ fn run_sync_cycle_for_backend(
     let mut remote_hash: Option<u64> = None;
     let mut remote_unchanged = false;
     match backend.pull(force_push) {
-        Ok(remote) => {
+        Ok(mut remote) => {
             remote_hash = Some(sync::payload_semantic_hash(&remote));
-            match sync::merge_remote_into_local(db, &remote, &local_device) {
+            match sync::merge_remote_into_local(db, &mut remote, &local_device) {
                 Ok(s) => stats = s,
                 Err(e) => {
                     return (false, format!("合并远程数据失败: {e}"), stats, 0, 0);
