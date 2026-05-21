@@ -337,7 +337,11 @@ pub fn is_path(text: &str) -> bool {
         return true;
     }
     // Unix absolute path: /Users/..., /etc/..., /tmp/...
-    if text.starts_with('/') && text.len() >= 3 && text.as_bytes()[1] != b'/' {
+    // Require at least one "/" after the first char to avoid matching
+    // slash commands like /clear, /help, etc.
+    if text.starts_with('/') && text.len() >= 3 && text.as_bytes()[1] != b'/'
+        && text[1..].contains('/')
+    {
         return true;
     }
     false
