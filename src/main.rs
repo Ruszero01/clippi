@@ -11,6 +11,13 @@ mod looper;
 mod platform;
 mod services;
 
+/// Returns `true` if this is the first instance and the app should start.
+/// Uses a localhost TCP port as a cross-process lock — the OS releases it
+/// automatically when the owning process exits (cleanly or via crash).
+fn ensure_single_instance() -> bool {
+    std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
+}
+
 fn init_logging(db_path: &str) {
     let log_path = crate::core::paths::log_path(db_path);
     if let Some(parent) = log_path.parent() {
@@ -34,6 +41,11 @@ fn init_logging(db_path: &str) {
 }
 
 fn main() {
+    // Prevent multiple instances — desktop clipboard manager must be a singleton.
+    if !ensure_single_instance() {
+        return;
+    }
+
     // On macOS, disable Slint's default menu bar to avoid muda class name conflict
     // with tray-icon. Both Slint and tray-icon depend on muda (different versions)
     // which register the same ObjC class "MudaMenuItem", causing a crash.
