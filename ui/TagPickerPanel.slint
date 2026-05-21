@@ -62,7 +62,7 @@ export component TagPickerPanel inherits Rectangle {
             alignment: space-between;
 
             Text {
-                text: root.is-batch ? "批量添加标签" : "添加标签";
+                text: root.is-batch ? @tr("Batch tag") : @tr("Tag");
                 font-size: 13px;
                 font-weight: 600;
                 color: text-1;
@@ -268,7 +268,7 @@ export component TagPickerPanel inherits Rectangle {
                     padding-top: 8px;
                     padding-bottom: 8px;
                     Text {
-                        text: "暂无标签，在上方输入创建";
+                        text: @tr("No tags. Create one above");
                         font-size: 11px;
                         color: text-3;
                     }

@@ -50,14 +50,14 @@ export component SettingsTabHotkey inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "呼出快捷键";
+                        text: @tr("Hotkey");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: root.recording-hotkey ? "请按下新的快捷键..." : "点击按钮开始录制";
+                        text: root.recording-hotkey ? @tr("Press new hotkey...") : @tr("Click to start recording");
                         font-size: 10px;
                         color: root.recording-hotkey ? accent : text-3;
                     }
@@ -152,7 +152,7 @@ export component SettingsTabHotkey inherits Rectangle {
                             }
 
                             if root.foreground-app-name == "" : Text {
-                                text: "无前台应用";
+                                text: @tr("No foreground app");
                                 font-size: 12px;
                                 color: text-3;
                                 vertical-alignment: center;
@@ -275,7 +275,7 @@ export component SettingsTabHotkey inherits Rectangle {
                     height: 40px;
 
                     Text {
-                        text: root.foreground-app-name != "" ? "暂无黑名单应用，点击右侧按钮添加当前应用" : "暂无黑名单应用";
+                        text: root.foreground-app-name != "" ? @tr("No blacklisted apps. Click to add current app") : @tr("No blacklisted apps");
                         font-size: 11px;
                         color: text-3;
                         horizontal-alignment: center;

@@ -99,7 +99,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "复制";
+                    text: @tr("Copy");
                     font-size: 13px;
                     color: row-copy-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -139,7 +139,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "粘贴";
+                    text: @tr("Paste");
                     font-size: 13px;
                     color: row-paste-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -183,7 +183,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: is-hex ? "粘贴为 RGB" : "粘贴为 HEX";
+                    text: is-hex ? @tr("Paste as RGB") : @tr("Paste as HEX");
                     font-size: 13px;
                     color: row-convert-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -232,7 +232,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "编辑";
+                    text: @tr("Edit");
                     font-size: 13px;
                     color: row-edit-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -272,7 +272,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "备注";
+                    text: @tr("Note");
                     font-size: 13px;
                     color: row-note-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -312,7 +312,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "打开原图";
+                    text: @tr("Open image");
                     font-size: 13px;
                     color: row-oi-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -352,7 +352,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "添加标签";
+                    text: @tr("Tag");
                     font-size: 13px;
                     color: row-tag-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -401,7 +401,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: is-favorite ? "取消收藏" : "收藏";
+                    text: is-favorite ? @tr("Unfav") : @tr("Fav");
                     font-size: 13px;
                     color: row-fav-ta.has-hover ? fav-color : text-1;
                     vertical-alignment: center;
@@ -441,7 +441,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "删除";
+                    text: @tr("Delete");
                     font-size: 13px;
                     color: row-del-ta.has-hover ? danger : text-1;
                     vertical-alignment: center;
@@ -484,7 +484,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "粘贴 " + selected-count + " 条";
+                    text: @tr("Paste {}", selected-count);
                     font-size: 13px;
                     color: row-bp-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -533,7 +533,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "批量添加标签";
+                    text: @tr("Batch tag");
                     font-size: 13px;
                     color: row-btg-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
@@ -582,7 +582,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "批量收藏";
+                    text: @tr("Batch fav");
                     font-size: 13px;
                     color: row-bf-ta.has-hover ? fav-color : text-1;
                     vertical-alignment: center;
@@ -622,7 +622,7 @@ export component ContextMenu inherits Rectangle {
                 }
 
                 Text {
-                    text: "批量删除";
+                    text: @tr("Batch delete");
                     font-size: 13px;
                     color: row-bd-ta.has-hover ? danger : text-1;
                     vertical-alignment: center;

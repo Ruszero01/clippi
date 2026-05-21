@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
+use super::i18n;
+
 #[cfg(target_os = "windows")]
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 #[cfg(target_os = "windows")]
@@ -75,6 +77,8 @@ pub struct AppSettings {
     pub max_items: u32,                    // 最大保存条目数 (0=不限制, 默认0)
     #[serde(default)]
     pub hotkey_blacklist: Vec<String>,     // 快捷键黑名单应用名列表
+    #[serde(default)]
+    pub language: String,                  // "zh_CN" or "en", empty = follow system
 }
 
 fn default_sync_interval() -> u64 {
@@ -111,6 +115,7 @@ impl Default for AppSettings {
             sync_favorites_only: true,
             max_items: 0,
             hotkey_blacklist: Vec::new(),
+            language: String::new(),
         }
     }
 }
@@ -221,17 +226,55 @@ pub fn is_system_dark_mode() -> bool {
     false
 }
 
+/// Detect system UI language. Returns "zh_CN" for Chinese systems, "en" otherwise.
+pub fn detect_system_language() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(key) = hkcu.open_subkey_with_flags(
+            r"Control Panel\International",
+            KEY_READ,
+        ) {
+            if let Ok(locale) = key.get_value::<String, _>("LocaleName") {
+                if locale.starts_with("zh") {
+                    return "zh_CN".to_string();
+                }
+            }
+        }
+        "en".to_string()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mtm = match objc2::MainThreadMarker::new() {
+            Some(mtm) => mtm,
+            None => return "en".to_string(),
+        };
+        let locale = objc2_foundation::NSLocale::currentLocale(mtm);
+        let lang = locale.languageCode().to_string();
+        if lang.starts_with("zh") {
+            "zh_CN".to_string()
+        } else {
+            "en".to_string()
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "en".to_string()
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn set_auto_start(enable: bool) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_WRITE)
-        .map_err(|e| format!("打开注册表失败: {e}"))?;
+        .map_err(|e| format!("{}: {e}", i18n::tr("打开注册表失败", "Failed to open registry")))?;
 
     if enable {
-        let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {e}"))?;
+        let exe_path = std::env::current_exe().map_err(|e| format!("{}: {e}", i18n::tr("获取程序路径失败", "Failed to get program path")))?;
         key.set_value(APP_NAME, &exe_path.to_string_lossy().as_ref())
-            .map_err(|e| format!("写入注册表失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("写入注册表失败", "Failed to write registry")))?;
     } else {
         let _ = key.delete_value(APP_NAME);
     }
@@ -246,16 +289,16 @@ fn launch_agent_plist_path() -> Option<std::path::PathBuf> {
 #[cfg(target_os = "macos")]
 pub fn set_auto_start(enable: bool) -> Result<(), String> {
     let plist_path = launch_agent_plist_path()
-        .ok_or("无法获取 LaunchAgents 路径")?;
+        .ok_or(i18n::tr("无法获取 LaunchAgents 路径", "Cannot get LaunchAgents path"))?;
 
     if let Some(parent) = plist_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建 LaunchAgents 目录失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("创建 LaunchAgents 目录失败", "Failed to create LaunchAgents directory")))?;
     }
 
     if enable {
         let exe_path = std::env::current_exe()
-            .map_err(|e| format!("获取程序路径失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("获取程序路径失败", "Failed to get program path")))?;
         let exe_str = exe_path.to_string_lossy();
 
         let plist_content = format!(
@@ -278,11 +321,11 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
         );
 
         std::fs::write(&plist_path, plist_content)
-            .map_err(|e| format!("写入 plist 失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("写入 plist 失败", "Failed to write plist")))?;
     } else {
         if plist_path.exists() {
             std::fs::remove_file(&plist_path)
-                .map_err(|e| format!("删除 plist 失败: {e}"))?;
+                .map_err(|e| format!("{}: {e}", i18n::tr("删除 plist 失败", "Failed to delete plist")))?;
         }
     }
 
@@ -311,16 +354,16 @@ pub(crate) fn generate_id() -> String {
 
 pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), String> {
     if *new_path == *old_path {
-        return Err("新路径与当前路径相同".into());
+        return Err(i18n::tr("新路径与当前路径相同", "New path is same as current").into());
     }
 
     if let Some(parent) = new_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建目录失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("创建目录失败", "Failed to create directory")))?;
     }
 
     std::fs::copy(old_path, new_path)
-        .map_err(|e| format!("复制数据库失败: {e}"))?;
+        .map_err(|e| format!("{}: {e}", i18n::tr("复制数据库失败", "Failed to copy database")))?;
 
     Ok(())
 }

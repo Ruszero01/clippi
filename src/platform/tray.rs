@@ -14,6 +14,8 @@ pub enum TrayAction {
     Quit,
 }
 
+use crate::core::i18n;
+
 /// System tray manager
 pub struct TrayManager {
     #[allow(dead_code)]
@@ -33,10 +35,10 @@ impl TrayManager {
         let icon = create_icon();
 
         let menu = Menu::new();
-        let show_item = MenuItem::new("显示窗口", true, None);
-        let settings_item = MenuItem::new("设置", true, None);
-        let restart_item = MenuItem::new("重启应用", true, None);
-        let quit_item = MenuItem::new("退出", true, None);
+        let show_item = MenuItem::new(i18n::tr("显示窗口", "Show Window"), true, None);
+        let settings_item = MenuItem::new(i18n::tr("设置", "Settings"), true, None);
+        let restart_item = MenuItem::new(i18n::tr("重启应用", "Restart"), true, None);
+        let quit_item = MenuItem::new(i18n::tr("退出", "Quit"), true, None);
 
         let show_id = show_item.id().clone();
         let settings_id = settings_item.id().clone();

@@ -7,6 +7,7 @@ use crate::core::types::SourceAppInfo;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use crate::core::i18n;
     use crate::core::types::SourceAppInfo;
     use windows_sys::Win32::Foundation::{CloseHandle, HWND};
     use windows_sys::Win32::System::Threading::{
@@ -63,14 +64,15 @@ mod windows_impl {
     }
 
     fn extract_app_name(exe_path: &str) -> String {
+        let fallback = i18n::tr("未知应用", "Unknown app");
         let name = std::path::Path::new(exe_path)
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("未知应用");
+            .unwrap_or(fallback);
         let mut chars = name.chars();
         match chars.next() {
             Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            None => "未知应用".to_string(),
+            None => fallback.to_string(),
         }
     }
 

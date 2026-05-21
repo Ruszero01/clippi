@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use crate::core::i18n;
 use global_hotkey::hotkey::Code;
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
@@ -99,7 +100,7 @@ mod windows {
             let hotkey = parse_hotkey(hotkey_str)?;
 
             // Try to register
-            manager.register(hotkey).map_err(|e| format!("注册快捷键失败: {e}"))?;
+            manager.register(hotkey).map_err(|e| format!("{}: {e}", i18n::tr("注册快捷键失败", "Failed to register hotkey")))?;
 
             Ok(Self {
                 manager,
@@ -122,7 +123,7 @@ mod windows {
 
             // Parse and register new
             let new_hotkey = parse_hotkey(hotkey_str)?;
-            self.manager.register(new_hotkey).map_err(|e| format!("注册快捷键失败: {e}"))?;
+            self.manager.register(new_hotkey).map_err(|e| format!("{}: {e}", i18n::tr("注册快捷键失败", "Failed to register hotkey")))?;
             self.hotkey = new_hotkey;
             self.registered.store(true, Ordering::SeqCst);
             Ok(())
@@ -274,7 +275,7 @@ mod windows {
             }
         }
 
-        let key = key.ok_or("未指定按键")?;
+        let key = key.ok_or(i18n::tr("未指定按键", "No key specified"))?;
         Ok(HotKey::new(Some(mods), key))
     }
 
@@ -328,7 +329,7 @@ mod macos {
             let hotkey = parse_hotkey(hotkey_str)?;
 
             // Try to register
-            manager.register(hotkey).map_err(|e| format!("注册快捷键失败: {e}"))?;
+            manager.register(hotkey).map_err(|e| format!("{}: {e}", i18n::tr("注册快捷键失败", "Failed to register hotkey")))?;
 
             Ok(Self {
                 manager,
@@ -351,7 +352,7 @@ mod macos {
 
             // Parse and register new
             let new_hotkey = parse_hotkey(hotkey_str)?;
-            self.manager.register(new_hotkey).map_err(|e| format!("注册快捷键失败: {e}"))?;
+            self.manager.register(new_hotkey).map_err(|e| format!("{}: {e}", i18n::tr("注册快捷键失败", "Failed to register hotkey")))?;
             self.hotkey = new_hotkey;
             self.registered.store(true, Ordering::SeqCst);
             Ok(())
@@ -501,7 +502,7 @@ mod macos {
             }
         }
 
-        let key = key.ok_or("未指定按键")?;
+        let key = key.ok_or(i18n::tr("未指定按键", "No key specified"))?;
         Ok(HotKey::new(Some(mods), key))
     }
 

@@ -2,6 +2,7 @@
 
 use crate::core::db::Database;
 use crate::core::filters::ClipboardFilters;
+use crate::core::i18n;
 use crate::core::paths::images_dir;
 use crate::core::types::format_relative_time;
 use crate::looper::Pollable;
@@ -1054,7 +1055,18 @@ fn format_file_size(bytes: u64) -> String {
 
 fn format_char_count(count: usize) -> String {
     if count < 1000 {
-        format!("{count}字")
+        if i18n::is_en() {
+            format!("{count} chars")
+        } else {
+            format!("{count}字")
+        }
+    } else if i18n::is_en() {
+        let k = count as f64 / 1000.0;
+        if k < 100.0 {
+            format!("{:.1}K chars", k)
+        } else {
+            format!("{:.0}K chars", k)
+        }
     } else if count < 10000 {
         format!("{:.1}千字", count as f64 / 1000.0)
     } else {
@@ -1087,7 +1099,7 @@ fn build_file_fields(
     // Single file: show extension or "文件夹".
     let icon_text = if count == 1 {
         if fd.files[0].is_dir {
-            "文件夹".to_string()
+            i18n::tr("文件夹", "Folder").to_string()
         } else {
             crate::core::types::get_extension_label(&fd.files[0].name)
         }

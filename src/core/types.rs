@@ -61,24 +61,45 @@ pub struct TagInfo {
 }
 
 /// 12 preset tag colors: (name, hex)
-pub const TAG_PRESET_COLORS: &[(&str, &str)] = &[
-    ("红色", "#EF4444"),
-    ("橙色", "#F97316"),
-    ("黄色", "#EAB308"),
-    ("绿色", "#22C55E"),
-    ("青色", "#06B6D4"),
-    ("蓝色", "#3B82F6"),
-    ("靛蓝", "#6366F1"),
-    ("紫色", "#A855F7"),
-    ("粉色", "#EC4899"),
-    ("灰色", "#6B7280"),
-    ("棕色", "#92400E"),
-    ("天蓝", "#0EA5E9"),
-];
+pub fn tag_preset_colors() -> &'static [(&'static str, &'static str)] {
+    use crate::core::i18n;
+    if i18n::is_en() {
+        &[
+            ("Red", "#EF4444"),
+            ("Orange", "#F97316"),
+            ("Yellow", "#EAB308"),
+            ("Green", "#22C55E"),
+            ("Cyan", "#06B6D4"),
+            ("Blue", "#3B82F6"),
+            ("Indigo", "#6366F1"),
+            ("Purple", "#A855F7"),
+            ("Pink", "#EC4899"),
+            ("Gray", "#6B7280"),
+            ("Brown", "#92400E"),
+            ("Sky", "#0EA5E9"),
+        ]
+    } else {
+        &[
+            ("红色", "#EF4444"),
+            ("橙色", "#F97316"),
+            ("黄色", "#EAB308"),
+            ("绿色", "#22C55E"),
+            ("青色", "#06B6D4"),
+            ("蓝色", "#3B82F6"),
+            ("靛蓝", "#6366F1"),
+            ("紫色", "#A855F7"),
+            ("粉色", "#EC4899"),
+            ("灰色", "#6B7280"),
+            ("棕色", "#92400E"),
+            ("天蓝", "#0EA5E9"),
+        ]
+    }
+}
 
 /// Pick the next color from presets in round-robin order
 pub fn next_tag_color(index: usize) -> &'static str {
-    TAG_PRESET_COLORS[index % TAG_PRESET_COLORS.len()].1
+    let colors = tag_preset_colors();
+    colors[index % colors.len()].1
 }
 
 /// Parse hex color "#EF4444" → (r, g, b)
@@ -171,7 +192,8 @@ pub fn get_extension_label(name: &str) -> String {
     if let Some(idx) = name.rfind('.') {
         name[idx..].to_lowercase()
     } else {
-        "文件".to_string()
+        use crate::core::i18n;
+        i18n::tr("文件", "File").to_string()
     }
 }
 
@@ -296,16 +318,33 @@ impl ClipboardItem {
 pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     let elapsed = Utc::now().signed_duration_since(*captured_at);
     let secs = elapsed.num_seconds();
+    use crate::core::i18n;
     if secs < 60 {
-        "刚刚".to_string()
+        i18n::tr("刚刚", "Just now").to_string()
     } else if secs < 3600 {
-        format!("{}分钟前", secs / 60)
+        if i18n::is_en() {
+            format!("{} min ago", secs / 60)
+        } else {
+            format!("{}分钟前", secs / 60)
+        }
     } else if secs < 86400 {
-        format!("{}小时前", secs / 3600)
+        if i18n::is_en() {
+            format!("{} hr ago", secs / 3600)
+        } else {
+            format!("{}小时前", secs / 3600)
+        }
     } else if secs < 604800 {
-        format!("{}天前", secs / 86400)
+        if i18n::is_en() {
+            format!("{} days ago", secs / 86400)
+        } else {
+            format!("{}天前", secs / 86400)
+        }
     } else {
-        format!("{}周前", secs / 604800)
+        if i18n::is_en() {
+            format!("{} wks ago", secs / 604800)
+        } else {
+            format!("{}周前", secs / 604800)
+        }
     }
 }
 

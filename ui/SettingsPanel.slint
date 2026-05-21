@@ -38,6 +38,7 @@ export component SettingsPanel inherits Rectangle {
     in property <string> foreground-window-title: "";
     in property <image> foreground-app-icon: @image-url("../assets/blank.png");
     in property <[BlacklistEntry]> hotkey-blacklist: [];
+    in property <int> language-index: 0;
 
     // ========== 内部状态 ==========
     in-out property <int> active-tab: 0;
@@ -54,6 +55,7 @@ export component SettingsPanel inherits Rectangle {
     callback set-theme(int);
     callback set-position-mode(int);
     callback set-card-height-mode(string);
+    callback set-language(int);
     callback toggle-silent-start();
     callback toggle-show-source-app();
     callback toggle-auto-scroll-to-top();
@@ -108,7 +110,7 @@ export component SettingsPanel inherits Rectangle {
         }
 
         Text {
-            text: "设置";
+            text: @tr("Settings");
             font-size: 14px;
             font-weight: 700;
             color: dark-mode ? #eaebec : #1a1c2e;
@@ -132,7 +134,7 @@ export component SettingsPanel inherits Rectangle {
                 alignment: center;
 
                 Text {
-                    text: "通用";
+                    text: @tr("General");
                     font-size: 12px;
                     font-weight: root.active-tab == 0 ? 700 : 400;
                     color: root.active-tab == 0 ? accent : text-2;
@@ -164,7 +166,7 @@ export component SettingsPanel inherits Rectangle {
                 alignment: center;
 
                 Text {
-                    text: "剪贴板";
+                    text: @tr("Clipboard");
                     font-size: 12px;
                     font-weight: root.active-tab == 1 ? 700 : 400;
                     color: root.active-tab == 1 ? accent : text-2;
@@ -196,7 +198,7 @@ export component SettingsPanel inherits Rectangle {
                 alignment: center;
 
                 Text {
-                    text: "快捷键";
+                    text: @tr("Hotkey");
                     font-size: 12px;
                     font-weight: root.active-tab == 2 ? 700 : 400;
                     color: root.active-tab == 2 ? accent : text-2;
@@ -228,7 +230,7 @@ export component SettingsPanel inherits Rectangle {
                 alignment: center;
 
                 Text {
-                    text: "数据";
+                    text: @tr("Data");
                     font-size: 12px;
                     font-weight: root.active-tab == 3 ? 700 : 400;
                     color: root.active-tab == 3 ? accent : text-2;
@@ -260,7 +262,7 @@ export component SettingsPanel inherits Rectangle {
                 alignment: center;
 
                 Text {
-                    text: "同步";
+                    text: @tr("Sync");
                     font-size: 12px;
                     font-weight: root.active-tab == 4 ? 700 : 400;
                     color: root.active-tab == 4 ? accent : text-2;
@@ -301,11 +303,13 @@ export component SettingsPanel inherits Rectangle {
             auto-hide: root.auto-hide;
             position-mode: root.position-mode;
             silent-start: root.silent-start;
+            language-index: root.language-index;
             toggle-auto-start => { root.toggle-auto-start(); }
             toggle-auto-hide => { root.toggle-auto-hide(); }
             set-theme(int) => { root.set-theme(int); }
             set-position-mode(int) => { root.set-position-mode(int); }
             toggle-silent-start => { root.toggle-silent-start(); }
+            set-language(int) => { root.set-language(int); }
         }
 
         if (root.active-tab == 1) : SettingsTabClipboard {

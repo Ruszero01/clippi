@@ -1,5 +1,13 @@
 fn main() {
-    slint_build::compile("ui/app.slint").unwrap();
+    let config = slint_build::CompilerConfiguration::new()
+        .with_bundled_translations("lang")
+        .with_default_translation_context(
+            slint_build::DefaultTranslationContext::None,
+        );
+    slint_build::compile_with_config("ui/app.slint", config).unwrap();
+
+    // Ensure rebuilds when translation files change.
+    println!("cargo:rerun-if-changed=lang");
 
     #[cfg(target_os = "windows")]
     {

@@ -38,7 +38,7 @@ export component SettingsTabData inherits Rectangle {
                 spacing: 6px;
 
                 Text {
-                    text: "数据库路径";
+                    text: @tr("Database path");
                     font-size: 12px;
                     font-weight: 600;
                     color: text-1;
@@ -76,7 +76,7 @@ export component SettingsTabData inherits Rectangle {
                         }
 
                         Text {
-                            text: "更改";
+                            text: @tr("Change");
                             font-size: 11px;
                             font-weight: 600;
                             color: change-ta.has-hover ? accent : #ffffff;
@@ -100,7 +100,7 @@ export component SettingsTabData inherits Rectangle {
                         }
 
                         Text {
-                            text: "重置";
+                            text: @tr("Reset");
                             font-size: 11px;
                             font-weight: 600;
                             color: reset-ta.has-hover ? text-1 : text-3;
@@ -131,14 +131,14 @@ export component SettingsTabData inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "最大保存条数";
+                        text: @tr("Max items");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: "设置为 0 则不限制条目数量";
+                        text: @tr("Set to 0 for unlimited items");
                         font-size: 10px;
                         color: text-3;
                     }
@@ -177,7 +177,7 @@ export component SettingsTabData inherits Rectangle {
                     }
 
                     Text {
-                        text: "无限制";
+                        text: @tr("Unlimited");
                         font-size: 12px;
                         color: text-3;
                         vertical-alignment: center;

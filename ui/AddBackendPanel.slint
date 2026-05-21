@@ -63,7 +63,7 @@ export component AddBackendPanel inherits Rectangle {
             alignment: space-between;
 
             Text {
-                text: root.edit-mode ? "编辑同步服务" : "添加同步服务";
+                text: root.edit-mode ? @tr("Edit backend") : @tr("Add backend");
                 font-size: 13px;
                 font-weight: 600;
                 color: text-1;
@@ -102,7 +102,7 @@ export component AddBackendPanel inherits Rectangle {
 
         // 预设按钮（仅添加模式）
         if !root.edit-mode : Text {
-            text: "快速添加";
+            text: @tr("Quick add");
             font-size: 11px;
             font-weight: 600;
             color: text-2;
@@ -209,7 +209,7 @@ export component AddBackendPanel inherits Rectangle {
 
         // 名称输入
         Text {
-            text: "服务名称";
+            text: @tr("Name");
             font-size: 11px;
             font-weight: 600;
             color: text-2;
@@ -234,7 +234,7 @@ export component AddBackendPanel inherits Rectangle {
 
         // 目录路径
         Text {
-            text: "同步目录";
+            text: @tr("Folder");
             font-size: 11px;
             font-weight: 600;
             color: text-2;
@@ -274,7 +274,7 @@ export component AddBackendPanel inherits Rectangle {
                 }
 
                 Text {
-                    text: "选择";
+                    text: @tr("Browse");
                     font-size: 11px;
                     font-weight: 600;
                     color: pick-ta.has-hover ? #ffffff : accent;
@@ -306,7 +306,7 @@ export component AddBackendPanel inherits Rectangle {
             }
 
             Text {
-                text: "添加服务";
+                text: @tr("Add backend");
                 font-size: 12px;
                 font-weight: 600;
                 color: add-ta.has-hover ? accent : #ffffff;
@@ -335,7 +335,7 @@ export component AddBackendPanel inherits Rectangle {
             }
 
             Text {
-                text: "保存";
+                text: @tr("Save");
                 font-size: 12px;
                 font-weight: 600;
                 color: save-ta.has-hover ? accent : #ffffff;

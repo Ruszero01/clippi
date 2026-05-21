@@ -16,7 +16,7 @@ export component App inherits Window {
     preferred-width: 320px;
     preferred-height: 480px;
     no-frame: true;
-    always-on-top: true;
+    always-on-top: pinned;
     background: transparent;
     forward-focus: key-handler;
 
@@ -49,6 +49,7 @@ export component App inherits Window {
     in-out property <image> foreground-app-icon: @image-url("../assets/blank.png");
     in-out property <int> position-mode: 0;  // 0=center, 1=follow, 2=remember
     in-out property <string> card-height-mode: "medium";
+    in-out property <int> language-index: 0;
     in-out property <bool> silent-start: true;
     in-out property <bool> show-source-app: false;
     in-out property <bool> auto-scroll-to-top: false;
@@ -158,6 +159,7 @@ export component App inherits Window {
     callback toggle-favorites-filter();
     callback toggle-favorite(int);
     callback delete-item(int);
+    callback set-language(int);
     callback toggle-silent-start();
     callback toggle-show-source-app();
     callback toggle-auto-scroll-to-top();
@@ -522,6 +524,7 @@ export component App inherits Window {
                     hotkey-blacklist: root.hotkey-blacklist;
                     position-mode: root.position-mode;
                     card-height-mode: root.card-height-mode;
+                    language-index: root.language-index;
                     silent-start: root.silent-start;
                     show-source-app: root.show-source-app;
                     auto-scroll-to-top: root.auto-scroll-to-top;
@@ -551,6 +554,7 @@ export component App inherits Window {
                     set-position-mode(mode) => { root.set-position-mode(mode); }
                     set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
                     toggle-silent-start => { root.toggle-silent-start(); }
+                    set-language(i) => { root.set-language(i); }
                     toggle-show-source-app => { root.toggle-show-source-app(); }
                     toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
                     toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
@@ -681,7 +685,7 @@ export component App inherits Window {
                     spacing: 10px;
 
                     Text {
-                        text: "将 " + root.blacklist-pending-app + " 加入快捷键黑名单？";
+                        text: @tr("Add {} to hotkey blacklist?", root.blacklist-pending-app);
                         font-size: 13px;
                         font-weight: 600;
                         color: panel-text-1;
@@ -689,7 +693,7 @@ export component App inherits Window {
                     }
 
                     Text {
-                        text: "加入后在该应用中不会触发 Clippi 快捷键";
+                        text: @tr("Clippi hotkey will be disabled in this app");
                         font-size: 11px;
                         color: panel-text-2;
                     }
@@ -715,7 +719,7 @@ export component App inherits Window {
                             }
 
                             Text {
-                                text: "取消";
+                                text: @tr("Cancel");
                                 font-size: 11px;
                                 color: panel-text-2;
                                 horizontal-alignment: center;
@@ -736,7 +740,7 @@ export component App inherits Window {
                             }
 
                             Text {
-                                text: "确认加入";
+                                text: @tr("Add");
                                 font-size: 11px;
                                 font-weight: 600;
                                 color: #ffffff;

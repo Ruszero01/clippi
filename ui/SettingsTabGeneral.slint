@@ -5,12 +5,14 @@ export component SettingsTabGeneral inherits Rectangle {
     in property <bool> auto-hide: false;
     in property <int> position-mode: 0;
     in property <bool> silent-start: true;
+    in property <int> language-index: 0;
 
     callback toggle-auto-start();
     callback toggle-auto-hide();
     callback set-theme(int);
     callback set-position-mode(int);
     callback toggle-silent-start();
+    callback set-language(int);
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -25,6 +27,94 @@ export component SettingsTabGeneral inherits Rectangle {
     VerticalLayout {
         spacing: 12px;
         padding-top: 8px;
+
+        // 语言设置
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: @tr("Language");
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: @tr("Interface language");
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: center;
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: 56px;
+                        height: 26px;
+                        border-radius: 7px;
+                        background: root.language-index == 0 ? accent-soft : transparent;
+                        border-width: 1px;
+                        border-color: root.language-index == 0 ? accent : divider;
+
+                        lang-zh-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-language(0); }
+                        }
+
+                        Text {
+                            text: @tr("Chinese");
+                            font-size: 9px;
+                            font-weight: 600;
+                            color: root.language-index == 0 ? accent : text-3;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 56px;
+                        height: 26px;
+                        border-radius: 7px;
+                        background: root.language-index == 1 ? accent-soft : transparent;
+                        border-width: 1px;
+                        border-color: root.language-index == 1 ? accent : divider;
+
+                        lang-en-ta := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.set-language(1); }
+                        }
+
+                        Text {
+                            text: "English";
+                            font-size: 9px;
+                            font-weight: 600;
+                            color: root.language-index == 1 ? accent : text-3;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
 
         // 开机自启动
         Rectangle {
@@ -45,14 +135,14 @@ export component SettingsTabGeneral inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "开机自启动";
+                        text: @tr("Auto-start");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: "系统启动时自动运行 Clippi";
+                        text: @tr("Run on system startup");
                         font-size: 10px;
                         color: text-3;
                     }
@@ -104,14 +194,14 @@ export component SettingsTabGeneral inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "失焦自动隐藏";
+                        text: @tr("Auto-hide");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: "点击窗口外部时自动隐藏";
+                        text: @tr("Hide on focus loss");
                         font-size: 10px;
                         color: text-3;
                     }
@@ -163,14 +253,14 @@ export component SettingsTabGeneral inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "静默启动";
+                        text: @tr("Silent start");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: "启动时不显示窗口，在后台运行";
+                        text: @tr("Start silently in tray");
                         font-size: 10px;
                         color: text-3;
                     }
@@ -222,14 +312,14 @@ export component SettingsTabGeneral inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "外观";
+                        text: @tr("Theme");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: "选择应用的主题模式";
+                        text: @tr("Select theme");
                         font-size: 10px;
                         color: text-3;
                     }
@@ -255,7 +345,7 @@ export component SettingsTabGeneral inherits Rectangle {
                         }
 
                         Text {
-                            text: "跟随系统";
+                            text: @tr("Auto");
                             font-size: 9px;
                             font-weight: 600;
                             color: root.theme-mode == 0 ? accent : text-3;
@@ -279,7 +369,7 @@ export component SettingsTabGeneral inherits Rectangle {
                         }
 
                         Text {
-                            text: "亮色";
+                            text: @tr("Light");
                             font-size: 9px;
                             font-weight: 600;
                             color: root.theme-mode == 2 ? accent : text-3;
@@ -303,7 +393,7 @@ export component SettingsTabGeneral inherits Rectangle {
                         }
 
                         Text {
-                            text: "暗色";
+                            text: @tr("Dark");
                             font-size: 9px;
                             font-weight: 600;
                             color: root.theme-mode == 1 ? accent : text-3;
@@ -334,14 +424,14 @@ export component SettingsTabGeneral inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "窗口位置";
+                        text: @tr("Position");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
                     }
 
                     Text {
-                        text: "选择窗口呼出时的位置";
+                        text: @tr("Popup position");
                         font-size: 10px;
                         color: text-3;
                     }
@@ -367,7 +457,7 @@ export component SettingsTabGeneral inherits Rectangle {
                         }
 
                         Text {
-                            text: "居中";
+                            text: @tr("Center");
                             font-size: 9px;
                             font-weight: 600;
                             color: root.position-mode == 0 ? accent : text-3;
@@ -391,7 +481,7 @@ export component SettingsTabGeneral inherits Rectangle {
                         }
 
                         Text {
-                            text: "跟随鼠标";
+                            text: @tr("Follow");
                             font-size: 9px;
                             font-weight: 600;
                             color: root.position-mode == 1 ? accent : text-3;
@@ -415,7 +505,7 @@ export component SettingsTabGeneral inherits Rectangle {
                         }
 
                         Text {
-                            text: "记住位置";
+                            text: @tr("Pin");
                             font-size: 9px;
                             font-weight: 600;
                             color: root.position-mode == 2 ? accent : text-3;

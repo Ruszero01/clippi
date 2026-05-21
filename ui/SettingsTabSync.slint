@@ -60,7 +60,7 @@ export component SettingsTabSync inherits Rectangle {
                     alignment: space-between;
 
                     Text {
-                        text: "云同步";
+                        text: @tr("Sync");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
@@ -106,7 +106,7 @@ export component SettingsTabSync inherits Rectangle {
                     alignment: space-between;
 
                     Text {
-                        text: "仅收藏";
+                        text: @tr("Fav only");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
@@ -165,7 +165,7 @@ export component SettingsTabSync inherits Rectangle {
                             clicked => { root.set-sync-interval(30); }
                         }
                         Text {
-                            text: "30秒"; font-size: 10px; font-weight: 600;
+                            text: @tr("30s"); font-size: 10px; font-weight: 600;
                             color: i30-selected ? #ffffff : (i30-ta.has-hover ? accent : text-2);
                             horizontal-alignment: center; vertical-alignment: center;
                         }
@@ -184,7 +184,7 @@ export component SettingsTabSync inherits Rectangle {
                             clicked => { root.set-sync-interval(60); }
                         }
                         Text {
-                            text: "1分"; font-size: 10px; font-weight: 600;
+                            text: @tr("1min"); font-size: 10px; font-weight: 600;
                             color: i60-selected ? #ffffff : (i60-ta.has-hover ? accent : text-2);
                             horizontal-alignment: center; vertical-alignment: center;
                         }
@@ -203,7 +203,7 @@ export component SettingsTabSync inherits Rectangle {
                             clicked => { root.set-sync-interval(600); }
                         }
                         Text {
-                            text: "10分"; font-size: 10px; font-weight: 600;
+                            text: @tr("10min"); font-size: 10px; font-weight: 600;
                             color: i600-selected ? #ffffff : (i600-ta.has-hover ? accent : text-2);
                             horizontal-alignment: center; vertical-alignment: center;
                         }
@@ -222,7 +222,7 @@ export component SettingsTabSync inherits Rectangle {
                             clicked => { root.set-sync-interval(1800); }
                         }
                         Text {
-                            text: "30分"; font-size: 10px; font-weight: 600;
+                            text: @tr("30min"); font-size: 10px; font-weight: 600;
                             color: i1800-selected ? #ffffff : (i1800-ta.has-hover ? accent : text-2);
                             horizontal-alignment: center; vertical-alignment: center;
                         }
@@ -240,7 +240,7 @@ export component SettingsTabSync inherits Rectangle {
                             clicked => { root.sync-now(); }
                         }
                         Text {
-                            text: "立即同步";
+                            text: @tr("Sync now");
                             font-size: 10px; font-weight: 600;
                             color: sync-now-ta.has-hover ? accent : #ffffff;
                             horizontal-alignment: center; vertical-alignment: center;
@@ -290,7 +290,7 @@ export component SettingsTabSync inherits Rectangle {
                             vertical-alignment: center;
                         }
                         Text {
-                            text: "添加服务";
+                            text: @tr("Add backend");
                             font-size: 12px;
                             color: add-btn-ta.has-hover ? accent : text-2;
                             vertical-alignment: center;
@@ -387,7 +387,7 @@ export component SettingsTabSync inherits Rectangle {
                                         }
 
                                         Text {
-                                            text: backend.last-sync-at + " · " + backend.item-count + "条记录 · " + backend.tag-count + "个标签";
+                                            text: @tr("{} · {} items · {} tags", backend.last-sync-at, backend.item-count, backend.tag-count);
                                             font-size: 10px;
                                             color: text-3;
                                         }

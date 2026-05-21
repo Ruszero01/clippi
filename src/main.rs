@@ -60,10 +60,22 @@ fn main() {
     }
 
     // Load settings early so we can initialize logging before UI setup
-    let settings = crate::core::settings::AppSettings::load();
+    let mut settings = crate::core::settings::AppSettings::load();
     init_logging(&settings.db_path);
 
+    // Detect system language on first run.
+    if settings.language.is_empty() {
+        settings.language = crate::core::settings::detect_system_language();
+        settings.save();
+    }
+    crate::core::i18n::set_language(&settings.language);
+
     let slint_app = App::new().unwrap();
+
+    // select_bundled_translation MUST be called after the first component is created.
+    // Always call it: for "en", Slint uses msgid as-is; for "zh_CN", it loads translations.
+    slint::select_bundled_translation(&settings.language)
+        .unwrap_or_else(|e| eprintln!("Failed to set language: {e}"));
 
     // Register iconfont after app is initialized
     {

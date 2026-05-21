@@ -3,6 +3,7 @@
 //! Reads/writes `clippi_sync.json` in a cloud-synced folder (OneDrive, iCloud,
 //! Dropbox, etc.). The OS/cloud-provider handles the actual network sync.
 
+use crate::core::i18n;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{self, BackendStatus, BackendType, SyncBackend, SyncPayload};
 use std::path::PathBuf;
@@ -79,7 +80,7 @@ impl SyncBackend for LocalFolderBackend {
             return BackendStatus::Offline;
         }
         if !dir.is_dir() {
-            return BackendStatus::Error("路径不是目录".into());
+            return BackendStatus::Error(i18n::tr("路径不是目录", "Path is not a directory").into());
         }
         BackendStatus::Online
     }
@@ -87,7 +88,7 @@ impl SyncBackend for LocalFolderBackend {
     fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String> {
         let path = self.file_path();
         if !path.exists() {
-            return Err("同步文件不存在".into());
+            return Err(i18n::tr("同步文件不存在", "Sync file not found").into());
         }
 
         // Check if remote file has changed since last pull.
@@ -118,9 +119,9 @@ impl SyncBackend for LocalFolderBackend {
         // Read main payload
         let mut payload = if mtime_changed {
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("读取同步文件失败: {e}"))?;
+                .map_err(|e| format!("{}: {e}", i18n::tr("读取同步文件失败", "Failed to read sync file")))?;
             serde_json::from_str::<SyncPayload>(&content)
-                .map_err(|e| format!("解析同步文件失败: {e}"))?
+                .map_err(|e| format!("{}: {e}", i18n::tr("解析同步文件失败", "Failed to parse sync file")))?
         } else {
             // Main file unchanged — return early only if no conflicts either
             let conflicts = self.find_conflicts();
@@ -129,9 +130,9 @@ impl SyncBackend for LocalFolderBackend {
             }
             // Re-read main payload to merge with conflicts
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("读取同步文件失败: {e}"))?;
+                .map_err(|e| format!("{}: {e}", i18n::tr("读取同步文件失败", "Failed to read sync file")))?;
             serde_json::from_str::<SyncPayload>(&content)
-                .map_err(|e| format!("解析同步文件失败: {e}"))?
+                .map_err(|e| format!("{}: {e}", i18n::tr("解析同步文件失败", "Failed to parse sync file")))?
         };
 
         // Merge conflict files
@@ -158,20 +159,20 @@ impl SyncBackend for LocalFolderBackend {
     fn push(&self, payload: &SyncPayload) -> Result<(), String> {
         let dir = PathBuf::from(&self.config.folder_path);
         std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("创建目录失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("创建目录失败", "Failed to create directory")))?;
 
         let file_path = self.file_path();
         let json = serde_json::to_string_pretty(payload)
-            .map_err(|e| format!("序列化失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("序列化失败", "Serialization failed")))?;
 
         // Atomic write: temp file + rename
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
         std::fs::write(&tmp_path, &json)
-            .map_err(|e| format!("写入临时文件失败: {e}"))?;
+            .map_err(|e| format!("{}: {e}", i18n::tr("写入临时文件失败", "Failed to write temp file")))?;
         std::fs::rename(&tmp_path, &file_path)
             .map_err(|e| {
                 let _ = std::fs::remove_file(&tmp_path);
-                format!("替换同步文件失败: {e}")
+                format!("{}: {e}", i18n::tr("替换同步文件失败", "Failed to replace sync file"))
             })?;
         // Cache new mtime so our own push doesn't trigger a changed-file
         // detection on the next pull.

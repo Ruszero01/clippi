@@ -4,6 +4,7 @@ pub mod color;
 pub mod db;
 pub mod filters;
 pub mod frontend;
+pub mod i18n;
 pub mod migration;
 pub mod paths;
 pub mod settings;

@@ -41,7 +41,7 @@ export component TagEditPanel inherits Rectangle {
 
         // 标题
         Text {
-            text: "编辑标签";
+            text: @tr("Edit tag");
             font-size: 13px;
             font-weight: 600;
             color: text-1;
@@ -60,7 +60,7 @@ export component TagEditPanel inherits Rectangle {
             spacing: 6px;
 
             Text {
-                text: "名称";
+                text: @tr("Name");
                 font-size: 11px;
                 color: text-2;
                 vertical-alignment: center;
@@ -96,7 +96,7 @@ export component TagEditPanel inherits Rectangle {
 
         // 颜色选择
         Text {
-            text: "颜色";
+            text: @tr("Color");
             font-size: 11px;
             color: text-2;
         }
@@ -151,7 +151,7 @@ export component TagEditPanel inherits Rectangle {
                 Text {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: "取消";
+                    text: @tr("Cancel");
                     font-size: 11px;
                     color: text-2;
                 }
@@ -172,7 +172,7 @@ export component TagEditPanel inherits Rectangle {
                 Text {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: "保存";
+                    text: @tr("Save");
                     font-size: 11px;
                     font-weight: 600;
                     color: #ffffff;

@@ -76,7 +76,7 @@ export component EditPanel inherits Rectangle {
             }
 
             Text {
-                text: "编辑内容";
+                text: @tr("Edit");
                 font-size: 14px;
                 font-weight: 700;
                 color: text-1;
@@ -106,8 +106,8 @@ export component EditPanel inherits Rectangle {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     text: root.selected-type == "link" ? "URL" :
-                          root.selected-type == "path" ? "路径" :
-                          root.selected-type == "color" ? "颜色" : "文本";
+                          root.selected-type == "path" ? @tr("Path") :
+                          root.selected-type == "color" ? @tr("Color") : @tr("Text");
                     font-size: 10px;
                     color: accent;
                     horizontal-alignment: center;
@@ -158,7 +158,7 @@ export component EditPanel inherits Rectangle {
                 Text {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: "取消";
+                    text: @tr("Cancel");
                     font-size: 11px;
                     color: text-2;
                     horizontal-alignment: center;
@@ -183,7 +183,7 @@ export component EditPanel inherits Rectangle {
                 Text {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: "保存";
+                    text: @tr("Save");
                     font-size: 11px;
                     font-weight: 600;
                     color: #ffffff;
@@ -225,7 +225,7 @@ export component EditPanel inherits Rectangle {
                 padding: 4px;
                 spacing: 2px;
 
-                for opt[idx] in ["文本", "URL", "路径", "颜色"]: Rectangle {
+                for opt[idx] in [@tr("Text"), "URL", @tr("Path"), @tr("Color")]: Rectangle {
                     height: 26px;
                     border-radius: 4px;
                     background: item-ta.has-hover ? divider : transparent;

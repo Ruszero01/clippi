@@ -3,6 +3,7 @@
 use crate::core::color::{detect_color, is_hex_format};
 use crate::core::db::Database;
 use crate::core::frontend::{Frontend, PositionMode};
+use crate::core::i18n;
 use crate::core::settings::{
     is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
     AppSettings,
@@ -608,7 +609,7 @@ impl AppController {
                 if let Some(app) = c.app.upgrade() {
                     let old_path = c.settings.lock().expect("settings lock poisoned").resolve_db_path();
                     if let Err(e) = c.db.lock().expect("db lock").checkpoint() {
-                        app.set_settings_error(SharedString::from(format!("准备迁移失败: {e}")));
+                        app.set_settings_error(SharedString::from(format!("{}: {e}", i18n::tr("准备迁移失败", "Migration preparation failed"))));
                         return;
                     }
                     match migrate_database(&old_path, &new_path) {
@@ -637,7 +638,7 @@ impl AppController {
             }
             if let Err(e) = c.db.lock().expect("db lock").checkpoint() {
                 if let Some(app) = c.app.upgrade() {
-                    app.set_settings_error(SharedString::from(format!("准备迁移失败: {e}")));
+                    app.set_settings_error(SharedString::from(format!("{}: {e}", i18n::tr("准备迁移失败", "Migration preparation failed"))));
                 }
                 return;
             }
@@ -703,6 +704,47 @@ impl AppController {
             let mut s = c.settings.lock().expect("settings lock poisoned");
             s.card_height_mode = mode.to_string();
             s.save();
+        });
+
+        let c = ctx.clone();
+        slint_app.on_set_language(move |idx: i32| {
+            let lang = match idx {
+                1 => "en",
+                _ => "zh_CN",
+            };
+            let current = c.settings.lock().expect("settings lock poisoned").language.clone();
+            if lang == current {
+                return;
+            }
+            // Save new preference, then ask for restart.
+            {
+                let mut s = c.settings.lock().expect("settings lock poisoned");
+                s.language = lang.to_string();
+                s.save();
+            }
+            let confirmed = rfd::MessageDialog::new()
+                .set_title(crate::core::i18n::tr("重启应用", "Restart App"))
+                .set_description(crate::core::i18n::tr(
+                    "切换语言后需要重启应用才能完全生效，是否立即重启？",
+                    "A restart is required to apply the language change. Restart now?",
+                ))
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .show()
+                == rfd::MessageDialogResult::Ok;
+            if confirmed {
+                do_restart(&c);
+            } else {
+                // User cancelled — revert settings and UI.
+                let old_idx: i32 = if current == "en" { 1 } else { 0 };
+                {
+                    let mut s = c.settings.lock().expect("settings lock poisoned");
+                    s.language = current;
+                    s.save();
+                }
+                if let Some(app) = c.app.upgrade() {
+                    app.set_language_index(old_idx);
+                }
+            }
         });
 
         let c = ctx.clone();
@@ -780,7 +822,7 @@ impl AppController {
                     let s = c.settings.lock().expect("settings lock poisoned");
                     if s.sync_backends.is_empty() {
                         app.set_toast_visible(false);
-                        app.set_toast_message(SharedString::from("请先添加同步服务"));
+                        app.set_toast_message(SharedString::from(i18n::tr("请先添加同步服务", "Please add a sync service first")));
                         app.set_toast_visible(true);
                         return;
                     }
@@ -1352,6 +1394,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
     app.set_position_mode(PositionMode::from_str(&settings.window_position_mode).to_int());
     app.set_card_height_mode(SharedString::from(&settings.card_height_mode));
+    app.set_language_index(if settings.language == "en" { 1 } else { 0 });
     app.set_silent_start(settings.silent_start);
     app.set_show_source_app(settings.show_source_app);
     app.set_auto_scroll_to_top(settings.auto_scroll_to_top);
