@@ -1,19 +1,24 @@
 <div align="center">
+  <p>
+    <img src="assets/LOGO_notext.png" width="120" alt="Clippi 图标">
+  </p>
 
-<img src="assets/LOGO_notext.png" width="120" alt="Clippi 图标">
+  # Clippi
 
-# Clippi
+  轻量级剪贴板管理器 · 基于 Rust + Slint 构建<br>
+  支持 Windows 和 macOS
 
-轻量级剪贴板管理器 · 基于 Rust + Slint 构建<br>
-支持 Windows 和 macOS
+  <p>
+    <a href="https://github.com/Ruszero01/clippi/issues">反馈问题</a> ·
+    <a href="https://github.com/Ruszero01/clippi/releases">更新日志</a>
+  </p>
 
-[反馈问题](https://github.com/Ruszero01/clippi/issues) · [更新日志](https://github.com/Ruszero01/clippi/releases)
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Rust Edition 2021](https://img.shields.io/badge/Rust-2021-%23000000?logo=rust)
-![Slint](https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue)
-
+  <p>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
+    <img src="https://img.shields.io/badge/Rust-2021-%23000000?logo=rust" alt="Rust">
+    <img src="https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint" alt="Slint">
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue" alt="Platform">
+  </p>
 </div>
 
 <p align="center">
