@@ -250,6 +250,7 @@ fn generate_thumbnail(image_path: &std::path::Path, img_dir: &std::path::Path, h
 struct PollingClipboardListener {
     running: Arc<AtomicBool>,
     startup_end: Arc<Mutex<Option<Instant>>>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl PollingClipboardListener {
@@ -257,6 +258,7 @@ impl PollingClipboardListener {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             startup_end: Arc::new(Mutex::new(None)),
+            handle: None,
         }
     }
 
@@ -314,7 +316,7 @@ impl ClipboardListener for PollingClipboardListener {
             objc2_app_kit::NSPasteboard::generalPasteboard().changeCount(),
         ));
 
-        thread::spawn(move || {
+        self.handle = Some(thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
                 // 批量粘贴期间跳过记录，避免产生冗余条目
                 if batch_pasting.load(Ordering::SeqCst) {
@@ -416,13 +418,16 @@ impl ClipboardListener for PollingClipboardListener {
 
                 thread::sleep(Duration::from_millis(50));
             }
-        });
+        }));
 
         Ok(())
     }
 
     fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 

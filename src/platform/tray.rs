@@ -48,7 +48,7 @@ impl TrayManager {
         let tray = TrayIconBuilder::new()
             .with_icon(icon)
             .with_menu(Box::new(menu))
-            .with_tooltip("Clippi - 剪贴板管理器")
+            .with_tooltip("Clippi")
             .build()
             .unwrap();
 

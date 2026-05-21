@@ -1492,7 +1492,7 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         if item.content_type == ContentType::Image {
             if let Some(size) = expected_img_size {
                 if !verify_clipboard_image(size, 300) {
-                    eprintln!("[WARN] batch_paste: image clipboard verification failed for item {}", item.id);
+                    log::warn!("batch_paste: image clipboard verification failed for item {}", item.id);
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             } else {
@@ -1500,7 +1500,7 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
             }
         } else if item.content_type != ContentType::File {
             if !verify_clipboard_content(&expected, 300) {
-                eprintln!("[WARN] batch_paste: clipboard verification timed out for item {}", item.id);
+                log::warn!("batch_paste: clipboard verification timed out for item {}", item.id);
             }
         } else {
             std::thread::sleep(std::time::Duration::from_millis(50));

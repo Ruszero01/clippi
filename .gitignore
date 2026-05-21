@@ -5,6 +5,8 @@ dist/
 # Runtime data
 *.db
 clippi.toml
+*.log
+*.log.old
 
 # IDE
 .vscode/

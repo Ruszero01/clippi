@@ -150,7 +150,7 @@ mod windows {
                         self.registered.store(true, Ordering::SeqCst);
                     }
                     Err(e) => {
-                        eprintln!("hotkey register failed: {e}");
+                        log::error!("hotkey register failed: {e}");
                     }
                 }
             }
@@ -379,7 +379,7 @@ mod macos {
                         self.registered.store(true, Ordering::SeqCst);
                     }
                     Err(e) => {
-                        eprintln!("hotkey register failed: {e}");
+                        log::error!("hotkey register failed: {e}");
                     }
                 }
             }

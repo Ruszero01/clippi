@@ -11,6 +11,28 @@ mod looper;
 mod platform;
 mod services;
 
+fn init_logging(db_path: &str) {
+    let log_path = crate::core::paths::log_path(db_path);
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Rotate: if log > 1 MB, rename to .old before starting fresh
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() > 1_000_000 {
+            let old = log_path.with_extension("log.old");
+            let _ = std::fs::remove_file(&old);
+            let _ = std::fs::rename(&log_path, &old);
+        }
+    }
+    if let Ok(file) = std::fs::File::create(&log_path) {
+        let _ = simplelog::WriteLogger::init(
+            simplelog::LevelFilter::Info,
+            simplelog::Config::default(),
+            file,
+        );
+    }
+}
+
 fn main() {
     // On macOS, disable Slint's default menu bar to avoid muda class name conflict
     // with tray-icon. Both Slint and tray-icon depend on muda (different versions)
@@ -24,6 +46,10 @@ fn main() {
         slint::platform::set_platform(Box::new(backend))
             .expect("Failed to set Slint platform");
     }
+
+    // Load settings early so we can initialize logging before UI setup
+    let settings = crate::core::settings::AppSettings::load();
+    init_logging(&settings.db_path);
 
     let slint_app = App::new().unwrap();
 

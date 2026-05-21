@@ -119,8 +119,23 @@ impl AppSettings {
     pub fn load() -> Self {
         let path = Self::config_path();
         let mut settings: Self = if path.exists() {
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            toml::from_str(&content).unwrap_or_default()
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("无法读取配置文件 {}: {e}", path.display());
+                    return Self::default();
+                }
+            };
+            match toml::from_str(&content) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("配置文件解析失败: {e}");
+                    let backup = path.with_extension("toml.bak");
+                    let _ = std::fs::copy(&path, &backup);
+                    log::warn!("已备份损坏的配置文件到 {}", backup.display());
+                    Self::default()
+                }
+            }
         } else {
             Self::default()
         };
@@ -191,13 +206,14 @@ pub fn is_system_dark_mode() -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn is_system_dark_mode() -> bool {
-    unsafe {
-        let mtm = objc2::MainThreadMarker::new_unchecked();
-        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-        let appearance = app.effectiveAppearance();
-        let name = appearance.name();
-        name.to_string().contains("Dark")
-    }
+    let mtm = match objc2::MainThreadMarker::new() {
+        Some(mtm) => mtm,
+        None => return false,
+    };
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    let appearance = app.effectiveAppearance();
+    let name = appearance.name();
+    name.to_string().contains("Dark")
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -278,15 +294,19 @@ pub fn set_auto_start(_enable: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Generate a simple unique ID for backend configs.
+/// Generate a unique ID using splitmix64 mixing for better bit distribution.
 pub(crate) fn generate_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let rand: u32 = (ts as u32).wrapping_mul(1103515245).wrapping_add(12345);
-    format!("{:08x}{:08x}", ts as u32, rand)
+    let mut x: u64 = ts as u64;
+    x = x.wrapping_add(0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x = x ^ (x >> 31);
+    format!("{:016x}", x)
 }
 
 pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), String> {

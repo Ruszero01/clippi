@@ -377,11 +377,15 @@ impl ClipboardService {
             if let Ok(mut db) = self.db.lock() {
                 let tag_name = db.get_all_tags().ok()
                     .and_then(|tags| tags.iter().find(|t| t.id == tag_id).map(|t| t.name.clone()));
-                let _ = db.delete_tag(tag_id);
+                if let Err(e) = db.delete_tag(tag_id) {
+                    log::error!("delete_tag({tag_id}): {e}");
+                }
                 if let Some(name) = tag_name {
                     let now = chrono::Utc::now().to_rfc3339();
                     let device = crate::services::backends::local_folder::hostname();
-                    let _ = db.record_tag_deletion(&name, &now, &device);
+                    if let Err(e) = db.record_tag_deletion(&name, &now, &device) {
+                        log::error!("record_tag_deletion({name}): {e}");
+                    }
                 }
             }
         }
@@ -398,9 +402,13 @@ impl ClipboardService {
                 // Check if already has tag
                 let tags = db.get_tags_for_item(item_id_i64).unwrap_or_default();
                 if tags.iter().any(|t| t.id == tag_id) {
-                    let _ = db.remove_item_tag(item_id_i64, tag_id);
+                    if let Err(e) = db.remove_item_tag(item_id_i64, tag_id) {
+                        log::error!("remove_item_tag({item_id_i64}, {tag_id}): {e}");
+                    }
                 } else {
-                    let _ = db.add_item_tag(item_id_i64, tag_id);
+                    if let Err(e) = db.add_item_tag(item_id_i64, tag_id) {
+                        log::error!("add_item_tag({item_id_i64}, {tag_id}): {e}");
+                    }
                 }
             }
         }
@@ -443,7 +451,9 @@ impl ClipboardService {
     pub fn batch_add_tag(&mut self, tag_id: i64) {
         if let Ok(db) = self.db.lock() {
             for &id in &self.selected_ids {
-                let _ = db.add_item_tag(id as i64, tag_id);
+                if let Err(e) = db.add_item_tag(id as i64, tag_id) {
+                    log::error!("batch_add_tag({id}, {tag_id}): {e}");
+                }
             }
         }
         self.mark_dirty();
@@ -455,7 +465,9 @@ impl ClipboardService {
     pub fn batch_remove_tag(&mut self, tag_id: i64) {
         if let Ok(db) = self.db.lock() {
             for &id in &self.selected_ids {
-                let _ = db.remove_item_tag(id as i64, tag_id);
+                if let Err(e) = db.remove_item_tag(id as i64, tag_id) {
+                    log::error!("batch_remove_tag({id}, {tag_id}): {e}");
+                }
             }
         }
         self.mark_dirty();
@@ -466,7 +478,9 @@ impl ClipboardService {
     /// Clear all tags from a single item
     pub fn clear_item_tags(&mut self, item_id: i32) {
         if let Ok(db) = self.db.lock() {
-            let _ = db.clear_item_tags(item_id as i64);
+            if let Err(e) = db.clear_item_tags(item_id as i64) {
+                log::error!("clear_item_tags({item_id}): {e}");
+            }
         }
         self.mark_dirty();
         self.refresh_row(item_id);
@@ -476,7 +490,9 @@ impl ClipboardService {
     pub fn clear_selected_tags(&mut self) {
         if let Ok(db) = self.db.lock() {
             for &id in &self.selected_ids {
-                let _ = db.clear_item_tags(id as i64);
+                if let Err(e) = db.clear_item_tags(id as i64) {
+                    log::error!("clear_selected_tags({id}): {e}");
+                }
             }
         }
         self.mark_dirty();
@@ -491,19 +507,25 @@ impl ClipboardService {
             if let Ok(db) = self.db.lock() {
                 // Read current state before toggling
                 let was_fav = db.get_by_id(id as i64).ok().flatten().is_some_and(|item| item.is_favorite);
-                let _ = db.toggle_favorite(id as i64);
+                if let Err(e) = db.toggle_favorite(id as i64) {
+                    log::error!("toggle_favorite({id}): {e}");
+                }
                 // Record or remove unfavorite tombstone
                 if was_fav {
                     // Was favorited, now unfavorited — record tombstone
                     if let Ok(Some(item)) = db.get_by_id(id as i64) {
                         let now = chrono::Utc::now().to_rfc3339();
                         let device = crate::services::backends::local_folder::hostname();
-                        let _ = db.record_unfavorite(item.content_hash, &now, &device);
+                        if let Err(e) = db.record_unfavorite(item.content_hash, &now, &device) {
+                            log::error!("record_unfavorite({}): {e}", item.content_hash);
+                        }
                     }
                 } else {
                     // Was unfavorited, now favorited — remove tombstone
                     if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                        let _ = db.remove_unfavorite(item.content_hash);
+                        if let Err(e) = db.remove_unfavorite(item.content_hash) {
+                            log::error!("remove_unfavorite({}): {e}", item.content_hash);
+                        }
                     }
                 }
             }
@@ -523,10 +545,14 @@ impl ClipboardService {
         {
             if let Ok(db) = self.db.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                    let _ = db.delete_item(id as i64);
+                    if let Err(e) = db.delete_item(id as i64) {
+                        log::error!("delete_item({id}): {e}");
+                    }
                     let now = chrono::Utc::now().to_rfc3339();
                     let device = crate::services::backends::local_folder::hostname();
-                    let _ = db.record_item_deletion(item.content_hash, &now, &device);
+                    if let Err(e) = db.record_item_deletion(item.content_hash, &now, &device) {
+                        log::error!("record_item_deletion({}): {e}", item.content_hash);
+                    }
                 }
             }
         }
@@ -547,7 +573,9 @@ impl ClipboardService {
     /// Update note for an item and refresh that row
     pub fn update_note(&mut self, id: i32, note: &str) {
         if let Ok(db) = self.db.lock() {
-            let _ = db.update_note(id as i64, note);
+            if let Err(e) = db.update_note(id as i64, note) {
+                log::error!("update_note({id}): {e}");
+            }
         }
         self.mark_dirty();
         self.refresh_row(id);
@@ -556,7 +584,9 @@ impl ClipboardService {
     /// Update content for an item, recompute hash, and refresh that row
     pub fn update_content(&mut self, id: i32, text: &str, content_type: &str) {
         if let Ok(db) = self.db.lock() {
-            let _ = db.update_content(id as i64, text, content_type);
+            if let Err(e) = db.update_content(id as i64, text, content_type) {
+                log::error!("update_content({id}): {e}");
+            }
         }
         self.mark_dirty();
         self.refresh_row(id);
@@ -675,14 +705,20 @@ impl ClipboardService {
             let device = crate::services::backends::local_folder::hostname();
             for &id in &self.selected_ids {
                 let was_fav = db.get_by_id(id as i64).ok().flatten().is_some_and(|item| item.is_favorite);
-                let _ = db.toggle_favorite(id as i64);
+                if let Err(e) = db.toggle_favorite(id as i64) {
+                    log::error!("toggle_favorite({id}): {e}");
+                }
                 if was_fav {
                     if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                        let _ = db.record_unfavorite(item.content_hash, &now, &device);
+                        if let Err(e) = db.record_unfavorite(item.content_hash, &now, &device) {
+                            log::error!("batch record_unfavorite({}): {e}", item.content_hash);
+                        }
                     }
                 } else {
                     if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                        let _ = db.remove_unfavorite(item.content_hash);
+                        if let Err(e) = db.remove_unfavorite(item.content_hash) {
+                            log::error!("batch remove_unfavorite({}): {e}", item.content_hash);
+                        }
                     }
                 }
             }
@@ -712,12 +748,16 @@ impl ClipboardService {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
                     hashes.push(item.content_hash);
                 }
-                let _ = db.delete_item(id as i64);
+                if let Err(e) = db.delete_item(id as i64) {
+                    log::error!("batch_delete_item({id}): {e}");
+                }
             }
             let now = chrono::Utc::now().to_rfc3339();
             let device = crate::services::backends::local_folder::hostname();
             for h in &hashes {
-                let _ = db.record_item_deletion(*h, &now, &device);
+                if let Err(e) = db.record_item_deletion(*h, &now, &device) {
+                    log::error!("batch record_item_deletion({h}): {e}");
+                }
             }
         }
         self.mark_dirty();
@@ -811,7 +851,7 @@ impl Pollable for ClipboardService {
                     item.size = compute_size(&item);
 
                     if let Err(e) = db.upsert(&item) {
-                        eprintln!("[ERROR] ClipboardService: upsert error: {:?}", e);
+                        log::error!("ClipboardService: upsert error: {:?}", e);
                         continue;
                     }
 

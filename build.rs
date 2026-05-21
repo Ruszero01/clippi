@@ -5,7 +5,7 @@ fn main() {
     {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/LOGO.ico");
-        res.set("FileDescription", "Clippi - Clipboard Manager");
+        res.set("FileDescription", "Clippi");
         res.set("ProductName", "Clippi");
         res.set("OriginalFilename", "clippi.exe");
         res.compile().expect("Failed to compile Windows resources");

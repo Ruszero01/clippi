@@ -26,6 +26,14 @@ pub fn resolve_db_path(db_setting: &str) -> PathBuf {
     }
 }
 
+/// Log file path — follows the database directory so custom db_path
+/// users get the log file next to their database.
+pub fn log_path(db_setting: &str) -> PathBuf {
+    let db = resolve_db_path(db_setting);
+    let dir = db.parent().unwrap_or_else(|| std::path::Path::new("."));
+    dir.join("clippi.log")
+}
+
 pub fn app_icon_dir() -> PathBuf {
     let dir = images_dir().join("icons");
     if !dir.exists() {
@@ -80,7 +88,7 @@ fn ensure_app_data_dir() -> std::io::Result<()> {
 pub fn migrate_legacy_files() {
     // Always ensure data directory exists (for fresh installs and after migration)
     if let Err(e) = ensure_app_data_dir() {
-        eprintln!("Warning: failed to create data directory: {e}");
+        log::error!("failed to create data directory: {e}");
         return;
     }
 
@@ -105,14 +113,14 @@ pub fn migrate_legacy_files() {
 
     if legacy_config.exists() {
         if let Err(e) = fs::copy(&legacy_config, &new_config) {
-            eprintln!("Warning: failed to migrate config: {e}");
+            log::error!("failed to migrate config: {e}");
         }
     }
 
     if legacy_db.exists() {
         let new_db = data_dir.join(DB_FILE);
         if let Err(e) = fs::copy(&legacy_db, &new_db) {
-            eprintln!("Warning: failed to migrate database: {e}");
+            log::error!("failed to migrate database: {e}");
         }
     }
 }

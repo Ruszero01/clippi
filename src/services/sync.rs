@@ -339,7 +339,7 @@ impl SyncManager {
         self.settings
             .lock()
             .map(|s| s.sync_auto_enabled)
-            .unwrap_or(true)
+            .unwrap_or(false)
     }
 
     /// Whether sync-favorites-only is enabled.

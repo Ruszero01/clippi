@@ -143,11 +143,11 @@ impl SyncBackend for LocalFolderBackend {
                         payload = sync::merge_payloads(payload, conflict);
                     }
                     Err(e) => {
-                        eprintln!("[sync] 冲突文件解析失败 {}: {e}", conflict_path.display());
+                        log::error!("[sync] 冲突文件解析失败 {}: {e}", conflict_path.display());
                     }
                 },
                 Err(e) => {
-                    eprintln!("[sync] 冲突文件读取失败 {}: {e}", conflict_path.display());
+                    log::error!("[sync] 冲突文件读取失败 {}: {e}", conflict_path.display());
                 }
             }
         }
@@ -186,7 +186,7 @@ impl SyncBackend for LocalFolderBackend {
     fn post_push_cleanup(&self) -> Result<(), String> {
         for path in self.find_conflicts() {
             if let Err(e) = std::fs::remove_file(&path) {
-                eprintln!("[sync] 清理冲突文件失败 {}: {e}", path.display());
+                log::warn!("[sync] 清理冲突文件失败 {}: {e}", path.display());
             }
         }
         Ok(())
