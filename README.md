@@ -11,7 +11,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Rust Edition 2021](https://img.shields.io/badge/Rust-2021-%23000000?logo=rust)
-![Slint](https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint)<br>
+![Slint](https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue)
 
 </div>
