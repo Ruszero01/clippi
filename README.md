@@ -1,11 +1,24 @@
-# Clippi - 剪贴板管理器
+<div align="center">
+
+<img src="assets/LOGO_notext.png" width="120" alt="Clippi 图标">
+
+# Clippi
+
+轻量级剪贴板管理器 · 基于 Rust + Slint 构建<br>
+支持 Windows 和 macOS
+
+[反馈问题](https://github.com/Ruszero01/clippi/issues) · [更新日志](https://github.com/Ruszero01/clippi/releases)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Rust Edition 2021](https://img.shields.io/badge/Rust-2021-%23000000?logo=rust)
+![Slint](https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint)<br>
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue)
+
+</div>
 
 <p align="center">
-  <img src="assets/Banner.png" alt="Banner" width="100%">
   <img src="assets/UI.png" alt="UI Screenshot" width="100%">
 </p>
-
-一个轻量级剪贴板管理器，使用 Rust + Slint 构建。支持 Windows 和 macOS。
 
 ## 功能
 
