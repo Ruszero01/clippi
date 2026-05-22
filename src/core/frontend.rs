@@ -244,6 +244,11 @@ impl Frontend {
 
     pub fn hide(&mut self) {
         if let Some(app) = self.app.upgrade() {
+            // Close all floating panels so they don't linger when the window reappears
+            app.set_context_menu_visible(false);
+            app.set_tag_filter_visible(false);
+            app.set_tag_picker_visible(false);
+
             let window = app.window();
             if self.position_mode == PositionMode::Remember {
                 let pos = window.position();
@@ -255,12 +260,11 @@ impl Frontend {
             let scale = window.scale_factor();
             self.saved_window_width = size.width as f32 / scale;
             self.saved_window_height = size.height as f32 / scale;
-        }
-        self.visible = false;
-        // Signal ClipboardService to release model resources (images, cache)
-        // so memory drops back to baseline while the window is hidden.
-        self.needs_release.store(true, Ordering::SeqCst);
-        if let Some(app) = self.app.upgrade() {
+
+            self.visible = false;
+            // Signal ClipboardService to release model resources (images, cache)
+            // so memory drops back to baseline while the window is hidden.
+            self.needs_release.store(true, Ordering::SeqCst);
             app.window().hide().ok();
         }
     }
