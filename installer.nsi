@@ -44,6 +44,11 @@ SetCompressor /SOLID lzma
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
+Function un.onInit
+  ; Kill running instance before any uninstall action
+  nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
+FunctionEnd
+
 LangString DESC_Core ${LANG_SIMPCHINESE} "核心程序文件（必需）"
 LangString DESC_StartMenu ${LANG_SIMPCHINESE} "在开始菜单创建快捷方式"
 LangString DESC_Desktop ${LANG_SIMPCHINESE} "在桌面创建快捷方式"
@@ -91,6 +96,7 @@ SectionEnd
 Section /o "un.清除应用数据" SectionUnData
   ; /o = unchecked by default — user must explicitly opt in to delete data
   ; Remove app data at %LOCALAPPDATA%\Clippi (database, config, images, logs)
+  SetShellVarContext current
   RMDir /r "$LOCALAPPDATA\${APP_NAME}"
 SectionEnd
 
@@ -99,8 +105,6 @@ SectionEnd
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
-  nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
-
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
