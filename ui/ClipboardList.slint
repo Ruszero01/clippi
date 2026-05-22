@@ -93,6 +93,7 @@ export component ClipboardList inherits Rectangle {
         width: parent.width;
         height: parent.height;
         clicked => {
+            search-input.clear-focus();
             root.clear-selection();
             root.hide-context-menu();
             root.hide-tag-filter-panel();
