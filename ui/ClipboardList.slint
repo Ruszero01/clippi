@@ -614,11 +614,11 @@ export component ClipboardList inherits Rectangle {
                                             background: tag-bg;
                                             clip: true;
 
-                                            // Multi-file: generic icon; single file: OS file icon (or fallback glyph)
+                                            // Multi-file: folder icon; single file: OS file icon (or fallback glyph)
                                             if entry.file-count > 1 : Text {
                                                 x: (parent.width - self.width) / 2;
                                                 y: (parent.height - self.height) / 2;
-                                                text: "\u{e68a}";
+                                                text: "\u{e60f}";
                                                 font-family: "iconfont";
                                                 font-size: 18px;
                                                 color: tag-text;
@@ -657,7 +657,7 @@ export component ClipboardList inherits Rectangle {
                                                 spacing: 1px;
 
                                                 if entry.file-count > 1 : Text {
-                                                    text: "\u{e60f}";
+                                                    text: "\u{e68a}";
                                                     font-family: "iconfont";
                                                     font-size: 8px;
                                                     color: tag-text;
