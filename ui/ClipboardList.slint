@@ -511,11 +511,11 @@ export component ClipboardList inherits Rectangle {
 
                                 // ── 来源应用模式（开启且有来源，文件类型除外） ──
                                 if root.show-source-app && entry.source-app-name != "" && entry.source-app-icon-path != "" && entry.content-type != "file" && entry.content-type != "path" && entry.content-type != "link" : VerticalLayout {
-                                    width: 34px;
+                                    width: 36px;
                                     spacing: 3px;
 
                                     Rectangle {
-                                        width: 34px;
+                                        width: 36px;
                                         height: 28px;
                                         border-radius: 6px;
                                         background: divider;
@@ -524,7 +524,7 @@ export component ClipboardList inherits Rectangle {
                                         Image {
                                             width: 22px;
                                             height: 22px;
-                                            x: 6px;
+                                            x: 7px;
                                             y: 3px;
                                             source: entry.source-app-icon-image;
                                             image-fit: cover;
@@ -534,7 +534,7 @@ export component ClipboardList inherits Rectangle {
                                     // 颜色类型：显示色块；其他类型：显示图标+标签
                                     if entry.content-type == "color" : Rectangle {
                                         height: 14px;
-                                        width: 34px;
+                                        width: 36px;
                                         border-radius: 3px;
                                         background: entry.color-swatch;
                                         border-width: 1px;
@@ -543,39 +543,33 @@ export component ClipboardList inherits Rectangle {
 
                                     if entry.content-type != "color" : st-bg := Rectangle {
                                         height: 14px;
-                                        width: 34px;
+                                        width: 36px;
                                         border-radius: 3px;
                                         background: tag-bg;
 
-                                        st-layout := HorizontalLayout {
-                                            padding-left: 4px;
-                                            padding-right: 4px;
-                                            alignment: center;
-
-                                            st-label := Text {
-                                                text: entry.content-type == "plain_text" ? @tr("Text") :
-                                                      entry.content-type == "rich_text" ? @tr("RTF") :
-                                                      entry.content-type == "image" ? @tr("Image") :
-                                                      entry.content-type == "file" ? entry.file-icon-text :
-                                                      entry.content-type == "link" ? @tr("URL") :
-                                                      entry.content-type == "path" ? @tr("Path") : "";
-                                                font-size: 10px;
-                                                color: tag-text;
-                                                vertical-alignment: center;
-                                            }
+                                        st-label := Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: entry.content-type == "plain_text" ? @tr("Text") :
+                                                  entry.content-type == "rich_text" ? @tr("RTF") :
+                                                  entry.content-type == "image" ? @tr("Image") :
+                                                  entry.content-type == "file" ? entry.file-icon-text :
+                                                  entry.content-type == "link" ? @tr("URL") :
+                                                  entry.content-type == "path" ? @tr("Path") : "";
+                                            font-size: 10px;
+                                            color: tag-text;
                                         }
                                     }
                                 }
 
                                 // ── 类型图标模式（关闭、没有来源、或文件类型） ──
                                 if !root.show-source-app || entry.source-app-name == "" || entry.source-app-icon-path == "" || entry.content-type == "file" || entry.content-type == "path" || entry.content-type == "link" : VerticalLayout {
-                                    width: 34px;
-
                                     if entry.content-type == "image": VerticalLayout {
+                                        width: 36px;
                                         spacing: 3px;
 
                                         Rectangle {
-                                            width: 34px;
+                                            width: 36px;
                                             height: 28px;
                                             border-radius: 6px;
                                             background: tag-bg;
@@ -592,30 +586,26 @@ export component ClipboardList inherits Rectangle {
 
                                         Rectangle {
                                             height: 14px;
-                                            width: 34px;
+                                            width: 36px;
                                             border-radius: 3px;
                                             background: tag-bg;
 
-                                            HorizontalLayout {
-                                                padding-left: 4px;
-                                                padding-right: 4px;
-                                                alignment: center;
-
-                                                Text {
-                                                    text: @tr("Image");
-                                                    font-size: 10px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                }
+                                            Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: @tr("Image");
+                                                font-size: 10px;
+                                                color: tag-text;
                                             }
                                         }
                                     }
 
                                     if entry.content-type == "file": VerticalLayout {
+                                        width: 38px;
                                         spacing: 3px;
 
                                         Rectangle {
-                                            width: 34px;
+                                            width: 38px;
                                             height: 28px;
                                             border-radius: 6px;
                                             background: tag-bg;
@@ -634,7 +624,7 @@ export component ClipboardList inherits Rectangle {
                                             if entry.file-count <= 1 && entry.file-icon-path != "" : Image {
                                                 width: 22px;
                                                 height: 22px;
-                                                x: 6px;
+                                                x: 8px;
                                                 y: 3px;
                                                 source: entry.file-icon-image;
                                                 image-fit: contain;
@@ -652,19 +642,19 @@ export component ClipboardList inherits Rectangle {
 
                                         Rectangle {
                                             height: 14px;
-                                            width: 34px;
+                                            width: 38px;
                                             border-radius: 3px;
                                             background: tag-bg;
                                             clip: true;
 
                                             HorizontalLayout {
-                                                padding-left: 4px;
-                                                padding-right: 4px;
+                                                padding-left: 3px;
+                                                padding-right: 3px;
                                                 alignment: center;
                                                 spacing: 1px;
 
                                                 if entry.file-count > 1 : Text {
-                                                    text: "\u{e646}";
+                                                    text: "\u{e60f}";
                                                     font-family: "iconfont";
                                                     font-size: 8px;
                                                     color: tag-text;
@@ -683,10 +673,11 @@ export component ClipboardList inherits Rectangle {
                                     }
 
                                     if entry.content-type == "plain_text": VerticalLayout {
+                                        width: 36px;
                                         spacing: 3px;
 
                                         Rectangle {
-                                            width: 34px;
+                                            width: 36px;
                                             height: 28px;
                                             border-radius: 6px;
                                             background: tag-bg;
@@ -703,30 +694,26 @@ export component ClipboardList inherits Rectangle {
 
                                         Rectangle {
                                             height: 14px;
-                                            width: 34px;
+                                            width: 36px;
                                             border-radius: 3px;
                                             background: tag-bg;
 
-                                            HorizontalLayout {
-                                                padding-left: 4px;
-                                                padding-right: 4px;
-                                                alignment: center;
-
-                                                Text {
-                                                    text: @tr("Text");
-                                                    font-size: 10px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                }
+                                            Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: @tr("Text");
+                                                font-size: 10px;
+                                                color: tag-text;
                                             }
                                         }
                                     }
 
                                     if entry.content-type == "rich_text": VerticalLayout {
+                                        width: 36px;
                                         spacing: 3px;
 
                                         Rectangle {
-                                            width: 34px;
+                                            width: 36px;
                                             height: 28px;
                                             border-radius: 6px;
                                             background: tag-bg;
@@ -743,30 +730,26 @@ export component ClipboardList inherits Rectangle {
 
                                         Rectangle {
                                             height: 14px;
-                                            width: 34px;
+                                            width: 36px;
                                             border-radius: 3px;
                                             background: tag-bg;
 
-                                            HorizontalLayout {
-                                                padding-left: 4px;
-                                                padding-right: 4px;
-                                                alignment: center;
-
-                                                Text {
-                                                    text: @tr("RTF");
-                                                    font-size: 10px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                }
+                                            Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: @tr("RTF");
+                                                font-size: 10px;
+                                                color: tag-text;
                                             }
                                         }
                                     }
 
                                     if entry.content-type == "link": VerticalLayout {
+                                        width: 36px;
                                         spacing: 3px;
 
                                         Rectangle {
-                                            width: 34px;
+                                            width: 36px;
                                             height: 28px;
                                             border-radius: 6px;
                                             background: tag-bg;
@@ -775,7 +758,7 @@ export component ClipboardList inherits Rectangle {
                                             if entry.favicon-path != "" : Rectangle {
                                                 width: 22px;
                                                 height: 22px;
-                                                x: 6px;
+                                                x: 7px;
                                                 y: 3px;
                                                 clip: true;
                                                 border-radius: 11px;
@@ -791,7 +774,7 @@ export component ClipboardList inherits Rectangle {
                                             if entry.favicon-path == "" && root.show-source-app && entry.source-app-icon-path != "" : Image {
                                                 width: 22px;
                                                 height: 22px;
-                                                x: 6px;
+                                                x: 7px;
                                                 y: 3px;
                                                 source: entry.source-app-icon-image;
                                                 image-fit: contain;
@@ -809,32 +792,26 @@ export component ClipboardList inherits Rectangle {
 
                                         Rectangle {
                                             height: 14px;
-                                            width: 34px;
+                                            width: 36px;
                                             border-radius: 3px;
                                             background: tag-bg;
-                                            clip: true;
 
-                                            HorizontalLayout {
-                                                padding-left: 4px;
-                                                padding-right: 4px;
-                                                alignment: center;
-
-                                                Text {
-                                                    text: "URL";
-                                                    font-size: 10px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                    overflow: elide;
-                                                }
+                                            Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "URL";
+                                                font-size: 10px;
+                                                color: tag-text;
                                             }
                                         }
                                     }
 
                                     if entry.content-type == "path": VerticalLayout {
+                                        width: 36px;
                                         spacing: 3px;
 
                                         Rectangle {
-                                            width: 34px;
+                                            width: 36px;
                                             height: 28px;
                                             border-radius: 6px;
                                             background: tag-bg;
@@ -843,7 +820,7 @@ export component ClipboardList inherits Rectangle {
                                             if entry.folder-icon-path != "" : Image {
                                                 width: 22px;
                                                 height: 22px;
-                                                x: 6px;
+                                                x: 7px;
                                                 y: 3px;
                                                 source: entry.folder-icon-image;
                                                 image-fit: contain;
@@ -861,35 +838,29 @@ export component ClipboardList inherits Rectangle {
 
                                         Rectangle {
                                             height: 14px;
-                                            width: 34px;
+                                            width: 36px;
                                             border-radius: 3px;
                                             background: tag-bg;
-                                            clip: true;
 
-                                            HorizontalLayout {
-                                                padding-left: 4px;
-                                                padding-right: 4px;
-                                                alignment: center;
-
-                                                Text {
-                                                    text: @tr("Path");
-                                                    font-size: 10px;
-                                                    color: tag-text;
-                                                    vertical-alignment: center;
-                                                    overflow: elide;
-                                                }
+                                            Text {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                text: @tr("Path");
+                                                font-size: 10px;
+                                                color: tag-text;
                                             }
                                         }
                                     }
 
                                     if entry.content-type == "color": VerticalLayout {
+                                        width: 36px;
                                         Rectangle {
                                             vertical-stretch: 1;
                                         }
 
                                         Rectangle {
-                                            width: 34px;
-                                            height: 34px;
+                                            width: 36px;
+                                            height: 36px;
                                             border-radius: 6px;
                                             background: tag-bg;
 
