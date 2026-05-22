@@ -113,6 +113,7 @@ export component App inherits Window {
     in-out property <bool> filter-file: false;
     in-out property <bool> filter-favorites: false;
     in-out property <bool> has-tag-filter: false;
+    in-out property <bool> tag-match-all: false;
 
     // 标签浮层状态
     in-out property <bool> tag-filter-visible: false;
@@ -198,6 +199,8 @@ export component App inherits Window {
     callback show-tag-filter-panel();
     callback hide-tag-filter-panel();
     callback toggle-tag-filter(int);
+    callback toggle-tag-mode();
+    callback clear-tag-filters();
     callback create-tag(string);
     callback delete-tag(int);
     callback update-tag(int, string, color);
@@ -617,12 +620,15 @@ export component App inherits Window {
             dark-mode: root.dark-mode;
             all-tags <=> root.all-tags;
             has-tag-filter: root.has-tag-filter;
+            tag-match-all: root.tag-match-all;
 
             hide-panel => { root.hide-tag-filter-panel(); }
             create-tag(name) => { root.create-tag(name); }
             delete-tag(id) => { root.delete-tag(id); }
             update-tag(id, name, color) => { root.update-tag(id, name, color); }
             toggle-tag-filter(id) => { root.toggle-tag-filter(id); }
+            toggle-tag-mode => { root.toggle-tag-mode(); }
+            clear-tag-filters => { root.clear-tag-filters(); }
         }
 
         // ========== 标签选择器浮层面板 ==========

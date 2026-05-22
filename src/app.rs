@@ -1218,6 +1218,27 @@ impl AppController {
         });
 
         let c = ctx.clone();
+        slint_app.on_toggle_tag_mode(move || {
+            let _ = c.looper.try_with_clipboard_service(|cs| {
+                cs.toggle_tag_mode_and_refresh();
+                if let Some(app) = c.app.upgrade() {
+                    app.set_tag_match_all(cs.tag_match_all());
+                }
+            });
+        });
+
+        let c = ctx.clone();
+        slint_app.on_clear_tag_filters(move || {
+            let _ = c.looper.try_with_clipboard_service(|cs| {
+                cs.clear_tag_filters_and_refresh();
+                if let Some(app) = c.app.upgrade() {
+                    app.set_has_tag_filter(false);
+                    app.set_tag_match_all(false);
+                }
+            });
+        });
+
+        let c = ctx.clone();
         slint_app.on_create_tag(move |name: SharedString| {
             let _ = c.looper.try_with_clipboard_service(|cs| {
                 cs.create_tag(name.as_str());

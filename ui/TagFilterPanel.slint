@@ -14,6 +14,7 @@ export component TagFilterPanel inherits Rectangle {
     // 数据
     in-out property <[TagItem]> all-tags: [];
     in property <bool> has-tag-filter: false;
+    in property <bool> tag-match-all: false;
 
     // 回调
     callback hide-panel();
@@ -21,6 +22,8 @@ export component TagFilterPanel inherits Rectangle {
     callback delete-tag(int);
     callback toggle-tag-filter(int);
     callback update-tag(int, string, color);
+    callback toggle-tag-mode();
+    callback clear-tag-filters();
 
     // 编辑状态
     in-out property <int> editing-tag-id: -1;
@@ -75,25 +78,79 @@ export component TagFilterPanel inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            close-btn := Rectangle {
-                width: 22px;
-                height: 22px;
-                border-radius: 5px;
-                background: close-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+            HorizontalLayout {
+                width: 72px;
+                alignment: end;
+                spacing: 2px;
 
-                close-ta := TouchArea {
-                    width: 100%;
-                    height: 100%;
-                    clicked => { root.hide-panel(); }
+                // AND/OR 模式切换按钮
+                mode-btn := Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    background: mode-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover)
+                               : root.tag-match-all ? (dark-mode ? #7ecba322 : #6ab89022)
+                               : transparent;
+
+                    mode-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.toggle-tag-mode(); }
+                    }
+
+                    Text {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        text: "\u{e61e}";
+                        font-family: "iconfont";
+                        font-size: 12px;
+                        color: root.tag-match-all ? accent : text-2;
+                    }
                 }
 
-                Text {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    text: "\u{e7b7}";
-                    font-family: "iconfont";
-                    font-size: 11px;
-                    color: text-2;
+                // 一键清除标签筛选
+                if root.has-tag-filter : clear-btn := Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    background: clear-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+
+                    clear-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.clear-tag-filters(); }
+                    }
+
+                    Text {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        text: "\u{e607}";
+                        font-family: "iconfont";
+                        font-size: 12px;
+                        color: text-2;
+                    }
+                }
+
+                close-btn := Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    background: close-ta.has-hover ? (dark-mode ? #3e3f42 : btn-hover) : transparent;
+
+                    close-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.hide-panel(); }
+                    }
+
+                    Text {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        text: "\u{e7b7}";
+                        font-family: "iconfont";
+                        font-size: 11px;
+                        color: text-2;
+                    }
                 }
             }
         }

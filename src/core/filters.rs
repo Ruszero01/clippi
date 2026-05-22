@@ -18,6 +18,8 @@ pub struct ClipboardFilters {
     favorites_only: bool,
     /// Tag filter: empty = no tag filter, non-empty = item must have at least one of these tags
     tag_ids: Vec<i64>,
+    /// Tag match mode: false = OR (any selected tag), true = AND (all selected tags)
+    tag_match_all: bool,
 }
 
 impl ClipboardFilters {
@@ -50,6 +52,7 @@ impl ClipboardFilters {
         self.keyword = None;
         self.favorites_only = false;
         self.tag_ids.clear();
+        self.tag_match_all = false;
     }
 
     /// Check if a specific type filter is active
@@ -83,9 +86,24 @@ impl ClipboardFilters {
         self.tag_ids.contains(&tag_id)
     }
 
+    /// Clear all tag filters (keeps other filter dimensions)
+    pub fn clear_tag_filters(&mut self) {
+        self.tag_ids.clear();
+    }
+
     /// Check if any tag filter is active
     pub fn has_tag_filters(&self) -> bool {
         !self.tag_ids.is_empty()
+    }
+
+    /// Toggle tag match mode between OR and AND
+    pub fn toggle_tag_mode(&mut self) {
+        self.tag_match_all = !self.tag_match_all;
+    }
+
+    /// Current tag match mode (true = AND)
+    pub fn is_tag_match_all(&self) -> bool {
+        self.tag_match_all
     }
 
     /// Check if an in-memory item matches all active filters (AND logic).
@@ -95,11 +113,16 @@ impl ClipboardFilters {
         if self.favorites_only && !item.is_favorite {
             return false;
         }
-        // Tag filter dimension: item must have at least one of the selected tags (OR logic)
-        if !self.tag_ids.is_empty()
-            && !item.tags.iter().any(|t| self.tag_ids.contains(&t.id))
-        {
-            return false;
+        // Tag filter dimension: OR = item has any selected tag, AND = item has all selected tags
+        if !self.tag_ids.is_empty() {
+            let matched = if self.tag_match_all {
+                self.tag_ids.iter().all(|tid| item.tags.iter().any(|t| t.id == *tid))
+            } else {
+                item.tags.iter().any(|t| self.tag_ids.contains(&t.id))
+            };
+            if !matched {
+                return false;
+            }
         }
         // Type filter dimension
         if !self.type_filters.is_empty() {
@@ -136,13 +159,21 @@ impl ClipboardFilters {
             conditions.push("is_favorite = 1".to_string());
         }
 
-        // Tag filter — item must have at least one of the selected tags
+        // Tag filter — OR: item has any selected tag; AND: item has all selected tags
         if !self.tag_ids.is_empty() {
             let ph: Vec<&str> = self.tag_ids.iter().map(|_| "?").collect();
-            conditions.push(format!(
-                "id IN (SELECT item_id FROM item_tags WHERE tag_id IN ({}))",
-                ph.join(",")
-            ));
+            if self.tag_match_all {
+                conditions.push(format!(
+                    "id IN (SELECT item_id FROM item_tags WHERE tag_id IN ({}) GROUP BY item_id HAVING COUNT(DISTINCT tag_id) = {})",
+                    ph.join(","),
+                    self.tag_ids.len()
+                ));
+            } else {
+                conditions.push(format!(
+                    "id IN (SELECT item_id FROM item_tags WHERE tag_id IN ({}))",
+                    ph.join(",")
+                ));
+            }
             for id in &self.tag_ids {
                 params.push((*id).into());
             }

@@ -263,6 +263,24 @@ impl ClipboardService {
         self.refresh_with_current_filter();
     }
 
+    /// Toggle tag filter mode (AND/OR) and full reload
+    pub fn toggle_tag_mode_and_refresh(&mut self) {
+        self.filters.toggle_tag_mode();
+        self.refresh_with_current_filter();
+    }
+
+    /// Clear all tag filters and full reload
+    pub fn clear_tag_filters_and_refresh(&mut self) {
+        self.filters.clear_tag_filters();
+        self.load_all_tags_for_filter();
+        self.refresh_with_current_filter();
+    }
+
+    /// Current tag match mode (true = AND)
+    pub fn tag_match_all(&self) -> bool {
+        self.filters.is_tag_match_all()
+    }
+
     /// Clear all tag filters and full reload
     /// Load all tags into the shared model with filter-checked state
     pub fn load_all_tags_for_filter(&self) {
