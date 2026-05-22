@@ -449,8 +449,11 @@ impl SyncManager {
             if result.success {
                 state.last_sync_at = chrono::Utc::now().to_rfc3339();
                 state.status = state.backend.check_status();
-                state.last_item_count = result.pushed_items;
-                state.last_tag_count = result.pushed_tags;
+                // Only update counts when a real push happened (fast path returns 0,0)
+                if result.pushed_items > 0 || result.pushed_tags > 0 {
+                    state.last_item_count = result.pushed_items;
+                    state.last_tag_count = result.pushed_tags;
+                }
             } else {
                 state.status = BackendStatus::Error(msg);
             }
