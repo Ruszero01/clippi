@@ -40,6 +40,10 @@
 
 ## What Can Clippi Do?
 
+- Slint native frontend rendering: No webview required, combining low resource footprint with high aesthetics.
+- Fast Rust backend: High performance and robust cross-platform capabilities.
+- Multi-backend cloud sync: Supports OneDrive/iCloud with an extensible architecture (WebDAV and other channels planned).
+
 ### Clipboard Monitoring
 - Multi-format content detection (by priority):
   - **Files** — File/folder paths, multi-file support, system icon extraction; single image files auto-recognized as images
