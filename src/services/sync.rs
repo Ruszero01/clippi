@@ -176,6 +176,9 @@ impl SyncManager {
             name,
             folder_path,
             device_name: String::new(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
         };
 
         // Persist
@@ -309,15 +312,18 @@ impl SyncManager {
     fn build_state(config: BackendConfig) -> BackendState {
         let folder_path = config.folder_path.clone();
         let service_label = detect_service_label(&folder_path);
+        let last_sync_at = config.last_sync_at.clone();
+        let last_item_count = config.last_item_count;
+        let last_tag_count = config.last_tag_count;
         let backend: Arc<dyn SyncBackend> = Arc::new(LocalFolderBackend::new(config));
 
         BackendState {
             status: backend.check_status(),
             backend,
             last_sync: None,
-            last_sync_at: String::new(),
-            last_item_count: 0,
-            last_tag_count: 0,
+            last_sync_at,
+            last_item_count,
+            last_tag_count,
             folder_path,
             service_label,
             is_running: Arc::new(AtomicBool::new(false)),
@@ -453,6 +459,15 @@ impl SyncManager {
                 if result.pushed_items > 0 || result.pushed_tags > 0 {
                     state.last_item_count = result.pushed_items;
                     state.last_tag_count = result.pushed_tags;
+                }
+                // Persist stats so they survive app restart
+                if let Ok(mut s) = self.settings.lock() {
+                    if let Some(cfg) = s.sync_backends.iter_mut().find(|b| b.id == state.backend.id()) {
+                        cfg.last_sync_at = state.last_sync_at.clone();
+                        cfg.last_item_count = state.last_item_count;
+                        cfg.last_tag_count = state.last_tag_count;
+                        s.save();
+                    }
                 }
             } else {
                 state.status = BackendStatus::Error(msg);

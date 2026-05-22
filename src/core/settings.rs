@@ -28,6 +28,12 @@ pub struct BackendConfig {
     pub name: String,
     pub folder_path: String,
     pub device_name: String,
+    #[serde(default)]
+    pub last_sync_at: String,
+    #[serde(default)]
+    pub last_item_count: u32,
+    #[serde(default)]
+    pub last_tag_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +173,9 @@ impl AppSettings {
                 name: device_name.clone(),
                 folder_path: self.sync_data_dir.clone(),
                 device_name,
+                last_sync_at: String::new(),
+                last_item_count: 0,
+                last_tag_count: 0,
             });
             // Clear old fields
             self.sync_enabled = false;
