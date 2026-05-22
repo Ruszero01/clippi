@@ -88,12 +88,15 @@ export component ClipboardList inherits Rectangle {
 
     background: transparent;
 
-    // 点击空白区域取消所有选中
+    // 点击空白区域取消所有选中并关闭浮层面板
     bg-ta := TouchArea {
         width: parent.width;
         height: parent.height;
         clicked => {
             root.clear-selection();
+            root.hide-context-menu();
+            root.hide-tag-filter-panel();
+            root.hide-tag-picker();
         }
     }
 

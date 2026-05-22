@@ -428,6 +428,9 @@ impl AppController {
         slint_app.on_close_window(move || {
             if let Some(app) = ctx_close.app.upgrade() {
                 app.set_pinned(false);
+                app.set_context_menu_visible(false);
+                app.set_tag_filter_visible(false);
+                app.set_tag_picker_visible(false);
             }
             if let Ok(mut fe) = ctx_close.frontend.lock() {
                 fe.hide(); // sets needs_release internally
