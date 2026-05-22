@@ -33,16 +33,11 @@
 
 ## Why Clippi?
 
-- Easily record daily clipboard history
-- Low system resource consumption
-- Cross-platform synchronization across multiple devices
-- Sleek and modern user interface
-
-## What Can Clippi Do?
-
 - Slint native frontend rendering: No webview required, combining low resource footprint with high aesthetics.
 - Fast Rust backend: High performance and robust cross-platform capabilities.
 - Multi-backend cloud sync: Supports OneDrive/iCloud with an extensible architecture (WebDAV and other channels planned).
+
+## What Can Clippi Do?
 
 ### Clipboard Monitoring
 - Multi-format content detection (by priority):
