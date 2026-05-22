@@ -197,6 +197,7 @@ impl SyncBackend for LocalFolderBackend {
 // ── Platform detection helpers ──
 
 /// Get a human-readable device name for conflict identification.
+#[allow(clippy::bind_instead_of_map)]
 pub fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
