@@ -31,14 +31,21 @@
 
 ---
 
+## Why Clippi?
+
+- Easily record daily clipboard history
+- Low system resource consumption
+- Cross-platform synchronization across multiple devices
+- Sleek and modern user interface
+
 ## What Can Clippi Do?
 
 ### Clipboard Monitoring
 - Multi-format content detection (by priority):
   - **Files** — File/folder paths, multi-file support, system icon extraction; single image files auto-recognized as images
-  - **Images** — PNG format (including transparency), auto-thumbnails
+  - **Images** — Automatically process images into thumbnails to save memory.
   - **Links** — URL auto-detection (http/https), domain/path extraction, favicon preview
-  - **Colors** — HEX/RGB auto-detection & normalization (`#RGB`, `#RRGGBB`, `rgb()`/`rgba()`, comma/space delimited)
+  - **Colors** — HEX/RGB auto-detection & normalization
   - **Rich Text** — HTML, RTF formats
   - **Plain Text** — Plain text content
   - **Paths** — Windows absolute paths / UNC paths / Unix absolute paths, intelligent recognition
@@ -60,7 +67,7 @@
 - Six-level type filter: Text / Rich Text / Images / Files / Links / Colors
   - Link ⇄ Path, File ⇄ Image bidirectional auto-linkage
 - Keyword search — matches text content and tag names simultaneously
-- Tag filtering — multi-tag OR logic, combined with other filter dimensions via AND
+- Tag filtering — Switchable AND/OR logic for multiple tags, combined with other filter dimensions via AND
 - Sorting: by creation time / by last modified time
 - Note inline editing + full content editor
 
