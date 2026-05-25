@@ -204,6 +204,23 @@ impl AppController {
             fe.set_initial_suppress();
         }
 
+        // Spawn background update check (fire-and-forget, non-critical)
+        {
+            use crate::services::update::UpdateChecker;
+            let checker =
+                UpdateChecker::new(env!("CARGO_PKG_VERSION"), "Ruszero01", "clippi");
+            std::thread::spawn(move || {
+                if let Some(info) = checker.check() {
+                    log::info!(
+                        "Update available: {} -> {} ({})",
+                        checker.current_version(),
+                        info.latest_version,
+                        info.html_url,
+                    );
+                }
+            });
+        }
+
         // Trim working set after startup — initialization (Slint renderer,
         // font loading, DB setup) allocates temporary memory that the
         // allocator won't return to the OS without a hint.

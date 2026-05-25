@@ -3,8 +3,12 @@
 use crate::core::frontend::Frontend;
 use crate::looper::Pollable;
 use crate::platform::tray::{TrayAction, TrayManager};
+use crate::services::update;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// GitHub releases page for the Clippi project.
+const RELEASES_URL: &str = "https://github.com/Ruszero01/clippi/releases";
 
 pub struct TrayService {
     tray: TrayManager,
@@ -42,6 +46,9 @@ impl Pollable for TrayService {
                 }
                 TrayAction::Quit => {
                     slint::quit_event_loop().ok();
+                }
+                TrayAction::CheckUpdate => {
+                    update::open_releases_page(RELEASES_URL);
                 }
             }
         }

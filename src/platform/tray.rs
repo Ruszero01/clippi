@@ -1,7 +1,7 @@
 //! System tray - platform implementation using tray-icon
 
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 
@@ -12,6 +12,7 @@ pub enum TrayAction {
     OpenSettings,
     Restart,
     Quit,
+    CheckUpdate,
 }
 
 use crate::core::i18n;
@@ -20,10 +21,17 @@ use crate::core::i18n;
 pub struct TrayManager {
     #[allow(dead_code)]
     tray: TrayIcon,
-    /// Keep MenuItem objects alive — dropping them may invalidate
+    /// Keep menu item objects alive — dropping them may invalidate
     /// internal muda references and cause menu text to disappear.
     #[allow(dead_code)]
+    _version_item: MenuItem,
+    #[allow(dead_code)]
+    _check_update_item: MenuItem,
+    #[allow(dead_code)]
+    _sep: PredefinedMenuItem,
+    #[allow(dead_code)]
     _items: [MenuItem; 4],
+    check_update_id: tray_icon::menu::MenuId,
     show_id: tray_icon::menu::MenuId,
     settings_id: tray_icon::menu::MenuId,
     restart_id: tray_icon::menu::MenuId,
@@ -35,6 +43,20 @@ impl TrayManager {
         let icon = create_icon();
 
         let menu = Menu::new();
+
+        // Version label (disabled, gray)
+        let version_text = format!("Clippi v{}", env!("CARGO_PKG_VERSION"));
+        let version_item = MenuItem::new(&version_text, false, None);
+
+        // Separator between version and functional items
+        let sep = PredefinedMenuItem::separator();
+
+        // Check for updates button
+        let check_update_item =
+            MenuItem::new(i18n::tr("检查更新", "Check for Updates"), true, None);
+        let check_update_id = check_update_item.id().clone();
+
+        // Existing functional menu items
         let show_item = MenuItem::new(i18n::tr("显示窗口", "Show Window"), true, None);
         let settings_item = MenuItem::new(i18n::tr("设置", "Settings"), true, None);
         let restart_item = MenuItem::new(i18n::tr("重启应用", "Restart"), true, None);
@@ -45,8 +67,16 @@ impl TrayManager {
         let restart_id = restart_item.id().clone();
         let quit_id = quit_item.id().clone();
 
-        menu.append_items(&[&show_item, &settings_item, &restart_item, &quit_item])
-            .unwrap();
+        menu.append_items(&[
+            &version_item,
+            &sep,
+            &check_update_item,
+            &show_item,
+            &settings_item,
+            &restart_item,
+            &quit_item,
+        ])
+        .unwrap();
 
         let tray = TrayIconBuilder::new()
             .with_icon(icon)
@@ -57,7 +87,11 @@ impl TrayManager {
 
         Self {
             tray,
+            _version_item: version_item,
+            _check_update_item: check_update_item,
+            _sep: sep,
             _items: [show_item, settings_item, restart_item, quit_item],
+            check_update_id,
             show_id,
             settings_id,
             restart_id,
@@ -87,6 +121,9 @@ impl TrayManager {
             }
             if event.id == self.quit_id {
                 return Some(TrayAction::Quit);
+            }
+            if event.id == self.check_update_id {
+                return Some(TrayAction::CheckUpdate);
             }
         }
 
