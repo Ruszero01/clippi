@@ -289,6 +289,7 @@ impl Frontend {
             app.set_context_menu_visible(false);
             app.set_tag_filter_visible(false);
             app.set_tag_picker_visible(false);
+            app.set_add_backend_panel_visible(false);
             app.set_editing_note_id(-1);
             app.set_pinned(false);
             app.set_current_view(slint::SharedString::from("clipboard"));

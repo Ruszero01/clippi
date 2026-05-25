@@ -228,12 +228,21 @@ impl SyncManager {
         self.refresh_model();
     }
 
-    /// Get backend name and folder path by ID.
-    pub fn get_backend_info(&self, id: &str) -> Option<(String, String)> {
+    /// Get backend name, folder path, and type by ID.
+    pub fn get_backend_info(&self, id: &str) -> Option<(String, String, String)> {
         self.backends
             .iter()
             .find(|b| b.backend.id() == id)
-            .map(|b| (b.backend.name().to_string(), b.folder_path.clone()))
+            .map(|b| {
+                let bt = match b.backend.backend_type() {
+                    crate::core::sync::BackendType::LocalFolder => "local_folder",
+                };
+                (
+                    b.backend.name().to_string(),
+                    b.folder_path.clone(),
+                    bt.to_string(),
+                )
+            })
     }
 
     /// Edit a backend — updates name and folder path, then persists.

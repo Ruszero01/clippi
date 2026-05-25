@@ -945,15 +945,12 @@ impl AppController {
         let c = ctx.clone();
         slint_app.on_edit_sync_backend(move |id: SharedString| {
             let _ = c.looper.try_with_sync_manager(|sm| {
-                if let Some((name, folder)) = sm.get_backend_info(&id) {
+                if let Some((name, folder, backend_type)) = sm.get_backend_info(&id) {
                     if let Some(app) = c.app.upgrade() {
-                        if let Some(pos) = get_cursor_pos() {
-                            app.set_add_backend_panel_x(pos.0 as f32);
-                            app.set_add_backend_panel_y(pos.1 as f32);
-                        }
                         app.set_add_backend_edit_id(id.clone());
                         app.set_add_backend_edit_name(SharedString::from(&name));
                         app.set_add_backend_edit_folder(SharedString::from(&folder));
+                        app.set_add_backend_backend_type(SharedString::from(&backend_type));
                         app.set_add_backend_edit_mode(true);
                         app.set_add_backend_panel_visible(true);
                     }
@@ -964,13 +961,10 @@ impl AppController {
         let c = ctx.clone();
         slint_app.on_show_add_backend_panel(move || {
             if let Some(app) = c.app.upgrade() {
-                if let Some(pos) = get_cursor_pos() {
-                    app.set_add_backend_panel_x(pos.0 as f32);
-                    app.set_add_backend_panel_y(pos.1 as f32);
-                }
                 app.set_add_backend_edit_mode(false);
                 app.set_add_backend_edit_name(SharedString::default());
                 app.set_add_backend_edit_folder(SharedString::default());
+                app.set_add_backend_backend_type(SharedString::default());
                 app.set_add_backend_panel_visible(true);
             }
         });

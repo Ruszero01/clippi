@@ -319,3 +319,18 @@ msgstr "未知应用"
 
 msgid "Browse"
 msgstr "浏览"
+
+msgid "Select backend type"
+msgstr "选择后端类型"
+
+msgid "Local Folder"
+msgstr "本地文件夹"
+
+msgid "OneDrive, iCloud, etc."
+msgstr "OneDrive、iCloud 等"
+
+msgid "WebDAV"
+msgstr "WebDAV"
+
+msgid "Coming soon"
+msgstr "即将推出"

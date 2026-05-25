@@ -71,14 +71,13 @@ export component App inherits Window {
     in-out property <bool> toast-visible: false;
     // 添加服务浮层
     in-out property <bool> add-backend-panel-visible: false;
-    in-out property <length> add-backend-panel-x: 0px;
-    in-out property <length> add-backend-panel-y: 0px;
     in property <string> preset-onedrive-path: "";
     in property <string> preset-icloud-path: "";
     in-out property <bool> add-backend-edit-mode: false;
     in-out property <string> add-backend-edit-id: "";
     in-out property <string> add-backend-edit-name: "";
     in-out property <string> add-backend-edit-folder: "";
+    in-out property <string> add-backend-backend-type: "";
 
     // 右键菜单状态
     in-out property <bool> context-menu-visible: false;
@@ -761,10 +760,20 @@ export component App inherits Window {
             }
         }
 
-        // ========== 添加同步服务浮层 ==========
+        // ========== 添加同步服务浮层背景遮罩 + 面板 ==========
+        if root.add-backend-panel-visible: bg-blocker := Rectangle {
+            width: 100%;
+            height: 100%;
+            x: 0;
+            y: 0;
+            bg-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => { root.hide-add-backend-panel(); }
+            }
+        }
+
         if root.add-backend-panel-visible: AddBackendPanel {
-            panel-x: root.add-backend-panel-x;
-            panel-y: root.add-backend-panel-y;
             container-w: parent.width;
             container-h: parent.height;
             dark-mode: root.dark-mode;
@@ -774,6 +783,7 @@ export component App inherits Window {
             edit-id: root.add-backend-edit-id;
             edit-name <=> root.add-backend-edit-name;
             edit-folder <=> root.add-backend-edit-folder;
+            backend-type <=> root.add-backend-backend-type;
 
             hide-panel => { root.hide-add-backend-panel(); }
             add-backend(name, path) => { root.add-sync-backend(name, path); }
