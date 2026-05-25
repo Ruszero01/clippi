@@ -1,10 +1,11 @@
 //! Frontend management - window visibility and UI operations
 
+use crate::core::settings::is_system_dark_mode;
 use crate::platform::monitor;
 use crate::App;
 use slint::{ComponentHandle, LogicalSize, PhysicalPosition};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Default window size (width, height) in logical pixels.
 pub const DEFAULT_WINDOW_WIDTH: f32 = 320.0;
@@ -90,7 +91,10 @@ impl Frontend {
         (self.saved_window_x, self.saved_window_y)
     }
 
-    pub fn apply_saved_position_to_settings(&self, settings: &mut crate::core::settings::AppSettings) {
+    pub fn apply_saved_position_to_settings(
+        &self,
+        settings: &mut crate::core::settings::AppSettings,
+    ) {
         if self.saved_window_x >= 0 && self.saved_window_y >= 0 {
             settings.saved_window_x = self.saved_window_x;
             settings.saved_window_y = self.saved_window_y;
@@ -113,8 +117,10 @@ impl Frontend {
             #[cfg(target_os = "macos")]
             let (win_w, win_h) = {
                 let scale = window.scale_factor();
-                ((size.width as f32 / scale) as i32,
-                 (size.height as f32 / scale) as i32)
+                (
+                    (size.width as f32 / scale) as i32,
+                    (size.height as f32 / scale) as i32,
+                )
             };
             #[cfg(not(target_os = "macos"))]
             let (win_w, win_h) = (size.width as i32, size.height as i32);
@@ -175,22 +181,43 @@ impl Frontend {
         }
     }
 
+    fn sync_system_theme(&self) {
+        if let Some(app) = self.app.upgrade() {
+            if app.get_theme_mode() == 0 {
+                let is_dark = is_system_dark_mode();
+                if app.get_dark_mode() != is_dark {
+                    app.set_dark_mode(is_dark);
+                }
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     pub fn show_and_focus(&mut self) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
 
         self.needs_reload.store(true, Ordering::SeqCst);
-        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+        self.suppress_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
+            self.sync_system_theme();
             app.set_pinned(false);
             // Reset double-click state so stale state doesn't eat the first click
             app.set_click_pending(false);
             app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
-            let w = if self.saved_window_width > 0.0 { self.saved_window_width } else { DEFAULT_WINDOW_WIDTH };
-            let h = if self.saved_window_height > 0.0 { self.saved_window_height } else { DEFAULT_WINDOW_HEIGHT };
+            let w = if self.saved_window_width > 0.0 {
+                self.saved_window_width
+            } else {
+                DEFAULT_WINDOW_WIDTH
+            };
+            let h = if self.saved_window_height > 0.0 {
+                self.saved_window_height
+            } else {
+                DEFAULT_WINDOW_HEIGHT
+            };
             window.set_size(LogicalSize::new(w, h));
             self.apply_position();
             let t = app.get_scroll_trigger();
@@ -208,16 +235,26 @@ impl Frontend {
     #[allow(deprecated)] // TODO: migrate to NSApp.activate once objc2 binding is available
     pub fn show_and_focus(&mut self) {
         self.needs_reload.store(true, Ordering::SeqCst);
-        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+        self.suppress_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
+            self.sync_system_theme();
             app.set_pinned(false);
             app.set_click_pending(false);
             app.set_last_clicked_id(-1);
             let window = app.window();
             window.show().ok();
-            let w = if self.saved_window_width > 0.0 { self.saved_window_width } else { DEFAULT_WINDOW_WIDTH };
-            let h = if self.saved_window_height > 0.0 { self.saved_window_height } else { DEFAULT_WINDOW_HEIGHT };
+            let w = if self.saved_window_width > 0.0 {
+                self.saved_window_width
+            } else {
+                DEFAULT_WINDOW_WIDTH
+            };
+            let h = if self.saved_window_height > 0.0 {
+                self.saved_window_height
+            } else {
+                DEFAULT_WINDOW_HEIGHT
+            };
             window.set_size(LogicalSize::new(w, h));
             self.apply_position();
             let t = app.get_scroll_trigger();
@@ -231,9 +268,11 @@ impl Frontend {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn show_and_focus(&mut self) {
         self.needs_reload.store(true, Ordering::SeqCst);
-        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+        self.suppress_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
+            self.sync_system_theme();
             app.set_pinned(false);
             app.set_click_pending(false);
             app.set_last_clicked_id(-1);
@@ -242,13 +281,24 @@ impl Frontend {
         }
     }
 
-    pub fn hide(&mut self) {
+    /// Dismiss all floating UI state: context menu, tag panels, note editing,
+    /// pin, selections, edit/settings view. Called by `hide()` and can also be
+    /// invoked directly (e.g. clicking blank area) without hiding the window.
+    pub fn dismiss_ui(&self) {
         if let Some(app) = self.app.upgrade() {
-            // Close all floating panels so they don't linger when the window reappears
             app.set_context_menu_visible(false);
             app.set_tag_filter_visible(false);
             app.set_tag_picker_visible(false);
+            app.set_editing_note_id(-1);
+            app.set_pinned(false);
+            app.set_current_view(slint::SharedString::from("clipboard"));
+        }
+    }
 
+    pub fn hide(&mut self) {
+        self.dismiss_ui();
+
+        if let Some(app) = self.app.upgrade() {
             let window = app.window();
             if self.position_mode == PositionMode::Remember {
                 let pos = window.position();
@@ -273,13 +323,23 @@ impl Frontend {
         // When the window was hidden the model was released; reload so the
         // clipboard list is populated if the user navigates back from settings.
         self.needs_reload.store(true, Ordering::SeqCst);
-        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+        self.suppress_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
         if let Some(app) = self.app.upgrade() {
+            self.sync_system_theme();
             app.set_current_view(slint::SharedString::from("settings"));
             let window = app.window();
             window.show().ok();
-            let w = if self.saved_window_width > 0.0 { self.saved_window_width } else { DEFAULT_WINDOW_WIDTH };
-            let h = if self.saved_window_height > 0.0 { self.saved_window_height } else { DEFAULT_WINDOW_HEIGHT };
+            let w = if self.saved_window_width > 0.0 {
+                self.saved_window_width
+            } else {
+                DEFAULT_WINDOW_WIDTH
+            };
+            let h = if self.saved_window_height > 0.0 {
+                self.saved_window_height
+            } else {
+                DEFAULT_WINDOW_HEIGHT
+            };
             window.set_size(LogicalSize::new(w, h));
             self.apply_position();
             self.visible = true;
@@ -299,7 +359,8 @@ impl Frontend {
 
     /// Set suppress for initial window show to prevent immediate auto-hide
     pub fn set_initial_suppress(&mut self) {
-        self.suppress_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+        self.suppress_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
     }
 
     pub fn move_window(&self, dx: f32, dy: f32) {

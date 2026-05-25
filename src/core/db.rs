@@ -188,10 +188,8 @@ impl Database {
     }
 
     pub fn delete_item(&self, id: i64) -> SqlResult<()> {
-        self.conn.execute(
-            "DELETE FROM clipboard_items WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -252,7 +250,9 @@ impl Database {
     }
 
     pub fn get_all_tags(&self) -> SqlResult<Vec<TagInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, color, updated_at FROM tags ORDER BY id DESC")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, color, updated_at FROM tags ORDER BY id DESC")?;
         let rows = stmt.query_map([], |row| {
             let updated_str: String = row.get::<_, String>(3).unwrap_or_default();
             Ok(TagInfo {
@@ -283,8 +283,12 @@ impl Database {
         rows.collect()
     }
 
-    pub fn get_tags_for_items(&self, item_ids: &[i64]) -> SqlResult<std::collections::HashMap<i64, Vec<TagInfo>>> {
-        let mut map: std::collections::HashMap<i64, Vec<TagInfo>> = std::collections::HashMap::new();
+    pub fn get_tags_for_items(
+        &self,
+        item_ids: &[i64],
+    ) -> SqlResult<std::collections::HashMap<i64, Vec<TagInfo>>> {
+        let mut map: std::collections::HashMap<i64, Vec<TagInfo>> =
+            std::collections::HashMap::new();
         if item_ids.is_empty() {
             return Ok(map);
         }
@@ -299,12 +303,15 @@ impl Database {
         let params: Vec<rusqlite::types::Value> = item_ids.iter().map(|&id| (id).into()).collect();
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let updated_str: String = row.get::<_, String>(4).unwrap_or_default();
-            Ok((row.get::<_, i64>(0)?, TagInfo {
-                id: row.get(1)?,
-                name: row.get(2)?,
-                color: row.get(3)?,
-                updated_at: updated_str,
-            }))
+            Ok((
+                row.get::<_, i64>(0)?,
+                TagInfo {
+                    id: row.get(1)?,
+                    name: row.get(2)?,
+                    color: row.get(3)?,
+                    updated_at: updated_str,
+                },
+            ))
         })?;
         for row in rows {
             let (item_id, tag) = row?;
@@ -337,10 +344,9 @@ impl Database {
     }
 
     pub fn clear_item_tags(&self, item_id: i64) -> SqlResult<()> {
-        let deleted = self.conn.execute(
-            "DELETE FROM item_tags WHERE item_id = ?1",
-            params![item_id],
-        )?;
+        let deleted = self
+            .conn
+            .execute("DELETE FROM item_tags WHERE item_id = ?1", params![item_id])?;
         if deleted > 0 {
             self.touch_item(item_id)?;
         }
@@ -348,7 +354,9 @@ impl Database {
     }
 
     pub fn get_tag_by_name(&self, name: &str) -> SqlResult<Option<TagInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, color, updated_at FROM tags WHERE name = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, color, updated_at FROM tags WHERE name = ?1")?;
         let mut rows = stmt.query(params![name])?;
         if let Some(row) = rows.next()? {
             let updated_str: String = row.get::<_, String>(3).unwrap_or_default();
@@ -415,10 +423,7 @@ impl Database {
     }
 
     /// Insert a full item row (used during sync merge for new remote items).
-    pub fn insert_sync_item_raw(
-        &self,
-        item: &crate::core::sync::SyncItem,
-    ) -> SqlResult<i64> {
+    pub fn insert_sync_item_raw(&self, item: &crate::core::sync::SyncItem) -> SqlResult<i64> {
         let created_at: chrono::DateTime<chrono::Utc> = item
             .created_at
             .parse()
@@ -449,11 +454,7 @@ impl Database {
     }
 
     /// Update an item's fields from a newer remote version (sync merge).
-    pub fn update_sync_item(
-        &self,
-        id: i64,
-        item: &crate::core::sync::SyncItem,
-    ) -> SqlResult<()> {
+    pub fn update_sync_item(&self, id: i64, item: &crate::core::sync::SyncItem) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
              rich_data = ?4, is_favorite = ?5, note = ?6, size = ?7
@@ -495,7 +496,12 @@ impl Database {
     // ── Tombstone operations ──
 
     /// Record a deleted item tombstone for sync propagation.
-    pub fn record_item_deletion(&self, content_hash: u64, deleted_at: &str, device_name: &str) -> SqlResult<()> {
+    pub fn record_item_deletion(
+        &self,
+        content_hash: u64,
+        deleted_at: &str,
+        device_name: &str,
+    ) -> SqlResult<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO deleted_items (content_hash, deleted_at, device_name) VALUES (?1, ?2, ?3)",
             params![content_hash as i64, deleted_at, device_name],
@@ -504,7 +510,12 @@ impl Database {
     }
 
     /// Record a deleted tag tombstone for sync propagation.
-    pub fn record_tag_deletion(&self, name: &str, deleted_at: &str, device_name: &str) -> SqlResult<()> {
+    pub fn record_tag_deletion(
+        &self,
+        name: &str,
+        deleted_at: &str,
+        device_name: &str,
+    ) -> SqlResult<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO deleted_tags (name, deleted_at, device_name) VALUES (?1, ?2, ?3)",
             params![name, deleted_at, device_name],
@@ -552,7 +563,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM clipboard_items WHERE is_favorite = 0 ORDER BY created_at ASC",
         )?;
-        let all_ids: Vec<i64> = stmt.query_map([], |row| row.get(0))?
+        let all_ids: Vec<i64> = stmt
+            .query_map([], |row| row.get(0))?
             .filter_map(|r| r.ok())
             .collect();
         let pruned_ids: Vec<i64> = all_ids.iter().take(excess).copied().collect();
@@ -598,7 +610,12 @@ impl Database {
     }
 
     /// Record an unfavorite marker for sync propagation.
-    pub fn record_unfavorite(&self, content_hash: u64, unfavorited_at: &str, device_name: &str) -> SqlResult<()> {
+    pub fn record_unfavorite(
+        &self,
+        content_hash: u64,
+        unfavorited_at: &str,
+        device_name: &str,
+    ) -> SqlResult<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO unfavorited_items (content_hash, unfavorited_at, device_name) VALUES (?1, ?2, ?3)",
             params![content_hash as i64, unfavorited_at, device_name],
@@ -689,7 +706,13 @@ impl Database {
     }
 
     /// Update tag with explicit timestamp (for sync merge).
-    pub fn update_tag_with_timestamp(&self, id: i64, name: &str, color: &str, updated_at: &str) -> SqlResult<()> {
+    pub fn update_tag_with_timestamp(
+        &self,
+        id: i64,
+        name: &str,
+        color: &str,
+        updated_at: &str,
+    ) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE tags SET name = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
             params![name, color, updated_at, id],
@@ -699,7 +722,12 @@ impl Database {
 
     /// Create tag with explicit timestamp (for sync merge).
     /// Caller must ensure the tag does not already exist.
-    pub fn create_tag_with_timestamp(&self, name: &str, color: &str, updated_at: &str) -> SqlResult<i64> {
+    pub fn create_tag_with_timestamp(
+        &self,
+        name: &str,
+        color: &str,
+        updated_at: &str,
+    ) -> SqlResult<i64> {
         self.conn.execute(
             "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
             params![name, color, updated_at],

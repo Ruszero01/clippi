@@ -64,6 +64,7 @@ export component ClipboardList inherits Rectangle {
     callback show-tag-picker(int);
     callback hide-tag-picker();
     callback hide-tag-filter-panel();
+    callback dismiss-ui();
 
     // ========== 主题色板 ==========
     property <color> surface:       dark-mode ? #232425 : #ffffff;
@@ -95,9 +96,7 @@ export component ClipboardList inherits Rectangle {
         clicked => {
             search-input.clear-focus();
             root.clear-selection();
-            root.hide-context-menu();
-            root.hide-tag-filter-panel();
-            root.hide-tag-picker();
+            root.dismiss-ui();
         }
     }
 
@@ -450,6 +449,7 @@ export component ClipboardList inherits Rectangle {
                                     search-input.clear-focus();
                                     root.click-pending = false;
                                     root.last-clicked-id = -1;
+                                    root.editing-note-id = -1;
                                     root.hide-tag-filter-panel();
                                     root.hide-tag-picker();
                                     if (entry.selected && root.selected-count > 1) {
@@ -480,6 +480,7 @@ export component ClipboardList inherits Rectangle {
                                     root.hide-context-menu();
                                     root.hide-tag-filter-panel();
                                     root.hide-tag-picker();
+                                    root.editing-note-id = -1;
 
                                     if (root.click-pending && root.last-clicked-id == entry.id) {
                                         root.click-pending = false;
@@ -1019,11 +1020,25 @@ export component ClipboardList inherits Rectangle {
                                                 }
                                             }
 
-                                            Text {
-                                                text: entry.file-name-1;
-                                                font-size: 10px;
-                                                color: text-1;
-                                                vertical-alignment: center;
+                                            name-ext-1 := HorizontalLayout {
+                                                spacing: 0px;
+                                                alignment: start;
+                                                horizontal-stretch: 1;
+
+                                                Text {
+                                                    text: entry.file-name-1;
+                                                    overflow: elide;
+                                                    font-size: 10px;
+                                                    color: text-1;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                }
+                                                if entry.file-ext-1 != "" : Text {
+                                                    text: entry.file-ext-1;
+                                                    font-size: 10px;
+                                                    color: text-3;
+                                                    vertical-alignment: center;
+                                                }
                                             }
                                         }
                                     }
@@ -1061,11 +1076,25 @@ export component ClipboardList inherits Rectangle {
                                                 }
                                             }
 
-                                            Text {
-                                                text: entry.file-name-2;
-                                                font-size: 10px;
-                                                color: text-1;
-                                                vertical-alignment: center;
+                                            name-ext-2 := HorizontalLayout {
+                                                spacing: 0px;
+                                                alignment: start;
+                                                horizontal-stretch: 1;
+
+                                                Text {
+                                                    text: entry.file-name-2;
+                                                    overflow: elide;
+                                                    font-size: 10px;
+                                                    color: text-1;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                }
+                                                if entry.file-ext-2 != "" : Text {
+                                                    text: entry.file-ext-2;
+                                                    font-size: 10px;
+                                                    color: text-3;
+                                                    vertical-alignment: center;
+                                                }
                                             }
                                         }
                                     }
@@ -1103,11 +1132,25 @@ export component ClipboardList inherits Rectangle {
                                                 }
                                             }
 
-                                            Text {
-                                                text: entry.file-name-3;
-                                                font-size: 10px;
-                                                color: text-1;
-                                                vertical-alignment: center;
+                                            name-ext-3 := HorizontalLayout {
+                                                spacing: 0px;
+                                                alignment: start;
+                                                horizontal-stretch: 1;
+
+                                                Text {
+                                                    text: entry.file-name-3;
+                                                    overflow: elide;
+                                                    font-size: 10px;
+                                                    color: text-1;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                }
+                                                if entry.file-ext-3 != "" : Text {
+                                                    text: entry.file-ext-3;
+                                                    font-size: 10px;
+                                                    color: text-3;
+                                                    vertical-alignment: center;
+                                                }
                                             }
                                         }
                                     }

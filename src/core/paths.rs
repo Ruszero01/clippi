@@ -46,7 +46,13 @@ pub fn app_icon_dir() -> PathBuf {
 pub fn app_icon_path(app_name: &str) -> PathBuf {
     let sanitized: String = app_name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     app_icon_dir().join(format!("{sanitized}.png"))
 }
@@ -59,7 +65,10 @@ pub fn init_images_dir(db_path: &str) {
     let dir = if db_path.is_empty() {
         app_data_dir().join("images")
     } else {
-        PathBuf::from(db_path).parent().map(|p| p.join("images")).unwrap_or_else(|| app_data_dir().join("images"))
+        PathBuf::from(db_path)
+            .parent()
+            .map(|p| p.join("images"))
+            .unwrap_or_else(|| app_data_dir().join("images"))
     };
     let _ = RESOLVED_IMAGES_DIR.set(dir);
 }

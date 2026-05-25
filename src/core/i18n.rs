@@ -19,5 +19,9 @@ pub fn is_en() -> bool {
 /// Simple static translation: `tr("中文", "English")` returns the right string.
 #[inline]
 pub fn tr<'a>(zh: &'a str, en: &'a str) -> &'a str {
-    if is_en() { en } else { zh }
+    if is_en() {
+        en
+    } else {
+        zh
+    }
 }

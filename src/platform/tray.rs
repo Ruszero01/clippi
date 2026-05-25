@@ -45,7 +45,8 @@ impl TrayManager {
         let restart_id = restart_item.id().clone();
         let quit_id = quit_item.id().clone();
 
-        menu.append_items(&[&show_item, &settings_item, &restart_item, &quit_item]).unwrap();
+        menu.append_items(&[&show_item, &settings_item, &restart_item, &quit_item])
+            .unwrap();
 
         let tray = TrayIconBuilder::new()
             .with_icon(icon)

@@ -3,7 +3,7 @@
 /// Encode raw RGBA pixel data as a PNG byte vector.
 #[allow(dead_code)]
 pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
-    use image::{ImageEncoder, codecs::png::PngEncoder};
+    use image::{codecs::png::PngEncoder, ImageEncoder};
     let mut buf = Vec::new();
     let encoder = PngEncoder::new(&mut buf);
     encoder
@@ -32,13 +32,15 @@ pub fn trim_process_working_set() {
 /// Render an HICON to a 32x32 BGRA DIB, convert to RGBA PNG, and base64-encode.
 /// Shared by source app icon extraction and file icon extraction on Windows.
 #[cfg(target_os = "windows")]
-pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: i32) -> Option<String> {
+pub fn hicon_to_base64_png(
+    hicon: windows_sys::Win32::Foundation::HANDLE,
+    size: i32,
+) -> Option<String> {
     use base64::Engine;
     use windows_sys::Win32::Foundation::{BOOL, HANDLE};
     use windows_sys::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
-        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-        HDC, HBRUSH,
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+        SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBRUSH, HDC,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
@@ -101,7 +103,17 @@ pub fn hicon_to_base64_png(hicon: windows_sys::Win32::Foundation::HANDLE, size: 
         }
 
         let old_bmp = SelectObject(mem_dc, dib);
-        DrawIconEx(mem_dc, 0, 0, hicon, size, size, 0, std::ptr::null_mut(), DI_NORMAL);
+        DrawIconEx(
+            mem_dc,
+            0,
+            0,
+            hicon,
+            size,
+            size,
+            0,
+            std::ptr::null_mut(),
+            DI_NORMAL,
+        );
 
         let pixel_count = (size * size) as usize;
         let bgra_data: Vec<u8> =
@@ -188,10 +200,12 @@ mod macos_geometry {
     }
 
     unsafe impl Encode for CGRect {
-        const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+        const ENCODING: Encoding =
+            Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
     }
     unsafe impl RefEncode for CGRect {
-        const ENCODING_REF: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+        const ENCODING_REF: Encoding =
+            Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
     }
 }
 
@@ -205,10 +219,10 @@ mod macos_geometry {
 pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Option<String> {
     unsafe {
         use base64::Engine;
+        use macos_geometry::{CGPoint, CGRect, CGSize};
         use objc2::class;
         use objc2::msg_send;
         use objc2::rc::Retained;
-        use macos_geometry::{CGPoint, CGRect, CGSize};
 
         let size_f = size as f64;
 

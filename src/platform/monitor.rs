@@ -31,9 +31,11 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
     let event = core_graphics::event::CGEvent::new(
         core_graphics::event_source::CGEventSource::new(
-            core_graphics::event_source::CGEventSourceStateID::HIDSystemState
-        ).ok()?
-    ).ok()?;
+            core_graphics::event_source::CGEventSourceStateID::HIDSystemState,
+        )
+        .ok()?,
+    )
+    .ok()?;
     let loc = event.location();
     Some((loc.x as i32, loc.y as i32))
 }

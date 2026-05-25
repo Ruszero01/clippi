@@ -15,8 +15,8 @@ use base64::Engine;
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct ClipboardService {
@@ -35,6 +35,7 @@ pub struct ClipboardService {
     needs_reload: Arc<AtomicBool>,
     max_items: usize,
     image_cache: HashMap<String, Image>,
+    poll_count: u64,
 }
 
 impl ClipboardService {
@@ -64,6 +65,7 @@ impl ClipboardService {
             needs_reload,
             max_items: 100,
             image_cache: HashMap::new(),
+            poll_count: 0,
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
@@ -95,8 +97,12 @@ impl ClipboardService {
             self.filters.toggle_type(a);
             self.filters.toggle_type(b);
         } else {
-            if !a_active { self.filters.toggle_type(a); }
-            if !b_active { self.filters.toggle_type(b); }
+            if !a_active {
+                self.filters.toggle_type(a);
+            }
+            if !b_active {
+                self.filters.toggle_type(b);
+            }
         }
         self.refresh_with_current_filter();
     }
@@ -129,7 +135,11 @@ impl ClipboardService {
         self.model.clear();
         self.selected_ids.clear();
         self.anchor_id = -1;
-        let order_by = if self.sort_by_created { "created_at" } else { "updated_at" };
+        let order_by = if self.sort_by_created {
+            "created_at"
+        } else {
+            "updated_at"
+        };
 
         // Use a generous limit to ensure enough non-favorites are loaded after
         // favorites are separated out. The DB prune keeps total under control.
@@ -139,12 +149,19 @@ impl ClipboardService {
             self.max_items.saturating_mul(2).max(200)
         };
 
-        let items = self.db.lock().expect("db lock poisoned")
+        let items = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .load_filtered_with_tags(&self.filters, query_limit, order_by)
             .unwrap_or_default();
 
         // Separate favorites and non-favorites, preserving sort order
-        let non_fav_allowed = if self.max_items == 0 { usize::MAX } else { self.max_items };
+        let non_fav_allowed = if self.max_items == 0 {
+            usize::MAX
+        } else {
+            self.max_items
+        };
         let mut non_fav_seen = 0usize;
         for item in &items {
             if item.is_favorite {
@@ -190,7 +207,9 @@ impl ClipboardService {
             return;
         }
         let pruned_ids = match self.db.lock() {
-            Ok(db) => db.prune_excess_non_favorites(self.max_items as u32).unwrap_or_default(),
+            Ok(db) => db
+                .prune_excess_non_favorites(self.max_items as u32)
+                .unwrap_or_default(),
             Err(_) => return,
         };
         if pruned_ids.is_empty() {
@@ -208,15 +227,11 @@ impl ClipboardService {
                 }
             }
         }
-        self.selected_ids.retain(|id| !pruned_ids.contains(&(*id as i64)));
+        self.selected_ids
+            .retain(|id| !pruned_ids.contains(&(*id as i64)));
         if let Some(app) = self.app.upgrade() {
             app.set_item_count(self.model.row_count() as i32);
         }
-    }
-
-    /// Load initial items from database (model starts empty; delegate to unified refresh)
-    pub fn load_initial(&mut self) {
-        self.refresh_with_current_filter();
     }
 
     /// Refresh a single row by id (e.g., after copying to update timestamp)
@@ -284,17 +299,21 @@ impl ClipboardService {
     /// Clear all tag filters and full reload
     /// Load all tags into the shared model with filter-checked state
     pub fn load_all_tags_for_filter(&self) {
-        let tags = self.db.lock().expect("db lock poisoned")
+        let tags = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .get_all_tags()
             .unwrap_or_default();
-        let model: Vec<crate::TagItem> = tags.iter().map(|t| {
-            crate::TagItem {
+        let model: Vec<crate::TagItem> = tags
+            .iter()
+            .map(|t| crate::TagItem {
                 id: t.id as i32,
                 name: slint::SharedString::from(t.name.clone()),
                 color: hex_to_slint_color(&t.color),
                 checked: self.filters.is_tag_active(t.id),
-            }
-        }).collect();
+            })
+            .collect();
         if let Some(app) = self.app.upgrade() {
             app.set_all_tags(slint::ModelRc::from(model.as_slice()));
         }
@@ -304,7 +323,10 @@ impl ClipboardService {
     pub fn load_all_tags_for_picker(&self, item_id: i32) {
         let (mut tags, item_tags) = {
             let db = self.db.lock().expect("db lock poisoned");
-            (db.get_all_tags().unwrap_or_default(), db.get_tags_for_item(item_id as i64).unwrap_or_default())
+            (
+                db.get_all_tags().unwrap_or_default(),
+                db.get_tags_for_item(item_id as i64).unwrap_or_default(),
+            )
         };
         let item_tag_ids: Vec<i64> = item_tags.iter().map(|t| t.id).collect();
 
@@ -319,14 +341,15 @@ impl ClipboardService {
             }
         });
 
-        let model: Vec<crate::TagItem> = tags.iter().map(|t| {
-            crate::TagItem {
+        let model: Vec<crate::TagItem> = tags
+            .iter()
+            .map(|t| crate::TagItem {
                 id: t.id as i32,
                 name: slint::SharedString::from(t.name.clone()),
                 color: hex_to_slint_color(&t.color),
                 checked: item_tag_ids.contains(&t.id),
-            }
-        }).collect();
+            })
+            .collect();
         if let Some(app) = self.app.upgrade() {
             app.set_all_tags(slint::ModelRc::from(model.as_slice()));
         }
@@ -334,28 +357,38 @@ impl ClipboardService {
 
     /// Load all tags for batch picker (checked if all selected items have the tag)
     pub fn load_all_tags_for_batch_picker(&self) {
-        let tags = self.db.lock().expect("db lock poisoned")
+        let tags = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .get_all_tags()
             .unwrap_or_default();
 
         // Get tags for all selected items
         let selected_i64: Vec<i64> = self.selected_ids.iter().map(|&id| id as i64).collect();
-        let tag_map = self.db.lock().expect("db lock poisoned")
+        let tag_map = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .get_tags_for_items(&selected_i64)
             .unwrap_or_default();
 
         let total = self.selected_ids.len() as i64;
-        let model: Vec<crate::TagItem> = tags.iter().map(|t| {
-            let count = tag_map.values()
-                .filter(|item_tags| item_tags.iter().any(|it| it.id == t.id))
-                .count() as i64;
-            crate::TagItem {
-                id: t.id as i32,
-                name: slint::SharedString::from(t.name.clone()),
-                color: hex_to_slint_color(&t.color),
-                checked: count == total && total > 0,
-            }
-        }).collect();
+        let model: Vec<crate::TagItem> = tags
+            .iter()
+            .map(|t| {
+                let count = tag_map
+                    .values()
+                    .filter(|item_tags| item_tags.iter().any(|it| it.id == t.id))
+                    .count() as i64;
+                crate::TagItem {
+                    id: t.id as i32,
+                    name: slint::SharedString::from(t.name.clone()),
+                    color: hex_to_slint_color(&t.color),
+                    checked: count == total && total > 0,
+                }
+            })
+            .collect();
         if let Some(app) = self.app.upgrade() {
             app.set_all_tags(slint::ModelRc::from(model.as_slice()));
         }
@@ -363,12 +396,18 @@ impl ClipboardService {
 
     /// Create a new tag
     pub fn create_tag(&self, name: &str) -> Option<crate::core::types::TagInfo> {
-        let count = self.db.lock().expect("db lock poisoned")
+        let count = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .get_all_tags()
             .map(|t| t.len())
             .unwrap_or(0);
         let color = crate::core::types::next_tag_color(count);
-        let result = self.db.lock().expect("db lock poisoned")
+        let result = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .create_tag(name, color)
             .ok()
             .map(|id| crate::core::types::TagInfo {
@@ -383,7 +422,10 @@ impl ClipboardService {
 
     /// Update a tag's name and color
     pub fn update_tag(&self, tag_id: i64, name: &str, color: &str) {
-        let _ = self.db.lock().expect("db lock poisoned")
+        let _ = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
             .update_tag(tag_id, name, color);
         self.mark_dirty();
     }
@@ -394,7 +436,9 @@ impl ClipboardService {
         // race where a sync cycle runs between deletion and tombstone recording.
         {
             if let Ok(mut db) = self.db.lock() {
-                let tag_name = db.get_all_tags().ok()
+                let tag_name = db
+                    .get_all_tags()
+                    .ok()
                     .and_then(|tags| tags.iter().find(|t| t.id == tag_id).map(|t| t.name.clone()));
                 if let Err(e) = db.delete_tag(tag_id) {
                     log::error!("delete_tag({tag_id}): {e}");
@@ -440,7 +484,11 @@ impl ClipboardService {
     }
 
     /// Create a tag and add it to the current item (from picker)
-    pub fn create_and_add_tag(&mut self, item_id: i32, name: &str) -> Option<crate::core::types::TagInfo> {
+    pub fn create_and_add_tag(
+        &mut self,
+        item_id: i32,
+        name: &str,
+    ) -> Option<crate::core::types::TagInfo> {
         let (tag_id, color) = {
             let db = self.db.lock().expect("db lock poisoned");
             let count = db.get_all_tags().map(|t| t.len()).unwrap_or(0);
@@ -448,7 +496,9 @@ impl ClipboardService {
             let id = db.create_tag(name, color).ok()?;
             (id, color.to_string())
         };
-        self.db.lock().expect("db lock poisoned")
+        self.db
+            .lock()
+            .expect("db lock poisoned")
             .add_item_tag(item_id as i64, tag_id)
             .ok()?;
         self.mark_dirty();
@@ -525,7 +575,11 @@ impl ClipboardService {
         {
             if let Ok(db) = self.db.lock() {
                 // Read current state before toggling
-                let was_fav = db.get_by_id(id as i64).ok().flatten().is_some_and(|item| item.is_favorite);
+                let was_fav = db
+                    .get_by_id(id as i64)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|item| item.is_favorite);
                 if let Err(e) = db.toggle_favorite(id as i64) {
                     log::error!("toggle_favorite({id}): {e}");
                 }
@@ -620,7 +674,6 @@ impl ClipboardService {
     fn mark_dirty(&self) {
         self.sync_dirty.store(true, Ordering::SeqCst);
     }
-
 
     // ── Selection management ──
 
@@ -723,7 +776,11 @@ impl ClipboardService {
             let now = chrono::Utc::now().to_rfc3339();
             let device = crate::services::backends::local_folder::hostname();
             for &id in &self.selected_ids {
-                let was_fav = db.get_by_id(id as i64).ok().flatten().is_some_and(|item| item.is_favorite);
+                let was_fav = db
+                    .get_by_id(id as i64)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|item| item.is_favorite);
                 if let Err(e) = db.toggle_favorite(id as i64) {
                     log::error!("toggle_favorite({id}): {e}");
                 }
@@ -813,14 +870,23 @@ impl ClipboardService {
 
         crate::platform::util::trim_process_working_set();
     }
-
 }
 
 impl Pollable for ClipboardService {
     fn poll(&mut self) {
+        self.poll_count += 1;
+
         // Release model resources when window is hidden
         if self.needs_release.swap(false, Ordering::SeqCst) {
             self.release_model_resources();
+        }
+
+        // Periodic WAL truncation (every ~60s at 200ms) to prevent WAL
+        // file growth from consuming process memory during long background runs.
+        if self.poll_count.is_multiple_of(300) {
+            if let Ok(db) = self.db.lock() {
+                let _ = db.checkpoint();
+            }
         }
 
         // Reload model when window is shown (always reload — pending items
@@ -831,7 +897,11 @@ impl Pollable for ClipboardService {
         }
 
         // Check if batch paste completed and wants selection cleared
-        if self.shared.clear_selection_requested.swap(false, Ordering::SeqCst) {
+        if self
+            .shared
+            .clear_selection_requested
+            .swap(false, Ordering::SeqCst)
+        {
             self.clear_selection();
         }
 
@@ -841,7 +911,11 @@ impl Pollable for ClipboardService {
         }
 
         let pending = {
-            let mut p = self.shared.pending.lock().expect("clipboard pending lock poisoned");
+            let mut p = self
+                .shared
+                .pending
+                .lock()
+                .expect("clipboard pending lock poisoned");
             p.drain(..).collect::<Vec<_>>()
         };
 
@@ -861,7 +935,9 @@ impl Pollable for ClipboardService {
             if let Ok(db) = self.db.lock() {
                 let mut actions = Vec::new();
                 for mut item in pending {
-                    if self.copy_as_plain_text && item.content_type == crate::core::types::ContentType::RichText {
+                    if self.copy_as_plain_text
+                        && item.content_type == crate::core::types::ContentType::RichText
+                    {
                         item.content_type = crate::core::types::ContentType::PlainText;
                         item.rich_data = String::new();
                     }
@@ -905,7 +981,10 @@ impl Pollable for ClipboardService {
                 PollAction::UpdateExisting(id, existing) => {
                     let entry = self.item_to_entry(&existing);
                     if let Some(idx) = (0..self.model.row_count()).position(|i| {
-                        self.model.row_data(i).map(|e| e.id as i64 == id).unwrap_or(false)
+                        self.model
+                            .row_data(i)
+                            .map(|e| e.id as i64 == id)
+                            .unwrap_or(false)
                     }) {
                         self.model.set_row_data(idx, entry);
                     }
@@ -913,7 +992,10 @@ impl Pollable for ClipboardService {
                 PollAction::MoveToTop(id, existing) => {
                     let entry = self.item_to_entry(&existing);
                     if let Some(idx) = (0..self.model.row_count()).position(|i| {
-                        self.model.row_data(i).map(|e| e.id as i64 == id).unwrap_or(false)
+                        self.model
+                            .row_data(i)
+                            .map(|e| e.id as i64 == id)
+                            .unwrap_or(false)
                     }) {
                         self.model.remove(idx);
                     }
@@ -960,15 +1042,25 @@ fn hex_to_slint_color(hex: &str) -> slint::Color {
 }
 
 /// Decode source app icon from base64 and cache on disk as PNG.
-fn build_source_icon(item: &crate::core::types::ClipboardItem, cache: &mut HashMap<String, Image>) -> (String, Image) {
+fn build_source_icon(
+    item: &crate::core::types::ClipboardItem,
+    cache: &mut HashMap<String, Image>,
+) -> (String, Image) {
     if item.source_app_icon.is_empty() {
         return (String::new(), Image::default());
     }
     let icon_dir = images_dir().join("icons");
     let _ = std::fs::create_dir_all(&icon_dir);
-    let safe_name: String = item.source_app_name
+    let safe_name: String = item
+        .source_app_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let icon_path = if safe_name.is_empty() {
         icon_dir.join(format!("{:016x}.png", item.content_hash))
@@ -977,7 +1069,9 @@ fn build_source_icon(item: &crate::core::types::ClipboardItem, cache: &mut HashM
     };
     let path_str = icon_path.to_string_lossy().to_string();
     if !icon_path.exists() {
-        if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&item.source_app_icon) {
+        if let Ok(png_bytes) =
+            base64::engine::general_purpose::STANDARD.decode(&item.source_app_icon)
+        {
             let _ = std::fs::write(&icon_path, png_bytes);
         }
     }
@@ -993,39 +1087,6 @@ fn build_source_icon(item: &crate::core::types::ClipboardItem, cache: &mut HashM
 
 /// Truncate a filename: keep head + "..." + extension so the result fits
 /// within `max_len` characters. The stem middle is elided.
-fn truncate_filename(name: &str, max_len: usize) -> String {
-    if name.chars().count() <= max_len {
-        return name.to_string();
-    }
-    let path = std::path::Path::new(name);
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
-
-    let ext_with_dot = if ext.is_empty() {
-        String::new()
-    } else {
-        format!(".{}", ext)
-    };
-    let available = max_len.saturating_sub(ext_with_dot.chars().count() + 3); // 3 for "..."
-    if available <= 2 {
-        return format!("...{}", ext_with_dot);
-    }
-    let prefix_len = available / 2;
-    let suffix_len = available - prefix_len;
-
-    let stem_chars: Vec<char> = stem.chars().collect();
-    let prefix: String = stem_chars.iter().take(prefix_len).collect();
-    let suffix: String = stem_chars
-        .iter()
-        .rev()
-        .take(suffix_len)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{}...{}{}", prefix, suffix, ext_with_dot)
-}
-
 /// Build size label for the bottom-right corner tag from the stored `size` field.
 /// File types: total file size in bytes → human-readable (e.g. "2.5 MB").
 /// Text types: character count → human-readable (e.g. "1,234字").
@@ -1099,22 +1160,55 @@ fn format_char_count(count: usize) -> String {
 
 /// Build file type display fields: count, icon text, up to 3 truncated filenames,
 /// raw names, overflow.
+fn split_name_for_display(name: &str, is_dir: bool) -> (String, String) {
+    if is_dir {
+        return (name.to_string(), String::new());
+    }
+    let path = std::path::Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let ext_with_dot = if ext.is_empty() {
+        String::new()
+    } else {
+        format!(".{}", ext)
+    };
+    (stem.to_string(), ext_with_dot)
+}
+
 fn build_file_fields(
     item: &crate::core::types::ClipboardItem,
-) -> (i32, String, String, String, String, String, String, String, i32) {
+) -> (
+    i32,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i32,
+) {
     if item.content_type != crate::core::types::ContentType::File || item.file_data.is_empty() {
         return (
             0,
             String::new(),
-            String::new(), String::new(), String::new(),
-            String::new(), String::new(), String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
             0,
         );
     }
     let fd = crate::core::types::FileData::from_json(&item.file_data);
     let count = fd.files.len() as i32;
-    // Multi-file: show only the count (UI layer adds icon glyph).
-    // Single file: show extension or "文件夹".
     let icon_text = if count == 1 {
         if fd.files[0].is_dir {
             i18n::tr("文件夹", "Folder").to_string()
@@ -1124,32 +1218,39 @@ fn build_file_fields(
     } else {
         count.to_string()
     };
-    let n1 = fd
+
+    let (n1, e1) = fd
         .files
         .first()
-        .map(|f| truncate_filename(&f.name, 60))
+        .map(|f| split_name_for_display(&f.name, f.is_dir))
         .unwrap_or_default();
-    let n2 = fd
+    let (n2, e2) = fd
         .files
         .get(1)
-        .map(|f| truncate_filename(&f.name, 60))
+        .map(|f| split_name_for_display(&f.name, f.is_dir))
         .unwrap_or_default();
-    let n3 = fd
+    let (n3, e3) = fd
         .files
         .get(2)
-        .map(|f| truncate_filename(&f.name, 60))
+        .map(|f| split_name_for_display(&f.name, f.is_dir))
         .unwrap_or_default();
+
     let n1_raw = fd.files.first().map(|f| f.name.clone()).unwrap_or_default();
     let n2_raw = fd.files.get(1).map(|f| f.name.clone()).unwrap_or_default();
     let n3_raw = fd.files.get(2).map(|f| f.name.clone()).unwrap_or_default();
     let overflow = if count > 3 { count - 3 } else { 0 };
-    (count, icon_text, n1, n2, n3, n1_raw, n2_raw, n3_raw, overflow)
+    (
+        count, icon_text, n1, n2, n3, n1_raw, n2_raw, n3_raw, e1, e2, e3, overflow,
+    )
 }
 
 /// OS icon for a single file. Cached in memory (HashMap) and on disk (PNG).
 /// Disk cache is checked first — avoids the expensive Shell API call when
 /// the icon was already extracted in a previous session.
-fn icon_for_file(fi: &crate::core::types::FileInfo, cache: &mut HashMap<String, Image>) -> (String, Image) {
+fn icon_for_file(
+    fi: &crate::core::types::FileInfo,
+    cache: &mut HashMap<String, Image>,
+) -> (String, Image) {
     let cache_name = if fi.is_dir {
         "ext_folder".to_string()
     } else {
@@ -1171,7 +1272,9 @@ fn icon_for_file(fi: &crate::core::types::FileInfo, cache: &mut HashMap<String, 
             format!("ext_{}", ext)
         }
     };
-    let icon_path = images_dir().join("icons").join(format!("{}.png", cache_name));
+    let icon_path = images_dir()
+        .join("icons")
+        .join(format!("{}.png", cache_name));
     let path_str = icon_path.to_string_lossy().to_string();
 
     // Memory cache hit — instant
@@ -1207,20 +1310,45 @@ fn build_file_icons(
 ) -> (String, Image, String, Image, String, Image) {
     if item.content_type != crate::core::types::ContentType::File || item.file_data.is_empty() {
         return (
-            String::new(), Image::default(),
-            String::new(), Image::default(),
-            String::new(), Image::default(),
+            String::new(),
+            Image::default(),
+            String::new(),
+            Image::default(),
+            String::new(),
+            Image::default(),
         );
     }
     let fd = crate::core::types::FileData::from_json(&item.file_data);
-    let (p1, img1) = fd.files.first().map(|f| icon_for_file(f, cache)).unwrap_or_default();
-    let (p2, img2) = fd.files.get(1).map(|f| icon_for_file(f, cache)).unwrap_or_default();
-    let (p3, img3) = fd.files.get(2).map(|f| icon_for_file(f, cache)).unwrap_or_default();
+    let (p1, img1) = fd
+        .files
+        .first()
+        .map(|f| icon_for_file(f, cache))
+        .unwrap_or_default();
+    let (p2, img2) = fd
+        .files
+        .get(1)
+        .map(|f| icon_for_file(f, cache))
+        .unwrap_or_default();
+    let (p3, img3) = fd
+        .files
+        .get(2)
+        .map(|f| icon_for_file(f, cache))
+        .unwrap_or_default();
     (p1, img1, p2, img2, p3, img3)
 }
 
 /// Build link/path preview fields: domain, path, favicon, folder icon.
-fn build_link_preview(item: &crate::core::types::ClipboardItem, cache: &mut HashMap<String, Image>) -> (SharedString, SharedString, SharedString, Image, SharedString, Image) {
+fn build_link_preview(
+    item: &crate::core::types::ClipboardItem,
+    cache: &mut HashMap<String, Image>,
+) -> (
+    SharedString,
+    SharedString,
+    SharedString,
+    Image,
+    SharedString,
+    Image,
+) {
     match item.content_type {
         crate::core::types::ContentType::Link => {
             let domain = crate::core::types::url_domain(&item.full_text);
@@ -1231,7 +1359,8 @@ fn build_link_preview(item: &crate::core::types::ClipboardItem, cache: &mut Hash
                 let img = if let Some(cached) = cache.get(&cache_path) {
                     cached.clone()
                 } else {
-                    let img = Image::load_from_path(std::path::Path::new(&cache_path)).unwrap_or_default();
+                    let img = Image::load_from_path(std::path::Path::new(&cache_path))
+                        .unwrap_or_default();
                     cache.insert(cache_path.clone(), img.clone());
                     img
                 };
@@ -1239,9 +1368,14 @@ fn build_link_preview(item: &crate::core::types::ClipboardItem, cache: &mut Hash
             } else {
                 (String::new(), Image::default())
             };
-            (SharedString::from(domain), SharedString::from(path),
-             SharedString::from(fav_path_str), fav_img,
-             SharedString::default(), Image::default())
+            (
+                SharedString::from(domain),
+                SharedString::from(path),
+                SharedString::from(fav_path_str),
+                fav_img,
+                SharedString::default(),
+                Image::default(),
+            )
         }
         crate::core::types::ContentType::Path => {
             let icon_dir = images_dir().join("icons");
@@ -1263,7 +1397,8 @@ fn build_link_preview(item: &crate::core::types::ClipboardItem, cache: &mut Hash
                 let img = if let Some(cached) = cache.get(&path_str) {
                     cached.clone()
                 } else {
-                    let img = Image::load_from_path(std::path::Path::new(&icon_path)).unwrap_or_default();
+                    let img =
+                        Image::load_from_path(std::path::Path::new(&icon_path)).unwrap_or_default();
                     cache.insert(path_str.clone(), img.clone());
                     img
                 };
@@ -1271,18 +1406,39 @@ fn build_link_preview(item: &crate::core::types::ClipboardItem, cache: &mut Hash
             } else {
                 (String::new(), Image::default())
             };
-            (SharedString::default(), SharedString::default(),
-             SharedString::default(), Image::default(),
-             SharedString::from(fol_path_str), fol_img)
+            (
+                SharedString::default(),
+                SharedString::default(),
+                SharedString::default(),
+                Image::default(),
+                SharedString::from(fol_path_str),
+                fol_img,
+            )
         }
-        _ => (SharedString::default(), SharedString::default(),
-              SharedString::default(), Image::default(),
-              SharedString::default(), Image::default())
+        _ => (
+            SharedString::default(),
+            SharedString::default(),
+            SharedString::default(),
+            Image::default(),
+            SharedString::default(),
+            Image::default(),
+        ),
     }
 }
 
 /// Build tag dot display data: up to 3 colored dots, names, overflow count.
-fn build_tag_dots(tags: &[crate::core::types::TagInfo]) -> (bool, slint::Color, slint::Color, slint::Color, SharedString, SharedString, SharedString, i32) {
+fn build_tag_dots(
+    tags: &[crate::core::types::TagInfo],
+) -> (
+    bool,
+    slint::Color,
+    slint::Color,
+    slint::Color,
+    SharedString,
+    SharedString,
+    SharedString,
+    i32,
+) {
     let mut colors: Vec<slint::Color> = Vec::new();
     let mut names: Vec<SharedString> = Vec::new();
     for t in tags.iter().take(3) {
@@ -1293,10 +1449,27 @@ fn build_tag_dots(tags: &[crate::core::types::TagInfo]) -> (bool, slint::Color, 
             colors.push(slint::Color::default());
         }
     }
-    while colors.len() < 3 { colors.push(slint::Color::default()); }
-    while names.len() < 3 { names.push(SharedString::default()); }
-    let overflow = if tags.len() > 3 { (tags.len() - 3) as i32 } else { 0 };
-    (!tags.is_empty(), colors[0], colors[1], colors[2], names.remove(0), names.remove(0), names.remove(0), overflow)
+    while colors.len() < 3 {
+        colors.push(slint::Color::default());
+    }
+    while names.len() < 3 {
+        names.push(SharedString::default());
+    }
+    let overflow = if tags.len() > 3 {
+        (tags.len() - 3) as i32
+    } else {
+        0
+    };
+    (
+        !tags.is_empty(),
+        colors[0],
+        colors[1],
+        colors[2],
+        names.remove(0),
+        names.remove(0),
+        names.remove(0),
+        overflow,
+    )
 }
 
 /// Derive thumbnail path from full image path.
@@ -1311,13 +1484,16 @@ fn thumb_path(image_path: &str) -> std::path::PathBuf {
 }
 
 impl ClipboardService {
-
     fn item_to_entry(&mut self, item: &crate::core::types::ClipboardItem) -> ClipboardEntry {
         // Thumbnails are unique per image — load directly without caching so the
         // decoded RGBA buffer is freed when the model entry is dropped.
         let (thumbnail, img_w, img_h) = if !item.image_path.is_empty() {
             let tp = thumb_path(&item.image_path);
-            let load_path = if tp.exists() { &tp } else { std::path::Path::new(&item.image_path) };
+            let load_path = if tp.exists() {
+                &tp
+            } else {
+                std::path::Path::new(&item.image_path)
+            };
             let img = Image::load_from_path(load_path).unwrap_or_default();
             // Prefer in-memory dimensions (fresh capture); fall back to file read (DB reload)
             let (w, h) = if item.image_width > 0 && item.image_height > 0 {
@@ -1330,7 +1506,8 @@ impl ClipboardService {
             (Image::default(), 0, 0)
         };
 
-        let (source_icon_path, source_app_icon_image) = build_source_icon(item, &mut self.image_cache);
+        let (source_icon_path, source_app_icon_image) =
+            build_source_icon(item, &mut self.image_cache);
 
         let color_swatch = if item.content_type == crate::core::types::ContentType::Color {
             crate::core::color::detect_color(&item.full_text)
@@ -1340,10 +1517,46 @@ impl ClipboardService {
             slint::Color::default()
         };
 
-        let (file_count, file_icon_text, file_name_1, file_name_2, file_name_3, file_name_1_raw, file_name_2_raw, file_name_3_raw, file_overflow) = build_file_fields(item);
-        let (file_icon_path, file_icon_image, file_icon_path_2, file_icon_image_2, file_icon_path_3, file_icon_image_3) = build_file_icons(item, &mut self.image_cache);
-        let (link_domain, link_path, favicon_path, favicon_image, folder_icon_path, folder_icon_image) = build_link_preview(item, &mut self.image_cache);
-        let (has_tags, tag_dot_0, tag_dot_1, tag_dot_2, tag_name_0, tag_name_1, tag_name_2, tags_overflow) = build_tag_dots(&item.tags);
+        let (
+            file_count,
+            file_icon_text,
+            file_name_1,
+            file_name_2,
+            file_name_3,
+            file_name_1_raw,
+            file_name_2_raw,
+            file_name_3_raw,
+            file_ext_1,
+            file_ext_2,
+            file_ext_3,
+            file_overflow,
+        ) = build_file_fields(item);
+        let (
+            file_icon_path,
+            file_icon_image,
+            file_icon_path_2,
+            file_icon_image_2,
+            file_icon_path_3,
+            file_icon_image_3,
+        ) = build_file_icons(item, &mut self.image_cache);
+        let (
+            link_domain,
+            link_path,
+            favicon_path,
+            favicon_image,
+            folder_icon_path,
+            folder_icon_image,
+        ) = build_link_preview(item, &mut self.image_cache);
+        let (
+            has_tags,
+            tag_dot_0,
+            tag_dot_1,
+            tag_dot_2,
+            tag_name_0,
+            tag_name_1,
+            tag_name_2,
+            tags_overflow,
+        ) = build_tag_dots(&item.tags);
         let size_label = build_size_label(item);
 
         ClipboardEntry {
@@ -1378,6 +1591,9 @@ impl ClipboardService {
             file_name_1_raw: SharedString::from(file_name_1_raw),
             file_name_2_raw: SharedString::from(file_name_2_raw),
             file_name_3_raw: SharedString::from(file_name_3_raw),
+            file_ext_1: SharedString::from(file_ext_1),
+            file_ext_2: SharedString::from(file_ext_2),
+            file_ext_3: SharedString::from(file_ext_3),
             file_overflow,
             file_icon_path: SharedString::from(file_icon_path),
             file_icon_image,

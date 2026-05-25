@@ -139,10 +139,17 @@ impl HotkeyService {
 
 impl Pollable for HotkeyService {
     fn poll(&mut self) {
-        let Some(app) = self.app.upgrade() else { return };
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
 
         // ── Dynamic registration based on blacklist ──
-        let fg_name = self.foreground_app_name.lock().ok().map(|fg| fg.clone()).unwrap_or_default();
+        let fg_name = self
+            .foreground_app_name
+            .lock()
+            .ok()
+            .map(|fg| fg.clone())
+            .unwrap_or_default();
         if !fg_name.is_empty() && self.is_blacklisted(&fg_name) {
             self.unregister_hotkey();
         } else {

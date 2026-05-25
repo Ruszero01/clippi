@@ -206,6 +206,7 @@ export component App inherits Window {
     callback update-tag(int, string, color);
     callback show-tag-picker(int);
     callback hide-tag-picker();
+    callback dismiss-ui();
     callback create-and-add-tag(int, string);
     callback toggle-item-tag(int, int);
     callback batch-add-tag(int);
@@ -457,8 +458,8 @@ export component App inherits Window {
                     auto-scroll-to-top: root.auto-scroll-to-top;
                     show-original-on-hover: root.show-original-on-hover;
                     scroll-trigger: root.scroll-trigger;
-                    editing-note-id: root.editing-note-id;
-                    editing-note-text: root.editing-note-text;
+                    editing-note-id <=> root.editing-note-id;
+                    editing-note-text <=> root.editing-note-text;
                     toggle-filter(type) => { root.toggle-filter(type); }
                     clear-filters => { root.clear-filters(); }
                     search-keyword(keyword) => { root.search-keyword(keyword); }
@@ -486,6 +487,7 @@ export component App inherits Window {
                     show-tag-picker(id) => { root.show-tag-picker(id); }
                     hide-tag-picker => { root.hide-tag-picker(); }
                     hide-tag-filter-panel => { root.hide-tag-filter-panel(); }
+                    dismiss-ui => { root.dismiss-ui(); }
                 }
 
                 EditPanel {

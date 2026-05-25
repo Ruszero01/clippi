@@ -3,7 +3,7 @@
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHGFI_ICON, SHGFI_LARGEICON, SHFILEINFOW};
+    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 
     pub fn extract_file_icon_base64(file_path: &str) -> Option<String> {
         unsafe {
@@ -29,7 +29,7 @@ mod windows_impl {
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use crate::platform::util::nsimage_to_base64_png;
-    use objc2_app_kit::{NSWorkspace, NSImage};
+    use objc2_app_kit::{NSImage, NSWorkspace};
     use objc2_foundation::NSString;
 
     pub fn extract_file_icon_base64(file_path: &str) -> Option<String> {

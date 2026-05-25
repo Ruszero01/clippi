@@ -48,7 +48,11 @@ impl LocalFolderBackend {
                     // Skip files modified within the last 5 seconds
                     if let Ok(meta) = path.metadata() {
                         if let Ok(mtime) = meta.modified() {
-                            if now.duration_since(mtime).map(|d| d.as_secs() < 5).unwrap_or(false) {
+                            if now
+                                .duration_since(mtime)
+                                .map(|d| d.as_secs() < 5)
+                                .unwrap_or(false)
+                            {
                                 continue;
                             }
                         }
@@ -80,7 +84,9 @@ impl SyncBackend for LocalFolderBackend {
             return BackendStatus::Offline;
         }
         if !dir.is_dir() {
-            return BackendStatus::Error(i18n::tr("路径不是目录", "Path is not a directory").into());
+            return BackendStatus::Error(
+                i18n::tr("路径不是目录", "Path is not a directory").into(),
+            );
         }
         BackendStatus::Online
     }
@@ -118,10 +124,18 @@ impl SyncBackend for LocalFolderBackend {
 
         // Read main payload
         let mut payload = if mtime_changed {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("{}: {e}", i18n::tr("读取同步文件失败", "Failed to read sync file")))?;
-            serde_json::from_str::<SyncPayload>(&content)
-                .map_err(|e| format!("{}: {e}", i18n::tr("解析同步文件失败", "Failed to parse sync file")))?
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    i18n::tr("读取同步文件失败", "Failed to read sync file")
+                )
+            })?;
+            serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    i18n::tr("解析同步文件失败", "Failed to parse sync file")
+                )
+            })?
         } else {
             // Main file unchanged — return early only if no conflicts either
             let conflicts = self.find_conflicts();
@@ -129,10 +143,18 @@ impl SyncBackend for LocalFolderBackend {
                 return Err("@@unchanged".into());
             }
             // Re-read main payload to merge with conflicts
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("{}: {e}", i18n::tr("读取同步文件失败", "Failed to read sync file")))?;
-            serde_json::from_str::<SyncPayload>(&content)
-                .map_err(|e| format!("{}: {e}", i18n::tr("解析同步文件失败", "Failed to parse sync file")))?
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    i18n::tr("读取同步文件失败", "Failed to read sync file")
+                )
+            })?;
+            serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    i18n::tr("解析同步文件失败", "Failed to parse sync file")
+                )
+            })?
         };
 
         // Merge conflict files
@@ -158,8 +180,12 @@ impl SyncBackend for LocalFolderBackend {
 
     fn push(&self, payload: &SyncPayload) -> Result<(), String> {
         let dir = PathBuf::from(&self.config.folder_path);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("{}: {e}", i18n::tr("创建目录失败", "Failed to create directory")))?;
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("创建目录失败", "Failed to create directory")
+            )
+        })?;
 
         let file_path = self.file_path();
         let json = serde_json::to_string_pretty(payload)
@@ -167,13 +193,19 @@ impl SyncBackend for LocalFolderBackend {
 
         // Atomic write: temp file + rename
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
-        std::fs::write(&tmp_path, &json)
-            .map_err(|e| format!("{}: {e}", i18n::tr("写入临时文件失败", "Failed to write temp file")))?;
-        std::fs::rename(&tmp_path, &file_path)
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&tmp_path);
-                format!("{}: {e}", i18n::tr("替换同步文件失败", "Failed to replace sync file"))
-            })?;
+        std::fs::write(&tmp_path, &json).map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("写入临时文件失败", "Failed to write temp file")
+            )
+        })?;
+        std::fs::rename(&tmp_path, &file_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!(
+                "{}: {e}",
+                i18n::tr("替换同步文件失败", "Failed to replace sync file")
+            )
+        })?;
         // Cache new mtime so our own push doesn't trigger a changed-file
         // detection on the next pull.
         if let Ok(meta) = std::fs::metadata(&file_path) {
@@ -205,7 +237,8 @@ pub fn hostname() -> String {
             #[cfg(unix)]
             {
                 let mut buf = [0u8; 256];
-                let hostname = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+                let hostname =
+                    unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
                 if hostname == 0 {
                     if let Some(end) = buf.iter().position(|&b| b == 0) {
                         return Ok(String::from_utf8_lossy(&buf[..end]).into_owned());

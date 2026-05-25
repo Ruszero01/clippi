@@ -1,8 +1,8 @@
 //! Core types - platform-agnostic
 
 use chrono::{DateTime, Utc};
-use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Content type of clipboard items
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +133,7 @@ pub struct ClipboardItem {
     pub note: String,
     pub source_app_name: String,
     pub source_app_icon: String, // base64-encoded PNG icon
-    pub size: i64, // byte count for files, char count for text
+    pub size: i64,               // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
 }
 
@@ -153,7 +153,6 @@ impl RichData {
     pub fn from_json(s: &str) -> Self {
         serde_json::from_str(s).unwrap_or_default()
     }
-
 }
 
 /// Info for a single file within a clipboard file group
@@ -180,7 +179,8 @@ impl FileData {
     }
 
     pub fn display_text(&self) -> String {
-        self.files.iter()
+        self.files
+            .iter()
             .map(|f| f.name.clone())
             .collect::<Vec<_>>()
             .join("\n")
@@ -212,11 +212,19 @@ pub fn is_image_extension(path: &str) -> bool {
 }
 
 impl ClipboardItem {
-    pub fn new_text(id: i64, text: &str, content_type: ContentType, source: Option<&SourceAppInfo>, rich_data: Option<&RichData>) -> Self {
+    pub fn new_text(
+        id: i64,
+        text: &str,
+        content_type: ContentType,
+        source: Option<&SourceAppInfo>,
+        rich_data: Option<&RichData>,
+    ) -> Self {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
         let now = Utc::now();
-        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| {
+            (s.app_name.clone(), s.icon_base64.clone())
+        });
         let rd = rich_data.map(|r| r.to_json()).unwrap_or_default();
         Self {
             id,
@@ -239,9 +247,18 @@ impl ClipboardItem {
         }
     }
 
-    pub fn new_image(id: i64, image_path: &str, hash: u64, w: u32, h: u32, source: Option<&SourceAppInfo>) -> Self {
+    pub fn new_image(
+        id: i64,
+        image_path: &str,
+        hash: u64,
+        w: u32,
+        h: u32,
+        source: Option<&SourceAppInfo>,
+    ) -> Self {
         let now = Utc::now();
-        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| {
+            (s.app_name.clone(), s.icon_base64.clone())
+        });
         Self {
             id,
             content_type: ContentType::Image,
@@ -265,7 +282,9 @@ impl ClipboardItem {
 
     pub fn new_color(id: i64, text: &str, hash: u64, source: Option<&SourceAppInfo>) -> Self {
         let now = Utc::now();
-        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| {
+            (s.app_name.clone(), s.icon_base64.clone())
+        });
         Self {
             id,
             content_type: ContentType::Color,
@@ -287,10 +306,18 @@ impl ClipboardItem {
         }
     }
 
-    pub fn new_file(id: i64, file_data: &FileData, hash: u64, source: Option<&SourceAppInfo>, size: i64) -> Self {
+    pub fn new_file(
+        id: i64,
+        file_data: &FileData,
+        hash: u64,
+        source: Option<&SourceAppInfo>,
+        size: i64,
+    ) -> Self {
         let now = Utc::now();
         let display = file_data.display_text();
-        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| (s.app_name.clone(), s.icon_base64.clone()));
+        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| {
+            (s.app_name.clone(), s.icon_base64.clone())
+        });
         Self {
             id,
             content_type: ContentType::File,
@@ -312,7 +339,6 @@ impl ClipboardItem {
         }
     }
 }
-
 
 /// Format elapsed time as human-readable string
 pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
@@ -393,7 +419,9 @@ pub fn is_path(text: &str) -> bool {
     // Unix absolute path: /Users/..., /etc/..., /tmp/...
     // Require at least one "/" after the first char to avoid matching
     // slash commands like /clear, /help, etc.
-    if text.starts_with('/') && text.len() >= 3 && text.as_bytes()[1] != b'/'
+    if text.starts_with('/')
+        && text.len() >= 3
+        && text.as_bytes()[1] != b'/'
         && text[1..].contains('/')
     {
         return true;
@@ -405,7 +433,8 @@ pub fn is_path(text: &str) -> bool {
 /// "https://www.github.com/user/repo" -> "www.github.com"
 pub fn url_domain(text: &str) -> String {
     let s = text.trim();
-    let no_scheme = s.strip_prefix("https://")
+    let no_scheme = s
+        .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
     match no_scheme.find(['/', '?', '#']) {
@@ -419,7 +448,8 @@ pub fn url_domain(text: &str) -> String {
 /// Returns empty string if the URL has no path portion.
 pub fn url_path(text: &str) -> String {
     let s = text.trim();
-    let no_scheme = s.strip_prefix("https://")
+    let no_scheme = s
+        .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
     match no_scheme.find(['/', '?', '#']) {

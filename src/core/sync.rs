@@ -150,7 +150,11 @@ impl MergeStats {
 /// Excludes image and file type items.
 /// When `favorites_only` is true, only favorited items are included.
 /// Only tags referenced by the synced items are included.
-pub fn build_snapshot(db: &Mutex<Database>, device_name: &str, favorites_only: bool) -> Result<SyncPayload, String> {
+pub fn build_snapshot(
+    db: &Mutex<Database>,
+    device_name: &str,
+    favorites_only: bool,
+) -> Result<SyncPayload, String> {
     let db = db.lock().map_err(|e| format!("db lock: {e}"))?;
 
     // Collect all live synced items
@@ -311,10 +315,7 @@ pub fn merge_remote_into_local(
         if uf.device_name == local_device_name {
             continue; // own unfavorite, already handled
         }
-        if db
-            .is_item_unfavorited(uf.content_hash)
-            .unwrap_or(false)
-        {
+        if db.is_item_unfavorited(uf.content_hash).unwrap_or(false) {
             continue; // already marked
         }
         // Record locally for propagation
@@ -335,13 +336,14 @@ pub fn merge_remote_into_local(
         if tombstone.device_name == local_device_name {
             continue; // own deletion
         }
-        if db
-            .is_tag_tombstoned(&tombstone.name)
-            .unwrap_or(false)
-        {
+        if db.is_tag_tombstoned(&tombstone.name).unwrap_or(false) {
             continue; // already tombstoned
         }
-        let _ = db.record_tag_deletion(&tombstone.name, &tombstone.deleted_at, &tombstone.device_name);
+        let _ = db.record_tag_deletion(
+            &tombstone.name,
+            &tombstone.deleted_at,
+            &tombstone.device_name,
+        );
         // Delete local tag if exists and is older than the tombstone
         if let Ok(Some(local_tag)) = db.get_tag_by_name(&tombstone.name) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
@@ -358,10 +360,7 @@ pub fn merge_remote_into_local(
 
     // Phase 3: Merge tags — create or update with color conflict resolution
     for remote_tag in &remote.tags {
-        if db
-            .is_tag_tombstoned(&remote_tag.name)
-            .unwrap_or(false)
-        {
+        if db.is_tag_tombstoned(&remote_tag.name).unwrap_or(false) {
             continue; // tag was deleted
         }
         match db
@@ -416,7 +415,8 @@ pub fn merge_remote_into_local(
         match local {
             None => {
                 // New item from remote — insert
-                let item_id = db.insert_sync_item_raw(remote_item)
+                let item_id = db
+                    .insert_sync_item_raw(remote_item)
                     .map_err(|e| format!("insert item: {e}"))?;
                 stats.items_added += 1;
 
@@ -568,8 +568,11 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
         }
     }
     {
-        let mut seen: std::collections::HashSet<u64> =
-            base.unfavorited_items.iter().map(|u| u.content_hash).collect();
+        let mut seen: std::collections::HashSet<u64> = base
+            .unfavorited_items
+            .iter()
+            .map(|u| u.content_hash)
+            .collect();
         for u in other.unfavorited_items {
             if seen.insert(u.content_hash) {
                 base.unfavorited_items.push(u);
@@ -690,15 +693,16 @@ mod tests {
     }
 
     fn make_tag(name: &str, color: &str, updated_at: &str) -> SyncTag {
-        SyncTag { name: name.into(), color: color.into(), updated_at: updated_at.into() }
+        SyncTag {
+            name: name.into(),
+            color: color.into(),
+            updated_at: updated_at.into(),
+        }
     }
 
     #[test]
     fn test_merge_payloads_newer_item_wins() {
-        let base = make_payload(
-            vec![make_item(1, "2026-05-14T09:00:00Z", "hello")],
-            vec![],
-        );
+        let base = make_payload(vec![make_item(1, "2026-05-14T09:00:00Z", "hello")], vec![]);
         let other = make_payload(
             vec![make_item(1, "2026-05-14T10:00:00Z", "hello updated")],
             vec![],
@@ -711,10 +715,7 @@ mod tests {
 
     #[test]
     fn test_merge_payloads_older_item_ignored() {
-        let base = make_payload(
-            vec![make_item(1, "2026-05-14T10:00:00Z", "hello")],
-            vec![],
-        );
+        let base = make_payload(vec![make_item(1, "2026-05-14T10:00:00Z", "hello")], vec![]);
         let other = make_payload(
             vec![make_item(1, "2026-05-14T09:00:00Z", "hello old")],
             vec![],
@@ -727,14 +728,8 @@ mod tests {
 
     #[test]
     fn test_merge_payloads_different_items_combined() {
-        let base = make_payload(
-            vec![make_item(1, "2026-05-14T09:00:00Z", "hello")],
-            vec![],
-        );
-        let other = make_payload(
-            vec![make_item(2, "2026-05-14T10:00:00Z", "world")],
-            vec![],
-        );
+        let base = make_payload(vec![make_item(1, "2026-05-14T09:00:00Z", "hello")], vec![]);
+        let other = make_payload(vec![make_item(2, "2026-05-14T10:00:00Z", "world")], vec![]);
         let merged = merge_payloads(base, other);
         assert_eq!(merged.items.len(), 2);
     }
@@ -765,8 +760,16 @@ mod tests {
         }];
         let mut other = make_payload(vec![], vec![]);
         other.deleted_items = vec![
-            SyncDeletedItem { content_hash: 1, deleted_at: "2026-05-14T10:00:00Z".into(), device_name: "b".into() },
-            SyncDeletedItem { content_hash: 2, deleted_at: "2026-05-14T10:00:00Z".into(), device_name: "b".into() },
+            SyncDeletedItem {
+                content_hash: 1,
+                deleted_at: "2026-05-14T10:00:00Z".into(),
+                device_name: "b".into(),
+            },
+            SyncDeletedItem {
+                content_hash: 2,
+                deleted_at: "2026-05-14T10:00:00Z".into(),
+                device_name: "b".into(),
+            },
         ];
         let merged = merge_payloads(base, other);
         // Hash 1 should be deduplicated, hash 2 is new

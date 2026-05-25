@@ -395,8 +395,13 @@ impl SyncManager {
         let favorites_only = self.sync_favorites_only();
 
         std::thread::spawn(move || {
-            let (success, message, stats, pushed_items, pushed_tags) =
-                run_sync_cycle_for_backend(backend.as_ref(), &db, &cancel, favorites_only, force_push);
+            let (success, message, stats, pushed_items, pushed_tags) = run_sync_cycle_for_backend(
+                backend.as_ref(),
+                &db,
+                &cancel,
+                favorites_only,
+                force_push,
+            );
 
             *pending.lock().expect("pending lock") = Some(BackendSyncResult {
                 backend_id,
@@ -453,16 +458,24 @@ impl SyncManager {
             .find(|b| b.backend.id() == result.backend_id)
         {
             if result.success {
-                state.last_sync_at = chrono::Utc::now().to_rfc3339();
+                let has_changes =
+                    !result.stats.is_empty() || result.pushed_items > 0 || result.pushed_tags > 0;
+                if has_changes {
+                    state.last_sync_at = chrono::Utc::now().to_rfc3339();
+                }
                 state.status = state.backend.check_status();
-                // Only update counts when a real push happened (fast path returns 0,0)
+                // Only update counts when a real push happened
                 if result.pushed_items > 0 || result.pushed_tags > 0 {
                     state.last_item_count = result.pushed_items;
                     state.last_tag_count = result.pushed_tags;
                 }
                 // Persist stats so they survive app restart
                 if let Ok(mut s) = self.settings.lock() {
-                    if let Some(cfg) = s.sync_backends.iter_mut().find(|b| b.id == state.backend.id()) {
+                    if let Some(cfg) = s
+                        .sync_backends
+                        .iter_mut()
+                        .find(|b| b.id == state.backend.id())
+                    {
                         cfg.last_sync_at = state.last_sync_at.clone();
                         cfg.last_item_count = state.last_item_count;
                         cfg.last_tag_count = state.last_tag_count;
@@ -566,7 +579,14 @@ fn run_sync_cycle_for_backend(
             match sync::merge_remote_into_local(db, &mut remote, &local_device) {
                 Ok(s) => stats = s,
                 Err(e) => {
-                    return (false, i18n::tr("合并远程数据失败: ", "Remote merge failed: ").to_string() + &e.to_string(), stats, 0, 0);
+                    return (
+                        false,
+                        i18n::tr("合并远程数据失败: ", "Remote merge failed: ").to_string()
+                            + &e.to_string(),
+                        stats,
+                        0,
+                        0,
+                    );
                 }
             }
         }
@@ -574,13 +594,25 @@ fn run_sync_cycle_for_backend(
             if e == "@@unchanged" {
                 remote_unchanged = true;
             } else if !e.contains("不存在") && !e.contains("not found") {
-                return (false, i18n::tr("拉取失败: ", "Pull failed: ").to_string() + &e.to_string(), stats, 0, 0);
+                return (
+                    false,
+                    i18n::tr("拉取失败: ", "Pull failed: ").to_string() + &e.to_string(),
+                    stats,
+                    0,
+                    0,
+                );
             }
         }
     }
 
     if cancel.load(Ordering::Relaxed) {
-        return (false, i18n::tr("同步已取消", "Sync cancelled").into(), stats, 0, 0);
+        return (
+            false,
+            i18n::tr("同步已取消", "Sync cancelled").into(),
+            stats,
+            0,
+            0,
+        );
     }
 
     // Fast path: if remote file wasn't even touched (same mtime) and there's
@@ -593,12 +625,15 @@ fn run_sync_cycle_for_backend(
     let payload = match sync::build_snapshot(db, &device_name, favorites_only) {
         Ok(p) => p,
         Err(e) => {
-            return (false, i18n::tr("构建快照失败: ", "Snapshot build failed: ").to_string() + &e.to_string(), stats, 0, 0);
+            return (
+                false,
+                i18n::tr("构建快照失败: ", "Snapshot build failed: ").to_string() + &e.to_string(),
+                stats,
+                0,
+                0,
+            );
         }
     };
-
-    let pushed_items = payload.items.len() as u32;
-    let pushed_tags = payload.tags.len() as u32;
 
     // Content-hash gate: if the local snapshot is semantically identical to
     // the remote payload we just pulled from, skip the push. This prevents
@@ -609,12 +644,21 @@ fn run_sync_cycle_for_backend(
     if let Some(rh) = remote_hash {
         let local_hash = sync::payload_semantic_hash(&payload);
         if rh == local_hash {
-            return (true, i18n::tr("已是最新", "Up to date").into(), stats, pushed_items, pushed_tags);
+            return (true, i18n::tr("已是最新", "Up to date").into(), stats, 0, 0);
         }
     }
 
+    let pushed_items = payload.items.len() as u32;
+    let pushed_tags = payload.tags.len() as u32;
+
     if let Err(e) = backend.push(&payload) {
-        return (false, i18n::tr("推送失败: ", "Push failed: ").to_string() + &e.to_string(), stats, pushed_items, pushed_tags);
+        return (
+            false,
+            i18n::tr("推送失败: ", "Push failed: ").to_string() + &e.to_string(),
+            stats,
+            pushed_items,
+            pushed_tags,
+        );
     }
 
     // Best-effort cleanup of cloud conflict files (e.g. clippi_sync-*.json)
@@ -622,24 +666,48 @@ fn run_sync_cycle_for_backend(
 
     let mut parts: Vec<String> = Vec::new();
     if stats.items_added > 0 {
-        parts.push(if i18n::is_en() { format!("Added {}", stats.items_added) } else { format!("新增{}条", stats.items_added) });
+        parts.push(if i18n::is_en() {
+            format!("Added {}", stats.items_added)
+        } else {
+            format!("新增{}条", stats.items_added)
+        });
     }
     if stats.items_updated > 0 {
-        parts.push(if i18n::is_en() { format!("Updated {}", stats.items_updated) } else { format!("更新{}条", stats.items_updated) });
+        parts.push(if i18n::is_en() {
+            format!("Updated {}", stats.items_updated)
+        } else {
+            format!("更新{}条", stats.items_updated)
+        });
     }
     if stats.items_deleted > 0 {
-        parts.push(if i18n::is_en() { format!("Deleted {}", stats.items_deleted) } else { format!("删除{}条", stats.items_deleted) });
+        parts.push(if i18n::is_en() {
+            format!("Deleted {}", stats.items_deleted)
+        } else {
+            format!("删除{}条", stats.items_deleted)
+        });
     }
     if stats.tags_added > 0 {
-        parts.push(if i18n::is_en() { format!("Tags +{}", stats.tags_added) } else { format!("标签+{}", stats.tags_added) });
+        parts.push(if i18n::is_en() {
+            format!("Tags +{}", stats.tags_added)
+        } else {
+            format!("标签+{}", stats.tags_added)
+        });
     }
     if stats.tags_deleted > 0 {
-        parts.push(if i18n::is_en() { format!("Tags -{}", stats.tags_deleted) } else { format!("标签-{}", stats.tags_deleted) });
+        parts.push(if i18n::is_en() {
+            format!("Tags -{}", stats.tags_deleted)
+        } else {
+            format!("标签-{}", stats.tags_deleted)
+        });
     }
     let msg = if parts.is_empty() && pushed_items == 0 {
         i18n::tr("同步完成，本地无数据", "Sync done, no local data").to_string()
     } else if parts.is_empty() {
-        i18n::tr("同步完成: 已推送 ", "Sync done: pushed ").to_string() + &format!("{pushed_items} ") + i18n::tr("条记录, ", "items, ") + &format!("{pushed_tags} ") + i18n::tr("个标签", "tags")
+        i18n::tr("同步完成: 已推送 ", "Sync done: pushed ").to_string()
+            + &format!("{pushed_items} ")
+            + i18n::tr("条记录, ", "items, ")
+            + &format!("{pushed_tags} ")
+            + i18n::tr("个标签", "tags")
     } else {
         i18n::tr("同步完成: ", "Sync done: ").to_string() + &parts.join(", ")
     };

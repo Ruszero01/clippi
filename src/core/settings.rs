@@ -43,7 +43,7 @@ pub struct AppSettings {
     pub auto_start: bool,
     pub auto_hide: bool,
     pub db_path: String,
-    pub sort_by_created: bool,  // true=按创建时间排序, false=按更新时间排序
+    pub sort_by_created: bool, // true=按创建时间排序, false=按更新时间排序
     pub window_position_mode: String, // "center" | "follow" | "remember"
     pub saved_window_x: i32,
     pub saved_window_y: i32,
@@ -59,32 +59,32 @@ pub struct AppSettings {
     #[serde(default)]
     pub show_original_on_hover: bool, // 悬停时显示原内容: 有备注时鼠标悬停显示原始内容
     #[serde(default)]
-    pub saved_window_width: f32,  // 用户调整后的窗口宽度 (0=使用默认值)
+    pub saved_window_width: f32, // 用户调整后的窗口宽度 (0=使用默认值)
     #[serde(default)]
     pub saved_window_height: f32, // 用户调整后的窗口高度 (0=使用默认值)
     // ── Cloud sync ──
     #[serde(default)]
     pub sync_enabled: bool,
     #[serde(default)]
-    pub sync_data_dir: String,       // 云同步目录路径 (OneDrive/iCloud) — deprecated, use sync_backends
+    pub sync_data_dir: String, // 云同步目录路径 (OneDrive/iCloud) — deprecated, use sync_backends
     #[serde(default)]
-    pub sync_device_name: String,    // 设备名 — deprecated, use sync_backends
+    pub sync_device_name: String, // 设备名 — deprecated, use sync_backends
     #[serde(default)]
-    pub sync_last_at: String,        // 上次同步时间 RFC3339 — deprecated
+    pub sync_last_at: String, // 上次同步时间 RFC3339 — deprecated
     #[serde(default = "default_sync_interval")]
-    pub sync_interval_secs: u64,     // 同步间隔秒数 (默认60)
+    pub sync_interval_secs: u64, // 同步间隔秒数 (默认60)
     #[serde(default)]
     pub sync_backends: Vec<BackendConfig>, // 多后端配置列表 (new)
     #[serde(default)]
-    pub sync_auto_enabled: bool,           // 自动同步开关 (dirty + interval)
+    pub sync_auto_enabled: bool, // 自动同步开关 (dirty + interval)
     #[serde(default)]
-    pub sync_favorites_only: bool,          // 仅同步收藏的条目
+    pub sync_favorites_only: bool, // 仅同步收藏的条目
     #[serde(default)]
-    pub max_items: u32,                    // 最大保存条目数 (0=不限制, 默认0)
+    pub max_items: u32, // 最大保存条目数 (0=不限制, 默认0)
     #[serde(default)]
-    pub hotkey_blacklist: Vec<String>,     // 快捷键黑名单应用名列表
+    pub hotkey_blacklist: Vec<String>, // 快捷键黑名单应用名列表
     #[serde(default)]
-    pub language: String,                  // "zh_CN" or "en", empty = follow system
+    pub language: String, // "zh_CN" or "en", empty = follow system
 }
 
 fn default_sync_interval() -> u64 {
@@ -157,10 +157,7 @@ impl AppSettings {
 
     /// One-time migration: old `sync_enabled` + `sync_data_dir` → `sync_backends` entry.
     fn migrate_sync_fields(&mut self) {
-        if self.sync_enabled
-            && !self.sync_data_dir.is_empty()
-            && self.sync_backends.is_empty()
-        {
+        if self.sync_enabled && !self.sync_data_dir.is_empty() && self.sync_backends.is_empty() {
             let device_name = if self.sync_device_name.is_empty() {
                 crate::services::backends::local_folder::hostname()
             } else {
@@ -241,10 +238,7 @@ pub fn detect_system_language() -> String {
     {
         use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        if let Ok(key) = hkcu.open_subkey_with_flags(
-            r"Control Panel\International",
-            KEY_READ,
-        ) {
+        if let Ok(key) = hkcu.open_subkey_with_flags(r"Control Panel\International", KEY_READ) {
             if let Ok(locale) = key.get_value::<String, _>("LocaleName") {
                 if locale.starts_with("zh") {
                     return "zh_CN".to_string();
@@ -278,12 +272,27 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_WRITE)
-        .map_err(|e| format!("{}: {e}", i18n::tr("打开注册表失败", "Failed to open registry")))?;
+        .map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("打开注册表失败", "Failed to open registry")
+            )
+        })?;
 
     if enable {
-        let exe_path = std::env::current_exe().map_err(|e| format!("{}: {e}", i18n::tr("获取程序路径失败", "Failed to get program path")))?;
+        let exe_path = std::env::current_exe().map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("获取程序路径失败", "Failed to get program path")
+            )
+        })?;
         key.set_value(APP_NAME, &exe_path.to_string_lossy().as_ref())
-            .map_err(|e| format!("{}: {e}", i18n::tr("写入注册表失败", "Failed to write registry")))?;
+            .map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    i18n::tr("写入注册表失败", "Failed to write registry")
+                )
+            })?;
     } else {
         let _ = key.delete_value(APP_NAME);
     }
@@ -292,22 +301,38 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn launch_agent_plist_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join("Library/LaunchAgents").join(format!("{LAUNCH_AGENT_ID}.plist")))
+    dirs::home_dir().map(|h| {
+        h.join("Library/LaunchAgents")
+            .join(format!("{LAUNCH_AGENT_ID}.plist"))
+    })
 }
 
 #[cfg(target_os = "macos")]
 pub fn set_auto_start(enable: bool) -> Result<(), String> {
-    let plist_path = launch_agent_plist_path()
-        .ok_or(i18n::tr("无法获取 LaunchAgents 路径", "Cannot get LaunchAgents path"))?;
+    let plist_path = launch_agent_plist_path().ok_or(i18n::tr(
+        "无法获取 LaunchAgents 路径",
+        "Cannot get LaunchAgents path",
+    ))?;
 
     if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("{}: {e}", i18n::tr("创建 LaunchAgents 目录失败", "Failed to create LaunchAgents directory")))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr(
+                    "创建 LaunchAgents 目录失败",
+                    "Failed to create LaunchAgents directory"
+                )
+            )
+        })?;
     }
 
     if enable {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("{}: {e}", i18n::tr("获取程序路径失败", "Failed to get program path")))?;
+        let exe_path = std::env::current_exe().map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("获取程序路径失败", "Failed to get program path")
+            )
+        })?;
         let exe_str = exe_path.to_string_lossy();
 
         let plist_content = format!(
@@ -329,12 +354,20 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
 </plist>"#
         );
 
-        std::fs::write(&plist_path, plist_content)
-            .map_err(|e| format!("{}: {e}", i18n::tr("写入 plist 失败", "Failed to write plist")))?;
+        std::fs::write(&plist_path, plist_content).map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("写入 plist 失败", "Failed to write plist")
+            )
+        })?;
     } else {
         if plist_path.exists() {
-            std::fs::remove_file(&plist_path)
-                .map_err(|e| format!("{}: {e}", i18n::tr("删除 plist 失败", "Failed to delete plist")))?;
+            std::fs::remove_file(&plist_path).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    i18n::tr("删除 plist 失败", "Failed to delete plist")
+                )
+            })?;
         }
     }
 
@@ -367,12 +400,20 @@ pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), St
     }
 
     if let Some(parent) = new_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("{}: {e}", i18n::tr("创建目录失败", "Failed to create directory")))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "{}: {e}",
+                i18n::tr("创建目录失败", "Failed to create directory")
+            )
+        })?;
     }
 
-    std::fs::copy(old_path, new_path)
-        .map_err(|e| format!("{}: {e}", i18n::tr("复制数据库失败", "Failed to copy database")))?;
+    std::fs::copy(old_path, new_path).map_err(|e| {
+        format!(
+            "{}: {e}",
+            i18n::tr("复制数据库失败", "Failed to copy database")
+        )
+    })?;
 
     Ok(())
 }

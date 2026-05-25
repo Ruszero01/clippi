@@ -2,7 +2,7 @@
 
 slint::include_modules!();
 
-use crate::core::frontend::{DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT};
+use crate::core::frontend::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH};
 use slint::{ComponentHandle, LogicalSize};
 
 mod app;
@@ -55,8 +55,7 @@ fn main() {
             .with_default_menu_bar(false)
             .build()
             .expect("Failed to create Slint backend");
-        slint::platform::set_platform(Box::new(backend))
-            .expect("Failed to set Slint platform");
+        slint::platform::set_platform(Box::new(backend)).expect("Failed to set Slint platform");
     }
 
     // Load settings early so we can initialize logging before UI setup
@@ -91,13 +90,15 @@ fn main() {
     // Show window first to initialize layout, then apply physical-pixel sizing
     // to prevent DPI-scaling from inflating the window (logical px * scale factor).
     // This runs before the event loop, so no visible flash occurs.
-    // When silent_start is enabled, skip showing the window entirely — avoids
-    // creating GPU textures just to immediately hide the window.
+    // When silent_start is enabled, skip showing the window entirely.
     if !slint_app.get_silent_start() {
         #[cfg(target_os = "macos")]
         {
             slint_app.window().show().unwrap();
-            slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+            slint_app.window().set_size(LogicalSize::new(
+                DEFAULT_WINDOW_WIDTH,
+                DEFAULT_WINDOW_HEIGHT,
+            ));
             let mtm = objc2::MainThreadMarker::new().unwrap();
             let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             ns_app.activate();
@@ -105,7 +106,10 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         {
             slint_app.window().show().unwrap();
-            slint_app.window().set_size(LogicalSize::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+            slint_app.window().set_size(LogicalSize::new(
+                DEFAULT_WINDOW_WIDTH,
+                DEFAULT_WINDOW_HEIGHT,
+            ));
         }
     }
 

@@ -3,25 +3,27 @@
 //! Uses NSWorkspace polling for macOS focus monitoring
 
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::CloseHandle;
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC};
-#[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
-    PostThreadMessageW, TranslateMessage, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
-    WINEVENT_OUTOFCONTEXT, MSG, PM_REMOVE, WM_QUIT,
-};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::UI::Accessibility::{
+    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
+};
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHGFI_ICON, SHGFI_LARGEICON, SHFILEINFOW};
+use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
+    PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
+    WINEVENT_OUTOFCONTEXT, WM_QUIT,
+};
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -92,8 +94,9 @@ impl FocusWatcher {
 #[cfg(target_os = "windows")]
 pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
     let hook = unsafe {
-        let proc: WINEVENTPROC = Some(
-            std::mem::transmute::<*const (), unsafe extern "system" fn(
+        let proc: WINEVENTPROC = Some(std::mem::transmute::<
+            *const (),
+            unsafe extern "system" fn(
                 *mut std::ffi::c_void,
                 u32,
                 *mut std::ffi::c_void,
@@ -101,7 +104,8 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
                 i32,
                 u32,
                 u32,
-            )>(win_event_proc as *const ()));
+            ),
+        >(win_event_proc as *const ()));
         SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
@@ -140,7 +144,11 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
 
     let thread_id = rx.recv().unwrap_or(0);
 
-    Ok(FocusWatcher { hook, thread: Some(thread), thread_id })
+    Ok(FocusWatcher {
+        hook,
+        thread: Some(thread),
+        thread_id,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -192,7 +200,11 @@ pub fn get_last_non_clippi_window() -> Option<HWND> {
 #[cfg(target_os = "macos")]
 pub fn get_last_non_clippi_pid() -> Option<i32> {
     let pid = LAST_NON_CLIPPI_PID.load(Ordering::SeqCst);
-    if pid == 0 { None } else { Some(pid) }
+    if pid == 0 {
+        None
+    } else {
+        Some(pid)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -266,11 +278,14 @@ pub fn get_foreground_app_info() -> Option<ForegroundAppInfo> {
 fn windows_foreground_info() -> Option<ForegroundAppInfo> {
     unsafe {
         // Use the stored non-Clippi window; fall back to current foreground
-        let hwnd = get_last_non_clippi_window()
-            .or_else(|| {
-                let fg = GetForegroundWindow();
-                if fg.is_null() || is_clippi_window(fg) { None } else { Some(fg) }
-            })?;
+        let hwnd = get_last_non_clippi_window().or_else(|| {
+            let fg = GetForegroundWindow();
+            if fg.is_null() || is_clippi_window(fg) {
+                None
+            } else {
+                Some(fg)
+            }
+        })?;
 
         // Window title from stored buffer
         let window_title = if let Ok(buf) = LAST_FOREGROUND_TITLE.lock() {
@@ -365,8 +380,12 @@ fn macos_foreground_info() -> Option<ForegroundAppInfo> {
     }
 
     // Use generated methods (nil-safe via Option)
-    let app_name = app.localizedName().map(|n| n.to_string()).unwrap_or_default();
-    let icon_base64 = app.icon()
+    let app_name = app
+        .localizedName()
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    let icon_base64 = app
+        .icon()
         .and_then(|i| super::util::nsimage_to_base64_png(&i, 32))
         .unwrap_or_default();
 

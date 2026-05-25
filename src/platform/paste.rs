@@ -5,7 +5,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_V,
 };
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, IsWindow, SetForegroundWindow,
+};
 
 #[cfg(target_os = "windows")]
 const BASE_DELAY_MS: u64 = 50;
@@ -32,8 +34,8 @@ pub fn restore_paste_target() {
 /// actually in the foreground (up to `FOCUS_TIMEOUT_MS`).
 #[cfg(target_os = "windows")]
 pub fn paste_after_delay() {
-    let target_hwnd: Option<usize> = crate::platform::focus::get_last_non_clippi_window()
-        .map(|h| h as usize);
+    let target_hwnd: Option<usize> =
+        crate::platform::focus::get_last_non_clippi_window().map(|h| h as usize);
 
     std::thread::spawn(move || {
         wait_for_focus_and_send_ctrl_v(target_hwnd);
@@ -46,8 +48,8 @@ pub fn paste_after_delay() {
 /// Caller must call `restore_paste_target()` before invoking.
 #[cfg(target_os = "windows")]
 pub fn paste_sync() {
-    let target_hwnd: Option<usize> = crate::platform::focus::get_last_non_clippi_window()
-        .map(|h| h as usize);
+    let target_hwnd: Option<usize> =
+        crate::platform::focus::get_last_non_clippi_window().map(|h| h as usize);
     wait_for_focus_and_send_ctrl_v(target_hwnd);
 }
 
@@ -60,8 +62,8 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     if let Some(hwnd) = target_hwnd {
         let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
         if unsafe { IsWindow(hwnd) } != 0 {
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
             loop {
                 if unsafe { GetForegroundWindow() } == hwnd {
                     break;
@@ -166,8 +168,7 @@ pub fn paste_sync() {
 
 #[cfg(target_os = "macos")]
 fn wait_for_focus(pid: i32) {
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
     let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
     loop {
         let apps = workspace.runningApplications();
@@ -194,24 +195,28 @@ fn send_cmd_v() {
         wait_for_focus(pid);
     }
     let source = core_graphics::event_source::CGEventSource::new(
-        core_graphics::event_source::CGEventSourceStateID::CombinedSessionState
+        core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
     );
     let Ok(source) = source else { return };
 
     let cmd_flag = core_graphics::event::CGEventFlags::CGEventFlagCommand;
 
     // Cmd down
-    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true) {
+    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true)
+    {
         event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }
     // V down (with Cmd flag)
-    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true) {
+    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true)
+    {
         event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }
     // V up (with Cmd flag)
-    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false) {
+    if let Ok(event) =
+        core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false)
+    {
         event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }

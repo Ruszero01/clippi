@@ -46,17 +46,26 @@ impl Looper {
 
     /// Register clipboard service (keeps concrete type for special methods)
     pub fn set_clipboard_service(&mut self, service: ClipboardService) {
-        *self.clipboard_service.lock().expect("clipboard service lock poisoned") = Some(service);
+        *self
+            .clipboard_service
+            .lock()
+            .expect("clipboard service lock poisoned") = Some(service);
     }
 
     /// Register hotkey service (keeps concrete type for special methods)
     pub fn set_hotkey_service(&mut self, service: HotkeyService) {
-        *self.hotkey_service.lock().expect("hotkey service lock poisoned") = Some(service);
+        *self
+            .hotkey_service
+            .lock()
+            .expect("hotkey service lock poisoned") = Some(service);
     }
 
     /// Register focus service (keeps concrete type for special methods)
     pub fn set_focus_service(&mut self, service: FocusService) {
-        *self.focus_service.lock().expect("focus service lock poisoned") = Some(service);
+        *self
+            .focus_service
+            .lock()
+            .expect("focus service lock poisoned") = Some(service);
     }
 
     /// Try to access clipboard service
@@ -109,7 +118,10 @@ impl Looper {
 
     /// Register sync manager (keeps concrete type for special methods)
     pub fn set_sync_manager(&mut self, manager: SyncManager) {
-        *self.sync_manager.lock().expect("sync manager lock poisoned") = Some(manager);
+        *self
+            .sync_manager
+            .lock()
+            .expect("sync manager lock poisoned") = Some(manager);
     }
 
     /// Try to access sync manager
@@ -137,37 +149,54 @@ impl Looper {
         let fs = Arc::clone(&self.focus_service);
         let sm = Arc::clone(&self.sync_manager);
 
-        self.timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
-            for svc in &mut services {
-                svc.poll();
-            }
-            if let Some(ref mut cs) = *cs.lock().expect("clipboard service lock poisoned") {
-                cs.poll();
-            }
-            if let Some(ref mut hk) = *hk.lock().expect("hotkey service lock poisoned") {
-                hk.poll();
-            }
-            if let Some(ref mut fs) = *fs.lock().expect("focus service lock poisoned") {
-                fs.poll();
-            }
-            if let Some(ref mut sm) = *sm.lock().expect("sync manager lock poisoned") {
-                sm.poll();
-            }
-        });
+        self.timer
+            .start(TimerMode::Repeated, Duration::from_millis(200), move || {
+                for svc in &mut services {
+                    svc.poll();
+                }
+                if let Some(ref mut cs) = *cs.lock().expect("clipboard service lock poisoned") {
+                    cs.poll();
+                }
+                if let Some(ref mut hk) = *hk.lock().expect("hotkey service lock poisoned") {
+                    hk.poll();
+                }
+                if let Some(ref mut fs) = *fs.lock().expect("focus service lock poisoned") {
+                    fs.poll();
+                }
+                if let Some(ref mut sm) = *sm.lock().expect("sync manager lock poisoned") {
+                    sm.poll();
+                }
+            });
     }
 
     pub fn stop(&mut self) {
         self.timer.stop();
-        if let Some(ref mut cs) = *self.clipboard_service.lock().expect("clipboard service lock poisoned") {
+        if let Some(ref mut cs) = *self
+            .clipboard_service
+            .lock()
+            .expect("clipboard service lock poisoned")
+        {
             cs.stop();
         }
-        if let Some(ref mut hk) = *self.hotkey_service.lock().expect("hotkey service lock poisoned") {
+        if let Some(ref mut hk) = *self
+            .hotkey_service
+            .lock()
+            .expect("hotkey service lock poisoned")
+        {
             hk.stop();
         }
-        if let Some(ref mut fs) = *self.focus_service.lock().expect("focus service lock poisoned") {
+        if let Some(ref mut fs) = *self
+            .focus_service
+            .lock()
+            .expect("focus service lock poisoned")
+        {
             fs.stop();
         }
-        if let Some(ref mut sm) = *self.sync_manager.lock().expect("sync manager lock poisoned") {
+        if let Some(ref mut sm) = *self
+            .sync_manager
+            .lock()
+            .expect("sync manager lock poisoned")
+        {
             sm.stop();
         }
     }

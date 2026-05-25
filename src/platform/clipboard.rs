@@ -4,18 +4,20 @@
 //! Files > Image > Link > Color > RichText > PlainText
 
 use crate::core::color::detect_color;
-use crate::core::types::{is_url, is_path, is_image_extension, ClipboardItem, ContentType, FileData, FileInfo, RichData};
 use crate::core::paths::images_dir;
-use crate::platform::source;
+use crate::core::types::{
+    is_image_extension, is_path, is_url, ClipboardItem, ContentType, FileData, FileInfo, RichData,
+};
 use crate::platform::favicon;
+use crate::platform::source;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::common::RustImageData;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -67,16 +69,20 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         let files_result = ctx.get_files();
         if let Ok(files) = files_result {
             if !files.is_empty() {
-                let entries: Vec<FileInfo> = files.iter().map(|path| {
-                    let p = std::path::Path::new(path);
-                    FileInfo {
-                        name: p.file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| path.clone()),
-                        path: path.clone(),
-                        is_dir: p.is_dir(),
-                    }
-                }).collect();
+                let entries: Vec<FileInfo> = files
+                    .iter()
+                    .map(|path| {
+                        let p = std::path::Path::new(path);
+                        FileInfo {
+                            name: p
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| path.clone()),
+                            path: path.clone(),
+                            is_dir: p.is_dir(),
+                        }
+                    })
+                    .collect();
                 // Compute total file size in background thread (avoids blocking main thread poll)
                 let total_size: i64 = entries
                     .iter()
@@ -85,7 +91,8 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                     .sum::<u64>() as i64;
 
                 // Single image file → treat as Image type for thumbnail preview
-                if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path) {
+                if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path)
+                {
                     if let Ok(img) = RustImageData::from_path(&entries[0].path) {
                         if !img.is_empty() {
                             let (iw, ih) = img.get_size();
@@ -102,7 +109,10 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                                     let path = file_path.clone();
                                     let dir = img_dir.clone();
                                     std::thread::spawn(move || {
-                                        if png_bytes.save_to_path(path.to_str().unwrap_or("")).is_ok() {
+                                        if png_bytes
+                                            .save_to_path(path.to_str().unwrap_or(""))
+                                            .is_ok()
+                                        {
                                             generate_thumbnail(&path, &dir, hash);
                                         }
                                     });
@@ -114,7 +124,8 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                                     0,
                                     file_path.to_str().unwrap_or(""),
                                     hash,
-                                    iw, ih,
+                                    iw,
+                                    ih,
                                     source_info.as_ref(),
                                 ));
                             }
@@ -171,7 +182,8 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                     0,
                     file_path.to_str().unwrap_or(""),
                     hash,
-                    iw, ih,
+                    iw,
+                    ih,
                     source_info.as_ref(),
                 ));
             }
@@ -187,11 +199,23 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             // Prefetch favicon in background thread (non-critical)
             let domain = crate::core::types::url_to_domain(&text);
             let _ = favicon::ensure_favicon_cached(&domain);
-            return Some(ClipboardItem::new_text(0, &text, ContentType::Link, source_info.as_ref(), None));
+            return Some(ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::Link,
+                source_info.as_ref(),
+                None,
+            ));
         }
 
         if is_path(&text) {
-            return Some(ClipboardItem::new_text(0, &text, ContentType::Path, source_info.as_ref(), None));
+            return Some(ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::Path,
+                source_info.as_ref(),
+                None,
+            ));
         }
 
         // Color detection: hash the normalized color value for dedup
@@ -199,7 +223,12 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             let mut hasher = DefaultHasher::new();
             color.to_hex_normalized().hash(&mut hasher);
             let hash = hasher.finish();
-            return Some(ClipboardItem::new_color(0, &text, hash, source_info.as_ref()));
+            return Some(ClipboardItem::new_color(
+                0,
+                &text,
+                hash,
+                source_info.as_ref(),
+            ));
         }
 
         if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {
@@ -207,11 +236,23 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             let rtf = ctx.get_rich_text().ok();
             if html.is_some() || rtf.is_some() {
                 let rich = RichData { html, rtf };
-                return Some(ClipboardItem::new_text(0, &text, ContentType::RichText, source_info.as_ref(), Some(&rich)));
+                return Some(ClipboardItem::new_text(
+                    0,
+                    &text,
+                    ContentType::RichText,
+                    source_info.as_ref(),
+                    Some(&rich),
+                ));
             }
         }
 
-        return Some(ClipboardItem::new_text(0, &text, ContentType::PlainText, source_info.as_ref(), None));
+        return Some(ClipboardItem::new_text(
+            0,
+            &text,
+            ContentType::PlainText,
+            source_info.as_ref(),
+            None,
+        ));
     }
 
     None

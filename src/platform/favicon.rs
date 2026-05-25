@@ -10,12 +10,20 @@ fn sanitize_domain(domain: &str) -> String {
     let without_port = domain.split(':').next().unwrap_or(domain);
     without_port
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
 }
 
 fn cache_path(domain: &str) -> PathBuf {
-    images_dir().join("icons").join(format!("favicon_{}.png", sanitize_domain(domain)))
+    images_dir()
+        .join("icons")
+        .join(format!("favicon_{}.png", sanitize_domain(domain)))
 }
 
 /// Get the expected cache path for a domain (does not guarantee file exists).
@@ -37,10 +45,7 @@ pub fn ensure_favicon_cached(domain: &str) -> Option<String> {
     // Ensure icons directory exists
     let _ = std::fs::create_dir_all(path.parent()?);
 
-    let url = format!(
-        "https://www.google.com/s2/favicons?domain={}&sz=32",
-        domain
-    );
+    let url = format!("https://www.google.com/s2/favicons?domain={}&sz=32", domain);
 
     match ureq::get(&url).call() {
         Ok(response) => {

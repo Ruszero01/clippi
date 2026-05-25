@@ -14,11 +14,7 @@ pub fn is_clippi_foreground() -> bool {
     }
     let mut buffer: [u16; 256] = [0; 256];
     let len = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(
-            fg,
-            buffer.as_mut_ptr(),
-            256,
-        )
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(fg, buffer.as_mut_ptr(), 256)
     };
     if len > 0 {
         let fg_title = String::from_utf16_lossy(&buffer[..len as usize]);

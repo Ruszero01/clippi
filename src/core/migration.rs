@@ -72,7 +72,11 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
 
     for migration in DB_MIGRATIONS {
         if migration.version > current {
-            log::info!("[db] migration v{} — {}", migration.version, migration.description);
+            log::info!(
+                "[db] migration v{} — {}",
+                migration.version,
+                migration.description
+            );
             if !migration.sql.is_empty() {
                 conn.execute_batch(migration.sql)?;
             }

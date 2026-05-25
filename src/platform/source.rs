@@ -13,7 +13,7 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHGFI_ICON, SHGFI_LARGEICON, SHFILEINFOW};
+    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 
     extern "system" {
         fn GetClipboardOwner() -> HWND;
@@ -41,12 +41,8 @@ mod windows_impl {
             }
             let mut buf = [0u16; 260];
             let mut len = buf.len() as u32;
-            let result = QueryFullProcessImageNameW(
-                process,
-                PROCESS_NAME_WIN32,
-                buf.as_mut_ptr(),
-                &mut len,
-            );
+            let result =
+                QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
             CloseHandle(process);
             if result == 0 {
                 return None;
@@ -114,11 +110,13 @@ mod macos_impl {
         }
 
         // Use generated methods (nil-safe via Option)
-        let app_name = app.localizedName()
+        let app_name = app
+            .localizedName()
             .map(|n| n.to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| i18n::tr("未知应用", "Unknown app").to_string());
-        let icon_base64 = app.icon()
+        let icon_base64 = app
+            .icon()
             .and_then(|i| nsimage_to_base64_png(&i, 32))
             .unwrap_or_default();
 

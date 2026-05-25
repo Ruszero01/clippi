@@ -5,25 +5,24 @@ use crate::core::db::Database;
 use crate::core::frontend::{Frontend, PositionMode};
 use crate::core::i18n;
 use crate::core::settings::{
-    is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process,
-    AppSettings,
+    is_system_dark_mode, migrate_database, set_auto_start, spawn_new_process, AppSettings,
 };
 use crate::core::types::{ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
+use crate::platform::hotkey::create_hotkey_listener;
 use crate::platform::monitor::get_cursor_pos;
 use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
-use crate::platform::hotkey::create_hotkey_listener;
 use crate::services::clipboard::ClipboardService;
 use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::sync::SyncManager;
 use crate::services::tray::TrayService;
 use crate::App;
-use clipboard_rs::{Clipboard, ClipboardContext, ClipboardContent};
+use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use slint::{ComponentHandle, LogicalSize, SharedString};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Pre-cloned shared state for callback closures.
 /// All fields are cheap to clone (Arc or Weak).
@@ -65,7 +64,11 @@ impl AppController {
         let db = Arc::new(Mutex::new(Database::open(db_path.to_str().unwrap())?));
         let needs_reload_flag = Arc::new(AtomicBool::new(false));
         let needs_release_flag = Arc::new(AtomicBool::new(false));
-        let mut frontend = Frontend::new(slint_app, needs_reload_flag.clone(), needs_release_flag.clone());
+        let mut frontend = Frontend::new(
+            slint_app,
+            needs_reload_flag.clone(),
+            needs_release_flag.clone(),
+        );
         frontend.set_position_mode(PositionMode::from_str(&settings.window_position_mode));
         frontend.set_saved_position(settings.saved_window_x, settings.saved_window_y);
         frontend.set_saved_size(settings.saved_window_width, settings.saved_window_height);
@@ -102,7 +105,6 @@ impl AppController {
             needs_reload_flag.clone(),
         );
         // Load initial data and apply settings
-        clipboard_service.load_initial();
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
         clipboard_service.set_copy_as_plain_text(copy_as_plain_text_setting);
         clipboard_service.set_max_items(max_items_setting);
@@ -114,11 +116,8 @@ impl AppController {
         let foreground_app_name = crate::services::focus::shared_foreground_app_name();
 
         // Create hotkey service
-        let mut hotkey_service = HotkeyService::new(
-            frontend.clone(),
-            app.clone(),
-            foreground_app_name.clone(),
-        );
+        let mut hotkey_service =
+            HotkeyService::new(frontend.clone(), app.clone(), foreground_app_name.clone());
         if let Ok(h) = create_hotkey_listener(&hotkey_str) {
             hotkey_service.set_hotkey(h);
         }
@@ -131,16 +130,13 @@ impl AppController {
         let tray_service = TrayService::new(frontend.clone(), restart_requested.clone());
 
         // Create focus service
-        let mut focus_service = match FocusService::new(
-            frontend.clone(),
-            app.clone(),
-            foreground_app_name,
-        ) {
-            Ok(fs) => fs,
-            Err(e) => {
-                return Err(e.into());
-            }
-        };
+        let mut focus_service =
+            match FocusService::new(frontend.clone(), app.clone(), foreground_app_name) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    return Err(e.into());
+                }
+            };
         // Apply initial focus settings
         focus_service.set_auto_hide(auto_hide_setting);
 
@@ -228,7 +224,9 @@ impl AppController {
     pub fn prepare_restart(&self) {
         let _ = self.db.lock().expect("db lock").checkpoint();
         self.shared_settings.lock().expect("settings lock").save();
-        let _ = self.looper.try_with_hotkey_service(|hk| hk.unregister_hotkey());
+        let _ = self
+            .looper
+            .try_with_hotkey_service(|hk| hk.unregister_hotkey());
     }
 
     pub fn restart_flag(&self) -> Arc<AtomicBool> {
@@ -251,10 +249,7 @@ impl AppController {
 
     // ── Window callbacks: move, resize, copy, paste, close ──
 
-    fn bind_window_callbacks(
-        slint_app: &App,
-        ctx: &CallbackCtx,
-    ) {
+    fn bind_window_callbacks(slint_app: &App, ctx: &CallbackCtx) {
         let ctx_move = ctx.clone();
         slint_app.on_move_window(move |dx, dy| {
             if let Ok(fe) = ctx_move.frontend.lock() {
@@ -284,7 +279,11 @@ impl AppController {
         slint_app.on_copy_item(move |id| {
             if let Ok(db) = ctx_copy.db.lock() {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                    write_item_to_clipboard(&item, ctx_copy.copy_as_plain_text.load(Ordering::Relaxed), &ctx_copy.shared);
+                    write_item_to_clipboard(
+                        &item,
+                        ctx_copy.copy_as_plain_text.load(Ordering::Relaxed),
+                        &ctx_copy.shared,
+                    );
                 }
             }
             let _ = looper_for_copy.try_with_clipboard_service(|cs| {
@@ -323,7 +322,11 @@ impl AppController {
                         {
                             use windows_sys::Win32::UI::Shell::ShellExecuteW;
                             use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
-                            let path_utf16: Vec<u16> = item.image_path.encode_utf16().chain(std::iter::once(0)).collect();
+                            let path_utf16: Vec<u16> = item
+                                .image_path
+                                .encode_utf16()
+                                .chain(std::iter::once(0))
+                                .collect();
                             let operation: Vec<u16> = "open\0".encode_utf16().collect();
                             unsafe {
                                 ShellExecuteW(
@@ -363,7 +366,8 @@ impl AppController {
                             let target = item.full_text.clone();
                             #[cfg(target_os = "windows")]
                             {
-                                let target_utf16: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+                                let target_utf16: Vec<u16> =
+                                    target.encode_utf16().chain(std::iter::once(0)).collect();
                                 unsafe {
                                     use windows_sys::Win32::UI::Shell::ShellExecuteW;
                                     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
@@ -378,9 +382,13 @@ impl AppController {
                                 }
                             }
                             #[cfg(target_os = "macos")]
-                            { let _ = std::process::Command::new("open").arg(&target).spawn(); }
+                            {
+                                let _ = std::process::Command::new("open").arg(&target).spawn();
+                            }
                             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-                            { let _ = std::process::Command::new("xdg-open").arg(&target).spawn(); }
+                            {
+                                let _ = std::process::Command::new("xdg-open").arg(&target).spawn();
+                            }
                         }
                         ContentType::File => {
                             let file_data = FileData::from_json(&item.file_data);
@@ -388,14 +396,18 @@ impl AppController {
                                 #[cfg(target_os = "windows")]
                                 {
                                     let arg = format!("/select,\"{}\"", first.path);
-                                    let arg_utf16: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
+                                    let arg_utf16: Vec<u16> =
+                                        arg.encode_utf16().chain(std::iter::once(0)).collect();
                                     unsafe {
                                         use windows_sys::Win32::UI::Shell::ShellExecuteW;
                                         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
                                         ShellExecuteW(
                                             std::ptr::null_mut(),
                                             "open\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
-                                            "explorer\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
+                                            "explorer\0"
+                                                .encode_utf16()
+                                                .collect::<Vec<u16>>()
+                                                .as_ptr(),
                                             arg_utf16.as_ptr(),
                                             std::ptr::null(),
                                             SW_SHOW,
@@ -413,7 +425,8 @@ impl AppController {
                                 {
                                     let parent = std::path::Path::new(&first.path).parent();
                                     if let Some(p) = parent {
-                                        let _ = std::process::Command::new("xdg-open").arg(p).spawn();
+                                        let _ =
+                                            std::process::Command::new("xdg-open").arg(p).spawn();
                                     }
                                 }
                             }
@@ -426,11 +439,8 @@ impl AppController {
 
         let ctx_close = ctx.clone();
         slint_app.on_close_window(move || {
-            if let Some(app) = ctx_close.app.upgrade() {
-                app.set_pinned(false);
-            }
             if let Ok(mut fe) = ctx_close.frontend.lock() {
-                fe.hide(); // sets needs_release internally
+                fe.hide(); // handles editing-state cleanup, needs_release, etc.
                 let mut s = ctx_close.settings.lock().expect("settings lock poisoned");
                 fe.apply_saved_position_to_settings(&mut s);
                 s.save();
@@ -607,9 +617,16 @@ impl AppController {
 
             if let Some(new_path) = result {
                 if let Some(app) = c.app.upgrade() {
-                    let old_path = c.settings.lock().expect("settings lock poisoned").resolve_db_path();
+                    let old_path = c
+                        .settings
+                        .lock()
+                        .expect("settings lock poisoned")
+                        .resolve_db_path();
                     if let Err(e) = c.db.lock().expect("db lock").checkpoint() {
-                        app.set_settings_error(SharedString::from(format!("{}: {e}", i18n::tr("准备迁移失败", "Migration preparation failed"))));
+                        app.set_settings_error(SharedString::from(format!(
+                            "{}: {e}",
+                            i18n::tr("准备迁移失败", "Migration preparation failed")
+                        )));
                         return;
                     }
                     match migrate_database(&old_path, &new_path) {
@@ -631,14 +648,21 @@ impl AppController {
 
         let c = ctx.clone();
         slint_app.on_reset_db_path(move || {
-            let old_path = c.settings.lock().expect("settings lock poisoned").resolve_db_path();
+            let old_path = c
+                .settings
+                .lock()
+                .expect("settings lock poisoned")
+                .resolve_db_path();
             let default_db_path = AppSettings::default().resolve_db_path();
             if old_path == default_db_path {
                 return;
             }
             if let Err(e) = c.db.lock().expect("db lock").checkpoint() {
                 if let Some(app) = c.app.upgrade() {
-                    app.set_settings_error(SharedString::from(format!("{}: {e}", i18n::tr("准备迁移失败", "Migration preparation failed"))));
+                    app.set_settings_error(SharedString::from(format!(
+                        "{}: {e}",
+                        i18n::tr("准备迁移失败", "Migration preparation failed")
+                    )));
                 }
                 return;
             }
@@ -712,7 +736,12 @@ impl AppController {
                 1 => "en",
                 _ => "zh_CN",
             };
-            let current = c.settings.lock().expect("settings lock poisoned").language.clone();
+            let current = c
+                .settings
+                .lock()
+                .expect("settings lock poisoned")
+                .language
+                .clone();
             if lang == current {
                 return;
             }
@@ -822,7 +851,10 @@ impl AppController {
                     let s = c.settings.lock().expect("settings lock poisoned");
                     if s.sync_backends.is_empty() {
                         app.set_toast_visible(false);
-                        app.set_toast_message(SharedString::from(i18n::tr("请先添加同步服务", "Please add a sync service first")));
+                        app.set_toast_message(SharedString::from(i18n::tr(
+                            "请先添加同步服务",
+                            "Please add a sync service first",
+                        )));
                         app.set_toast_visible(true);
                         return;
                     }
@@ -871,11 +903,13 @@ impl AppController {
         });
 
         let c = ctx.clone();
-        slint_app.on_save_sync_backend(move |id: SharedString, name: SharedString, path: SharedString| {
-            let _ = c.looper.try_with_sync_manager(|sm| {
-                sm.edit_backend(&id, &name, &path);
-            });
-        });
+        slint_app.on_save_sync_backend(
+            move |id: SharedString, name: SharedString, path: SharedString| {
+                let _ = c.looper.try_with_sync_manager(|sm| {
+                    sm.edit_backend(&id, &name, &path);
+                });
+            },
+        );
 
         let c = ctx.clone();
         slint_app.on_remove_sync_backend(move |id: SharedString| {
@@ -1000,7 +1034,9 @@ impl AppController {
                     app.set_filter_image(cs.is_filter_active("image"));
                     app.set_filter_link(cs.is_filter_active("link") || cs.is_filter_active("path"));
                     app.set_filter_color(cs.is_filter_active("color"));
-                    app.set_filter_file(cs.is_filter_active("file") || cs.is_filter_active("image"));
+                    app.set_filter_file(
+                        cs.is_filter_active("file") || cs.is_filter_active("image"),
+                    );
                 }
             });
         });
@@ -1064,21 +1100,21 @@ impl AppController {
         let c = ctx.clone();
         slint_app.on_show_context_menu(move |id| {
             if let Some(app) = c.app.upgrade() {
-                let (is_color, is_hex, is_image, is_file, is_favorite) =
-                    if let Ok(db) = c.db.lock() {
-                        if let Ok(Some(item)) = db.get_by_id(id as i64) {
-                            let color = item.content_type == ContentType::Color;
-                            let hex = color && is_hex_format(&item.full_text);
-                            let img = item.content_type == ContentType::Image;
-                            let file = item.content_type == ContentType::File;
-                            let fav = item.is_favorite;
-                            (color, hex, img, file, fav)
-                        } else {
-                            (false, false, false, false, false)
-                        }
+                let (is_color, is_hex, is_image, is_file, is_favorite) = if let Ok(db) = c.db.lock()
+                {
+                    if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                        let color = item.content_type == ContentType::Color;
+                        let hex = color && is_hex_format(&item.full_text);
+                        let img = item.content_type == ContentType::Image;
+                        let file = item.content_type == ContentType::File;
+                        let fav = item.is_favorite;
+                        (color, hex, img, file, fav)
                     } else {
                         (false, false, false, false, false)
-                    };
+                    }
+                } else {
+                    (false, false, false, false, false)
+                };
 
                 let (cursor_x, cursor_y) = get_cursor_pos().unwrap_or((0, 0));
                 let pos = app.window().position();
@@ -1102,6 +1138,13 @@ impl AppController {
         slint_app.on_hide_context_menu(move || {
             if let Some(app) = c.app.upgrade() {
                 app.set_context_menu_visible(false);
+            }
+        });
+
+        let c = ctx.clone();
+        slint_app.on_dismiss_ui(move || {
+            if let Ok(fe) = c.frontend.lock() {
+                fe.dismiss_ui();
             }
         });
     }
@@ -1143,9 +1186,10 @@ impl AppController {
     fn bind_batch_callbacks(slint_app: &App, ctx: &CallbackCtx) {
         let c = ctx.clone();
         slint_app.on_batch_paste(move || {
-            let items = c.looper.try_with_clipboard_service(|cs| {
-                cs.get_selected_items()
-            }).unwrap_or_default();
+            let items = c
+                .looper
+                .try_with_clipboard_service(|cs| cs.get_selected_items())
+                .unwrap_or_default();
 
             if items.is_empty() {
                 return;
@@ -1247,14 +1291,21 @@ impl AppController {
         });
 
         let c = ctx.clone();
-        slint_app.on_update_tag(move |tag_id: i32, name: SharedString, color: slint::Color| {
-            let hex = format!("#{:02X}{:02X}{:02X}", color.red(), color.green(), color.blue());
-            let _ = c.looper.try_with_clipboard_service(|cs| {
-                cs.update_tag(tag_id as i64, name.as_str(), &hex);
-                cs.load_all_tags_for_filter();
-                cs.refresh_with_current_filter();
-            });
-        });
+        slint_app.on_update_tag(
+            move |tag_id: i32, name: SharedString, color: slint::Color| {
+                let hex = format!(
+                    "#{:02X}{:02X}{:02X}",
+                    color.red(),
+                    color.green(),
+                    color.blue()
+                );
+                let _ = c.looper.try_with_clipboard_service(|cs| {
+                    cs.update_tag(tag_id as i64, name.as_str(), &hex);
+                    cs.load_all_tags_for_filter();
+                    cs.refresh_with_current_filter();
+                });
+            },
+        );
 
         let c = ctx.clone();
         slint_app.on_delete_tag(move |tag_id: i32| {
@@ -1270,7 +1321,10 @@ impl AppController {
 
         let c = ctx.clone();
         slint_app.on_show_tag_picker(move |item_id: i32| {
-            let is_batch = c.app.upgrade().is_some_and(|app| app.get_context_menu_is_batch());
+            let is_batch = c
+                .app
+                .upgrade()
+                .is_some_and(|app| app.get_context_menu_is_batch());
             let _ = c.looper.try_with_clipboard_service(|cs| {
                 if is_batch {
                     cs.load_all_tags_for_batch_picker();
@@ -1411,7 +1465,9 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_auto_start(settings.auto_start);
     app.set_auto_hide(settings.auto_hide);
     app.set_sort_by_created(settings.sort_by_created);
-    app.set_db_path(SharedString::from(settings.resolve_db_path().to_string_lossy().to_string()));
+    app.set_db_path(SharedString::from(
+        settings.resolve_db_path().to_string_lossy().to_string(),
+    ));
     app.set_hotkey_display(SharedString::from(&settings.hotkey));
     app.set_position_mode(PositionMode::from_str(&settings.window_position_mode).to_int());
     app.set_card_height_mode(SharedString::from(&settings.card_height_mode));
@@ -1444,10 +1500,12 @@ fn write_item_to_clipboard(
             #[cfg(target_os = "windows")]
             {
                 use windows_sys::Win32::System::DataExchange::{
-                    OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData,
-                    RegisterClipboardFormatW,
+                    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW,
+                    SetClipboardData,
                 };
-                use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+                use windows_sys::Win32::System::Memory::{
+                    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+                };
 
                 let png_bytes = std::fs::read(&item.image_path).unwrap_or_default();
                 if !png_bytes.is_empty() {
@@ -1462,7 +1520,11 @@ fn write_item_to_clipboard(
                                 if !mem.is_null() {
                                     let ptr = GlobalLock(mem);
                                     if !ptr.is_null() {
-                                        std::ptr::copy_nonoverlapping(png_bytes.as_ptr(), ptr as *mut u8, png_bytes.len());
+                                        std::ptr::copy_nonoverlapping(
+                                            png_bytes.as_ptr(),
+                                            ptr as *mut u8,
+                                            png_bytes.len(),
+                                        );
                                         GlobalUnlock(mem);
                                         SetClipboardData(png_fmt as u32, mem);
                                     }
@@ -1477,7 +1539,7 @@ fn write_item_to_clipboard(
 
             #[cfg(not(target_os = "windows"))]
             {
-                use clipboard_rs::common::{RustImageData, RustImage};
+                use clipboard_rs::common::{RustImage, RustImageData};
                 if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
                     let _ = ctx.set_image(img_data);
                     pushed = true;
@@ -1517,7 +1579,11 @@ fn write_item_to_clipboard(
 /// For each non-first item, a literal `\n` is pasted first to move the cursor to a
 /// new line, then the actual item is written and pasted. This works for all content
 /// types (text, rich text, images) because the newline is a separate paste operation.
-fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_flag: bool, shared: &ClipboardShared) {
+fn batch_paste_sequential(
+    items: &[crate::core::types::ClipboardItem],
+    plain_flag: bool,
+    shared: &ClipboardShared,
+) {
     let n = items.len();
     for (i, item) in items.iter().enumerate() {
         // For non-first items, paste a newline to move to the next line.
@@ -1550,7 +1616,10 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
         if item.content_type == ContentType::Image {
             if let Some(size) = expected_img_size {
                 if !verify_clipboard_image(size, 300) {
-                    log::warn!("batch_paste: image clipboard verification failed for item {}", item.id);
+                    log::warn!(
+                        "batch_paste: image clipboard verification failed for item {}",
+                        item.id
+                    );
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             } else {
@@ -1558,7 +1627,10 @@ fn batch_paste_sequential(items: &[crate::core::types::ClipboardItem], plain_fla
             }
         } else if item.content_type != ContentType::File {
             if !verify_clipboard_content(&expected, 300) {
-                log::warn!("batch_paste: clipboard verification timed out for item {}", item.id);
+                log::warn!(
+                    "batch_paste: clipboard verification timed out for item {}",
+                    item.id
+                );
             }
         } else {
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1609,7 +1681,9 @@ fn verify_clipboard_content(expected: &str, timeout_ms: u64) -> bool {
 /// The caller should have already checkpointed WAL and saved any pending settings.
 fn do_restart(ctx: &CallbackCtx) {
     ctx.settings.lock().expect("settings lock").save();
-    let _ = ctx.looper.try_with_hotkey_service(|hk| hk.unregister_hotkey());
+    let _ = ctx
+        .looper
+        .try_with_hotkey_service(|hk| hk.unregister_hotkey());
     spawn_new_process();
     slint::quit_event_loop().ok();
 }
