@@ -142,7 +142,7 @@ pub fn restore_paste_target() {
                 // Use raw value to avoid deprecated NSApplicationActivateIgnoringOtherApps.
                 // This flag is a no-op on macOS 14+ but still required for correct
                 // activation behavior on macOS 12–13 (our minimum is 12.0).
-                let options = 1 << 1; // NSApplicationActivateIgnoringOtherApps
+                let options: u64 = 1 << 1; // NSApplicationActivateIgnoringOtherApps
                 unsafe {
                     let _: bool = objc2::msg_send![&app, activateWithOptions: options];
                 }
