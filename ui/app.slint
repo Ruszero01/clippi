@@ -6,6 +6,7 @@ import { ContextMenu } from "ContextMenu.slint";
 import { TagFilterPanel } from "TagFilterPanel.slint";
 import { TagPickerPanel } from "TagPickerPanel.slint";
 import { AddBackendPanel } from "AddBackendPanel.slint";
+import { SideTagBar } from "SideTagBar.slint";
 
 import { Palette } from "std-widgets.slint";
 import { TagPanelTheme } from "theme.slint";
@@ -13,16 +14,18 @@ import { TagPanelTheme } from "theme.slint";
 export component App inherits Window {
     icon: @image-url("../assets/LOGO.ico");
     title: "Clippi";
-    preferred-width: 320px;
+    preferred-width: 380px;
     preferred-height: 480px;
     no-frame: true;
     always-on-top: pinned;
     background: transparent;
     forward-focus: key-handler;
 
-    // 窗口最小尺寸
-    min-width: 320px;
+    // 窗口最小/最大尺寸
+    min-width: 380px;
     min-height: 480px;
+    max-width: 1200px;
+    max-height: 1200px;
 
     in property <[ClipboardEntry]> clipboard-items: [];
     in property <int> item-count: 0;
@@ -124,6 +127,7 @@ export component App inherits Window {
     in-out property <int> tag-picker-item-id: -1;
     in-out property <bool> tag-picker-is-batch: false;
     in-out property <[TagItem]> all-tags: [];
+    in property <[TagItem]> sidebar-tags: [];
 
     // 双击检测
     in-out property <int> last-clicked-id: -1;
@@ -206,6 +210,7 @@ export component App inherits Window {
     callback show-tag-picker(int);
     callback hide-tag-picker();
     callback dismiss-ui();
+    callback toggle-pin-tag(int);
     callback create-and-add-tag(int, string);
     callback toggle-item-tag(int, int);
     callback batch-add-tag(int);
@@ -257,7 +262,21 @@ export component App inherits Window {
             reject
         }
 
+        // ═══════════ 侧边标签栏 (z-order: 下层) ═══════════
+        sidebar := SideTagBar {
+            x: 0px;
+            y: 84px;
+            height: parent.height - 84px;
+            dark-mode: root.dark-mode;
+            sidebar-tags: root.sidebar-tags;
+
+            toggle-tag-filter(id) => { root.toggle-tag-filter(id); }
+            toggle-pin(id) => { root.toggle-pin-tag(id); }
+        }
+
         Rectangle {
+            x: 60px;
+            width: parent.width - 60px;
             border-radius: 12px;
             background: bg;
             border-width: 1px;
@@ -573,6 +592,28 @@ export component App inherits Window {
                     toggle-sync-backend(id) => { root.toggle-sync-backend(id); }
                     edit-sync-backend(id) => { root.edit-sync-backend(id); }
                 }
+            }
+        }
+
+        // ========== 侧边标签悬浮提示 (z-order 在主面板之上) ==========
+        if sidebar.hovered-tag-name != "" : Rectangle {
+            x: 10px;
+            y: sidebar.y + sidebar.hovered-tag-y;
+            height: 22px;
+            width: tip-text.preferred-width + 16px;
+            border-radius: 6px;
+            background: dark-mode ? #3a3b3df0 : #fffffff0;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000018;
+
+            tip-text := Text {
+                text: sidebar.hovered-tag-name;
+                font-size: 11px;
+                color: dark-mode ? #eaebec : #5a5d70;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                x: 8px;
+                width: parent.width - 16px;
             }
         }
 

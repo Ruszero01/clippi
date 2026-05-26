@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Default window size (width, height) in logical pixels.
-pub const DEFAULT_WINDOW_WIDTH: f32 = 320.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 380.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -115,28 +115,36 @@ impl Frontend {
             // Windows: GetMonitorInfo / GetCursorPos already return physical
             // pixels matching Slint, so no conversion is needed.
             #[cfg(target_os = "macos")]
-            let (win_w, win_h) = {
+            let (win_w, win_h, sidebar_offset) = {
                 let scale = window.scale_factor();
                 (
                     (size.width as f32 / scale) as i32,
                     (size.height as f32 / scale) as i32,
+                    60, // sidebar is 60 logical px; macOS coords are logical
                 )
             };
             #[cfg(not(target_os = "macos"))]
-            let (win_w, win_h) = (size.width as i32, size.height as i32);
+            let (win_w, win_h, sidebar_offset) = {
+                let scale = window.scale_factor();
+                (
+                    size.width as i32,
+                    size.height as i32,
+                    (60.0 * scale) as i32, // sidebar 60 logical → physical px
+                )
+            };
 
-            if let Some(pos) = self.calculate_position(win_w, win_h) {
+            if let Some(pos) = self.calculate_position(win_w, win_h, sidebar_offset) {
                 window.set_position(pos);
             }
         }
     }
 
-    fn calculate_position(&self, win_w: i32, win_h: i32) -> Option<PhysicalPosition> {
+    fn calculate_position(&self, win_w: i32, win_h: i32, sidebar_offset: i32) -> Option<PhysicalPosition> {
         // mut used on macOS for logical-to-physical conversion below
         #[allow(unused_mut)]
         let (mut x, mut y) = match self.position_mode {
             PositionMode::Center => self.calc_center(win_w, win_h),
-            PositionMode::FollowMouse => self.calc_follow_mouse(win_w, win_h),
+            PositionMode::FollowMouse => self.calc_follow_mouse(win_w, win_h, sidebar_offset),
             PositionMode::Remember => self.calc_remember(win_w, win_h),
         }?;
 
@@ -160,10 +168,11 @@ impl Frontend {
         Some((x, y))
     }
 
-    fn calc_follow_mouse(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
+    fn calc_follow_mouse(&self, win_w: i32, win_h: i32, sidebar_offset: i32) -> Option<(i32, i32)> {
         let (cx, cy) = monitor::get_cursor_pos()?;
         let area = monitor::get_monitor_work_area(cx, cy)?;
-        Some(clamp_to_work_area(cx, cy, win_w, win_h, &area))
+        // Offset by sidebar width so the main panel aligns with the cursor
+        Some(clamp_to_work_area(cx - sidebar_offset, cy, win_w, win_h, &area))
     }
 
     fn calc_remember(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
@@ -282,8 +291,8 @@ impl Frontend {
     }
 
     /// Dismiss all floating UI state: context menu, tag panels, note editing,
-    /// pin, selections, edit/settings view. Called by `hide()` and can also be
-    /// invoked directly (e.g. clicking blank area) without hiding the window.
+    /// pin, selections. Called by `hide()` and can also be invoked directly
+    /// (e.g. clicking blank area) without hiding the window.
     pub fn dismiss_ui(&self) {
         if let Some(app) = self.app.upgrade() {
             app.set_context_menu_visible(false);
@@ -292,6 +301,13 @@ impl Frontend {
             app.set_add_backend_panel_visible(false);
             app.set_editing_note_id(-1);
             app.set_pinned(false);
+        }
+    }
+
+    /// Dismiss UI and switch back to clipboard view (blank-click dismiss).
+    pub fn dismiss_ui_to_clipboard(&self) {
+        self.dismiss_ui();
+        if let Some(app) = self.app.upgrade() {
             app.set_current_view(slint::SharedString::from("clipboard"));
         }
     }

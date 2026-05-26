@@ -85,6 +85,8 @@ pub struct AppSettings {
     pub hotkey_blacklist: Vec<String>, // 快捷键黑名单应用名列表
     #[serde(default)]
     pub language: String, // "zh_CN" or "en", empty = follow system
+    #[serde(default)]
+    pub pinned_tag_ids: Vec<i64>, // 固定在侧边栏的标签 ID
 }
 
 fn default_sync_interval() -> u64 {
@@ -122,6 +124,7 @@ impl Default for AppSettings {
             max_items: 0,
             hotkey_blacklist: Vec::new(),
             language: String::new(),
+            pinned_tag_ids: Vec::new(),
         }
     }
 }

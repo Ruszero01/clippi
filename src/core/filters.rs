@@ -17,7 +17,7 @@ pub struct ClipboardFilters {
     /// Favorites filter: true = show only favorites
     favorites_only: bool,
     /// Tag filter: empty = no tag filter, non-empty = item must have at least one of these tags
-    tag_ids: Vec<i64>,
+    pub tag_ids: Vec<i64>,
     /// Tag match mode: false = OR (any selected tag), true = AND (all selected tags)
     tag_match_all: bool,
 }

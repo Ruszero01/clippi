@@ -13,10 +13,11 @@ use crate::App;
 use crate::ClipboardEntry;
 use base64::Engine;
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct ClipboardService {
@@ -27,6 +28,10 @@ pub struct ClipboardService {
     sort_by_created: bool,
     copy_as_plain_text: bool,
     filters: ClipboardFilters,
+    pinned_tag_ids: Vec<i64>,
+    sidebar_model: Rc<VecModel<crate::TagItem>>,
+    unchecked_unpinned_since: HashMap<i64, Instant>,
+    pending_animate_tags: HashSet<i64>,
     selected_ids: Vec<i32>,
     anchor_id: i32,
     sync_dirty: Arc<AtomicBool>,
@@ -49,14 +54,19 @@ impl ClipboardService {
         needs_reload: Arc<AtomicBool>,
     ) -> Self {
         let model: Rc<VecModel<ClipboardEntry>> = Rc::new(VecModel::default());
+        let sidebar_model: Rc<VecModel<crate::TagItem>> = Rc::new(VecModel::default());
         let service = Self {
             shared,
             db,
-            app,
+            app: app.clone(),
             model: model.clone(),
             sort_by_created: false,
             copy_as_plain_text: false,
             filters: ClipboardFilters::default(),
+            pinned_tag_ids: Vec::new(),
+            sidebar_model: sidebar_model.clone(),
+            unchecked_unpinned_since: HashMap::new(),
+            pending_animate_tags: HashSet::new(),
             selected_ids: Vec::new(),
             anchor_id: -1,
             sync_dirty,
@@ -69,6 +79,7 @@ impl ClipboardService {
         };
         if let Some(app) = service.app.upgrade() {
             app.set_clipboard_items(ModelRc::from(model));
+            app.set_sidebar_tags(ModelRc::from(sidebar_model));
             app.set_item_count(0);
         }
         service
@@ -201,6 +212,10 @@ impl ClipboardService {
         }
     }
 
+    pub fn set_pinned_tag_ids(&mut self, ids: Vec<i64>) {
+        self.pinned_tag_ids = ids;
+    }
+
     /// Prune excess non-favorite items from DB and sync model.
     fn prune_and_clean_model(&mut self) {
         if self.max_items == 0 {
@@ -296,6 +311,122 @@ impl ClipboardService {
         self.filters.is_tag_match_all()
     }
 
+    /// Build and push the sidebar-tags model.
+    /// Pinned tags come first (in pin order), then active-but-unpinned.
+    /// Unpinned tags that just became unchecked stay briefly so the slide-out
+    /// animation plays before they disappear.
+    pub fn refresh_sidebar_tags(&mut self, pinned_tag_ids: &[i64]) {
+        self.pinned_tag_ids = pinned_tag_ids.to_vec();
+        let tags = self
+            .db
+            .lock()
+            .expect("db lock poisoned")
+            .get_all_tags()
+            .unwrap_or_default();
+        let active_ids = &self.filters.tag_ids;
+        let now = Instant::now();
+
+        // Pinned first (in pin order), then active non-pinned
+        let mut ordered: Vec<&crate::core::types::TagInfo> = Vec::new();
+        for pid in pinned_tag_ids {
+            if let Some(t) = tags.iter().find(|t| t.id == *pid) {
+                ordered.push(t);
+            }
+        }
+        for t in &tags {
+            if active_ids.contains(&t.id) && !pinned_tag_ids.contains(&t.id) {
+                ordered.push(t);
+            }
+        }
+
+        // Track unpinned tags that just became unchecked — they stay in the
+        // model briefly so the slide-out animation can play.
+        for t in &tags {
+            if !active_ids.contains(&t.id) && !pinned_tag_ids.contains(&t.id) {
+                if self.unchecked_unpinned_since.contains_key(&t.id) {
+                    // Still pending removal — keep it in the model
+                    ordered.push(t);
+                } else if self.sidebar_model.iter().any(|item| item.id == t.id as i32) {
+                    // Just unchecked: start the removal timer
+                    self.unchecked_unpinned_since.insert(t.id, now);
+                    ordered.push(t);
+                }
+            }
+        }
+
+        // Clean up tracking for tags that are no longer in pending state
+        self.unchecked_unpinned_since.retain(|id, _| {
+            !active_ids.contains(id) && !pinned_tag_ids.contains(id)
+        });
+
+        let desired: Vec<crate::TagItem> = ordered
+            .iter()
+            .map(|t| crate::TagItem {
+                id: t.id as i32,
+                name: slint::SharedString::from(t.name.clone()),
+                color: hex_to_slint_color(&t.color),
+                checked: active_ids.contains(&t.id),
+                pinned: pinned_tag_ids.contains(&t.id),
+            })
+            .collect();
+
+        // Update VecModel in-place so Slint preserves elements and animations fire.
+        let current_len = self.sidebar_model.row_count();
+
+        // Clear pending animations for tags no longer in the desired set
+        let desired_ids: HashSet<i64> = desired.iter().map(|t| t.id as i64).collect();
+        self.pending_animate_tags.retain(|id| desired_ids.contains(id));
+
+        for (i, tag) in desired.iter().enumerate() {
+            if i < current_len {
+                self.sidebar_model.set_row_data(i, tag.clone());
+            } else {
+                // New tag: push collapsed so the slide-in animation plays
+                let mut item = tag.clone();
+                if item.checked {
+                    item.checked = false;
+                    self.pending_animate_tags.insert(item.id as i64);
+                }
+                self.sidebar_model.push(item);
+            }
+        }
+        // Remove excess entries
+        while self.sidebar_model.row_count() > desired.len() {
+            self.sidebar_model.remove(desired.len());
+        }
+    }
+
+    /// Remove unpinned unchecked tags whose slide-out animation has finished.
+    fn cleanup_expired_sidebar_tags(&mut self) {
+        let cutoff = Instant::now() - std::time::Duration::from_millis(300);
+        let expired: Vec<i64> = self
+            .unchecked_unpinned_since
+            .iter()
+            .filter(|(_, t)| **t < cutoff)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &expired {
+            self.unchecked_unpinned_since.remove(id);
+        }
+        if expired.is_empty() {
+            return;
+        }
+        // Remove directly from model — don't call refresh_sidebar_tags which
+        // would re-insert the tag (it's still in the model but no longer tracked).
+        let mut i = 0;
+        while i < self.sidebar_model.row_count() {
+            if let Some(item) = self.sidebar_model.row_data(i) {
+                if expired.contains(&(item.id as i64)) {
+                    self.sidebar_model.remove(i);
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// Clear all tag filters and full reload
     /// Load all tags into the shared model with filter-checked state
     pub fn load_all_tags_for_filter(&self) {
@@ -312,6 +443,7 @@ impl ClipboardService {
                 name: slint::SharedString::from(t.name.clone()),
                 color: hex_to_slint_color(&t.color),
                 checked: self.filters.is_tag_active(t.id),
+                pinned: false,
             })
             .collect();
         if let Some(app) = self.app.upgrade() {
@@ -348,6 +480,7 @@ impl ClipboardService {
                 name: slint::SharedString::from(t.name.clone()),
                 color: hex_to_slint_color(&t.color),
                 checked: item_tag_ids.contains(&t.id),
+                pinned: false,
             })
             .collect();
         if let Some(app) = self.app.upgrade() {
@@ -386,6 +519,7 @@ impl ClipboardService {
                     name: slint::SharedString::from(t.name.clone()),
                     color: hex_to_slint_color(&t.color),
                     checked: count == total && total > 0,
+                    pinned: false,
                 }
             })
             .collect();
@@ -894,7 +1028,28 @@ impl Pollable for ClipboardService {
         // non-empty but incomplete).
         if self.needs_reload.swap(false, Ordering::SeqCst) {
             self.refresh_with_current_filter();
+            let pinned = self.pinned_tag_ids.clone();
+            self.refresh_sidebar_tags(&pinned);
         }
+
+        // Settle pending tag animations: tags were pushed collapsed so the
+        // slide-in animation plays. Now set their real checked state.
+        if !self.pending_animate_tags.is_empty() {
+            let active_ids = &self.filters.tag_ids;
+            for i in 0..self.sidebar_model.row_count() {
+                if let Some(mut item) = self.sidebar_model.row_data(i) {
+                    let tid = item.id as i64;
+                    if self.pending_animate_tags.remove(&tid) {
+                        item.checked = active_ids.contains(&tid);
+                        self.sidebar_model.set_row_data(i, item);
+                    }
+                }
+            }
+            self.pending_animate_tags.clear();
+        }
+
+        // Clean up unpinned tags whose slide-out animation has finished
+        self.cleanup_expired_sidebar_tags();
 
         // Check if batch paste completed and wants selection cleared
         if self

@@ -85,6 +85,7 @@ impl AppController {
         let sort_by_created_setting = settings.sort_by_created;
         let copy_as_plain_text_setting = settings.copy_as_plain_text;
         let max_items_setting = settings.max_items;
+        let pinned_tag_ids_setting = settings.pinned_tag_ids.clone();
         let copy_as_plain_text_flag = Arc::new(AtomicBool::new(copy_as_plain_text_setting));
         let shared_settings = Arc::new(Mutex::new(settings));
 
@@ -108,6 +109,8 @@ impl AppController {
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
         clipboard_service.set_copy_as_plain_text(copy_as_plain_text_setting);
         clipboard_service.set_max_items(max_items_setting);
+        clipboard_service.set_pinned_tag_ids(pinned_tag_ids_setting.clone());
+        clipboard_service.refresh_sidebar_tags(&pinned_tag_ids_setting);
 
         let mut listener = create_listener();
         listener.start(clipboard_service.shared())?;
@@ -282,8 +285,11 @@ impl AppController {
                 let s = window.size();
                 let w = s.width as f32 / scale;
                 let h = s.height as f32 / scale;
-                let new_w = (w + dx).max(320.0);
-                let new_h = (h + dy).max(480.0);
+                // Clamp delta to prevent runaway window expansion
+                let dx = dx.clamp(-200.0, 600.0);
+                let dy = dy.clamp(-200.0, 600.0);
+                let new_w = (w + dx).clamp(380.0, 1200.0);
+                let new_h = (h + dy).clamp(480.0, 1200.0);
                 window.set_size(LogicalSize::new(new_w, new_h));
                 if let Ok(mut fe) = ctx_resize.frontend.lock() {
                     fe.set_saved_size(new_w, new_h);
@@ -1155,7 +1161,7 @@ impl AppController {
         let c = ctx.clone();
         slint_app.on_dismiss_ui(move || {
             if let Ok(fe) = c.frontend.lock() {
-                fe.dismiss_ui();
+                fe.dismiss_ui_to_clipboard();
             }
         });
     }
@@ -1269,6 +1275,12 @@ impl AppController {
                 if let Some(app) = c.app.upgrade() {
                     app.set_has_tag_filter(cs.has_tag_filters());
                 }
+                let pinned = c
+                    .settings
+                    .lock()
+                    .map(|s| s.pinned_tag_ids.clone())
+                    .unwrap_or_default();
+                cs.refresh_sidebar_tags(&pinned);
             });
         });
 
@@ -1290,6 +1302,12 @@ impl AppController {
                     app.set_has_tag_filter(false);
                     app.set_tag_match_all(false);
                 }
+                let pinned = c
+                    .settings
+                    .lock()
+                    .map(|s| s.pinned_tag_ids.clone())
+                    .unwrap_or_default();
+                cs.refresh_sidebar_tags(&pinned);
             });
         });
 
@@ -1298,6 +1316,12 @@ impl AppController {
             let _ = c.looper.try_with_clipboard_service(|cs| {
                 cs.create_tag(name.as_str());
                 cs.load_all_tags_for_filter();
+                let pinned = c
+                    .settings
+                    .lock()
+                    .map(|s| s.pinned_tag_ids.clone())
+                    .unwrap_or_default();
+                cs.refresh_sidebar_tags(&pinned);
             });
         });
 
@@ -1320,13 +1344,27 @@ impl AppController {
 
         let c = ctx.clone();
         slint_app.on_delete_tag(move |tag_id: i32| {
+            let tag_id = tag_id as i64;
+            // Clean up pinned tag on delete
+            if let Ok(mut settings) = c.settings.lock() {
+                if let Some(pos) = settings.pinned_tag_ids.iter().position(|&id| id == tag_id) {
+                    settings.pinned_tag_ids.remove(pos);
+                    settings.save();
+                }
+            }
             let _ = c.looper.try_with_clipboard_service(|cs| {
-                cs.delete_tag(tag_id as i64);
+                cs.delete_tag(tag_id);
                 cs.load_all_tags_for_filter();
                 cs.refresh_with_current_filter();
                 if let Some(app) = c.app.upgrade() {
                     app.set_has_tag_filter(cs.has_tag_filters());
                 }
+                let pinned = c
+                    .settings
+                    .lock()
+                    .map(|s| s.pinned_tag_ids.clone())
+                    .unwrap_or_default();
+                cs.refresh_sidebar_tags(&pinned);
             });
         });
 
@@ -1413,6 +1451,26 @@ impl AppController {
                     }
                 }
             });
+        });
+
+        let c = ctx.clone();
+        slint_app.on_toggle_pin_tag(move |tag_id: i32| {
+            let tag_id = tag_id as i64;
+            if let Ok(mut settings) = c.settings.lock() {
+                if let Some(pos) = settings.pinned_tag_ids.iter().position(|&id| id == tag_id) {
+                    settings.pinned_tag_ids.remove(pos);
+                } else {
+                    settings.pinned_tag_ids.push(tag_id);
+                }
+                let pinned = settings.pinned_tag_ids.clone();
+                drop(settings);
+                let _ = c.looper.try_with_clipboard_service(|cs| {
+                    cs.refresh_sidebar_tags(&pinned);
+                });
+                if let Ok(settings) = c.settings.lock() {
+                    settings.save();
+                }
+            }
         });
     }
 
