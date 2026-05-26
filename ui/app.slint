@@ -188,6 +188,7 @@ export component App inherits Window {
     callback update-note(int, string);
     callback edit-item(int);
     callback save-content(int, string, string);
+    callback url-decode(string);
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
@@ -525,6 +526,7 @@ export component App inherits Window {
 
                     cancel => { root.current-view = "clipboard"; }
                     save-content(id, text, sel_type) => { root.save-content(id, text, sel_type); }
+                    url-decode(text) => { root.url-decode(text); }
                 }
 
                 SettingsPanel {

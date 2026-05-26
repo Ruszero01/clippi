@@ -23,6 +23,7 @@ use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use percent_encoding::percent_decode_str;
 
 /// Pre-cloned shared state for callback closures.
 /// All fields are cheap to clone (Arc or Weak).
@@ -1108,6 +1109,14 @@ impl AppController {
             });
             if let Some(app) = c.app.upgrade() {
                 app.set_current_view(SharedString::from("clipboard"));
+            }
+        });
+
+        let c = ctx.clone();
+        slint_app.on_url_decode(move |text: SharedString| {
+            let decoded = percent_decode_str(&text).decode_utf8().unwrap_or(std::borrow::Cow::Borrowed(&text));
+            if let Some(app) = c.app.upgrade() {
+                app.set_editing_content(SharedString::from(decoded.as_ref()));
             }
         });
     }

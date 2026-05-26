@@ -36,6 +36,7 @@ export component EditPanel inherits Rectangle {
     // ========== 回调 ==========
     callback cancel();
     callback save-content(int, string, string);
+    callback url-decode(string);
 
     // ========== 主题色板 ==========
     property <color> text-1:   dark-mode ? #eaebec : #1a1c2e;
@@ -86,9 +87,10 @@ export component EditPanel inherits Rectangle {
             }
         }
 
-        // ========== 类型选择下拉 ==========
+        // ========== 类型选择下拉 + 工具栏 ==========
         HorizontalLayout {
             height: 24px;
+            spacing: 4px;
 
             type-btn := Rectangle {
                 height: 22px;
@@ -113,6 +115,34 @@ export component EditPanel inherits Rectangle {
                     font-size: 10px;
                     color: accent;
                     horizontal-alignment: center;
+                }
+            }
+
+            // 弹性空间，把工具栏按钮推到右侧
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            // URL 解码按钮
+            url-decode-btn := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: url-decode-ta.has-hover ? (dark-mode ? #2a2b2c : #f0f1f5) : transparent;
+
+                url-decode-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.url-decode(root.editor-text); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "\u{e6af}";
+                    font-family: "iconfont";
+                    font-size: 14px;
+                    color: url-decode-ta.has-hover ? accent : text-2;
                 }
             }
         }

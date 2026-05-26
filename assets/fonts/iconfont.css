@@ -1,8 +1,8 @@
 @font-face {
   font-family: "iconfont"; /* Project id 5167546 */
-  src: url('iconfont.woff2?t=1779773120082') format('woff2'),
-       url('iconfont.woff?t=1779773120082') format('woff'),
-       url('iconfont.ttf?t=1779773120082') format('truetype');
+  src: url('iconfont.woff2?t=1779781785496') format('woff2'),
+       url('iconfont.woff?t=1779781785496') format('woff'),
+       url('iconfont.ttf?t=1779781785496') format('truetype');
 }
 
 .iconfont {
@@ -11,6 +11,10 @@
   font-style: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.icon-URL:before {
+  content: "\e6af";
 }
 
 .icon-youxiang:before {
