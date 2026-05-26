@@ -42,14 +42,15 @@
 ### 剪贴板监控
 - 多格式内容检测（按优先级）：
   - **文件** — 文件/文件夹路径，支持多文件，提取系统图标；单图片文件自动识别为图片
-  - **图片** — 记录图片自动处理缩略图节省内存
+  - **图片** — 记录图片自动处理缩略图节省内存；支持 OCR 文字识别（Windows Media Ocr / macOS Apple Vision，零额外依赖）
   - **链接** — URL 自动识别 (http/https)，支持域名/路径提取、favicon 预览
   - **颜色** — HEX/RGB 颜色自动检测与归一化
   - **富文本** — HTML、RTF 格式
-  - **纯文本** — 普通文本内容
+  - **纯文本** — 普通文本内容；自动识别邮箱地址和电话号码
   - **路径** — Windows 绝对路径 / UNC 路径 / Unix 绝对路径智能识别
 - 内容哈希去重：相同内容重复复制时更新时间戳，不重复记录
 - 颜色归一化去重：`#FF8000` ≡ `rgb(255,128,0)`，避免重复
+- 图片 OCR 缓存：同一图片不重复识别，OCR 文本参与关键词搜索
 - 快捷键黑名单：指定应用中禁用全局热键
 - 纯文本复制模式：开启后丢弃富文本格式，仅保留纯文本
 - SQLite (WAL 模式) 本地持久化，支持自定义数据库路径
@@ -59,9 +60,10 @@
 - 右键菜单（单条目/批量双模式）：
   - 复制、粘贴、编辑、备注
   - 颜色条目：粘贴为 RGB / 粘贴为 HEX
-  - 图片条目：打开原图
+  - 图片条目：打开原图、粘贴 OCR 文本
   - 收藏/取消收藏、删除
   - 标签管理（添加/移除/批量操作）
+- 编辑面板：全文本编辑器 + 类型选择器 + URL 解码工具栏按钮
 - 多选批量操作（Ctrl/Shift 选择）：批量粘贴（换行分隔）、批量收藏、批量删除、批量标签
 - 六级类型筛选：文本 / 富文本 / 图片 / 文件 / 链接 / 颜色
   - 链接 ⇄ 路径、文件 ⇄ 图片双向自动联动
@@ -73,7 +75,8 @@
 ### 标签系统
 - 创建/编辑/删除标签、12 种预设颜色
 - 标签关联到剪贴板条目（多对多）
-- 标签筛选面板 + 标签选择器面板
+- 侧边标签栏：筛选标签固定到窗口左侧，支持展开/折叠动画和固定
+- 标签筛选面板 + 标签选择器面板（均支持标签 CRUD）
 - 单条目/批量标签分配与移除
 - 跨设备标签同步（含颜色冲突解决）
 
@@ -87,6 +90,7 @@
 - 窗口尺寸跨会话持久化
 - 深色/亮色/跟随系统 三主题，自动检测系统深色模式
 - Toast 通知 + 设置错误滚动警告
+- 版本更新检查：托盘菜单显示当前版本，自动检查 GitHub 更新，一键跳转下载
 
 ### 显示选项
 - 来源应用信息显示（剪贴板来源程序名称和图标）
@@ -125,11 +129,13 @@
 | 系统托盘 | [tray-icon](https://github.com/tauri-apps/tray-icon) |
 | 全局快捷键 | [global-hotkey](https://github.com/tauri-apps/global-hotkey) |
 | 图片处理 | [image](https://github.com/image-rs/image) |
-| HTTP | [ureq](https://github.com/algesten/ureq) (favicon 获取) |
+| HTTP | [ureq](https://github.com/algesten/ureq) (favicon 获取, 版本检查) |
 | 配置 | TOML ([serde](https://serde.rs/) + [toml](https://github.com/toml-rs/toml)) |
-| 同步协议 | JSON (v1, [serde_json](https://github.com/serde-rs/json)) |
-| Windows | [windows-sys](https://github.com/microsoft/windows-rs) |
-| macOS | [objc2](https://github.com/madsmtm/objc2) + [core-graphics](https://github.com/servo/core-foundation-rs) |
+| 同步协议 | JSON (v2, [serde_json](https://github.com/serde-rs/json)) |
+| 版本比较 | [semver](https://github.com/dtolnay/semver) |
+| 日志 | [log](https://github.com/rust-lang/log) + [simplelog](https://github.com/drakulix/simplelog.rs) |
+| Windows | [windows-sys](https://github.com/microsoft/windows-rs) + [windows](https://github.com/microsoft/windows-rs) (OCR) |
+| macOS | [objc2](https://github.com/madsmtm/objc2) + [core-graphics](https://github.com/servo/core-foundation-rs) + [apple-vision](https://github.com/servo/core-foundation-rs) (OCR) |
 
 ## 构建
 
@@ -157,4 +163,9 @@ cargo run
 | 系统深色模式检测 | ✅ | ✅ |
 | OneDrive 预设检测 | ✅ | ✅ |
 | iCloud 预设检测 | ❌ | ✅ |
+| 图片 OCR 文字识别 | ✅ | ✅ |
+| 邮箱/电话识别 | ✅ | ✅ |
+| 侧边标签栏 | ✅ | ✅ |
+| 版本更新检查 | ✅ | ✅ |
+| 编辑面板 URL 解码 | ✅ | ✅ |
 | 界面语言 (中文/英文) | ✅ | ✅ |

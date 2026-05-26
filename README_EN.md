@@ -42,14 +42,15 @@
 ### Clipboard Monitoring
 - Multi-format content detection (by priority):
   - **Files** — File/folder paths, multi-file support, system icon extraction; single image files auto-recognized as images
-  - **Images** — Automatically process images into thumbnails to save memory.
+  - **Images** — Automatically process images into thumbnails to save memory; OCR text recognition (Windows Media Ocr / macOS Apple Vision, zero extra dependencies)
   - **Links** — URL auto-detection (http/https), domain/path extraction, favicon preview
   - **Colors** — HEX/RGB auto-detection & normalization
   - **Rich Text** — HTML, RTF formats
-  - **Plain Text** — Plain text content
+  - **Plain Text** — Plain text content; auto-detection of email addresses and phone numbers
   - **Paths** — Windows absolute paths / UNC paths / Unix absolute paths, intelligent recognition
 - Content hash deduplication: same content copies update timestamp without creating duplicate entries
 - Color normalization dedup: `#FF8000` ≡ `rgb(255,128,0)`, prevents duplicates
+- Image OCR caching: same image won't re-run OCR, OCR text participates in keyword search
 - Hotkey blacklist: disable global hotkey in specified applications
 - Plain text copy mode: discard rich formatting, keep plain text only
 - SQLite (WAL mode) local persistence with customizable database path
@@ -59,9 +60,10 @@
 - Right-click context menu (single / batch dual mode):
   - Copy, Paste, Edit, Note
   - Color items: Paste as RGB / Paste as HEX
-  - Image items: Open original image
+  - Image items: Open original image, Paste OCR text
   - Favorite/Unfavorite, Delete
   - Tag management (add/remove/batch operations)
+- Edit panel: full-text editor + type selector + URL decode toolbar button
 - Multi-select batch operations (Ctrl/Shift select): batch paste (newline-delimited), batch favorite, batch delete, batch tag
 - Six-level type filter: Text / Rich Text / Images / Files / Links / Colors
   - Link ⇄ Path, File ⇄ Image bidirectional auto-linkage
@@ -73,7 +75,8 @@
 ### Tag System
 - Create/edit/delete tags, 12 preset colors
 - Tag association with clipboard entries (many-to-many)
-- Tag filter panel + tag picker panel
+- Side tag bar: pin filter tags to the left side of window, with expand/collapse animation and pinning
+- Tag filter panel + tag picker panel (both support tag CRUD)
 - Single-item/batch tag assignment and removal
 - Cross-device tag synchronization (with color conflict resolution)
 
@@ -87,6 +90,7 @@
 - Window size persistence across sessions
 - Dark / Light / Follow system theme, auto-detect system dark mode
 - Toast notifications + settings error scroll alert
+- Version update check: tray menu shows current version, auto-checks GitHub for updates, one-click opens download page
 
 ### Display Options
 - Source app info display (clipboard source app name and icon)
@@ -125,11 +129,13 @@
 | System Tray | [tray-icon](https://github.com/tauri-apps/tray-icon) |
 | Global Hotkey | [global-hotkey](https://github.com/tauri-apps/global-hotkey) |
 | Image Processing | [image](https://github.com/image-rs/image) |
-| HTTP | [ureq](https://github.com/algesten/ureq) (favicon fetching) |
+| HTTP | [ureq](https://github.com/algesten/ureq) (favicon fetching, version check) |
 | Configuration | TOML ([serde](https://serde.rs/) + [toml](https://github.com/toml-rs/toml)) |
-| Sync Protocol | JSON ([serde_json](https://github.com/serde-rs/json)) |
-| Windows | [windows-sys](https://github.com/microsoft/windows-rs) |
-| macOS | [objc2](https://github.com/madsmtm/objc2) + [core-graphics](https://github.com/servo/core-foundation-rs) |
+| Sync Protocol | JSON (v2, [serde_json](https://github.com/serde-rs/json)) |
+| Version Compare | [semver](https://github.com/dtolnay/semver) |
+| Logging | [log](https://github.com/rust-lang/log) + [simplelog](https://github.com/drakulix/simplelog.rs) |
+| Windows | [windows-sys](https://github.com/microsoft/windows-rs) + [windows](https://github.com/microsoft/windows-rs) (OCR) |
+| macOS | [objc2](https://github.com/madsmtm/objc2) + [core-graphics](https://github.com/servo/core-foundation-rs) + [apple-vision](https://github.com/servo/core-foundation-rs) (OCR) |
 
 ## Build
 
@@ -157,4 +163,9 @@ cargo run
 | System Dark Mode Detection | ✅ | ✅ |
 | OneDrive Preset Detection | ✅ | ✅ |
 | iCloud Preset Detection | ❌ | ✅ |
+| Image OCR Text Recognition | ✅ | ✅ |
+| Email/Phone Detection | ✅ | ✅ |
+| Side Tag Bar | ✅ | ✅ |
+| Version Update Check | ✅ | ✅ |
+| Edit Panel URL Decode | ✅ | ✅ |
 | Interface Language (zh_CN / en) | ✅ | ✅ |
