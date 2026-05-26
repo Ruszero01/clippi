@@ -30,6 +30,7 @@ export component ContextMenu inherits Rectangle {
     callback start-note-edit(int);
     callback show-tag-picker(int);
     callback open-original-image(int);
+    callback paste-ocr(int);
     callback batch-paste();
     callback batch-favorite();
     callback batch-delete();
@@ -315,6 +316,46 @@ export component ContextMenu inherits Rectangle {
                     text: @tr("Open image");
                     font-size: 13px;
                     color: row-oi-ta.has-hover ? accent : text-1;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── 粘贴 OCR 文本（仅图片类型显示） ──
+        if !root.is-batch && is-image: row-ocr := Rectangle {
+            width: 156px;
+            height: 30px;
+            border-radius: 5px;
+            background: row-ocr-ta.has-hover ? btn-hover : transparent;
+
+            row-ocr-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    paste-ocr(item-id);
+                    hide-menu();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                height: 30px;
+                alignment: start;
+
+                Text {
+                    text: "\u{e648}";
+                    font-family: "iconfont";
+                    font-size: 13px;
+                    color: row-ocr-ta.has-hover ? accent : text-2;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: @tr("Paste OCR text");
+                    font-size: 13px;
+                    color: row-ocr-ta.has-hover ? accent : text-1;
                     vertical-alignment: center;
                 }
             }

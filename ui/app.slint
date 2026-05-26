@@ -58,6 +58,7 @@ export component App inherits Window {
     in-out property <bool> auto-scroll-to-top: false;
     in-out property <bool> copy-as-plain-text: false;
     in-out property <bool> show-original-on-hover: false;
+    in-out property <bool> ocr-enabled: true;
     in-out property <int> max-items: 0;
     in-out property <int> scroll-trigger: 0;
     // 云同步
@@ -138,6 +139,7 @@ export component App inherits Window {
 
     callback copy-item(int);
     callback paste-item(int);
+    callback paste-ocr(int);
 
     callback move-window(float, float);
     callback close-window();
@@ -169,6 +171,7 @@ export component App inherits Window {
     callback toggle-auto-scroll-to-top();
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
+    callback toggle-ocr-enabled();
     callback set-max-items(int);
     callback toggle-sync-auto-enabled();
     callback toggle-sync-favorites-only();
@@ -553,6 +556,7 @@ export component App inherits Window {
                     auto-scroll-to-top: root.auto-scroll-to-top;
                     copy-as-plain-text: root.copy-as-plain-text;
                     show-original-on-hover: root.show-original-on-hover;
+                    ocr-enabled: root.ocr-enabled;
                     max-items: root.max-items;
                     sync-auto-enabled: root.sync-auto-enabled;
                     sync-interval-secs: root.sync-interval-secs;
@@ -582,6 +586,7 @@ export component App inherits Window {
                     toggle-auto-scroll-to-top => { root.toggle-auto-scroll-to-top(); }
                     toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
                     toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
+                    toggle-ocr-enabled => { root.toggle-ocr-enabled(); }
                     set-max-items(v) => { root.set-max-items(v); }
                     toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
                     toggle-sync-favorites-only => { root.toggle-sync-favorites-only(); }
@@ -650,6 +655,7 @@ export component App inherits Window {
             batch-favorite => { root.batch-favorite(); }
             batch-delete => { root.batch-delete(); }
             open-original-image(id) => { root.open-original-image(id); }
+            paste-ocr(id) => { root.paste-ocr(id); }
             show-tag-picker(id) => { root.show-tag-picker(id); }
         }
 

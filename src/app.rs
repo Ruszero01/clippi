@@ -84,6 +84,7 @@ impl AppController {
         let blacklist = settings.hotkey_blacklist.clone();
         let sort_by_created_setting = settings.sort_by_created;
         let copy_as_plain_text_setting = settings.copy_as_plain_text;
+        let ocr_enabled_setting = settings.ocr_enabled;
         let max_items_setting = settings.max_items;
         let pinned_tag_ids_setting = settings.pinned_tag_ids.clone();
         let copy_as_plain_text_flag = Arc::new(AtomicBool::new(copy_as_plain_text_setting));
@@ -108,6 +109,7 @@ impl AppController {
         // Load initial data and apply settings
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
         clipboard_service.set_copy_as_plain_text(copy_as_plain_text_setting);
+        clipboard_service.set_ocr_enabled(ocr_enabled_setting);
         clipboard_service.set_max_items(max_items_setting);
         clipboard_service.set_pinned_tag_ids(pinned_tag_ids_setting.clone());
         clipboard_service.refresh_sidebar_tags(&pinned_tag_ids_setting);
@@ -377,6 +379,71 @@ impl AppController {
                     }
                 }
             }
+        });
+
+        let ctx_paste_ocr = ctx.clone();
+        slint_app.on_paste_ocr(move |id| {
+            // Load item and check for cached OCR text (release DB lock before running OCR)
+            let ocr_load = {
+                if let Ok(db) = ctx_paste_ocr.db.lock() {
+                    match db.get_by_id(id as i64) {
+                        Ok(Some(item)) => {
+                            let rd = crate::core::types::RichData::from_json(&item.rich_data);
+                            match rd.ocr_text.filter(|t| !t.trim().is_empty()) {
+                                Some(cached) => Some((cached, true, String::new(), String::new())),
+                                None if item.image_path.is_empty() => None,
+                                None => Some((String::new(), false, item.image_path.clone(), item.rich_data.clone())),
+                            }
+                        }
+                        Ok(None) => None,
+                        Err(e) => {
+                            log::error!("paste_ocr: db error: {:?}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            };
+
+            let ocr_text = match ocr_load {
+                Some((cached, true, _, _)) => Some(cached),
+                Some((_, false, ref img_path, ref existing_rich)) => {
+                    let engine = crate::core::ocr::create_ocr_engine();
+                    match engine.recognize(std::path::Path::new(img_path)) {
+                        Ok(text) if !text.trim().is_empty() => {
+                            // Write result back to DB
+                            if let Ok(db) = ctx_paste_ocr.db.lock() {
+                                let mut new_rd = crate::core::types::RichData::from_json(existing_rich);
+                                new_rd.ocr_text = Some(text.clone());
+                                let _ = db.update_rich_data(id as i64, &new_rd.to_json());
+                            }
+                            Some(text)
+                        }
+                        Ok(_) => None,
+                        Err(e) => {
+                            log::error!("OCR error for item {}: {}", id, e);
+                            None
+                        }
+                    }
+                }
+                None => None,
+            };
+
+            if let Some(text) = ocr_text {
+                if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
+                    ctx_paste_ocr
+                        .shared
+                        .skip_next
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = ctx.set_text(text);
+                }
+            }
+            if ctx_paste_ocr.copy_as_plain_text.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            restore_paste_target();
+            paste_after_delay();
         });
 
         let ctx_open_loc = ctx.clone();
@@ -844,6 +911,20 @@ impl AppController {
                 let mut s = c.settings.lock().expect("settings lock poisoned");
                 s.show_original_on_hover = new_val;
                 s.save();
+            }
+        });
+
+        let c = ctx.clone();
+        slint_app.on_toggle_ocr_enabled(move || {
+            if let Some(app) = c.app.upgrade() {
+                let new_val = !app.get_ocr_enabled();
+                app.set_ocr_enabled(new_val);
+                let mut s = c.settings.lock().expect("settings lock poisoned");
+                s.ocr_enabled = new_val;
+                s.save();
+                let _ = c.looper.try_with_clipboard_service(|cs| {
+                    cs.set_ocr_enabled(new_val);
+                });
             }
         });
 
@@ -1554,6 +1635,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_auto_scroll_to_top(settings.auto_scroll_to_top);
     app.set_copy_as_plain_text(settings.copy_as_plain_text);
     app.set_show_original_on_hover(settings.show_original_on_hover);
+    app.set_ocr_enabled(settings.ocr_enabled);
     app.set_max_items(settings.max_items as i32);
     app.set_sync_auto_enabled(settings.sync_auto_enabled);
     app.set_sync_favorites_only(settings.sync_favorites_only);

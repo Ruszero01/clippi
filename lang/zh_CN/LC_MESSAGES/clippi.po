@@ -260,6 +260,18 @@ msgstr "笔记"
 msgid "Open image"
 msgstr "打开图片"
 
+msgid "Paste OCR text"
+msgstr "粘贴 OCR 文本"
+
+msgid "Image OCR"
+msgstr "图片 OCR"
+
+msgid "Auto OCR for images"
+msgstr "图片自动 OCR"
+
+msgid "OCR disabled"
+msgstr "OCR 已关闭"
+
 msgid "Tag"
 msgstr "标签"
 

@@ -137,10 +137,19 @@ impl ClipboardFilters {
                 return false;
             }
         }
-        // Keyword filter: match against full_text for text types; skip only bitmap images
+        // Keyword filter: match against full_text for text types; for images, search OCR text in rich_data
         if let Some(ref kw) = self.keyword {
             match item.content_type {
-                crate::core::types::ContentType::Image => return false,
+                crate::core::types::ContentType::Image => {
+                    let rd = crate::core::types::RichData::from_json(&item.rich_data);
+                    let hit = rd
+                        .ocr_text
+                        .as_ref()
+                        .is_some_and(|ocr| ocr.to_lowercase().contains(&kw.to_lowercase()));
+                    if !hit {
+                        return false;
+                    }
+                }
                 _ => {
                     if !item.full_text.to_lowercase().contains(&kw.to_lowercase()) {
                         return false;
@@ -202,16 +211,17 @@ impl ClipboardFilters {
             }
         }
 
-        // Keyword filter — also matches tag names
+        // Keyword filter — also matches tag names and OCR text in rich_data (image items only)
         if let Some(ref kw) = self.keyword {
             conditions.push(
-                "(full_text LIKE ? OR id IN (\
+                "(full_text LIKE ? OR (content_type = 'image' AND rich_data LIKE ?) OR id IN (\
                  SELECT item_id FROM item_tags it \
                  INNER JOIN tags t ON it.tag_id = t.id \
                  WHERE t.name LIKE ?))"
                     .to_string(),
             );
             let pattern = format!("%{}%", kw);
+            params.push(pattern.clone().into());
             params.push(pattern.clone().into());
             params.push(pattern.into());
         }

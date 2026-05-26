@@ -144,6 +144,8 @@ pub struct RichData {
     pub html: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtf: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_text: Option<String>,
 }
 
 impl RichData {

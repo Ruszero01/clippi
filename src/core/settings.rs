@@ -87,6 +87,12 @@ pub struct AppSettings {
     pub language: String, // "zh_CN" or "en", empty = follow system
     #[serde(default)]
     pub pinned_tag_ids: Vec<i64>, // 固定在侧边栏的标签 ID
+    #[serde(default = "default_ocr_enabled")]
+    pub ocr_enabled: bool, // 图片OCR自动识别开关
+}
+
+fn default_ocr_enabled() -> bool {
+    false
 }
 
 fn default_sync_interval() -> u64 {
@@ -125,6 +131,7 @@ impl Default for AppSettings {
             hotkey_blacklist: Vec::new(),
             language: String::new(),
             pinned_tag_ids: Vec::new(),
+            ocr_enabled: false,
         }
     }
 }

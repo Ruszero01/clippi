@@ -254,7 +254,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             let html = ctx.get_html().ok();
             let rtf = ctx.get_rich_text().ok();
             if html.is_some() || rtf.is_some() {
-                let rich = RichData { html, rtf };
+                let rich = RichData { html, rtf, ocr_text: None };
                 return Some(ClipboardItem::new_text(
                     0,
                     &text,
@@ -385,7 +385,20 @@ impl ClipboardListener for PollingClipboardListener {
                 }
 
                 // 内部复制：调用方已直接推入 pending，监听器跳过本轮检测
+                // 同时更新 last_seq/last_cc，防止下个周期检测到内部写入
                 if skip_next.swap(false, Ordering::SeqCst) {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let seq = unsafe {
+                            windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
+                        };
+                        *last_seq.lock().unwrap() = seq;
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let cc = NSPasteboard::generalPasteboard().changeCount();
+                        *last_cc.lock().unwrap() = cc;
+                    }
                     thread::sleep(Duration::from_millis(50));
                     continue;
                 }

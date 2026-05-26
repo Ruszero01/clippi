@@ -27,6 +27,7 @@ pub struct ClipboardService {
     model: Rc<VecModel<ClipboardEntry>>,
     sort_by_created: bool,
     copy_as_plain_text: bool,
+    ocr_enabled: bool,
     filters: ClipboardFilters,
     pinned_tag_ids: Vec<i64>,
     sidebar_model: Rc<VecModel<crate::TagItem>>,
@@ -62,6 +63,7 @@ impl ClipboardService {
             model: model.clone(),
             sort_by_created: false,
             copy_as_plain_text: false,
+            ocr_enabled: true,
             filters: ClipboardFilters::default(),
             pinned_tag_ids: Vec::new(),
             sidebar_model: sidebar_model.clone(),
@@ -214,6 +216,10 @@ impl ClipboardService {
 
     pub fn set_pinned_tag_ids(&mut self, ids: Vec<i64>) {
         self.pinned_tag_ids = ids;
+    }
+
+    pub fn set_ocr_enabled(&mut self, enabled: bool) {
+        self.ocr_enabled = enabled;
     }
 
     /// Prune excess non-favorite items from DB and sync model.
@@ -1100,9 +1106,72 @@ impl Pollable for ClipboardService {
                     // Compute size once before upsert (file: byte sum, text: char count)
                     item.size = compute_size(&item);
 
+                    // Preserve existing OCR text in rich_data before upsert overwrites it.
+                    // Also check whether auto-OCR is needed for this image item.
+                    let mut need_ocr = false;
+                    let mut ocr_img_path = String::new();
+                    let mut ocr_item_id: i64 = 0;
+                    let mut ocr_existing_rich = String::new();
+
+                    if self.ocr_enabled
+                        && item.content_type == crate::core::types::ContentType::Image
+                        && !item.image_path.is_empty()
+                    {
+                        let rd = crate::core::types::RichData::from_json(&item.rich_data);
+                        if rd.ocr_text.is_none() {
+                            // New item may overwrite cached OCR — check DB for existing result
+                            if let Ok(Some(ref existing)) = db.get_by_hash(item.content_hash) {
+                                let erd = crate::core::types::RichData::from_json(&existing.rich_data);
+                                if let Some(ref cached) = erd.ocr_text {
+                                    // Carry cached OCR into the incoming item before upsert
+                                    let mut rd = rd;
+                                    rd.ocr_text = Some(cached.clone());
+                                    item.rich_data = rd.to_json();
+                                } else {
+                                    need_ocr = true;
+                                    ocr_img_path = item.image_path.clone();
+                                    ocr_item_id = existing.id;
+                                    ocr_existing_rich = existing.rich_data.clone();
+                                }
+                            } else {
+                                // Brand-new image — will get id after upsert
+                            }
+                        }
+                    }
+
                     if let Err(e) = db.upsert(&item) {
                         log::error!("ClipboardService: upsert error: {:?}", e);
                         continue;
+                    }
+
+                    // Auto OCR for brand-new image items (no prior DB record)
+                    if need_ocr && ocr_item_id == 0 {
+                        if let Ok(Some(existing)) = db.get_by_hash(item.content_hash) {
+                            ocr_item_id = existing.id;
+                        }
+                    }
+
+                    if need_ocr && ocr_item_id != 0 {
+                        let img_path = ocr_img_path;
+                        let db_clone = self.db.clone();
+                        let needs_refresh = self.needs_model_refresh.clone();
+                        let existing_rich = ocr_existing_rich;
+                        std::thread::spawn(move || {
+                            let engine = crate::core::ocr::create_ocr_engine();
+                            match engine.recognize(std::path::Path::new(&img_path)) {
+                                Ok(text) if !text.trim().is_empty() => {
+                                    let mut rd = crate::core::types::RichData::from_json(&existing_rich);
+                                    rd.ocr_text = Some(text);
+                                    let json = rd.to_json();
+                                    if let Ok(db) = db_clone.lock() {
+                                        let _ = db.update_rich_data(ocr_item_id, &json);
+                                        needs_refresh.store(true, std::sync::atomic::Ordering::SeqCst);
+                                    }
+                                }
+                                Ok(_) => { /* empty result, skip */ }
+                                Err(e) => log::error!("OCR error for item {}: {}", ocr_item_id, e),
+                            }
+                        });
                     }
 
                     if !self.filters.matches_item(&item) {

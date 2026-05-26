@@ -124,6 +124,15 @@ impl Database {
         Ok(())
     }
 
+    /// Update only the rich_data column for a given item.
+    pub fn update_rich_data(&self, id: i64, rich_data: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET rich_data = ?1, updated_at = ?2 WHERE id = ?3",
+            params![rich_data, chrono::Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
     /// Load items with unified filter support.
     /// Uses ClipboardFilters to build WHERE clause with AND logic across all filter dimensions.
     pub fn load_filtered(
