@@ -135,6 +135,7 @@ pub struct ClipboardItem {
     pub source_app_icon: String, // base64-encoded PNG icon
     pub size: i64,               // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
+    pub meta_type: String, // subtype for plain_text: "" | "email" | "phone"
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -244,6 +245,7 @@ impl ClipboardItem {
             source_app_icon: icon,
             size: 0,
             tags: Vec::new(),
+            meta_type: String::new(),
         }
     }
 
@@ -277,6 +279,7 @@ impl ClipboardItem {
             source_app_icon: icon,
             size: 0,
             tags: Vec::new(),
+            meta_type: String::new(),
         }
     }
 
@@ -303,6 +306,7 @@ impl ClipboardItem {
             source_app_icon: icon,
             size: 0,
             tags: Vec::new(),
+            meta_type: String::new(),
         }
     }
 
@@ -336,6 +340,7 @@ impl ClipboardItem {
             source_app_icon: icon,
             size,
             tags: Vec::new(),
+            meta_type: String::new(),
         }
     }
 }
@@ -385,6 +390,81 @@ pub fn is_url(text: &str) -> bool {
         return false;
     }
     (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10
+}
+
+/// Check if text is solely an email address.
+pub fn is_email(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() || text.contains('\n') || text.contains(' ') {
+        return false;
+    }
+    // Must contain exactly one @ not at start or end
+    let at_pos = match text.find('@') {
+        Some(p) if p > 0 && p < text.len() - 1 => p,
+        _ => return false,
+    };
+    // Local part: alphanumeric + limited special chars, no consecutive dots
+    let local = &text[..at_pos];
+    if local.is_empty() || local.len() > 64 || local.contains("..") {
+        return false;
+    }
+    if !local
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || ".!#$%&'*+/=?^_`{|}~-".contains(c))
+    {
+        return false;
+    }
+    // Domain part: must have a dot, no consecutive dots, valid chars
+    let domain = &text[at_pos + 1..];
+    if domain.is_empty() || domain.len() > 255 || domain.contains("..") {
+        return false;
+    }
+    if !domain.contains('.') {
+        return false;
+    }
+    if !domain
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || ".-".contains(c))
+    {
+        return false;
+    }
+    // TLD must start with a letter and be at least 2 chars
+    let tld = match domain.rfind('.') {
+        Some(p) => &domain[p + 1..],
+        None => return false,
+    };
+    tld.len() >= 2 && tld.starts_with(|c: char| c.is_ascii_alphabetic())
+}
+
+/// Check if text is solely a phone number (Chinese mobile / international format).
+pub fn is_phone(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() || text.contains('\n') {
+        return false;
+    }
+    // Strip common separators
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '(' | ')' | '\t'))
+        .collect();
+    // Chinese mobile: 1[3-9]xxxxxxxxx (11 digits, starts with 1)
+    if cleaned.len() == 11
+        && cleaned.starts_with('1')
+        && cleaned.chars().all(|c| c.is_ascii_digit())
+        && cleaned.as_bytes()[1] >= b'3'
+        && cleaned.as_bytes()[1] <= b'9'
+    {
+        return true;
+    }
+    // International: +country region number (7-15 digit phone body)
+    if cleaned.starts_with('+')
+        && cleaned.len() >= 10
+        && cleaned.len() <= 17
+        && cleaned[1..].chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
+    }
+    false
 }
 
 /// Check if text is solely a file system path (Windows absolute, UNC, or Unix absolute).

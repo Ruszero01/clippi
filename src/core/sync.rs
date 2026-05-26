@@ -81,6 +81,9 @@ pub struct SyncItem {
     /// Tag associations carried on the item.
     #[serde(default)]
     pub tags: Vec<SyncTagRef>,
+    /// Plain-text subtype: "" | "email" | "phone".
+    #[serde(default)]
+    pub meta_type: String,
 }
 
 /// Tag reference embedded in a SyncItem.
@@ -193,6 +196,7 @@ pub fn build_snapshot(
             note: item.note,
             size: item.size,
             tags,
+            meta_type: item.meta_type.clone(),
         });
     }
 
@@ -617,6 +621,7 @@ mod tests {
                     name: "work".into(),
                     color: "#EF4444".into(),
                 }],
+                meta_type: String::new(),
             }],
             tags: vec![SyncTag {
                 name: "work".into(),
@@ -689,6 +694,7 @@ mod tests {
             note: String::new(),
             size: 0,
             tags: vec![],
+            meta_type: String::new(),
         }
     }
 

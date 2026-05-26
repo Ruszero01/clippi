@@ -6,7 +6,8 @@
 use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
 use crate::core::types::{
-    is_image_extension, is_path, is_url, ClipboardItem, ContentType, FileData, FileInfo, RichData,
+    is_email, is_image_extension, is_path, is_phone, is_url, ClipboardItem, ContentType, FileData,
+    FileInfo, RichData,
 };
 use crate::platform::favicon;
 use crate::platform::source;
@@ -229,6 +230,24 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                 hash,
                 source_info.as_ref(),
             ));
+        }
+
+        // Email / phone detection: record as plain_text with meta_type set
+        if is_email(&text) || is_phone(&text) {
+            let meta = if is_email(&text) {
+                "email".to_string()
+            } else {
+                "phone".to_string()
+            };
+            let mut item = ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::PlainText,
+                source_info.as_ref(),
+                None,
+            );
+            item.meta_type = meta;
+            return Some(item);
         }
 
         if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {

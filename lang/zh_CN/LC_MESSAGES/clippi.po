@@ -38,6 +38,9 @@ msgstr "链接"
 msgid "Color"
 msgstr "颜色"
 
+msgid "Email"
+msgstr "邮箱"
+
 msgid "Edit"
 msgstr "编辑"
 
@@ -196,6 +199,9 @@ msgstr "设置为 0 表示不限制"
 
 msgid "Unlimited"
 msgstr "不限制"
+
+msgid "Phone"
+msgstr "电话"
 
 msgid "Fav only"
 msgstr "仅收藏"

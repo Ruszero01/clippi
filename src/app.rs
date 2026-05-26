@@ -120,7 +120,7 @@ impl AppController {
 
         // Create hotkey service
         let mut hotkey_service =
-            HotkeyService::new(frontend.clone(), app.clone(), foreground_app_name.clone());
+            HotkeyService::new(frontend.clone(), app.clone(), foreground_app_name.clone(), shared_settings.clone());
         if let Ok(h) = create_hotkey_listener(&hotkey_str) {
             hotkey_service.set_hotkey(h);
         }
@@ -1338,6 +1338,11 @@ impl AppController {
                     cs.update_tag(tag_id as i64, name.as_str(), &hex);
                     cs.load_all_tags_for_filter();
                     cs.refresh_with_current_filter();
+                    if let Some(app) = c.app.upgrade() {
+                        if app.get_tag_picker_visible() {
+                            cs.load_all_tags_for_picker(app.get_tag_picker_item_id());
+                        }
+                    }
                 });
             },
         );
@@ -1358,6 +1363,9 @@ impl AppController {
                 cs.refresh_with_current_filter();
                 if let Some(app) = c.app.upgrade() {
                     app.set_has_tag_filter(cs.has_tag_filters());
+                    if app.get_tag_picker_visible() {
+                        cs.load_all_tags_for_picker(app.get_tag_picker_item_id());
+                    }
                 }
                 let pinned = c
                     .settings

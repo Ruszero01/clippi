@@ -1718,6 +1718,7 @@ impl ClipboardService {
             id: item.id as i32,
             preview: SharedString::from(item.full_text.clone()),
             content_type: SharedString::from(item.content_type.as_str()),
+            meta_type: SharedString::from(item.meta_type.clone()),
             time_label: SharedString::from(format_relative_time(&item.updated_at)),
             image_path: SharedString::from(item.image_path.clone()),
             thumbnail,

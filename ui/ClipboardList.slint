@@ -555,7 +555,10 @@ export component ClipboardList inherits Rectangle {
                                         st-label := Text {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
-                                            text: entry.content-type == "plain_text" ? @tr("Text") :
+                                            text: entry.content-type == "plain_text" ?
+                                                  (entry.meta-type == "email" ? @tr("Email") :
+                                                   entry.meta-type == "phone" ? @tr("Phone") :
+                                                   @tr("Text")) :
                                                   entry.content-type == "rich_text" ? @tr("RTF") :
                                                   entry.content-type == "image" ? @tr("Image") :
                                                   entry.content-type == "file" ? entry.file-icon-text :
@@ -690,7 +693,9 @@ export component ClipboardList inherits Rectangle {
                                             Text {
                                                 x: (parent.width - self.width) / 2;
                                                 y: (parent.height - self.height) / 2;
-                                                text: "\u{e60e}";
+                                                text: entry.meta-type == "email" ? "\u{e604}" :
+                                                      entry.meta-type == "phone" ? "\u{e966}" :
+                                                      "\u{e60e}";
                                                 font-family: "iconfont";
                                                 font-size: 18px;
                                                 color: tag-text;
@@ -706,7 +711,9 @@ export component ClipboardList inherits Rectangle {
                                             Text {
                                                 x: (parent.width - self.width) / 2;
                                                 y: (parent.height - self.height) / 2;
-                                                text: @tr("Text");
+                                                text: entry.meta-type == "email" ? @tr("Email") :
+                                                      entry.meta-type == "phone" ? @tr("Phone") :
+                                                      @tr("Text");
                                                 font-size: 10px;
                                                 color: tag-text;
                                             }
@@ -982,6 +989,26 @@ export component ClipboardList inherits Rectangle {
                                     vertical-alignment: center;
                                 }
 
+                                // Email: bold centered, single line
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "plain_text" && entry.meta-type == "email" : Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: text-1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                // Phone: bold centered, single line
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "plain_text" && entry.meta-type == "phone" : Text {
+                                    text: entry.preview;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: text-1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
                                 // File list: each file in its own pill; multi-file shows per-file OS icon
                                 if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "file" : VerticalLayout {
                                     spacing: 3px;
@@ -1163,8 +1190,8 @@ export component ClipboardList inherits Rectangle {
                                     }
                                 }
 
-                                // Other text types (plain, rich, color)
-                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "color" && entry.content-type != "image" && entry.content-type != "link" && entry.content-type != "path" && entry.content-type != "file" : Text {
+                                // Other text types (plain, rich)
+                                if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type != "color" && entry.content-type != "image" && entry.content-type != "link" && entry.content-type != "path" && entry.content-type != "file" && entry.meta-type == "" : Text {
                                     text: entry.preview;
                                     font-size: 12px;
                                     color: text-1;

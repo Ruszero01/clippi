@@ -693,6 +693,8 @@ export component App inherits Window {
             batch-add-tag(tag-id) => { root.batch-add-tag(tag-id); }
             batch-remove-tag(tag-id) => { root.batch-remove-tag(tag-id); }
             clear-all-tags => { root.clear-all-tags(); }
+            delete-tag(id) => { root.delete-tag(id); }
+            update-tag(id, name, color) => { root.update-tag(id, name, color); }
         }
 
         // ========== 添加黑名单确认浮层 ==========

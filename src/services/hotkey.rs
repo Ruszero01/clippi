@@ -1,6 +1,7 @@
 //! Hotkey service - handles hotkey business logic
 
 use crate::core::frontend::Frontend;
+use crate::core::settings::AppSettings;
 use crate::looper::Pollable;
 use crate::platform::hotkey::HotkeyListener;
 use crate::services::focus::ForegroundAppName;
@@ -25,6 +26,7 @@ pub struct HotkeyService {
     blacklist_model: Rc<VecModel<BlacklistEntry>>,
     /// Shared foreground app name (written by FocusService, read here for blacklist).
     foreground_app_name: ForegroundAppName,
+    settings: Arc<Mutex<AppSettings>>,
 }
 
 impl HotkeyService {
@@ -32,6 +34,7 @@ impl HotkeyService {
         frontend: Arc<Mutex<Frontend>>,
         app: slint::Weak<App>,
         foreground_app_name: ForegroundAppName,
+        settings: Arc<Mutex<AppSettings>>,
     ) -> Self {
         Self {
             hotkey: None,
@@ -40,6 +43,7 @@ impl HotkeyService {
             is_recording: false,
             blacklist_model: Rc::new(VecModel::default()),
             foreground_app_name,
+            settings,
         }
     }
 
@@ -177,6 +181,10 @@ impl Pollable for HotkeyService {
                         self.is_recording = false;
                         app.set_hotkey_display(SharedString::from(&new_hotkey));
                         app.set_recording_hotkey(false);
+                        if let Ok(mut settings) = self.settings.lock() {
+                            settings.hotkey = new_hotkey;
+                            settings.save();
+                        }
                     }
                 }
             }

@@ -25,7 +25,7 @@ use rusqlite::Connection;
 pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 
 /// Current sync protocol version — written into every `SyncPayload` snapshot.
-pub const SYNC_VERSION: u32 = 1;
+pub const SYNC_VERSION: u32 = 2;
 
 /// A registered database migration.
 struct DbMigration {
@@ -42,18 +42,25 @@ struct DbMigration {
 ///
 /// Each migration is applied exactly once. To add a new migration, append an
 /// entry with the next version number and bump `DB_VERSION`.
-const DB_MIGRATIONS: &[DbMigration] = &[DbMigration {
-    version: 1,
-    description: "Add UNIQUE indexes to tombstone tables to prevent unbounded growth",
-    sql: concat!(
-        "DELETE FROM deleted_items WHERE rowid NOT IN (SELECT MIN(rowid) FROM deleted_items GROUP BY content_hash);",
-        "DELETE FROM deleted_tags WHERE rowid NOT IN (SELECT MIN(rowid) FROM deleted_tags GROUP BY name);",
-        "DELETE FROM unfavorited_items WHERE rowid NOT IN (SELECT MIN(rowid) FROM unfavorited_items GROUP BY content_hash);",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_del_items_hash_uq ON deleted_items(content_hash);",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_del_tags_name_uq ON deleted_tags(name);",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_uf_items_hash_uq ON unfavorited_items(content_hash);",
-    ),
-}];
+const DB_MIGRATIONS: &[DbMigration] = &[
+    DbMigration {
+        version: 1,
+        description: "Add UNIQUE indexes to tombstone tables to prevent unbounded growth",
+        sql: concat!(
+            "DELETE FROM deleted_items WHERE rowid NOT IN (SELECT MIN(rowid) FROM deleted_items GROUP BY content_hash);",
+            "DELETE FROM deleted_tags WHERE rowid NOT IN (SELECT MIN(rowid) FROM deleted_tags GROUP BY name);",
+            "DELETE FROM unfavorited_items WHERE rowid NOT IN (SELECT MIN(rowid) FROM unfavorited_items GROUP BY content_hash);",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_del_items_hash_uq ON deleted_items(content_hash);",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_del_tags_name_uq ON deleted_tags(name);",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_uf_items_hash_uq ON unfavorited_items(content_hash);",
+        ),
+    },
+    DbMigration {
+        version: 2,
+        description: "Add meta_type column for email/phone plain-text subtypes",
+        sql: "ALTER TABLE clipboard_items ADD COLUMN meta_type TEXT NOT NULL DEFAULT ''",
+    },
+];
 
 /// Run all pending database migrations, updating `PRAGMA user_version`.
 ///
@@ -89,16 +96,12 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Migrate an older sync payload to the current protocol version.
 ///
-/// Currently a no-op (only v1 exists). When `SYNC_VERSION` is bumped, add
-/// transform logic here to upgrade payloads from older versions.
+/// When `SYNC_VERSION` is bumped, add transform logic here to upgrade
+/// payloads from older versions.
 pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
-    // Example for future v2 migration:
-    //
-    // if payload.version < 2 {
-    //     // Transform v1 → v2 fields
-    //     payload.version = 2;
-    // }
-    //
-    // Always set version to current after migration.
-    let _ = payload; // Keep unused-var warning silent until first migration is added
+    if payload.version < 2 {
+        // v1 → v2: SyncItem.meta_type added with #[serde(default)] — no data
+        // transform needed since missing field defaults to "" on deserialization.
+        payload.version = 2;
+    }
 }
