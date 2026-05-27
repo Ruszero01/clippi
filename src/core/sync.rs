@@ -201,7 +201,7 @@ pub fn build_snapshot(
     }
 
     // Only include tags that are referenced by the synced items
-    let all_tags: Vec<SyncTag> = if used_tag_names.is_empty() {
+    let mut all_tags: Vec<SyncTag> = if used_tag_names.is_empty() {
         Vec::new()
     } else {
         db.get_all_tags()
@@ -217,7 +217,7 @@ pub fn build_snapshot(
     };
 
     // Collect recent tombstones (30-day window)
-    let deleted_items: Vec<SyncDeletedItem> = db
+    let mut deleted_items: Vec<SyncDeletedItem> = db
         .get_deleted_items_recent(30)
         .map_err(|e| format!("query item tombstones: {e}"))?
         .into_iter()
@@ -228,7 +228,7 @@ pub fn build_snapshot(
         })
         .collect();
 
-    let deleted_tags: Vec<SyncDeletedTag> = db
+    let mut deleted_tags: Vec<SyncDeletedTag> = db
         .get_deleted_tags_recent(30)
         .map_err(|e| format!("query tag tombstones: {e}"))?
         .into_iter()
@@ -239,7 +239,7 @@ pub fn build_snapshot(
         })
         .collect();
 
-    let unfavorited_items: Vec<SyncUnfavoritedItem> = db
+    let mut unfavorited_items: Vec<SyncUnfavoritedItem> = db
         .get_unfavorited_recent(30)
         .map_err(|e| format!("query unfavorite markers: {e}"))?
         .into_iter()
@@ -249,6 +249,19 @@ pub fn build_snapshot(
             device_name: dev,
         })
         .collect();
+
+    // Sort all arrays deterministically so semantic hashes match across devices.
+    // SQL queries return rows in undefined order, and HashMap iteration is
+    // non-deterministic — without sorting, two devices with identical logical
+    // state produce different hashes and endlessly overwrite each other.
+    for item in &mut sync_items {
+        item.tags.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    sync_items.sort_by_key(|i| i.content_hash);
+    all_tags.sort_by(|a, b| a.name.cmp(&b.name));
+    deleted_items.sort_by_key(|d| d.content_hash);
+    deleted_tags.sort_by(|a, b| a.name.cmp(&b.name));
+    unfavorited_items.sort_by_key(|u| u.content_hash);
 
     Ok(SyncPayload {
         version: crate::core::migration::SYNC_VERSION,
@@ -607,6 +620,16 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
     if other.synced_at > base.synced_at {
         base.synced_at = other.synced_at;
     }
+
+    // Sort deterministically so semantic hashes match across devices.
+    for item in &mut base.items {
+        item.tags.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    base.items.sort_by_key(|i| i.content_hash);
+    base.tags.sort_by(|a, b| a.name.cmp(&b.name));
+    base.deleted_items.sort_by_key(|d| d.content_hash);
+    base.deleted_tags.sort_by(|a, b| a.name.cmp(&b.name));
+    base.unfavorited_items.sort_by_key(|u| u.content_hash);
 
     base
 }
