@@ -5,11 +5,6 @@ export component SideTagBar inherits Rectangle {
     in property <[TagItem]> sidebar-tags: [];
     in property <bool> dark-mode: false;
 
-    // Hover tooltip state — y tracks the tag row position, not the mouse
-    out property <int> hovered-tag-index: -1;
-    out property <string> hovered-tag-name: "";
-    out property <length> hovered-tag-y: 0px;
-
     callback toggle-tag-filter(int);
     callback toggle-pin(int);
 
@@ -57,7 +52,7 @@ export component SideTagBar inherits Rectangle {
                 y: (22px - self.height) / 2;
                 border-radius: 2px;
                 background: tag.color;
-                animate height { duration: 300ms; easing: ease-in-out; }
+                animate height { duration: 150ms; easing: ease-in-out; }
             }
 
             // Tag name
@@ -87,16 +82,6 @@ export component SideTagBar inherits Rectangle {
                 }
             }
             mouse-cursor: interactable ? pointer : default;
-            changed has-hover => {
-                if self.has-hover && !tag.checked && tag.pinned {
-                    root.hovered-tag-index = idx;
-                    root.hovered-tag-name = tag.name;
-                    root.hovered-tag-y = idx * 24px;
-                } else if !self.has-hover && root.hovered-tag-index == idx {
-                    root.hovered-tag-index = -1;
-                    root.hovered-tag-name = "";
-                }
-            }
         }
     }
 }

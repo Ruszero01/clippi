@@ -621,28 +621,6 @@ export component App inherits Window {
             }
         }
 
-        // ========== 侧边标签悬浮提示 (z-order 在主面板之上) ==========
-        if sidebar.hovered-tag-name != "" : Rectangle {
-            x: 10px;
-            y: sidebar.y + sidebar.hovered-tag-y;
-            height: 22px;
-            width: tip-text.preferred-width + 16px;
-            border-radius: 6px;
-            background: dark-mode ? #3a3b3df0 : #fffffff0;
-            drop-shadow-blur: 8px;
-            drop-shadow-color: #00000018;
-
-            tip-text := Text {
-                text: sidebar.hovered-tag-name;
-                font-size: 11px;
-                color: dark-mode ? #eaebec : #5a5d70;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-                x: 8px;
-                width: parent.width - 16px;
-            }
-        }
-
         // ========== 右键菜单浮层 ==========
         if root.context-menu-visible: ContextMenu {
             menu-x: root.context-menu-x;
