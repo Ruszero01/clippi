@@ -658,6 +658,15 @@ fn run_sync_cycle_for_backend(
         if rh == local_hash {
             return (true, i18n::tr("已是最新", "Up to date").into(), stats, 0, 0);
         }
+        // Hashes differ, but if the merge didn't change anything locally,
+        // the difference is an unresolvable conflict (e.g. a tombstone
+        // older than the local item, or an item skipped due to a local
+        // tombstone). Pushing our snapshot won't change the remote side
+        // — it will do the same thing we just did and skip everything.
+        // Skip the push to break the infinite overwrite loop.
+        if stats.is_empty() {
+            return (true, i18n::tr("已是最新", "Up to date").into(), stats, 0, 0);
+        }
     }
 
     let pushed_items = payload.items.len() as u32;
