@@ -20,6 +20,9 @@ export component App inherits Window {
     always-on-top: pinned;
     background: transparent;
     forward-focus: key-handler;
+    // macOS: SF Pro lacks CJK glyphs — "system-cjk" (苹方) is registered at runtime.
+    // On other platforms, falls back to default SansSerif which already has CJK coverage.
+    default-font-family: "system-cjk";
 
     // 窗口最小/最大尺寸
     min-width: 360px;

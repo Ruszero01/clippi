@@ -40,6 +40,22 @@ fn init_logging(db_path: &str) {
     }
 }
 
+/// Search for PingFang.ttc under the MobileAsset font directory.
+/// macOS 13+ delivers system CJK fonts via AssetsV2 at hash-based paths.
+/// Returns `None` if not found; caller should fall back to STHeiti.
+#[cfg(target_os = "macos")]
+fn find_pingfang_path() -> Option<String> {
+    let assets_dir =
+        std::fs::read_dir("/System/Library/AssetsV2/com_apple_MobileAsset_Font8").ok()?;
+    for entry in assets_dir.filter_map(|e| e.ok()) {
+        let candidate = entry.path().join("AssetData").join("PingFang.ttc");
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 fn main() {
     // Prevent multiple instances — desktop clipboard manager must be a singleton.
     if !ensure_single_instance() {
@@ -85,10 +101,15 @@ fn main() {
     }
 
     // On macOS, the default SansSerif font (SF Pro) lacks CJK glyphs.
-    // Register STHeiti system font under a known family name for CJK rendering.
+    // Find and register PingFang or STHeiti as a CJK font.
     #[cfg(target_os = "macos")]
     {
-        if let Ok(font_data) = std::fs::read("/System/Library/Fonts/STHeiti Medium.ttc") {
+        // macOS 13+ delivers PingFang via MobileAsset at a hash-based path.
+        // Search AssetsV2 first; fall back to the stable STHeiti path.
+        let cjk_font_path = find_pingfang_path()
+            .unwrap_or_else(|| "/System/Library/Fonts/STHeiti Medium.ttc".into());
+
+        if let Ok(font_data) = std::fs::read(&cjk_font_path) {
             let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
             let mut collection = slint::fontique_08::shared_collection();
             let cjk_override = slint::fontique_08::fontique::FontInfoOverride {
