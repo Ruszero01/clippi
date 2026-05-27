@@ -306,7 +306,22 @@ pub fn merge_remote_into_local(
             .is_item_tombstoned(tombstone.content_hash)
             .unwrap_or(false)
         {
-            continue; // already tombstoned
+            // Already tombstoned — but the remote tombstone may have a newer
+            // deleted_at. Replace the local tombstone if remote is newer so
+            // stale timestamps don't propagate to other devices.
+            if let Ok(Some(local_at)) =
+                db.get_item_tombstone_deleted_at(tombstone.content_hash)
+            {
+                if rfc3339_newer(&tombstone.deleted_at, &local_at) {
+                    let _ = db.remove_item_tombstone(tombstone.content_hash);
+                    let _ = db.record_item_deletion(
+                        tombstone.content_hash,
+                        &tombstone.deleted_at,
+                        &tombstone.device_name,
+                    );
+                }
+            }
+            continue;
         }
         // Check local item age before recording the tombstone.
         // If the local item is newer, the user recreated it after deletion —
@@ -344,7 +359,20 @@ pub fn merge_remote_into_local(
             continue; // own unfavorite, already handled
         }
         if db.is_item_unfavorited(uf.content_hash).unwrap_or(false) {
-            continue; // already marked
+            // Already marked — replace if remote marker is newer.
+            if let Ok(Some(local_at)) =
+                db.get_unfavorite_deleted_at(uf.content_hash)
+            {
+                if rfc3339_newer(&uf.unfavorited_at, &local_at) {
+                    let _ = db.remove_unfavorite(uf.content_hash);
+                    let _ = db.record_unfavorite(
+                        uf.content_hash,
+                        &uf.unfavorited_at,
+                        &uf.device_name,
+                    );
+                }
+            }
+            continue;
         }
         // Check local item age before recording the marker.
         // If the local item is newer, the user re-favorited it — skip.
@@ -389,7 +417,20 @@ pub fn merge_remote_into_local(
             continue;
         }
         if db.is_tag_tombstoned(&tombstone.name).unwrap_or(false) {
-            continue; // already tombstoned
+            // Already tombstoned — replace if remote tombstone is newer.
+            if let Ok(Some(local_at)) =
+                db.get_tag_tombstone_deleted_at(&tombstone.name)
+            {
+                if rfc3339_newer(&tombstone.deleted_at, &local_at) {
+                    let _ = db.remove_tag_tombstone(&tombstone.name);
+                    let _ = db.record_tag_deletion(
+                        &tombstone.name,
+                        &tombstone.deleted_at,
+                        &tombstone.device_name,
+                    );
+                }
+            }
+            continue;
         }
         // Check local tag age before recording the tombstone.
         // If the local tag is newer, the user recreated it — skip.
@@ -495,7 +536,7 @@ pub fn merge_remote_into_local(
             {
                 let remote_ts = parse_rfc3339(&remote_item.updated_at);
                 let del_ts = parse_rfc3339(&deleted_at);
-                remote_ts.is_some_and(|r| del_ts.is_none_or(|d| r > d))
+                remote_ts.is_some_and(|r| del_ts.is_some_and(|d| r > d))
             } else {
                 false
             };
@@ -616,7 +657,7 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
     for item in other.items {
         match item_map.get(&item.content_hash) {
             Some(existing) => {
-                if item.updated_at.as_str() > existing.updated_at.as_str() {
+                if rfc3339_newer(&item.updated_at, &existing.updated_at) {
                     item_map.insert(item.content_hash, item);
                 }
             }
@@ -636,7 +677,7 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
     for tag in other.tags {
         match tag_map.get(&tag.name) {
             Some(existing) => {
-                if tag.updated_at.as_str() > existing.updated_at.as_str() {
+                if rfc3339_newer(&tag.updated_at, &existing.updated_at) {
                     tag_map.insert(tag.name.clone(), tag);
                 }
             }
@@ -647,40 +688,68 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
     }
     base.tags = tag_map.into_values().collect();
 
-    // Deduplicate tombstones
+    // Deduplicate tombstones, keeping the newer deleted_at when keys collide.
     {
-        let mut seen: std::collections::HashSet<u64> =
-            base.deleted_items.iter().map(|d| d.content_hash).collect();
+        let mut seen: std::collections::HashMap<u64, SyncDeletedItem> = base
+            .deleted_items
+            .into_iter()
+            .map(|d| (d.content_hash, d))
+            .collect();
         for d in other.deleted_items {
-            if seen.insert(d.content_hash) {
-                base.deleted_items.push(d);
+            match seen.get(&d.content_hash) {
+                Some(existing) if rfc3339_newer(&d.deleted_at, &existing.deleted_at) => {
+                    seen.insert(d.content_hash, d);
+                }
+                None => {
+                    seen.insert(d.content_hash, d);
+                }
+                _ => {}
             }
         }
+        base.deleted_items = seen.into_values().collect();
     }
     {
-        let mut seen: std::collections::HashSet<String> =
-            base.deleted_tags.iter().map(|d| d.name.clone()).collect();
+        let mut seen: std::collections::HashMap<String, SyncDeletedTag> = base
+            .deleted_tags
+            .into_iter()
+            .map(|d| (d.name.clone(), d))
+            .collect();
         for d in other.deleted_tags {
-            if seen.insert(d.name.clone()) {
-                base.deleted_tags.push(d);
+            match seen.get(&d.name) {
+                Some(existing) if rfc3339_newer(&d.deleted_at, &existing.deleted_at) => {
+                    seen.insert(d.name.clone(), d);
+                }
+                None => {
+                    seen.insert(d.name.clone(), d);
+                }
+                _ => {}
             }
         }
+        base.deleted_tags = seen.into_values().collect();
     }
     {
-        let mut seen: std::collections::HashSet<u64> = base
+        let mut seen: std::collections::HashMap<u64, SyncUnfavoritedItem> = base
             .unfavorited_items
-            .iter()
-            .map(|u| u.content_hash)
+            .into_iter()
+            .map(|u| (u.content_hash, u))
             .collect();
         for u in other.unfavorited_items {
-            if seen.insert(u.content_hash) {
-                base.unfavorited_items.push(u);
+            match seen.get(&u.content_hash) {
+                Some(existing) if rfc3339_newer(&u.unfavorited_at, &existing.unfavorited_at) => {
+                    seen.insert(u.content_hash, u);
+                }
+                None => {
+                    seen.insert(u.content_hash, u);
+                }
+                _ => {}
             }
         }
+        base.unfavorited_items = seen.into_values().collect();
     }
 
-    // Use the newer synced_at and device_name from whichever payload has it
-    if other.synced_at > base.synced_at {
+    // Use the newer synced_at, comparing as DateTime to handle
+    // variable-length RFC3339 representations correctly.
+    if rfc3339_newer(&other.synced_at, &base.synced_at) {
         base.synced_at = other.synced_at;
     }
 
@@ -700,6 +769,16 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
 /// Parse an RFC3339 string to Utc DateTime, returning None on failure.
 fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     s.parse::<chrono::DateTime<chrono::Utc>>().ok()
+}
+
+/// Compare two RFC3339 strings as DateTime values.
+/// Returns true if `a` is strictly newer than `b`.
+/// Falls back to lexical comparison when either string is unparseable.
+fn rfc3339_newer(a: &str, b: &str) -> bool {
+    match (parse_rfc3339(a), parse_rfc3339(b)) {
+        (Some(ta), Some(tb)) => ta > tb,
+        _ => a > b,
+    }
 }
 
 #[cfg(test)]

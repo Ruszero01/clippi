@@ -549,6 +549,7 @@ impl ClipboardService {
             .lock()
             .expect("db lock poisoned")
             .create_tag(name, color)
+            .map_err(|e| eprintln!("创建标签失败: {e}"))
             .ok()
             .map(|id| crate::core::types::TagInfo {
                 id,

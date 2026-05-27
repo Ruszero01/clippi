@@ -169,7 +169,7 @@ impl Looper {
             });
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         self.timer.stop();
         if let Some(ref mut cs) = *self
             .clipboard_service

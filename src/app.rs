@@ -277,9 +277,7 @@ impl AppController {
         if let Some(mut listener) = self.listener.take() {
             listener.stop();
         }
-        if let Ok(mut looper) = Arc::try_unwrap(self.looper) {
-            looper.stop();
-        }
+        self.looper.stop();
     }
 
     // ── Window callbacks: move, resize, copy, paste, close ──

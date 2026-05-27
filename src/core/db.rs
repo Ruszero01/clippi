@@ -49,7 +49,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
         )?;
         // Tags tables
-        let _ = self.conn.execute_batch(
+        self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -64,9 +64,9 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_item_tags_item ON item_tags(item_id);
             CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);",
-        );
+        )?;
         // Tombstone tables for sync deletion propagation
-        let _ = self.conn.execute_batch(
+        self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS deleted_items (
                 content_hash INTEGER NOT NULL,
                 deleted_at TEXT NOT NULL,
@@ -88,7 +88,7 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_uf_items_hash ON unfavorited_items(content_hash);
             CREATE INDEX IF NOT EXISTS idx_uf_items_at ON unfavorited_items(unfavorited_at);",
-        );
+        )?;
 
         crate::core::migration::run_db_migrations(&self.conn)?;
         Ok(())
@@ -684,6 +684,19 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Get the most recent unfavorited_at timestamp of an unfavorite marker.
+    pub fn get_unfavorite_deleted_at(&self, content_hash: u64) -> SqlResult<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT unfavorited_at FROM unfavorited_items WHERE content_hash = ?1 ORDER BY unfavorited_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![content_hash as i64])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Check if a tag has a local tombstone.

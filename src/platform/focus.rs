@@ -20,9 +20,9 @@ use windows_sys::Win32::UI::Accessibility::{
 use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
-    PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
-    WINEVENT_OUTOFCONTEXT, WM_QUIT,
+    DestroyIcon, DispatchMessageW, GetForegroundWindow, GetWindowTextW,
+    GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, TranslateMessage,
+    EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE, WINEVENT_OUTOFCONTEXT, WM_QUIT,
 };
 
 #[cfg(target_os = "windows")]
@@ -356,7 +356,9 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             SHGFI_ICON | SHGFI_LARGEICON,
         );
         let icon_base64 = if icon_result != 0 && !shfi.hIcon.is_null() {
-            super::util::hicon_to_base64_png(shfi.hIcon, 32).unwrap_or_default()
+            let result = super::util::hicon_to_base64_png(shfi.hIcon, 32).unwrap_or_default();
+            DestroyIcon(shfi.hIcon);
+            result
         } else {
             String::new()
         };
