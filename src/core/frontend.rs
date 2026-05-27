@@ -1,14 +1,15 @@
 //! Frontend management - window visibility and UI operations
 
+use crate::core::settings::AppSettings;
 use crate::core::settings::is_system_dark_mode;
 use crate::platform::monitor;
 use crate::App;
 use slint::{ComponentHandle, LogicalSize, PhysicalPosition};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Default window size (width, height) in logical pixels.
-pub const DEFAULT_WINDOW_WIDTH: f32 = 380.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 360.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -46,6 +47,7 @@ impl PositionMode {
 
 pub struct Frontend {
     app: slint::Weak<App>,
+    settings: Arc<Mutex<AppSettings>>,
     visible: bool,
     suppress_until: Option<std::time::Instant>,
     position_mode: PositionMode,
@@ -58,9 +60,10 @@ pub struct Frontend {
 }
 
 impl Frontend {
-    pub fn new(app: &App, needs_reload: Arc<AtomicBool>, needs_release: Arc<AtomicBool>) -> Self {
+    pub fn new(app: &App, needs_reload: Arc<AtomicBool>, needs_release: Arc<AtomicBool>, settings: Arc<Mutex<AppSettings>>) -> Self {
         Self {
             app: app.as_weak(),
+            settings,
             visible: true,
             suppress_until: None,
             position_mode: PositionMode::Center,
@@ -301,6 +304,15 @@ impl Frontend {
             app.set_add_backend_panel_visible(false);
             app.set_editing_note_id(-1);
             app.set_pinned(false);
+        }
+
+        // Persist window geometry on every dismiss so it survives restarts.
+        // dismiss_ui is called by all hide paths: Esc-close, focus-loss,
+        // tray-toggle, and blank-click dismiss. Saved size is already
+        // up-to-date from resize callbacks.
+        if let Ok(mut s) = self.settings.lock() {
+            self.apply_saved_position_to_settings(&mut s);
+            s.save();
         }
     }
 

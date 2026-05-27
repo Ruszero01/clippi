@@ -14,7 +14,7 @@ import { TagPanelTheme } from "theme.slint";
 export component App inherits Window {
     icon: @image-url("../assets/LOGO.ico");
     title: "Clippi";
-    preferred-width: 380px;
+    preferred-width: 360px;
     preferred-height: 480px;
     no-frame: true;
     always-on-top: pinned;
@@ -22,7 +22,7 @@ export component App inherits Window {
     forward-focus: key-handler;
 
     // 窗口最小/最大尺寸
-    min-width: 380px;
+    min-width: 360px;
     min-height: 480px;
     max-width: 1200px;
     max-height: 1200px;
@@ -290,8 +290,8 @@ export component App inherits Window {
         }
 
         Rectangle {
-            x: 60px;
-            width: parent.width - 60px;
+            x: 36px;
+            width: parent.width - 36px;
             border-radius: 12px;
             background: bg;
             border-width: 1px;

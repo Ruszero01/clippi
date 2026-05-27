@@ -11,6 +11,7 @@ use crate::core::types::{ContentType, RichData};
 use crate::looper::Looper;
 use crate::platform::clipboard::{create_listener, ClipboardShared};
 use crate::platform::hotkey::create_hotkey_listener;
+#[cfg(target_os = "macos")]
 use crate::platform::monitor::get_cursor_pos;
 use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
 use crate::services::clipboard::ClipboardService;
@@ -63,23 +64,8 @@ impl AppController {
         // Initialize shared state
         let db_path = settings.resolve_db_path();
         let db = Arc::new(Mutex::new(Database::open(db_path.to_str().unwrap())?));
-        let needs_reload_flag = Arc::new(AtomicBool::new(false));
-        let needs_release_flag = Arc::new(AtomicBool::new(false));
-        let mut frontend = Frontend::new(
-            slint_app,
-            needs_reload_flag.clone(),
-            needs_release_flag.clone(),
-        );
-        frontend.set_position_mode(PositionMode::from_str(&settings.window_position_mode));
-        frontend.set_saved_position(settings.saved_window_x, settings.saved_window_y);
-        frontend.set_saved_size(settings.saved_window_width, settings.saved_window_height);
-        let frontend = Arc::new(Mutex::new(frontend));
-        let app = slint_app.as_weak();
 
-        // Initialize UI with settings
-        init_ui_from_settings(slint_app, &settings);
-
-        // Wrap in Arc<Mutex<>> so callbacks and shutdown share live settings
+        // Extract values before wrapping settings in Arc
         let auto_hide_setting = settings.auto_hide;
         let hotkey_str = settings.hotkey.clone();
         let blacklist = settings.hotkey_blacklist.clone();
@@ -89,7 +75,33 @@ impl AppController {
         let max_items_setting = settings.max_items;
         let pinned_tag_ids_setting = settings.pinned_tag_ids.clone();
         let copy_as_plain_text_flag = Arc::new(AtomicBool::new(copy_as_plain_text_setting));
+        let window_position_mode = settings.window_position_mode.clone();
+        let saved_window_x = settings.saved_window_x;
+        let saved_window_y = settings.saved_window_y;
+        let saved_window_width = settings.saved_window_width;
+        let saved_window_height = settings.saved_window_height;
+
         let shared_settings = Arc::new(Mutex::new(settings));
+
+        let needs_reload_flag = Arc::new(AtomicBool::new(false));
+        let needs_release_flag = Arc::new(AtomicBool::new(false));
+        let mut frontend = Frontend::new(
+            slint_app,
+            needs_reload_flag.clone(),
+            needs_release_flag.clone(),
+            shared_settings.clone(),
+        );
+        frontend.set_position_mode(PositionMode::from_str(&window_position_mode));
+        frontend.set_saved_position(saved_window_x, saved_window_y);
+        frontend.set_saved_size(saved_window_width, saved_window_height);
+        let frontend = Arc::new(Mutex::new(frontend));
+        let app = slint_app.as_weak();
+
+        // Initialize UI with settings
+        {
+            let s = shared_settings.lock().expect("settings lock poisoned");
+            init_ui_from_settings(slint_app, &s);
+        }
 
         // Create clipboard service (sets up model in new())
         let clipboard_shared = ClipboardShared::new();
@@ -291,7 +303,7 @@ impl AppController {
                 // Clamp delta to prevent runaway window expansion
                 let dx = dx.clamp(-200.0, 600.0);
                 let dy = dy.clamp(-200.0, 600.0);
-                let new_w = (w + dx).clamp(380.0, 1200.0);
+                let new_w = (w + dx).clamp(360.0, 1200.0);
                 let new_h = (h + dy).clamp(480.0, 1200.0);
                 window.set_size(LogicalSize::new(new_w, new_h));
                 if let Ok(mut fe) = ctx_resize.frontend.lock() {
@@ -527,13 +539,11 @@ impl AppController {
             }
         });
 
+        // 此处不处理关闭逻辑，关闭逻辑统一在 Frontend::hide() / dismiss_ui() 中处理。
         let ctx_close = ctx.clone();
         slint_app.on_close_window(move || {
             if let Ok(mut fe) = ctx_close.frontend.lock() {
-                fe.hide(); // handles editing-state cleanup, needs_release, etc.
-                let mut s = ctx_close.settings.lock().expect("settings lock poisoned");
-                fe.apply_saved_position_to_settings(&mut s);
-                s.save();
+                fe.hide();
             }
         });
     }
@@ -1222,23 +1232,39 @@ impl AppController {
                     (false, false, false, false, false)
                 };
 
-                let (cursor_x, cursor_y) = get_cursor_pos().unwrap_or((0, 0));
-                let pos = app.window().position();
-                let scale = app.window().scale_factor();
-                // macOS: get_cursor_pos returns logical points, but
-                // window.position() returns physical pixels. Convert
-                // cursor to physical for correct subtraction.
+                #[cfg(target_os = "windows")]
+                {
+                    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetCursorPos};
+                    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+                    unsafe { GetCursorPos(&mut pt); }
+                    let scale = app.window().scale_factor();
+                    let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
+                    let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
+                    if !hwnd.is_null() {
+                        let mut client_origin = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+                        unsafe { ClientToScreen(hwnd, &mut client_origin); }
+                        // ContextMenu renders with an offset equal to the main
+                        // content panel's x position (36px in app.slint).
+                        const PANEL_OFFSET: f32 = 36.0;
+                        app.set_context_menu_x((pt.x - client_origin.x) as f32 / scale - PANEL_OFFSET);
+                        app.set_context_menu_y((pt.y - client_origin.y) as f32 / scale);
+                    }
+                }
                 #[cfg(target_os = "macos")]
-                let (cursor_x, cursor_y) = {
-                    (
-                        (cursor_x as f32 * scale) as i32,
-                        (cursor_y as f32 * scale) as i32,
-                    )
-                };
-                let client_x = (cursor_x as f32 - pos.x as f32) / scale;
-                let client_y = (cursor_y as f32 - pos.y as f32) / scale;
-                app.set_context_menu_x(client_x);
-                app.set_context_menu_y(client_y);
+                {
+                    let (cursor_x, cursor_y) = get_cursor_pos().unwrap_or((0, 0));
+                    let pos = app.window().position();
+                    let scale = app.window().scale_factor();
+                    let (cursor_x, cursor_y) = {
+                        (
+                            (cursor_x as f32 * scale) as i32,
+                            (cursor_y as f32 * scale) as i32,
+                        )
+                    };
+                    app.set_context_menu_x((cursor_x as f32 - pos.x as f32) / scale);
+                    app.set_context_menu_y((cursor_y as f32 - pos.y as f32) / scale);
+                }
 
                 app.set_context_menu_item_id(id);
                 app.set_context_menu_is_color(is_color);

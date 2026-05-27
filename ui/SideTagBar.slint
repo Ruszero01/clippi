@@ -10,19 +10,16 @@ export component SideTagBar inherits Rectangle {
 
     property <color> text-1: TagPanelTheme.text-1;
 
-    width: 80px;
-    // 高度由父组件动态指定，根据标签数量计算
+    width: 56px;
     background: transparent;
 
     for tag[idx] in root.sidebar-tags: Rectangle {
         height: 22px;
-        width: 80px;
+        width: 56px;
 
-        // Absolute y (22px row + 2px spacing) so x translation is free
         y: idx * 24px;
 
-        // Slide: checked → visible (x=16), pinned-only → peek bar (x=46)
-        x: tag.checked ? 24px : 46px;
+        x: tag.checked ? 0px : 22px;
         animate x { duration: 300ms; easing: ease-in-out; }
 
         // Fade out unpinned tags when unchecked
