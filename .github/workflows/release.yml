@@ -385,8 +385,8 @@ jobs:
           NSIS_ROW="| [${NSIS_FILE}](${NSIS_URL}) | x64 Windows (NSIS) | [checksum](${NSIS_CHECK_URL}) |"
 
           BODY=$(gh release view "$TAG" --json body -q '.body')
-          NEW_BODY=$(echo "$BODY" | awk -v "dmg=${DMG_ROW}" -v "nsis=${NSIS_ROW}" '/Apple Silicon macOS.*tar\.xz/ { print; print dmg; print nsis; next } 1')
-          gh release edit "$TAG" --notes "$NEW_BODY"
+          printf '%s\n\n%s\n%s\n' "$BODY" "$DMG_ROW" "$NSIS_ROW" > "$RUNNER_TEMP/notes.txt"
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.txt"
 
   announce:
     needs:
