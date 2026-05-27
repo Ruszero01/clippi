@@ -335,10 +335,20 @@ pub fn merge_remote_into_local(
         }
     }
 
+    // Collect remote tag names — if a tombstone and a tag share the same name,
+    // the remote device recreated the tag and the tag should take precedence.
+    let remote_tag_names: std::collections::HashSet<&str> =
+        remote.tags.iter().map(|t| t.name.as_str()).collect();
+
     // Phase 2: Process remote tag tombstones
     for tombstone in &remote.deleted_tags {
         if tombstone.device_name == local_device_name {
             continue; // own deletion
+        }
+        // Skip tombstone if the remote payload also includes a tag with the same
+        // name — the sender recreated this tag after deleting it.
+        if remote_tag_names.contains(tombstone.name.as_str()) {
+            continue;
         }
         if db.is_tag_tombstoned(&tombstone.name).unwrap_or(false) {
             continue; // already tombstoned
@@ -364,9 +374,17 @@ pub fn merge_remote_into_local(
 
     // Phase 3: Merge tags — create or update with color conflict resolution
     for remote_tag in &remote.tags {
-        if db.is_tag_tombstoned(&remote_tag.name).unwrap_or(false) {
-            continue; // tag was deleted
+        // If a different device deleted this tag, respect the deletion.
+        // If the tombstone is from the SAME device that sent this payload,
+        // the sender recreated the tag — clear the tombstone and proceed.
+        if db
+            .is_tag_tombstoned_by_other_device(&remote_tag.name, &remote.device_name)
+            .unwrap_or(false)
+        {
+            continue;
         }
+        // Clear any tombstone from the sender so the tag can be recreated.
+        let _ = db.remove_tag_tombstone(&remote_tag.name);
         match db
             .get_tag_by_name(&remote_tag.name)
             .map_err(|e| format!("tag lookup: {e}"))?

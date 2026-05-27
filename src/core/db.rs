@@ -229,6 +229,9 @@ impl Database {
 
     pub fn create_tag(&self, name: &str, color: &str) -> SqlResult<i64> {
         let now = chrono::Utc::now().to_rfc3339();
+        // Clear any existing tombstone — the user is recreating a tag
+        // that was previously deleted.
+        let _ = self.conn.execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
         self.conn.execute(
             "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
             params![name, color, now],
@@ -693,6 +696,29 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// Check if a tag has a tombstone from a device OTHER than the given one.
+    /// Used during merge: if the tombstone is from the same device that sent
+    /// the payload, the sender recreated the tag and we should accept it.
+    pub fn is_tag_tombstoned_by_other_device(
+        &self,
+        name: &str,
+        except_device: &str,
+    ) -> SqlResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM deleted_tags WHERE name = ?1 AND device_name != ?2",
+            params![name, except_device],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Remove a tag tombstone (tag was recreated).
+    pub fn remove_tag_tombstone(&self, name: &str) -> SqlResult<()> {
+        self.conn
+            .execute("DELETE FROM deleted_tags WHERE name = ?1", params![name])?;
+        Ok(())
+    }
+
     /// Delete a local item by content_hash (triggered by remote tombstone).
     pub fn delete_item_by_hash(&self, content_hash: u64) -> SqlResult<bool> {
         let affected = self.conn.execute(
@@ -748,6 +774,8 @@ impl Database {
         color: &str,
         updated_at: &str,
     ) -> SqlResult<i64> {
+        // Clear any existing tombstone — a remote device recreated this tag.
+        let _ = self.conn.execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
         self.conn.execute(
             "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
             params![name, color, updated_at],
