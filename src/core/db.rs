@@ -696,6 +696,20 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// Get the most recent deleted_at timestamp of a tag tombstone.
+    /// Used during merge to compare with remote tag's updated_at.
+    pub fn get_tag_tombstone_deleted_at(&self, name: &str) -> SqlResult<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT deleted_at FROM deleted_tags WHERE name = ?1 ORDER BY deleted_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![name])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Check if a tag has a tombstone from a device OTHER than the given one.
     /// Used during merge: if the tombstone is from the same device that sent
     /// the payload, the sender recreated the tag and we should accept it.
@@ -710,6 +724,29 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Get the most recent deleted_at timestamp of an item tombstone.
+    /// Used during merge to compare with remote item's updated_at.
+    pub fn get_item_tombstone_deleted_at(&self, content_hash: u64) -> SqlResult<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT deleted_at FROM deleted_items WHERE content_hash = ?1 ORDER BY deleted_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![content_hash as i64])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Remove an item tombstone (item was recreated/updated after deletion).
+    pub fn remove_item_tombstone(&self, content_hash: u64) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM deleted_items WHERE content_hash = ?1",
+            params![content_hash as i64],
+        )?;
+        Ok(())
     }
 
     /// Remove a tag tombstone (tag was recreated).

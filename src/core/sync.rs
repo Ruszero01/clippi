@@ -308,22 +308,33 @@ pub fn merge_remote_into_local(
         {
             continue; // already tombstoned
         }
-        // Record tombstone locally for propagation
-        let _ = db.record_item_deletion(
-            tombstone.content_hash,
-            &tombstone.deleted_at,
-            &tombstone.device_name,
-        );
-        // Delete local item if exists and is older than the tombstone
+        // Check local item age before recording the tombstone.
+        // If the local item is newer, the user recreated it after deletion —
+        // skip the tombstone and keep the item.
         if let Ok(Some(local_item)) = db.get_by_hash(tombstone.content_hash) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
-            if remote_ts.is_some_and(|r| r > local_item.updated_at)
-                && db
+            if remote_ts.is_some_and(|r| r > local_item.updated_at) {
+                // Tombstone is newer — delete and record for propagation.
+                if db
                     .delete_item_by_hash(tombstone.content_hash)
                     .unwrap_or(false)
-            {
-                stats.items_deleted += 1;
+                {
+                    stats.items_deleted += 1;
+                }
+                let _ = db.record_item_deletion(
+                    tombstone.content_hash,
+                    &tombstone.deleted_at,
+                    &tombstone.device_name,
+                );
             }
+            // else: local item is newer, do nothing (don't record tombstone)
+        } else {
+            // No local item — record tombstone for propagation to other devices.
+            let _ = db.record_item_deletion(
+                tombstone.content_hash,
+                &tombstone.deleted_at,
+                &tombstone.device_name,
+            );
         }
     }
 
@@ -335,17 +346,30 @@ pub fn merge_remote_into_local(
         if db.is_item_unfavorited(uf.content_hash).unwrap_or(false) {
             continue; // already marked
         }
-        // Record locally for propagation
-        let _ = db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
-        // Unfavorite local item if it exists and is still favorited
+        // Check local item age before recording the marker.
+        // If the local item is newer, the user re-favorited it — skip.
         if let Ok(Some(local_item)) = db.get_by_hash(uf.content_hash) {
             if local_item.is_favorite {
                 let remote_ts = parse_rfc3339(&uf.unfavorited_at);
                 if remote_ts.is_some_and(|r| r > local_item.updated_at) {
                     let _ = db.set_favorite(local_item.id, false);
                     stats.items_updated += 1;
+                    let _ = db.record_unfavorite(
+                        uf.content_hash,
+                        &uf.unfavorited_at,
+                        &uf.device_name,
+                    );
                 }
+                // else: item was re-favorited after unfavorite, skip
             }
+            // else: already not favorited, nothing to do
+        } else {
+            // No local item — record marker for propagation.
+            let _ = db.record_unfavorite(
+                uf.content_hash,
+                &uf.unfavorited_at,
+                &uf.device_name,
+            );
         }
     }
 
@@ -367,37 +391,59 @@ pub fn merge_remote_into_local(
         if db.is_tag_tombstoned(&tombstone.name).unwrap_or(false) {
             continue; // already tombstoned
         }
-        let _ = db.record_tag_deletion(
-            &tombstone.name,
-            &tombstone.deleted_at,
-            &tombstone.device_name,
-        );
-        // Delete local tag if exists and is older than the tombstone
+        // Check local tag age before recording the tombstone.
+        // If the local tag is newer, the user recreated it — skip.
         if let Ok(Some(local_tag)) = db.get_tag_by_name(&tombstone.name) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
             let local_ts = parse_rfc3339(&local_tag.updated_at);
             if remote_ts.is_some_and(|r| local_ts.is_none_or(|l| r > l)) {
-                // Drop immutable ref before mutable delete
+                // Tombstone is newer — delete and record for propagation.
                 drop(local_tag);
                 if db.delete_tag_by_name(&tombstone.name).unwrap_or(false) {
                     stats.tags_deleted += 1;
                 }
+                let _ = db.record_tag_deletion(
+                    &tombstone.name,
+                    &tombstone.deleted_at,
+                    &tombstone.device_name,
+                );
             }
+            // else: local tag is newer, do nothing (don't record tombstone)
+        } else {
+            // No local tag — record tombstone for propagation.
+            let _ = db.record_tag_deletion(
+                &tombstone.name,
+                &tombstone.deleted_at,
+                &tombstone.device_name,
+            );
         }
     }
 
     // Phase 3: Merge tags — create or update with color conflict resolution
     for remote_tag in &remote.tags {
-        // If a different device deleted this tag, respect the deletion.
-        // If the tombstone is from the SAME device that sent this payload,
-        // the sender recreated the tag — clear the tombstone and proceed.
-        if db
-            .is_tag_tombstoned_by_other_device(&remote_tag.name, &remote.device_name)
-            .unwrap_or(false)
-        {
-            continue;
+        // If this tag is locally tombstoned, compare timestamps. The remote
+        // tag may be newer (recreated after deletion) — in that case accept it.
+        if db.is_tag_tombstoned(&remote_tag.name).unwrap_or(false) {
+            if remote_tag.updated_at.is_empty() {
+                // v1 tag without timestamp — fall back to device-based check.
+                if db
+                    .is_tag_tombstoned_by_other_device(&remote_tag.name, &remote.device_name)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+            } else if let Ok(Some(deleted_at)) =
+                db.get_tag_tombstone_deleted_at(&remote_tag.name)
+            {
+                let remote_ts = parse_rfc3339(&remote_tag.updated_at);
+                let del_ts = parse_rfc3339(&deleted_at);
+                if remote_ts.is_some_and(|r| del_ts.is_some_and(|d| d >= r)) {
+                    continue; // tombstone is newer or same age, skip
+                }
+                // Remote tag is newer — fall through to clear tombstone and import.
+            }
         }
-        // Clear any tombstone from the sender so the tag can be recreated.
+        // Clear any tombstone so the tag can be recreated.
         let _ = db.remove_tag_tombstone(&remote_tag.name);
         match db
             .get_tag_by_name(&remote_tag.name)
@@ -436,13 +482,30 @@ pub fn merge_remote_into_local(
         }
     }
 
-    // Phase 4: Merge items by content_hash (last-writer-wins, skip tombstoned)
+    // Phase 4: Merge items by content_hash (last-writer-wins)
     for remote_item in &remote.items {
         if db
             .is_item_tombstoned(remote_item.content_hash)
             .unwrap_or(false)
         {
-            continue; // locally tombstoned, don't re-import
+            // Locally tombstoned, but the remote version may be newer —
+            // the item could have been recreated after deletion.
+            let should_import = if let Ok(Some(deleted_at)) =
+                db.get_item_tombstone_deleted_at(remote_item.content_hash)
+            {
+                let remote_ts = parse_rfc3339(&remote_item.updated_at);
+                let del_ts = parse_rfc3339(&deleted_at);
+                remote_ts.is_some_and(|r| del_ts.is_none_or(|d| r > d))
+            } else {
+                false
+            };
+            if should_import {
+                let _ = db.remove_item_tombstone(remote_item.content_hash);
+                let _ = db.remove_unfavorite(remote_item.content_hash);
+                // fall through to import below
+            } else {
+                continue; // tombstone is newer or same age, skip
+            }
         }
         let local = db
             .get_by_hash(remote_item.content_hash)
