@@ -123,7 +123,7 @@ impl Frontend {
                 (
                     (size.width as f32 / scale) as i32,
                     (size.height as f32 / scale) as i32,
-                    60, // sidebar is 60 logical px; macOS coords are logical
+                    36, // content panel x in app.slint (logical px)
                 )
             };
             #[cfg(not(target_os = "macos"))]
@@ -132,7 +132,7 @@ impl Frontend {
                 (
                     size.width as i32,
                     size.height as i32,
-                    (60.0 * scale) as i32, // sidebar 60 logical → physical px
+                    (36.0 * scale) as i32,
                 )
             };
 
