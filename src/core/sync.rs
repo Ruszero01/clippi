@@ -330,6 +330,7 @@ pub fn merge_remote_into_local(
                 let remote_ts = parse_rfc3339(&uf.unfavorited_at);
                 if remote_ts.is_some_and(|r| r > local_item.updated_at) {
                     let _ = db.set_favorite(local_item.id, false);
+                    stats.items_updated += 1;
                 }
             }
         }

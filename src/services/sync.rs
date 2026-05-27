@@ -427,10 +427,13 @@ impl SyncManager {
     fn apply_backend_result(&mut self, result: BackendSyncResult) {
         let msg = result.message.clone();
 
-        // Show merge stats, or push counts if no remote data was merged
+        // Show merge stats, or push counts if no remote data was merged.
+        // Include tag and unfavorite changes — they also modify the UI model.
         let has_merge = result.stats.items_added > 0
             || result.stats.items_updated > 0
-            || result.stats.items_deleted > 0;
+            || result.stats.items_deleted > 0
+            || result.stats.tags_added > 0
+            || result.stats.tags_deleted > 0;
         let items_added = if has_merge {
             result.stats.items_added
         } else {
