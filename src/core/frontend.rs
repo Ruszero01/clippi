@@ -306,14 +306,26 @@ impl Frontend {
             app.set_pinned(false);
         }
 
-        // Persist window geometry on every dismiss so it survives restarts.
-        // dismiss_ui is called by all hide paths: Esc-close, focus-loss,
-        // tray-toggle, and blank-click dismiss. Saved size is already
-        // up-to-date from resize callbacks.
-        if let Ok(mut s) = self.settings.lock() {
-            self.apply_saved_position_to_settings(&mut s);
-            s.save();
-        }
+        // Persist window geometry on a background thread so synchronous
+        // file I/O doesn't block the main thread and cause hide delay.
+        let saved_width = self.saved_window_width;
+        let saved_height = self.saved_window_height;
+        let saved_x = self.saved_window_x;
+        let saved_y = self.saved_window_y;
+        let settings = self.settings.clone();
+        std::thread::spawn(move || {
+            if let Ok(mut s) = settings.lock() {
+                if saved_x >= 0 && saved_y >= 0 {
+                    s.saved_window_x = saved_x;
+                    s.saved_window_y = saved_y;
+                }
+                if saved_width > 0.0 && saved_height > 0.0 {
+                    s.saved_window_width = saved_width;
+                    s.saved_window_height = saved_height;
+                }
+                s.save();
+            }
+        });
     }
 
     /// Dismiss UI and switch back to clipboard view (blank-click dismiss).
