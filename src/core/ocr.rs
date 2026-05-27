@@ -42,23 +42,54 @@ mod win {
                 .get()
                 .map_err(|e| format!("OCR BitmapDecoder get: {e}"))?;
 
-            let bitmap = decoder
+            let raw_bitmap = decoder
                 .GetSoftwareBitmapAsync()
                 .map_err(|e| format!("OCR GetSoftwareBitmap: {e}"))?
                 .get()
                 .map_err(|e| format!("OCR GetSoftwareBitmap get: {e}"))?;
 
-            let engine = windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages()
-                .map_err(|e| format!("OCR OcrEngine: {e}"))?;
+            // Convert to Gray8 — the Windows OCR engine works best with grayscale
+            let bitmap = windows::Graphics::Imaging::SoftwareBitmap::Convert(
+                &raw_bitmap,
+                windows::Graphics::Imaging::BitmapPixelFormat::Gray8,
+            )
+            .map_err(|e| format!("OCR Convert to Gray8: {e}"))?;
 
-            let result = engine
-                .RecognizeAsync(&bitmap)
-                .map_err(|e| format!("OCR RecognizeAsync: {e}"))?
-                .get()
-                .map_err(|e| format!("OCR RecognizeAsync get: {e}"))?;
+            // Language priority mirrors macOS behavior:
+            // ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"]
+            // Try zh-Hans first for Chinese accuracy, then user languages, then en-US
+            let language_tags: &[(bool, &str)] = &[
+                (false, "zh-Hans"),   // Simplified Chinese (primary)
+                (true, ""),           // User profile languages
+                (false, "en-US"),     // English final fallback
+            ];
 
-            let text = result.Text().map_err(|e| format!("OCR Text: {e}"))?;
-            Ok(text.to_string())
+            for &(use_profile, tag) in language_tags {
+                let engine = if use_profile {
+                    windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages().ok()
+                } else {
+                    let lang = match windows::Globalization::Language::CreateLanguage(&HSTRING::from(tag)) {
+                        Ok(l) => l,
+                        Err(_) => continue,
+                    };
+                    windows::Media::Ocr::OcrEngine::TryCreateFromLanguage(&lang).ok()
+                };
+
+                if let Some(engine) = engine {
+                    if let Ok(result) = engine.RecognizeAsync(&bitmap) {
+                        if let Ok(result) = result.get() {
+                            if let Ok(text) = result.Text() {
+                                let s = text.to_string();
+                                if !s.trim().is_empty() {
+                                    return Ok(s);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Err("OCR: no text recognized with any available language".to_string())
         }
     }
 }
