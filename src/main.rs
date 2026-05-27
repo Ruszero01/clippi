@@ -84,6 +84,33 @@ fn main() {
         let _fonts = collection.register_fonts(blob, None);
     }
 
+    // On macOS, the default SansSerif font (SF Pro) lacks CJK glyphs.
+    // Add system CJK fonts as fallbacks so Chinese/Japanese/Korean text renders.
+    #[cfg(target_os = "macos")]
+    {
+        use slint::fontique_08::fontique::{FallbackKey, GenericFamily, Script};
+        let mut collection = slint::fontique_08::shared_collection();
+        collection.load_system_fonts();
+
+        for family_name in &["PingFang SC", "PingFang TC", "PingFang HK"] {
+            if let Some(family_id) = collection.family_id(family_name) {
+                collection.append_generic_families(
+                    GenericFamily::SansSerif,
+                    [family_id].into_iter(),
+                );
+                // Register script-based fallback for CJK characters
+                for script_tag in &["Hans", "Hant", "Jpan", "Kore"] {
+                    if let Ok(script) = Script::parse(script_tag) {
+                        collection.append_fallbacks(
+                            FallbackKey::new(script, None::<&slint::fontique_08::fontique::Language>),
+                            [family_id].into_iter(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let controller = app::AppController::new(&slint_app).expect("Failed to init");
     let restart_flag = controller.restart_flag();
 
