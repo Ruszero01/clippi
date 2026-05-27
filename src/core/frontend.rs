@@ -218,12 +218,12 @@ impl Frontend {
             let window = app.window();
             window.show().ok();
             let w = if self.saved_window_width > 0.0 {
-                self.saved_window_width
+                self.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
             } else {
                 DEFAULT_WINDOW_WIDTH
             };
             let h = if self.saved_window_height > 0.0 {
-                self.saved_window_height
+                self.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
             } else {
                 DEFAULT_WINDOW_HEIGHT
             };
@@ -255,12 +255,12 @@ impl Frontend {
             let window = app.window();
             window.show().ok();
             let w = if self.saved_window_width > 0.0 {
-                self.saved_window_width
+                self.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
             } else {
                 DEFAULT_WINDOW_WIDTH
             };
             let h = if self.saved_window_height > 0.0 {
-                self.saved_window_height
+                self.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
             } else {
                 DEFAULT_WINDOW_HEIGHT
             };
@@ -348,12 +348,12 @@ impl Frontend {
             let window = app.window();
             window.show().ok();
             let w = if self.saved_window_width > 0.0 {
-                self.saved_window_width
+                self.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
             } else {
                 DEFAULT_WINDOW_WIDTH
             };
             let h = if self.saved_window_height > 0.0 {
-                self.saved_window_height
+                self.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
             } else {
                 DEFAULT_WINDOW_HEIGHT
             };

@@ -155,39 +155,35 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     }
 
     if ctx.has(ContentFormat::Image) {
-        if let Ok(img) = ctx.get_image() {
-            if !img.is_empty() {
-                let (iw, ih) = img.get_size();
-                let png_bytes = img.to_png().ok()?;
-                let mut hasher = DefaultHasher::new();
-                hasher.write(png_bytes.get_bytes());
-                let hash = hasher.finish();
+        if let Some((png_data, iw, ih)) = read_clipboard_image_png(ctx) {
+            let mut hasher = DefaultHasher::new();
+            hasher.write(&png_data);
+            let hash = hasher.finish();
 
-                let img_dir = images_dir();
-                let file_name = format!("{:016x}.png", hash);
-                let file_path = img_dir.join(&file_name);
+            let img_dir = images_dir();
+            let file_name = format!("{:016x}.png", hash);
+            let file_path = img_dir.join(&file_name);
 
-                if !file_path.exists() {
-                    let path = file_path.clone();
-                    let dir = img_dir.clone();
-                    std::thread::spawn(move || {
-                        if png_bytes.save_to_path(path.to_str().unwrap_or("")).is_ok() {
-                            generate_thumbnail(&path, &dir, hash);
-                        }
-                    });
-                } else {
-                    generate_thumbnail(&file_path, &img_dir, hash);
-                }
-
-                return Some(ClipboardItem::new_image(
-                    0,
-                    file_path.to_str().unwrap_or(""),
-                    hash,
-                    iw,
-                    ih,
-                    source_info.as_ref(),
-                ));
+            if !file_path.exists() {
+                let path = file_path.clone();
+                let dir = img_dir.clone();
+                std::thread::spawn(move || {
+                    if std::fs::write(&path, &png_data).is_ok() {
+                        generate_thumbnail(&path, &dir, hash);
+                    }
+                });
+            } else {
+                generate_thumbnail(&file_path, &img_dir, hash);
             }
+
+            return Some(ClipboardItem::new_image(
+                0,
+                file_path.to_str().unwrap_or(""),
+                hash,
+                iw,
+                ih,
+                source_info.as_ref(),
+            ));
         }
     }
 
@@ -277,6 +273,37 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     None
 }
 
+/// Parse PNG image dimensions from raw bytes without full decoding.
+/// Only reads the 24-byte header (signature + IHDR chunk header).
+fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    if data.len() < 24 || data[0..8] != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        return None;
+    }
+    let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+    let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+    Some((w, h))
+}
+
+/// Extract PNG bytes and dimensions from a clipboard image.
+/// Fast path: `get_buffer("PNG")` for native PNG (avoids decode→re-encode).
+/// Fallback: `get_image()` + `to_png()` for TIFF etc (e.g. macOS screenshots).
+fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(Vec<u8>, u32, u32)> {
+    // Fast path: raw PNG bytes already on pasteboard
+    if let Ok(raw_png) = ctx.get_buffer("PNG") {
+        if let Some((w, h)) = png_dimensions(&raw_png) {
+            return Some((raw_png, w, h));
+        }
+    }
+    // Fallback: decode + re-encode (e.g. TIFF screenshots on macOS)
+    let img = ctx.get_image().ok()?;
+    if img.is_empty() {
+        return None;
+    }
+    let (w, h) = img.get_size();
+    let png_bytes = img.to_png().ok()?;
+    Some((png_bytes.get_bytes().to_vec(), w, h))
+}
+
 /// Target thumbnail width matching the card content area logical-pixel width.
 const THUMB_WIDTH: u32 = 310;
 
@@ -323,30 +350,13 @@ impl PollingClipboardListener {
     }
 
     fn capture_baseline(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
         *self.startup_end.lock().unwrap() = Some(Instant::now());
         if let Ok(ctx) = ClipboardContext::new() {
-            if let Ok(text) = ctx.get_text() {
-                if !text.is_empty() {
-                    text.hash(&mut hasher);
-                }
-            }
-            if ctx.has(ContentFormat::Image) {
-                hasher.write(b"[img]");
-                if let Ok(png_bytes) = ctx.get_buffer("PNG") {
-                    hasher.write(&png_bytes);
-                }
-            }
-            if ctx.has(ContentFormat::Files) {
-                hasher.write(b"[files]");
-                if let Ok(files) = ctx.get_files() {
-                    for path in &files {
-                        path.hash(&mut hasher);
-                    }
-                }
+            if let Some(item) = detect_clipboard_content(&ctx) {
+                return item.content_hash;
             }
         }
-        hasher.finish()
+        0
     }
 }
 
@@ -439,42 +449,11 @@ impl ClipboardListener for PollingClipboardListener {
                     .is_none_or(|end| end.elapsed().as_millis() > 500);
 
                 if let Ok(ctx) = ClipboardContext::new() {
-                    let mut hasher = DefaultHasher::new();
-                    let mut has_text = false;
-
-                    if let Ok(text) = ctx.get_text() {
-                        if !text.is_empty() {
-                            text.hash(&mut hasher);
-                            has_text = true;
-                        }
-                    }
-
-                    let has_img = ctx.has(ContentFormat::Image);
-                    if has_img {
-                        hasher.write(b"[img]");
-                        if let Ok(png_bytes) = ctx.get_buffer("PNG") {
-                            hasher.write(&png_bytes);
-                        }
-                    }
-
-                    let has_files = ctx.has(ContentFormat::Files);
-                    if has_files {
-                        hasher.write(b"[files]");
-                        if let Ok(files) = ctx.get_files() {
-                            for path in &files {
-                                path.hash(&mut hasher);
-                            }
-                        }
-                    }
-
-                    let has_content = has_text || has_img || has_files;
-
-                    if has_content {
-                        let hash = hasher.finish();
+                    if let Some(item) = detect_clipboard_content(&ctx) {
                         let changed = {
                             let mut last = last_hash.lock().unwrap();
-                            if hash != *last {
-                                *last = hash;
+                            if item.content_hash != *last {
+                                *last = item.content_hash;
                                 true
                             } else {
                                 false
@@ -482,9 +461,7 @@ impl ClipboardListener for PollingClipboardListener {
                         };
 
                         if changed && startup_done {
-                            if let Some(item) = detect_clipboard_content(&ctx) {
-                                pending.lock().unwrap().push(item);
-                            }
+                            pending.lock().unwrap().push(item);
                         }
                     }
                 }

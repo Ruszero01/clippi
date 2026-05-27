@@ -16,7 +16,7 @@ export component SideTagBar inherits Rectangle {
     property <color> text-1: TagPanelTheme.text-1;
 
     width: 80px;
-    height: 100%;
+    // 高度由父组件动态指定，根据标签数量计算
     background: transparent;
 
     for tag[idx] in root.sidebar-tags: Rectangle {

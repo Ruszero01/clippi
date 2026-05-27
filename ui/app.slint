@@ -266,11 +266,22 @@ export component App inherits Window {
             reject
         }
 
-        // ═══════════ 侧边标签栏 (z-order: 下层) ═══════════
+        // ═══════════ 背景 TouchArea (z-order: 最底层) ═══════════
+        // 铺满窗口，所有未被上层元素处理的点击落到这里→关闭窗口
+        window-bg-touch := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.close-window(); }
+        }
+
+        // ═══════════ 侧边标签栏 ═══════════
         sidebar := SideTagBar {
             x: 0px;
             y: 84px;
-            height: parent.height - 84px;
+            height: root.sidebar-tags.length * 24px;
+            visible: root.sidebar-tags.length > 0;
             dark-mode: root.dark-mode;
             sidebar-tags: root.sidebar-tags;
 
@@ -286,6 +297,14 @@ export component App inherits Window {
             border-width: 1px;
             border-color: dark-mode ? #3a3b3c : #d0d2de;
             clip: true;
+
+            // 吸收主面板空白区域点击，防止穿透到 bg-touch
+            main-blocker := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+            }
 
         // 滚动 Timer
         error-scroll-timer := Timer {
@@ -876,7 +895,7 @@ export component App inherits Window {
             }
         }
 
-        // ========== 缩放手柄（置于最顶层，优先接收鼠标事件） ==========
+        // ========== 缩放手柄（对齐主面板边缘，避开左侧透明区域） ==========
         // 右边缘
         resize-right := TouchArea {
             x: parent.width - 6px;
@@ -892,11 +911,11 @@ export component App inherits Window {
             }
         }
 
-        // 底边缘
+        // 底边缘（从主面板左边缘 72px 到右边缘）
         resize-bottom := TouchArea {
-            x: 12px;
+            x: 72px;
             y: parent.height - 6px;
-            width: parent.width - 24px;
+            width: parent.width - 84px;
             height: 6px;
             mouse-cursor: row-resize;
 

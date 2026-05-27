@@ -413,7 +413,6 @@ impl AppController {
                     let engine = crate::core::ocr::create_ocr_engine();
                     match engine.recognize(std::path::Path::new(img_path)) {
                         Ok(text) if !text.trim().is_empty() => {
-                            // Write result back to DB
                             if let Ok(db) = ctx_paste_ocr.db.lock() {
                                 let mut new_rd = crate::core::types::RichData::from_json(existing_rich);
                                 new_rd.ocr_text = Some(text.clone());
@@ -439,12 +438,12 @@ impl AppController {
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     let _ = ctx.set_text(text);
                 }
+                if ctx_paste_ocr.copy_as_plain_text.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                }
+                restore_paste_target();
+                paste_after_delay();
             }
-            if ctx_paste_ocr.copy_as_plain_text.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(30));
-            }
-            restore_paste_target();
-            paste_after_delay();
         });
 
         let ctx_open_loc = ctx.clone();
@@ -1226,6 +1225,16 @@ impl AppController {
                 let (cursor_x, cursor_y) = get_cursor_pos().unwrap_or((0, 0));
                 let pos = app.window().position();
                 let scale = app.window().scale_factor();
+                // macOS: get_cursor_pos returns logical points, but
+                // window.position() returns physical pixels. Convert
+                // cursor to physical for correct subtraction.
+                #[cfg(target_os = "macos")]
+                let (cursor_x, cursor_y) = {
+                    (
+                        (cursor_x as f32 * scale) as i32,
+                        (cursor_y as f32 * scale) as i32,
+                    )
+                };
                 let client_x = (cursor_x as f32 - pos.x as f32) / scale;
                 let client_y = (cursor_y as f32 - pos.y as f32) / scale;
                 app.set_context_menu_x(client_x);

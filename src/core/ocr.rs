@@ -66,27 +66,38 @@ mod win {
 #[cfg(target_os = "windows")]
 pub use win::WindowsOcrEngine;
 
-// ── macOS: Apple Vision Framework ──
-
+// ── macOS: Apple Vision Framework via native ObjC helper ──
+///
+/// Uses a small Objective-C helper (ocr_helper.m) compiled into the binary
+/// to avoid objc2 msg_send! type-encoding issues with CGImageRef etc.
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
-    use apple_vision::prelude::*;
+    use std::ffi::{c_char, CStr, CString};
+
+    extern "C" {
+        fn clippi_ocr_recognize(image_path: *const c_char) -> *mut c_char;
+        fn clippi_ocr_free_string(s: *mut c_char);
+    }
 
     pub struct AppleVisionOcrEngine;
 
     impl OcrEngine for AppleVisionOcrEngine {
         fn recognize(&self, image_path: &Path) -> OcrResult {
-            let recognizer = TextRecognizer::new()
-                .with_recognition_level(RecognitionLevel::Accurate)
-                .with_language_correction(true);
+            let path_str = image_path
+                .to_str()
+                .ok_or_else(|| "OCR: non-UTF-8 path".to_string())?;
+            let c_path = CString::new(path_str)
+                .map_err(|_| "OCR: path contains null byte".to_string())?;
 
-            let observations = recognizer
-                .recognize_in_path(image_path)
-                .map_err(|e| format!("OCR failed: {e}"))?;
+            let ptr = unsafe { clippi_ocr_recognize(c_path.as_ptr()) };
+            if ptr.is_null() {
+                return Err("OCR: recognition failed".to_string());
+            }
 
-            let texts: Vec<&str> = observations.iter().map(|o| o.text.as_str()).collect();
-            Ok(texts.join("\n"))
+            let result = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+            unsafe { clippi_ocr_free_string(ptr) };
+            Ok(result)
         }
     }
 }

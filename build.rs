@@ -16,4 +16,14 @@ fn main() {
         res.set("OriginalFilename", "clippi.exe");
         res.compile().expect("Failed to compile Windows resources");
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rustc-link-lib=framework=Vision");
+        // Compile the native ObjC OCR helper
+        cc::Build::new()
+            .file("src/platform/ocr_helper.m")
+            .flag("-fobjc-arc")
+            .compile("ocr_helper");
+    }
 }
