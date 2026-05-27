@@ -256,6 +256,14 @@ impl Database {
             "UPDATE tags SET name = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
             params![name, color, now, tag_id],
         )?;
+        // Touch all associated items so the tag change propagates via sync.
+        // Without this, items keep their old updated_at and the merge on other
+        // devices skips them because the timestamps are equal.
+        self.conn.execute(
+            "UPDATE clipboard_items SET updated_at = ?1
+             WHERE id IN (SELECT item_id FROM item_tags WHERE tag_id = ?2)",
+            params![now, tag_id],
+        )?;
         Ok(())
     }
 
