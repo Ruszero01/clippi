@@ -22,6 +22,39 @@ mod win {
 
     pub struct WindowsOcrEngine;
 
+    /// Remove spaces between/adjacent to CJK characters.
+    /// Windows.Media.Ocr inserts extra spaces between CJK glyphs
+    /// (e.g. "你 好 世 界" → "你好世界").
+    fn clean_ocr_whitespace(text: &str) -> String {
+        fn is_cjk(c: char) -> bool {
+            matches!(
+                c,
+                '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+                | '\u{3400}'..='\u{4DBF}'  // CJK Extension A
+                | '\u{3040}'..='\u{309F}'  // Hiragana
+                | '\u{30A0}'..='\u{30FF}'  // Katakana
+                | '\u{AC00}'..='\u{D7AF}'  // Hangul Syllables
+                | '\u{F900}'..='\u{FAFF}'  // CJK Compatibility Ideographs
+                | '\u{FF00}'..='\u{FFEF}'  // Halfwidth/Fullwidth Forms
+            )
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        for i in 0..chars.len() {
+            let c = chars[i];
+            if c == ' ' || c == '\u{00A0}' {
+                let prev_cjk = i > 0 && is_cjk(chars[i - 1]);
+                let next_cjk = i + 1 < chars.len() && is_cjk(chars[i + 1]);
+                if prev_cjk || next_cjk {
+                    continue;
+                }
+            }
+            out.push(c);
+        }
+        out
+    }
+
     impl OcrEngine for WindowsOcrEngine {
         fn recognize(&self, image_path: &Path) -> OcrResult {
             let path_str = image_path.to_str().ok_or_else(|| "OCR: invalid image path".to_string())?;
@@ -48,12 +81,8 @@ mod win {
                 .get()
                 .map_err(|e| format!("OCR GetSoftwareBitmap get: {e}"))?;
 
-            // Convert to Gray8 — the Windows OCR engine works best with grayscale
-            let bitmap = windows::Graphics::Imaging::SoftwareBitmap::Convert(
-                &raw_bitmap,
-                windows::Graphics::Imaging::BitmapPixelFormat::Gray8,
-            )
-            .map_err(|e| format!("OCR Convert to Gray8: {e}"))?;
+            // Use the original bitmap directly — Gray8 conversion loses detail
+            // on small images, hurting recognition accuracy.
 
             // Language priority mirrors macOS behavior:
             // ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"]
@@ -76,10 +105,10 @@ mod win {
                 };
 
                 if let Some(engine) = engine {
-                    if let Ok(result) = engine.RecognizeAsync(&bitmap) {
+                    if let Ok(result) = engine.RecognizeAsync(&raw_bitmap) {
                         if let Ok(result) = result.get() {
                             if let Ok(text) = result.Text() {
-                                let s = text.to_string();
+                                let s = clean_ocr_whitespace(&text.to_string());
                                 if !s.trim().is_empty() {
                                     return Ok(s);
                                 }
