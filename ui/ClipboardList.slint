@@ -413,21 +413,17 @@ export component ClipboardList inherits Rectangle {
                                 (entry.content-type == "link" || entry.content-type == "path" ? 68px :
                                  entry.content-type == "image" ?
                                     (entry.image-width > 0 && entry.image-height > 0 ?
-                                        (entry.image-height * 100 / entry.image-width <= 25 ? 68px :
-                                         entry.image-height * 100 / entry.image-width <= 50 ? 80px :
-                                         entry.image-height * 100 / entry.image-width <= 80 ? 104px :
-                                         entry.image-height * 100 / entry.image-width <= 130 ? 130px :
-                                         200px) :
+                                        (entry.image-height * 100 / entry.image-width <= 50 ? 68px :
+                                         entry.image-height * 100 / entry.image-width <= 80 ? 96px :
+                                         128px) :
                                         96px) :
                                  entry.content-type == "file" ?
                                     (entry.file-count <= 2 ? 68px :
                                      entry.file-count <= 3 ? 96px :
-                                     108px) :
-                                    (entry.preview-length <= 50 ? 68px :
-                                     entry.preview-length <= 150 ? 80px :
-                                     entry.preview-length <= 300 ? 104px :
-                                     entry.preview-length <= 500 ? 130px :
-                                     200px)) :
+                                     128px) :
+                                    (entry.preview-length <= 150 ? 68px :
+                                     entry.preview-length <= 300 ? 96px :
+                                     128px)) :
                                 root.card-height-mode == "low" ? 68px :
                                 root.card-height-mode == "high" ? 128px :
                                 96px;
