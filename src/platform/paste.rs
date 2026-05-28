@@ -201,27 +201,27 @@ fn send_cmd_v() {
 
     let cmd_flag = core_graphics::event::CGEventFlags::CGEventFlagCommand;
 
-    // Cmd down
+    // Cmd down — modifiers were NOT active before pressing Cmd
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true)
     {
-        event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }
-    // V down (with Cmd flag)
+    // V down — Cmd IS held
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true)
     {
         event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }
-    // V up (with Cmd flag)
+    // V up — Cmd IS held
     if let Ok(event) =
         core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false)
     {
         event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }
-    // Cmd up
+    // Cmd up — Cmd WAS held before releasing
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source, 0x37, false) {
+        event.set_flags(cmd_flag);
         event.post(core_graphics::event::CGEventTapLocation::HID);
     }
 }
