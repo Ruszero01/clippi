@@ -1,3 +1,9 @@
+# Version 0.1.2 (未发布)
+
+### Bug 修复
+
+- macOS 双击粘贴失效 — CGEvent Cmd+V 修饰键标志位颠倒，系统将 Cmd keyDown 误当 key repeat 处理
+
 # Version 0.1.1
 
 ### 新功能
