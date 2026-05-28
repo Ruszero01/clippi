@@ -476,8 +476,10 @@ impl SyncManager {
                     state.last_sync_at = chrono::Utc::now().to_rfc3339();
                 }
                 state.status = state.backend.check_status();
-                // Only update counts when a real push happened
-                if result.pushed_items > 0 || result.pushed_tags > 0 {
+                // Update counts from snapshot size whenever the snapshot was
+                // actually built (i.e. not the fast-path or error short-circuit).
+                // The snapshot size reflects the true DB item/tag count.
+                if result.pushed_items > 0 || result.pushed_tags > 0 || !result.stats.is_empty() {
                     state.last_item_count = result.pushed_items;
                     state.last_tag_count = result.pushed_tags;
                 }
@@ -647,6 +649,9 @@ fn run_sync_cycle_for_backend(
         }
     };
 
+    let pushed_items = payload.items.len() as u32;
+    let pushed_tags = payload.tags.len() as u32;
+
     // Content-hash gate: if the local snapshot is semantically identical to
     // the remote payload we just pulled from, skip the push. This prevents
     // self-perpetuating sync loops when cloud providers change file mtime
@@ -656,12 +661,15 @@ fn run_sync_cycle_for_backend(
     if let Some(rh) = remote_hash {
         let local_hash = sync::payload_semantic_hash(&payload);
         if rh == local_hash {
-            return (true, i18n::tr("已是最新", "Up to date").into(), stats, 0, 0);
+            return (
+                true,
+                i18n::tr("已是最新", "Up to date").into(),
+                stats,
+                pushed_items,
+                pushed_tags,
+            );
         }
     }
-
-    let pushed_items = payload.items.len() as u32;
-    let pushed_tags = payload.tags.len() as u32;
 
     if let Err(e) = backend.push(&payload) {
         return (
