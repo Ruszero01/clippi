@@ -365,5 +365,11 @@ msgstr "密码"
 msgid "Test connection"
 msgstr "测试连接"
 
+msgid "URL decode"
+msgstr "URL 解码"
+
+msgid "JSON format"
+msgstr "JSON 格式化"
+
 msgid "Connection failed. Check URL and credentials."
 msgstr "连接失败，请检查地址与认证信息。"

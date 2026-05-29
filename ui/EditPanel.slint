@@ -37,6 +37,7 @@ export component EditPanel inherits Rectangle {
     callback cancel();
     callback save-content(int, string, string);
     callback url-decode(string);
+    callback json-format(string);
 
     // ========== 主题色板 ==========
     property <color> text-1:   dark-mode ? #eaebec : #1a1c2e;
@@ -139,10 +140,33 @@ export component EditPanel inherits Rectangle {
                 Text {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    text: "\u{e6af}";
+                    text: "\u{e6da}";
                     font-family: "iconfont";
                     font-size: 14px;
                     color: url-decode-ta.has-hover ? accent : text-2;
+                }
+            }
+
+            // JSON 格式化按钮
+            json-format-btn := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: json-format-ta.has-hover ? (dark-mode ? #2a2b2c : #f0f1f5) : transparent;
+
+                json-format-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.json-format(root.editor-text); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "\u{e819}";
+                    font-family: "iconfont";
+                    font-size: 14px;
+                    color: json-format-ta.has-hover ? accent : text-2;
                 }
             }
         }
@@ -234,7 +258,40 @@ export component EditPanel inherits Rectangle {
         }
     }
 
-    // ========== 类型下拉菜单（覆盖层） ==========
+    // ========== 覆盖层 ==========
+    if url-decode-ta.has-hover: Rectangle {
+        x: url-decode-btn.absolute-position.x - root.absolute-position.x + url-decode-btn.width - 60px;
+        y: url-decode-btn.absolute-position.y - root.absolute-position.y + url-decode-btn.height + 2px;
+        width: 60px;
+        height: 20px;
+        border-radius: 4px;
+        background: dark-mode ? #3a3b3c : #2a2b2c;
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            text: @tr("URL decode");
+            font-size: 10px;
+            color: #ffffff;
+        }
+    }
+
+    if json-format-ta.has-hover: Rectangle {
+        x: json-format-btn.absolute-position.x - root.absolute-position.x + json-format-btn.width - 70px;
+        y: json-format-btn.absolute-position.y - root.absolute-position.y + json-format-btn.height + 2px;
+        width: 70px;
+        height: 20px;
+        border-radius: 4px;
+        background: dark-mode ? #3a3b3c : #2a2b2c;
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            text: @tr("JSON format");
+            font-size: 10px;
+            color: #ffffff;
+        }
+    }
+
+    // ========== 类型下拉菜单 ==========
     if root.type-menu-open : Rectangle {
         x: 0;
         y: 0;

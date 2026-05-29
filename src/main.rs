@@ -100,16 +100,28 @@ fn main() {
         let _fonts = collection.register_fonts(blob, None);
     }
 
-    // On macOS, the default SansSerif font (SF Pro) lacks CJK glyphs.
-    // Find and register PingFang or STHeiti as a CJK font.
+    // The default SansSerif font lacks CJK glyphs on both macOS and Windows.
+    // Register a system CJK font to prevent missing-glyph boxes (tofu).
     #[cfg(target_os = "macos")]
     {
-        // macOS 13+ delivers PingFang via MobileAsset at a hash-based path.
-        // Search AssetsV2 first; fall back to the stable STHeiti path.
         let cjk_font_path = find_pingfang_path()
             .unwrap_or_else(|| "/System/Library/Fonts/STHeiti Medium.ttc".into());
 
         if let Ok(font_data) = std::fs::read(&cjk_font_path) {
+            let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
+            let mut collection = slint::fontique_08::shared_collection();
+            let cjk_override = slint::fontique_08::fontique::FontInfoOverride {
+                family_name: Some("system-cjk"),
+                ..Default::default()
+            };
+            collection.register_fonts(blob, Some(cjk_override));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let cjk_font_path = "C:\\Windows\\Fonts\\msyh.ttc";
+        if let Ok(font_data) = std::fs::read(cjk_font_path) {
             let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
             let mut collection = slint::fontique_08::shared_collection();
             let cjk_override = slint::fontique_08::fontique::FontInfoOverride {

@@ -1200,6 +1200,17 @@ impl AppController {
                 app.set_editing_content(SharedString::from(decoded.as_ref()));
             }
         });
+
+        let c = ctx.clone();
+        slint_app.on_json_format(move |text: SharedString| {
+            let formatted = match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(v) => serde_json::to_string_pretty(&v).unwrap_or(text.to_string()),
+                Err(_) => text.to_string(),
+            };
+            if let Some(app) = c.app.upgrade() {
+                app.set_editing_content(SharedString::from(formatted));
+            }
+        });
     }
 
     // ── Filter callbacks: type filters, favorites, search ──
