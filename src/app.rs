@@ -2043,39 +2043,41 @@ fn test_webdav_conn(url: &str, username: &str, password: &str) -> bool {
     false
 }
 
-/// Trim text: remove blank lines, collapse extra whitespace, keep lines close.
+/// Trim text: normalize Unicode whitespace, remove blank lines, collapse
+/// extra whitespace, keep lines close. Handles special chars from design
+/// tools (non-breaking spaces, line/paragraph separators, etc.).
 fn trim_text(text: &str) -> String {
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    // Normalize line endings: CRLF → LF, Unicode separators → LF
+    let text = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\u{2028}', "\n") // LINE SEPARATOR
+        .replace('\u{2029}', "\n"); // PARAGRAPH SEPARATOR
+
     let mut result = String::with_capacity(text.len());
 
     for line in text.lines() {
-        let trimmed = line.trim();
+        let trimmed = line.trim(); // str::trim uses char::is_whitespace (Unicode-aware)
         if trimmed.is_empty() {
             continue;
         }
-        // Collapse multiple spaces/tabs within the line
-        let mut prev_space = false;
+        let mut prev_ws = false;
         for ch in trimmed.chars() {
-            if ch == ' ' || ch == '\t' {
-                if !prev_space {
+            if ch.is_whitespace() {
+                if !prev_ws {
                     result.push(' ');
-                    prev_space = true;
+                    prev_ws = true;
                 }
             } else {
                 result.push(ch);
-                prev_space = false;
+                prev_ws = false;
             }
         }
         result.push('\n');
     }
 
-    // Trim trailing newline
     if result.ends_with('\n') {
         result.pop();
-        // If result was only whitespace, pop the trailing \r too if present
-        if result.ends_with('\r') {
-            result.pop();
-        }
     }
 
     result
