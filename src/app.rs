@@ -2043,47 +2043,41 @@ fn test_webdav_conn(url: &str, username: &str, password: &str) -> bool {
     false
 }
 
-/// Trim and clean text: normalize line endings, collapse whitespace,
-/// merge broken paragraph lines, separate paragraphs with blank lines.
+/// Trim text: remove blank lines, collapse extra whitespace, keep lines close.
 fn trim_text(text: &str) -> String {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
-
-    let mut paragraphs: Vec<String> = Vec::new();
-    let mut current_lines: Vec<&str> = Vec::new();
+    let mut result = String::with_capacity(text.len());
 
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            flush_paragraph(&mut current_lines, &mut paragraphs);
-        } else {
-            current_lines.push(trimmed);
+            continue;
         }
-    }
-    flush_paragraph(&mut current_lines, &mut paragraphs);
-
-    paragraphs.join("\n\n")
-}
-
-fn flush_paragraph(lines: &mut Vec<&str>, out: &mut Vec<String>) {
-    if lines.is_empty() {
-        return;
-    }
-    let joined = lines.join(" ");
-    // Collapse multiple spaces
-    let mut clean = String::with_capacity(joined.len());
-    let mut prev_space = false;
-    for ch in joined.chars() {
-        if ch == ' ' || ch == '\t' {
-            if !prev_space {
-                clean.push(' ');
-                prev_space = true;
+        // Collapse multiple spaces/tabs within the line
+        let mut prev_space = false;
+        for ch in trimmed.chars() {
+            if ch == ' ' || ch == '\t' {
+                if !prev_space {
+                    result.push(' ');
+                    prev_space = true;
+                }
+            } else {
+                result.push(ch);
+                prev_space = false;
             }
-        } else {
-            clean.push(ch);
-            prev_space = false;
+        }
+        result.push('\n');
+    }
+
+    // Trim trailing newline
+    if result.ends_with('\n') {
+        result.pop();
+        // If result was only whitespace, pop the trailing \r too if present
+        if result.ends_with('\r') {
+            result.pop();
         }
     }
-    out.push(clean);
-    lines.clear();
+
+    result
 }
 
