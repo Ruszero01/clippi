@@ -385,7 +385,7 @@ jobs:
           NSIS_ROW="| [${NSIS_FILE}](${NSIS_URL}) | x64 Windows (NSIS) | [checksum](${NSIS_CHECK_URL}) |"
 
           BODY=$(gh release view "$TAG" --json body -q '.body')
-          printf '%s\n\n%s\n%s\n' "$BODY" "$DMG_ROW" "$NSIS_ROW" > "$RUNNER_TEMP/notes.txt"
+          printf '%s\n%s\n%s\n' "$BODY" "$DMG_ROW" "$NSIS_ROW" > "$RUNNER_TEMP/notes.txt"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.txt"
 
   announce:
