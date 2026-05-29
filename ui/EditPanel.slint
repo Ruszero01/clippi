@@ -37,6 +37,7 @@ export component EditPanel inherits Rectangle {
     callback cancel();
     callback save-content(int, string, string);
     callback url-decode(string);
+    callback base64-decode(string);
     callback json-format(string);
     callback trim-text(string);
 
@@ -147,6 +148,29 @@ export component EditPanel inherits Rectangle {
                     font-family: "iconfont";
                     font-size: 14px;
                     color: url-decode-ta.has-hover ? accent : text-2;
+                }
+            }
+
+            // Base64 解码按钮
+            base64-decode-btn := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: base64-decode-ta.has-hover ? (dark-mode ? #2a2b2c : #f0f1f5) : transparent;
+
+                base64-decode-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.base64-decode(root.editor-text); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "\u{e66e}";
+                    font-family: "iconfont";
+                    font-size: 14px;
+                    color: base64-decode-ta.has-hover ? accent : text-2;
                 }
             }
 
@@ -296,6 +320,22 @@ export component EditPanel inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: @tr("URL decode");
+            font-size: 10px;
+            color: #ffffff;
+        }
+    }
+
+    if base64-decode-ta.has-hover: Rectangle {
+        x: base64-decode-btn.absolute-position.x - root.absolute-position.x + base64-decode-btn.width - 76px;
+        y: base64-decode-btn.absolute-position.y - root.absolute-position.y + base64-decode-btn.height + 2px;
+        width: 76px;
+        height: 20px;
+        border-radius: 4px;
+        background: dark-mode ? #3a3b3c : #2a2b2c;
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            text: @tr("Base64 decode");
             font-size: 10px;
             color: #ffffff;
         }

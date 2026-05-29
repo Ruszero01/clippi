@@ -1228,6 +1228,14 @@ impl AppController {
                 app.set_editing_content(SharedString::from(trimmed));
             }
         });
+
+        let c = ctx.clone();
+        slint_app.on_base64_decode(move |text: SharedString| {
+            let decoded = decode_base64(&text);
+            if let Some(app) = c.app.upgrade() {
+                app.set_editing_content(SharedString::from(decoded));
+            }
+        });
     }
 
     // ── Filter callbacks: type filters, favorites, search ──
@@ -2081,5 +2089,25 @@ fn trim_text(text: &str) -> String {
     }
 
     result
+}
+
+/// Decode Base64 text, with optional prefix ("data:..." or bare).
+fn decode_base64(text: &str) -> String {
+    // Strip data URL prefix if present, e.g. "data:image/png;base64,"
+    let encoded = if let Some(pos) = text.find(";base64,") {
+        &text[pos + 8..]
+    } else {
+        text
+    };
+    // Try standard decoding first, then URL-safe
+    use base64::Engine;
+    match base64::engine::general_purpose::STANDARD.decode(encoded) {
+        Ok(bytes) => return String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => {}
+    }
+    match base64::engine::general_purpose::URL_SAFE.decode(encoded) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => text.to_string(),
+    }
 }
 

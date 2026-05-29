@@ -199,6 +199,7 @@ export component App inherits Window {
     callback edit-item(int);
     callback save-content(int, string, string);
     callback url-decode(string);
+    callback base64-decode(string);
     callback json-format(string);
     callback trim-text(string);
     callback show-context-menu(int);
@@ -558,6 +559,7 @@ export component App inherits Window {
                     cancel => { root.current-view = "clipboard"; }
                     save-content(id, text, sel_type) => { root.save-content(id, text, sel_type); }
                     url-decode(text) => { root.url-decode(text); }
+                    base64-decode(text) => { root.base64-decode(text); }
                     json-format(text) => { root.json-format(text); }
                     trim-text(text) => { root.trim-text(text); }
                 }
