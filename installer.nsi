@@ -24,8 +24,6 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
-!include "WinMessages.nsh"
-
 !define MUI_ABORTWARNING
 !define MUI_ICON "${STAGING}\app.ico"
 !define MUI_UNICON "${STAGING}\app.ico"
@@ -45,12 +43,9 @@ SetCompressor /SOLID lzma
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-; Define WM_CLOSE timeout (milliseconds)
-!define CLOSE_TIMEOUT 3000
-
-; Check if Clippi is running by finding its window, then ask user.
-; Uses FindWindow + WM_CLOSE for graceful close, falls back to taskkill /F.
-; No external plugins required — all built-in NSIS functionality.
+; Check if Clippi is running, then ask user before terminating.
+; Clippi is a tray app — closing its window only hides it, the process stays alive.
+; So WM_CLOSE is not effective; we go straight to taskkill /F.
 !macro CheckAndCloseApp un
 Function ${un}CheckAndCloseApp
   FindWindow $0 "" "${APP_NAME}"
@@ -58,7 +53,7 @@ Function ${un}CheckAndCloseApp
 
   ; App is running — ask user
   MessageBox MB_YESNO|MB_ICONQUESTION \
-    "${APP_NAME} 正在运行。$\r$\n$\r$\n点击「是」将自动关闭程序并继续安装，点击「否」取消安装。" \
+    "${APP_NAME} 正在运行。$\r$\n$\r$\n点击「是」将关闭程序并继续，点击「否」取消。" \
     IDYES close IDNO cancel
 
 cancel:
@@ -66,20 +61,6 @@ cancel:
 
 close:
   DetailPrint "正在关闭 ${APP_NAME}..."
-  ; Send WM_CLOSE to gracefully close the app
-  SendMessage $0 ${WM_CLOSE} 0 0 /TIMEOUT=${CLOSE_TIMEOUT}
-
-  ; Verify the window closed — if still alive, fall back to force kill
-  Sleep 1000
-  FindWindow $0 "" "${APP_NAME}"
-  IntCmp $0 0 done
-
-  ; WM_CLOSE didn't work — ask before force kill
-  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-    "${APP_NAME} 未能正常关闭。$\r$\n$\r$\n点击「确定」强制终止进程继续安装，点击「取消」退出。" \
-    IDOK forceKill IDCANCEL cancel
-
-forceKill:
   nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
   Sleep 1000
 
