@@ -310,13 +310,13 @@ export component EditPanel inherits Rectangle {
 
     // ========== 覆盖层 ==========
     if url-decode-ta.has-hover: Rectangle {
-        x: url-decode-btn.absolute-position.x - root.absolute-position.x + url-decode-btn.width - 60px;
+        x: url-decode-btn.absolute-position.x - root.absolute-position.x + url-decode-btn.width - url-decode-tip-text.preferred-width - 10px;
         y: url-decode-btn.absolute-position.y - root.absolute-position.y + url-decode-btn.height + 2px;
-        width: 60px;
+        width: url-decode-tip-text.preferred-width + 10px;
         height: 20px;
         border-radius: 4px;
         background: dark-mode ? #3a3b3c : #2a2b2c;
-        Text {
+        url-decode-tip-text := Text {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: @tr("URL decode");
@@ -326,13 +326,13 @@ export component EditPanel inherits Rectangle {
     }
 
     if base64-decode-ta.has-hover: Rectangle {
-        x: base64-decode-btn.absolute-position.x - root.absolute-position.x + base64-decode-btn.width - 76px;
+        x: base64-decode-btn.absolute-position.x - root.absolute-position.x + base64-decode-btn.width - base64-decode-tip-text.preferred-width - 10px;
         y: base64-decode-btn.absolute-position.y - root.absolute-position.y + base64-decode-btn.height + 2px;
-        width: 76px;
+        width: base64-decode-tip-text.preferred-width + 10px;
         height: 20px;
         border-radius: 4px;
         background: dark-mode ? #3a3b3c : #2a2b2c;
-        Text {
+        base64-decode-tip-text := Text {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: @tr("Base64 decode");
@@ -342,13 +342,13 @@ export component EditPanel inherits Rectangle {
     }
 
     if json-format-ta.has-hover: Rectangle {
-        x: json-format-btn.absolute-position.x - root.absolute-position.x + json-format-btn.width - 70px;
+        x: json-format-btn.absolute-position.x - root.absolute-position.x + json-format-btn.width - json-format-tip-text.preferred-width - 10px;
         y: json-format-btn.absolute-position.y - root.absolute-position.y + json-format-btn.height + 2px;
-        width: 70px;
+        width: json-format-tip-text.preferred-width + 10px;
         height: 20px;
         border-radius: 4px;
         background: dark-mode ? #3a3b3c : #2a2b2c;
-        Text {
+        json-format-tip-text := Text {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: @tr("JSON format");
@@ -358,13 +358,13 @@ export component EditPanel inherits Rectangle {
     }
 
     if trim-text-ta.has-hover: Rectangle {
-        x: trim-text-btn.absolute-position.x - root.absolute-position.x + trim-text-btn.width - 70px;
+        x: trim-text-btn.absolute-position.x - root.absolute-position.x + trim-text-btn.width - trim-text-tip-text.preferred-width - 10px;
         y: trim-text-btn.absolute-position.y - root.absolute-position.y + trim-text-btn.height + 2px;
-        width: 70px;
+        width: trim-text-tip-text.preferred-width + 10px;
         height: 20px;
         border-radius: 4px;
         background: dark-mode ? #3a3b3c : #2a2b2c;
-        Text {
+        trim-text-tip-text := Text {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: @tr("Trim text");
