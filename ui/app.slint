@@ -200,6 +200,7 @@ export component App inherits Window {
     callback save-content(int, string, string);
     callback url-decode(string);
     callback json-format(string);
+    callback trim-text(string);
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
@@ -558,6 +559,7 @@ export component App inherits Window {
                     save-content(id, text, sel_type) => { root.save-content(id, text, sel_type); }
                     url-decode(text) => { root.url-decode(text); }
                     json-format(text) => { root.json-format(text); }
+                    trim-text(text) => { root.trim-text(text); }
                 }
 
                 SettingsPanel {

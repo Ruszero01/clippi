@@ -38,6 +38,7 @@ export component EditPanel inherits Rectangle {
     callback save-content(int, string, string);
     callback url-decode(string);
     callback json-format(string);
+    callback trim-text(string);
 
     // ========== 主题色板 ==========
     property <color> text-1:   dark-mode ? #eaebec : #1a1c2e;
@@ -171,6 +172,29 @@ export component EditPanel inherits Rectangle {
                     color: json-format-ta.has-hover ? accent : text-2;
                 }
             }
+
+            // 文本修整按钮
+            trim-text-btn := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: trim-text-ta.has-hover ? (dark-mode ? #2a2b2c : #f0f1f5) : transparent;
+
+                trim-text-ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.trim-text(root.editor-text); }
+                }
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "\u{e6db}";
+                    font-family: "iconfont";
+                    font-size: 14px;
+                    color: trim-text-ta.has-hover ? accent : text-2;
+                }
+            }
         }
 
         // ========== 编辑区域 ==========
@@ -288,6 +312,22 @@ export component EditPanel inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: @tr("JSON format");
+            font-size: 10px;
+            color: #ffffff;
+        }
+    }
+
+    if trim-text-ta.has-hover: Rectangle {
+        x: trim-text-btn.absolute-position.x - root.absolute-position.x + trim-text-btn.width - 70px;
+        y: trim-text-btn.absolute-position.y - root.absolute-position.y + trim-text-btn.height + 2px;
+        width: 70px;
+        height: 20px;
+        border-radius: 4px;
+        background: dark-mode ? #3a3b3c : #2a2b2c;
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            text: @tr("Trim text");
             font-size: 10px;
             color: #ffffff;
         }

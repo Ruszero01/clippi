@@ -1220,6 +1220,14 @@ impl AppController {
                 app.set_editing_content(SharedString::from(formatted));
             }
         });
+
+        let c = ctx.clone();
+        slint_app.on_trim_text(move |text: SharedString| {
+            let trimmed = trim_text(&text);
+            if let Some(app) = c.app.upgrade() {
+                app.set_editing_content(SharedString::from(trimmed));
+            }
+        });
     }
 
     // ── Filter callbacks: type filters, favorites, search ──
@@ -2033,5 +2041,49 @@ fn test_webdav_conn(url: &str, username: &str, password: &str) -> bool {
         }
     }
     false
+}
+
+/// Trim and clean text: normalize line endings, collapse whitespace,
+/// merge broken paragraph lines, separate paragraphs with blank lines.
+fn trim_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            flush_paragraph(&mut current_lines, &mut paragraphs);
+        } else {
+            current_lines.push(trimmed);
+        }
+    }
+    flush_paragraph(&mut current_lines, &mut paragraphs);
+
+    paragraphs.join("\n\n")
+}
+
+fn flush_paragraph(lines: &mut Vec<&str>, out: &mut Vec<String>) {
+    if lines.is_empty() {
+        return;
+    }
+    let joined = lines.join(" ");
+    // Collapse multiple spaces
+    let mut clean = String::with_capacity(joined.len());
+    let mut prev_space = false;
+    for ch in joined.chars() {
+        if ch == ' ' || ch == '\t' {
+            if !prev_space {
+                clean.push(' ');
+                prev_space = true;
+            }
+        } else {
+            clean.push(ch);
+            prev_space = false;
+        }
+    }
+    out.push(clean);
+    lines.clear();
 }
 
