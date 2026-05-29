@@ -4,7 +4,6 @@ import { ScrollView } from "std-widgets.slint";
 export component SettingsTabSync inherits Rectangle {
     in property <bool> dark-mode: false;
     in property <bool> sync-auto-enabled: true;
-    in property <int> sync-interval-secs: 60;
     in property <string> sync-status: "";
     in property <int> sync-items-added: 0;
     in property <int> sync-items-updated: 0;
@@ -14,12 +13,12 @@ export component SettingsTabSync inherits Rectangle {
 
     callback toggle-sync-auto-enabled();
     callback toggle-sync-favorites-only();
-    callback set-sync-interval(int);
-    callback sync-now();
     callback show-add-backend-panel();
     callback remove-sync-backend(string);
     callback toggle-sync-backend(string);
     callback edit-sync-backend(string);
+    callback sync-backend-now(string);
+    callback set-backend-sync-interval(string, int);
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -39,10 +38,9 @@ export component SettingsTabSync inherits Rectangle {
         padding-top: 8px;
 
         // ════════════════════════════════════════
-        // 上半部分：同步设置
+        // 上半部分：全局同步开关
         // ════════════════════════════════════════
 
-        // ── 同步设置容器 ──
         Rectangle {
             border-radius: 10px;
             background: surface;
@@ -52,7 +50,7 @@ export component SettingsTabSync inherits Rectangle {
             VerticalLayout {
                 spacing: 0;
 
-                // 云同步开关行
+                // 云同步总开关行
                 HorizontalLayout {
                     height: 38px;
                     padding-left: 14px;
@@ -137,121 +135,11 @@ export component SettingsTabSync inherits Rectangle {
                         }
                     }
                 }
-
-                // 开启后显示：间隔 + 立即同步
-                if root.sync-auto-enabled : Rectangle {
-                    width: parent.width;
-                    height: 1px;
-                    background: divider;
-                }
-
-                if root.sync-auto-enabled : HorizontalLayout {
-                    spacing: 6px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    padding-top: 8px;
-                    padding-bottom: 8px;
-
-                    Rectangle {
-                        height: 26px;
-                        horizontal-stretch: 1;
-                        border-radius: 6px;
-                        background: i30-selected ? accent : (i30-ta.has-hover ? accent-soft : transparent);
-                        animate background { duration: 200ms; }
-                        property <bool> i30-selected: root.sync-interval-secs == 30;
-                        i30-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => { root.set-sync-interval(30); }
-                        }
-                        Text {
-                            text: @tr("30s"); font-size: 10px; font-weight: 600;
-                            color: i30-selected ? #ffffff : (i30-ta.has-hover ? accent : text-2);
-                            horizontal-alignment: center; vertical-alignment: center;
-                        }
-                    }
-
-                    Rectangle {
-                        height: 26px;
-                        horizontal-stretch: 1;
-                        border-radius: 6px;
-                        background: i60-selected ? accent : (i60-ta.has-hover ? accent-soft : transparent);
-                        animate background { duration: 200ms; }
-                        property <bool> i60-selected: root.sync-interval-secs == 60;
-                        i60-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => { root.set-sync-interval(60); }
-                        }
-                        Text {
-                            text: @tr("1min"); font-size: 10px; font-weight: 600;
-                            color: i60-selected ? #ffffff : (i60-ta.has-hover ? accent : text-2);
-                            horizontal-alignment: center; vertical-alignment: center;
-                        }
-                    }
-
-                    Rectangle {
-                        height: 26px;
-                        horizontal-stretch: 1;
-                        border-radius: 6px;
-                        background: i600-selected ? accent : (i600-ta.has-hover ? accent-soft : transparent);
-                        animate background { duration: 200ms; }
-                        property <bool> i600-selected: root.sync-interval-secs == 600;
-                        i600-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => { root.set-sync-interval(600); }
-                        }
-                        Text {
-                            text: @tr("10min"); font-size: 10px; font-weight: 600;
-                            color: i600-selected ? #ffffff : (i600-ta.has-hover ? accent : text-2);
-                            horizontal-alignment: center; vertical-alignment: center;
-                        }
-                    }
-
-                    Rectangle {
-                        height: 26px;
-                        horizontal-stretch: 1;
-                        border-radius: 6px;
-                        background: i1800-selected ? accent : (i1800-ta.has-hover ? accent-soft : transparent);
-                        animate background { duration: 200ms; }
-                        property <bool> i1800-selected: root.sync-interval-secs == 1800;
-                        i1800-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => { root.set-sync-interval(1800); }
-                        }
-                        Text {
-                            text: @tr("30min"); font-size: 10px; font-weight: 600;
-                            color: i1800-selected ? #ffffff : (i1800-ta.has-hover ? accent : text-2);
-                            horizontal-alignment: center; vertical-alignment: center;
-                        }
-                    }
-
-                    // 立即同步
-                    Rectangle {
-                        height: 26px;
-                        horizontal-stretch: 1;
-                        border-radius: 6px;
-                        background: sync-now-ta.has-hover ? accent-soft : accent;
-                        sync-now-ta := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-                            clicked => { root.sync-now(); }
-                        }
-                        Text {
-                            text: @tr("Sync now");
-                            font-size: 10px; font-weight: 600;
-                            color: sync-now-ta.has-hover ? accent : #ffffff;
-                            horizontal-alignment: center; vertical-alignment: center;
-                        }
-                    }
-                }
             }
         }
 
         // ════════════════════════════════════════
-        // 下半部分：服务管理容器
+        // 下半部分：后端管理
         // ════════════════════════════════════════
 
         Rectangle {
@@ -263,7 +151,7 @@ export component SettingsTabSync inherits Rectangle {
             VerticalLayout {
                 spacing: 0;
 
-                // 添加服务按钮
+                // 添加后端按钮
                 Rectangle {
                     height: 40px;
                     border-radius: 10px;
@@ -305,37 +193,180 @@ export component SettingsTabSync inherits Rectangle {
                     background: divider;
                 }
 
-                // 服务卡片滚动列表
+                // 后端卡片滚动列表
                 if root.sync-backends.length > 0 : ScrollView {
-                    height: 190px;
+                    height: 200px;
                     viewport-width: parent.width;
 
-                    svc-list := VerticalLayout {
+                    VerticalLayout {
                         spacing: 6px;
                         padding: 8px;
 
                         for backend in root.sync-backends: Rectangle {
-                            height: 56px;
-                            border-radius: 8px;
-                            background: dark-mode ? #1e1f20 : #f8f9fc;
-                            border-width: 1px;
-                            border-color: divider;
+                            height: backend.enabled ? 83px : 52px;
+                            animate height { duration: 300ms; easing: ease-out; }
 
-                            VerticalLayout {
-                                height: 100%;
-                                padding-left: 10px;
-                                padding-right: 6px;
-
-                                Rectangle {
-                                    vertical-stretch: 1;
-                                }
+                            // ── 底部操作栏（滑到卡片后方被盖住）──
+                            Rectangle {
+                                y: backend.enabled ? 52px : 21px;
+                                animate y { duration: 300ms; easing: ease-out; }
+                                x: 0;
+                                width: 100%;
+                                height: 31px;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: divider;
+                                background: dark-mode ? #1e1f20 : #f8f9fc;
+                                opacity: backend.enabled ? 1.0 : 0.0;
+                                animate opacity { duration: 300ms; easing: ease-out; }
 
                                 HorizontalLayout {
-                                    alignment: space-between;
+                                    spacing: 4px;
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    padding-top: 5px;
+                                    padding-bottom: 5px;
 
+                                    // 30s
+                                    Rectangle {
+                                        height: 20px;
+                                        horizontal-stretch: 1;
+                                        border-radius: 6px;
+                                        background: backend.sync-interval-secs == 30 ? accent : (i30-ta.has-hover ? accent-soft : transparent);
+                                        animate background { duration: 200ms; }
+                                        i30-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => { root.set-backend-sync-interval(backend.id, 30); }
+                                        }
+                                        Text {
+                                            text: @tr("30s");
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: backend.sync-interval-secs == 30 ? #ffffff : (i30-ta.has-hover ? accent : text-2);
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // 1min
+                                    Rectangle {
+                                        height: 20px;
+                                        horizontal-stretch: 1;
+                                        border-radius: 6px;
+                                        background: backend.sync-interval-secs == 60 ? accent : (i60-ta.has-hover ? accent-soft : transparent);
+                                        animate background { duration: 200ms; }
+                                        i60-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => { root.set-backend-sync-interval(backend.id, 60); }
+                                        }
+                                        Text {
+                                            text: @tr("1min");
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: backend.sync-interval-secs == 60 ? #ffffff : (i60-ta.has-hover ? accent : text-2);
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // 10min
+                                    Rectangle {
+                                        height: 20px;
+                                        horizontal-stretch: 1;
+                                        border-radius: 6px;
+                                        background: backend.sync-interval-secs == 600 ? accent : (i600-ta.has-hover ? accent-soft : transparent);
+                                        animate background { duration: 200ms; }
+                                        i600-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => { root.set-backend-sync-interval(backend.id, 600); }
+                                        }
+                                        Text {
+                                            text: @tr("10min");
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: backend.sync-interval-secs == 600 ? #ffffff : (i600-ta.has-hover ? accent : text-2);
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // 30min
+                                    Rectangle {
+                                        height: 20px;
+                                        horizontal-stretch: 1;
+                                        border-radius: 6px;
+                                        background: backend.sync-interval-secs == 1800 ? accent : (i1800-ta.has-hover ? accent-soft : transparent);
+                                        animate background { duration: 200ms; }
+                                        i1800-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            clicked => { root.set-backend-sync-interval(backend.id, 1800); }
+                                        }
+                                        Text {
+                                            text: @tr("30min");
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: backend.sync-interval-secs == 1800 ? #ffffff : (i1800-ta.has-hover ? accent : text-2);
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // 立即同步
+                                    Rectangle {
+                                        height: 20px;
+                                        width: 60px;
+                                        border-radius: 6px;
+                                        background: sync-now-ta.has-hover ? accent-soft : accent;
+                                        sync-now-ta := TouchArea {
+                                            width: 100%;
+                                            height: 100%;
+                                            clicked => { root.sync-backend-now(backend.id); }
+                                        }
+                                        Text {
+                                            text: @tr("Sync now");
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: sync-now-ta.has-hover ? accent : #ffffff;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── 卡片：主体区域（覆盖在底部栏上方）──
+                            Rectangle {
+                                y: 0;
+                                x: 0;
+                                width: 100%;
+                                height: 52px;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: divider;
+                                background: dark-mode ? #1e1f20 : #f8f9fc;
+
+                                HorizontalLayout {
+                                    opacity: backend.enabled ? 1.0 : 0.45;
+                                    animate opacity { duration: 300ms; easing: ease-out; }
+                                    alignment: space-between;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    padding-top: 5px;
+                                    padding-bottom: 3px;
+
+                                    // ── 左侧：信息区 ──
                                     VerticalLayout {
                                         spacing: 3px;
 
+                                        Rectangle {
+                                            vertical-stretch: 1;
+                                        }
+
+                                        // 状态灯 + 名称 + 标签
                                         HorizontalLayout {
                                             spacing: 6px;
 
@@ -386,66 +417,103 @@ export component SettingsTabSync inherits Rectangle {
                                             }
                                         }
 
+                                        // 统计信息
                                         Text {
                                             text: @tr("{} · {} items · {} tags", backend.last-sync-at, backend.item-count, backend.tag-count);
                                             font-size: 10px;
                                             color: text-3;
                                         }
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: 2px;
 
                                         Rectangle {
-                                            width: 24px;
-                                            height: 24px;
-                                            border-radius: 5px;
-                                            y: (parent.height - self.height) / 2;
-                                            background: edit-ta.has-hover ? (dark-mode ? #2b2c2d : #e6e8f0) : transparent;
+                                            vertical-stretch: 1;
+                                        }
+                                    }
 
-                                            edit-ta := TouchArea {
-                                                width: 100%;
-                                                height: 100%;
-                                                clicked => { root.edit-sync-backend(backend.id); }
+                                    // ── 右侧：控制区（垂直居中，单行） ──
+                                    VerticalLayout {
+                                        Rectangle {
+                                            vertical-stretch: 1;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: 4px;
+                                            alignment: center;
+
+                                            Rectangle {
+                                                width: 24px;
+                                                height: 24px;
+                                                border-radius: 5px;
+                                                background: edit-ta.has-hover ? (dark-mode ? #2b2c2d : #e6e8f0) : transparent;
+
+                                                edit-ta := TouchArea {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    clicked => { root.edit-sync-backend(backend.id); }
+                                                }
+
+                                                Text {
+                                                    text: "\u{e648}";
+                                                    font-family: "iconfont";
+                                                    font-size: 12px;
+                                                    color: edit-ta.has-hover ? accent : text-3;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
                                             }
 
-                                            Text {
-                                                text: "\u{e648}";
-                                                font-family: "iconfont";
-                                                font-size: 12px;
-                                                color: edit-ta.has-hover ? accent : text-3;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
+                                            Rectangle {
+                                                width: 24px;
+                                                height: 24px;
+                                                border-radius: 5px;
+                                                background: rm-ta.has-hover ? (dark-mode ? #3e0005 : #ffeaea) : transparent;
+
+                                                rm-ta := TouchArea {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    clicked => { root.remove-sync-backend(backend.id); }
+                                                }
+
+                                                Text {
+                                                    text: "\u{e8b6}";
+                                                    font-family: "iconfont";
+                                                    font-size: 12px;
+                                                    color: rm-ta.has-hover ? red : text-3;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+
+                                            // 开关
+                                            Rectangle {
+                                                width: 40px;
+                                                height: 18px;
+                                                border-radius: 9px;
+                                                y: (parent.height - self.height) / 2;
+                                                background: backend.enabled ? accent : dark-mode ? #3a3b3c : #d0d3db;
+                                                animate background { duration: 200ms; }
+
+                                                Rectangle {
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    border-radius: 7px;
+                                                    background: #ffffff;
+                                                    x: backend.enabled ? parent.width - self.width - 2px : 2px;
+                                                    y: 2px;
+                                                    animate x { duration: 200ms; }
+                                                }
+
+                                                be-enable-ta := TouchArea {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    clicked => { root.toggle-sync-backend(backend.id); }
+                                                }
                                             }
                                         }
 
                                         Rectangle {
-                                            width: 24px;
-                                            height: 24px;
-                                            border-radius: 5px;
-                                            y: (parent.height - self.height) / 2;
-                                            background: rm-ta.has-hover ? (dark-mode ? #3e0005 : #ffeaea) : transparent;
-
-                                            rm-ta := TouchArea {
-                                                width: 100%;
-                                                height: 100%;
-                                                clicked => { root.remove-sync-backend(backend.id); }
-                                            }
-
-                                            Text {
-                                                text: "\u{e8b6}";
-                                                font-family: "iconfont";
-                                                font-size: 12px;
-                                                color: rm-ta.has-hover ? red : text-3;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                            }
+                                            vertical-stretch: 1;
                                         }
                                     }
-                                }
-
-                                Rectangle {
-                                    vertical-stretch: 1;
                                 }
                             }
                         }

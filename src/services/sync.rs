@@ -9,6 +9,7 @@ use crate::core::settings::{generate_id, AppSettings, BackendConfig};
 use crate::core::sync::{self, BackendStatus, BackendType, MergeStats, SyncBackend};
 use crate::looper::Pollable;
 use crate::services::backends::local_folder::LocalFolderBackend;
+use crate::services::backends::webdav::WebDAVBackend;
 use crate::App;
 use crate::SyncBackendInfo;
 use slint::{Model, ModelRc, SharedString, VecModel};
@@ -28,8 +29,19 @@ struct BackendSyncResult {
     pushed_tags: u32,
 }
 
+/// Public info about a backend for the edit panel.
+pub struct BackendInfo {
+    pub name: String,
+    pub folder: String,
+    pub backend_type: String,
+    pub webdav_url: String,
+    pub webdav_username: String,
+    pub webdav_password: String,
+}
+
 struct BackendState {
     backend: Arc<dyn SyncBackend>,
+    enabled: bool,
     status: BackendStatus,
     last_sync: Option<Instant>,
     last_sync_at: String,
@@ -40,6 +52,7 @@ struct BackendState {
     is_running: Arc<AtomicBool>,
     cancel_flag: Arc<AtomicBool>,
     pending_result: Arc<Mutex<Option<BackendSyncResult>>>,
+    last_status_check: Option<Instant>,
 }
 
 impl BackendState {
@@ -68,20 +81,36 @@ impl BackendState {
             name: SharedString::from(self.backend.name()),
             backend_type: SharedString::from(match self.backend.backend_type() {
                 BackendType::LocalFolder => "local_folder",
+                BackendType::WebDAV => "webdav",
             }),
             status: SharedString::from(&status_str),
             status_message: SharedString::from(&status_msg),
-            enabled: true,
+            enabled: self.enabled,
             folder_path: SharedString::from(&self.folder_path),
             last_sync_at: SharedString::from(&format_relative_time(&self.last_sync_at)),
             item_count: self.last_item_count as i32,
             tag_count: self.last_tag_count as i32,
             service_label: SharedString::from(&self.service_label),
+            sync_interval_secs: self.backend.sync_interval() as i32,
         }
     }
 }
 
-fn detect_service_label(folder_path: &str) -> String {
+fn detect_service_label(folder_path: &str, webdav_url: &str, backend_type: &str) -> String {
+    if backend_type == "webdav" {
+        // Extract domain from URL as the service label
+        if let Some(rest) = webdav_url
+            .strip_prefix("https://")
+            .or_else(|| webdav_url.strip_prefix("http://"))
+        {
+            return rest
+                .split('/')
+                .next()
+                .unwrap_or("WebDAV")
+                .to_string();
+        }
+        return "WebDAV".into();
+    }
     let lower = folder_path.to_lowercase();
     if lower.contains("onedrive") {
         "OneDrive".into()
@@ -179,9 +208,49 @@ impl SyncManager {
             last_sync_at: String::new(),
             last_item_count: 0,
             last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
         };
 
         // Persist
+        {
+            let mut s = self.settings.lock().expect("settings lock");
+            s.sync_backends.push(config.clone());
+            s.save();
+        }
+
+        self.add_state_for_config(config);
+        self.refresh_model();
+    }
+
+    /// Add a new WebDAV backend and persist.
+    pub fn add_webdav_backend(
+        &mut self,
+        name: String,
+        url: String,
+        username: String,
+        password: String,
+    ) {
+        let device_name =
+            crate::services::backends::local_folder::hostname();
+        let config = BackendConfig {
+            id: generate_id(),
+            enabled: true,
+            backend_type: "webdav".into(),
+            name,
+            folder_path: String::new(),
+            device_name,
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: url,
+            webdav_username: username,
+            webdav_password: password,
+        };
+
         {
             let mut s = self.settings.lock().expect("settings lock");
             s.sync_backends.push(config.clone());
@@ -228,20 +297,37 @@ impl SyncManager {
         self.refresh_model();
     }
 
-    /// Get backend name, folder path, and type by ID.
-    pub fn get_backend_info(&self, id: &str) -> Option<(String, String, String)> {
+    /// Get backend info by ID for the edit panel.
+    pub fn get_backend_info(&self, id: &str) -> Option<BackendInfo> {
         self.backends
             .iter()
             .find(|b| b.backend.id() == id)
             .map(|b| {
                 let bt = match b.backend.backend_type() {
                     crate::core::sync::BackendType::LocalFolder => "local_folder",
+                    crate::core::sync::BackendType::WebDAV => "webdav",
                 };
-                (
-                    b.backend.name().to_string(),
-                    b.folder_path.clone(),
-                    bt.to_string(),
-                )
+                // Read WebDAV fields from settings config
+                let (webdav_url, webdav_username, webdav_password) = {
+                    let s = self.settings.lock().expect("settings lock");
+                    s.sync_backends
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(|c| (
+                            c.webdav_url.clone(),
+                            c.webdav_username.clone(),
+                            c.webdav_password.clone(),
+                        ))
+                        .unwrap_or_default()
+                };
+                BackendInfo {
+                    name: b.backend.name().to_string(),
+                    folder: b.folder_path.clone(),
+                    backend_type: bt.to_string(),
+                    webdav_url,
+                    webdav_username,
+                    webdav_password,
+                }
             })
     }
 
@@ -262,25 +348,65 @@ impl SyncManager {
         self.refresh_model();
     }
 
+    /// Edit a WebDAV backend — updates name, URL, and credentials, then persists.
+    pub fn edit_webdav_backend(
+        &mut self,
+        id: &str,
+        new_name: &str,
+        new_url: &str,
+        new_username: &str,
+        new_password: &str,
+    ) {
+        {
+            let mut s = self.settings.lock().expect("settings lock");
+            for cfg in &mut s.sync_backends {
+                if cfg.id == id {
+                    cfg.name = new_name.to_string();
+                    cfg.webdav_url = new_url.to_string();
+                    cfg.webdav_username = new_username.to_string();
+                    // Only update password if the field is not empty (user might
+                    // leave it blank when editing to keep the existing one).
+                    if !new_password.is_empty() {
+                        cfg.webdav_password = new_password.to_string();
+                    }
+                    s.save();
+                    break;
+                }
+            }
+        }
+        self.reload_backends();
+        self.refresh_model();
+    }
+
     /// Trigger an immediate sync cycle for all enabled backends.
+    #[allow(dead_code)]
     pub fn trigger_sync_now(&self) {
         self.manual_trigger.store(true, Ordering::SeqCst);
     }
 
+    /// Trigger an immediate sync cycle for a specific backend.
+    pub fn trigger_backend_sync(&mut self, id: &str) {
+        for i in 0..self.backends.len() {
+            if self.backends[i].backend.id() == id {
+                if !self.backends[i].is_running.load(Ordering::SeqCst) {
+                    let interval = self.backends[i].backend.sync_interval();
+                    self.start_sync_cycle(i, interval, true);
+                }
+                break;
+            }
+        }
+    }
+
     // ── Internal ──
 
-    fn reload_backends(&mut self) {
+    pub fn reload_backends(&mut self) {
         for state in &self.backends {
             state.cancel_flag.store(true, Ordering::SeqCst);
         }
 
         let configs: Vec<BackendConfig> = {
             let s = self.settings.lock().expect("settings lock");
-            s.sync_backends
-                .iter()
-                .filter(|c| c.enabled)
-                .cloned()
-                .collect()
+            s.sync_backends.clone()
         };
 
         let mut new_states: Vec<BackendState> = Vec::new();
@@ -289,6 +415,7 @@ impl SyncManager {
             if let Some(old) = existing {
                 new_states.push(BackendState {
                     backend: Arc::new(LocalFolderBackend::new(config.clone())),
+                    enabled: config.enabled,
                     status: old.status.clone(),
                     last_sync: old.last_sync,
                     last_sync_at: old.last_sync_at.clone(),
@@ -299,6 +426,7 @@ impl SyncManager {
                     is_running: Arc::clone(&old.is_running),
                     cancel_flag: Arc::clone(&old.cancel_flag),
                     pending_result: Arc::clone(&old.pending_result),
+                    last_status_check: old.last_status_check,
                 });
             } else {
                 new_states.push(Self::build_state(config.clone()));
@@ -320,15 +448,24 @@ impl SyncManager {
 
     fn build_state(config: BackendConfig) -> BackendState {
         let folder_path = config.folder_path.clone();
-        let service_label = detect_service_label(&folder_path);
+        let service_label = detect_service_label(
+            &folder_path,
+            &config.webdav_url,
+            config.backend_type.as_str(),
+        );
         let last_sync_at = config.last_sync_at.clone();
         let last_item_count = config.last_item_count;
         let last_tag_count = config.last_tag_count;
-        let backend: Arc<dyn SyncBackend> = Arc::new(LocalFolderBackend::new(config));
+        let enabled = config.enabled;
+        let backend: Arc<dyn SyncBackend> = match config.backend_type.as_str() {
+            "webdav" => Arc::new(WebDAVBackend::new(config)),
+            _ => Arc::new(LocalFolderBackend::new(config)),
+        };
 
         BackendState {
             status: backend.check_status(),
             backend,
+            enabled,
             last_sync: None,
             last_sync_at,
             last_item_count,
@@ -338,6 +475,7 @@ impl SyncManager {
             is_running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             pending_result: Arc::new(Mutex::new(None)),
+            last_status_check: None,
         }
     }
 
@@ -358,6 +496,9 @@ impl SyncManager {
     }
 
     fn should_sync(&self, state: &BackendState, interval_secs: u64, is_manual: bool) -> bool {
+        if !state.enabled {
+            return false;
+        }
         if state.is_running.load(Ordering::SeqCst) {
             return false;
         }
@@ -503,17 +644,9 @@ impl SyncManager {
     }
 
     fn refresh_model(&self) {
-        let infos: Vec<SyncBackendInfo> = self.backends.iter().map(|b| b.to_slint_info()).collect();
-        // Rebuild model
-        self.model.set_vec(infos);
-    }
-
-    fn refresh_model_incremental(&self) {
-        // Update existing entries in-place when possible
         let count = self.backends.len();
         if self.model.row_count() != count {
-            let infos: Vec<SyncBackendInfo> =
-                self.backends.iter().map(|b| b.to_slint_info()).collect();
+            let infos: Vec<SyncBackendInfo> = self.backends.iter().map(|b| b.to_slint_info()).collect();
             self.model.set_vec(infos);
         } else {
             for (i, state) in self.backends.iter().enumerate() {
@@ -526,12 +659,6 @@ impl SyncManager {
 
 impl Pollable for SyncManager {
     fn poll(&mut self) {
-        let interval_secs = self
-            .settings
-            .lock()
-            .map(|s| s.sync_interval_secs)
-            .unwrap_or(60);
-
         // Phase 1: Check for completed background tasks
         let mut results: Vec<BackendSyncResult> = Vec::new();
         for state in &self.backends {
@@ -543,25 +670,33 @@ impl Pollable for SyncManager {
             self.apply_backend_result(result);
         }
 
-        // Phase 2: Check all backends' online status
+        // Phase 2: Check all backends' online status (throttled to 30s)
         for state in &mut self.backends {
             if !state.is_running.load(Ordering::Relaxed) {
-                state.status = state.backend.check_status();
+                let should_check = match state.last_status_check {
+                    Some(t) => t.elapsed() >= Duration::from_secs(30),
+                    None => true,
+                };
+                if should_check {
+                    state.status = state.backend.check_status();
+                    state.last_status_check = Some(Instant::now());
+                }
             }
         }
 
         // Phase 3: Start new sync cycles for due backends.
-        // Manual trigger bypasses auto-sync toggle and cooldown.
+        // Each backend uses its own configured interval.
         let manual = self.manual_trigger.swap(false, Ordering::SeqCst);
         let count = self.backends.len();
         for i in 0..count {
-            if self.should_sync(&self.backends[i], interval_secs, manual) {
-                self.start_sync_cycle(i, interval_secs, manual);
+            let effective = self.backends[i].backend.sync_interval();
+            if self.should_sync(&self.backends[i], effective, manual) {
+                self.start_sync_cycle(i, effective, manual);
             }
         }
 
         // Push backend status list to Slint UI
-        self.refresh_model_incremental();
+        self.refresh_model();
     }
 
     fn stop(&mut self) {

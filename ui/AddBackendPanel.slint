@@ -15,12 +15,18 @@ export component AddBackendPanel inherits Rectangle {
     in-out property <string> edit-name: "";
     in-out property <string> edit-folder: "";
     in-out property <string> backend-type: "";
+    in-out property <string> edit-webdav-url: "";
+    in-out property <string> edit-webdav-username: "";
+    in-out property <string> edit-webdav-password: "";
 
     // 回调
     callback hide-panel();
     callback add-backend(string, string);
     callback save-backend(string, string, string);
     callback pick-folder();
+    callback add-webdav-backend(string, string, string, string);
+    callback save-webdav-backend(string, string, string, string, string);
+    callback test-webdav-connection(string, string, string);
 
     // 主题色板
     property <color> accent: TagPanelTheme.accent;
@@ -33,8 +39,14 @@ export component AddBackendPanel inherits Rectangle {
     property <color> sep-line: TagPanelTheme.sep-line;
 
     // 内部状态: 编辑模式直接进入表单
-    property <int> _step: root.edit-mode ? 1 : 0;
+    property <int> _step: root.edit-mode
+        ? (root.backend-type == "webdav" ? 2 : 1)
+        : (root._selected-type == ""
+            ? 0
+            : (root._selected-type == "webdav" ? 2 : 1));
     property <string> _selected-type: root.backend-type;
+    in-out property <bool> test-ok: false;
+    in-out property <string> test-error: "";
 
     width: 304px;
     height: panel-content.preferred-height;
@@ -81,7 +93,6 @@ export component AddBackendPanel inherits Rectangle {
                         width: 100%;
                         height: 100%;
                         clicked => {
-                            root._step = 0;
                             root._selected-type = "";
                         }
                     }
@@ -98,7 +109,8 @@ export component AddBackendPanel inherits Rectangle {
 
                 title-text := Text {
                     text: root.edit-mode ? @tr("Edit backend") :
-                          (root._step == 0 ? @tr("Add backend") : @tr("Local Folder"));
+                          (root._step == 0 ? @tr("Add backend") :
+                           root._selected-type == "webdav" ? @tr("WebDAV") : @tr("Local Folder"));
                     font-size: 13px;
                     font-weight: 600;
                     color: text-1;
@@ -165,7 +177,6 @@ export component AddBackendPanel inherits Rectangle {
                         width: 100%;
                         height: 100%;
                         clicked => {
-                            root._step = 1;
                             root._selected-type = "local_folder";
                         }
                     }
@@ -194,15 +205,25 @@ export component AddBackendPanel inherits Rectangle {
                     }
                 }
 
-                // ── WebDAV 卡片（禁用，即将推出） ──
+                // ── WebDAV 卡片 ──
                 wd-card := Rectangle {
                     width: parent.width / 2 - 5px;
                     height: 68px;
                     border-radius: 8px;
-                    background: transparent;
+                    background: wd-ta.has-hover ? accent : btn-hover;
                     border-width: 1px;
-                    border-color: dark-mode ? #ffffff0d : #0000000a;
-                    opacity: 0.45;
+                    border-color: wd-ta.has-hover ? accent : transparent;
+
+                    wd-ta := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root._selected-type = "webdav";
+                            if root.edit-name == "" {
+                                root.edit-name = "WebDAV";
+                            }
+                        }
+                    }
 
                     VerticalLayout {
                         padding: 10px;
@@ -212,18 +233,18 @@ export component AddBackendPanel inherits Rectangle {
                             text: "\u{e7b1}";
                             font-family: "iconfont";
                             font-size: 16px;
-                            color: text-3;
+                            color: wd-ta.has-hover ? #ffffff : accent;
                         }
                         Text {
                             text: @tr("WebDAV");
                             font-size: 12px;
                             font-weight: 600;
-                            color: text-2;
+                            color: wd-ta.has-hover ? #ffffff : text-1;
                         }
                         Text {
-                            text: @tr("Coming soon");
+                            text: @tr("NAS, Nextcloud, etc.");
                             font-size: 10px;
-                            color: text-3;
+                            color: wd-ta.has-hover ? #ffffffcc : text-3;
                         }
                     }
                 }
@@ -474,6 +495,217 @@ export component AddBackendPanel inherits Rectangle {
                     font-size: 12px;
                     font-weight: 600;
                     color: save-ta.has-hover ? accent : #ffffff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ══════════════════════════════════════════
+        // Step 2: WebDAV 表单
+        if root._step == 2 : VerticalLayout {
+            spacing: 8px;
+
+            // URL 输入
+            Text {
+                text: @tr("Server URL");
+                font-size: 11px;
+                font-weight: 600;
+                color: text-2;
+            }
+
+            Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: input-bg;
+
+                wd-url-input := TextInput {
+                    x: 8px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 16px;
+                    height: 16px;
+                    color: text-1;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    text <=> root.edit-webdav-url;
+                }
+            }
+
+            // 名称输入
+            Text {
+                text: @tr("Name");
+                font-size: 11px;
+                font-weight: 600;
+                color: text-2;
+            }
+
+            Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: input-bg;
+
+                wd-name-input := TextInput {
+                    x: 8px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 16px;
+                    height: 16px;
+                    color: text-1;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    text <=> root.edit-name;
+                }
+            }
+
+            // 用户名
+            Text {
+                text: @tr("Username");
+                font-size: 11px;
+                font-weight: 600;
+                color: text-2;
+            }
+
+            Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: input-bg;
+
+                wd-user-input := TextInput {
+                    x: 8px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 16px;
+                    height: 16px;
+                    color: text-1;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    text <=> root.edit-webdav-username;
+                }
+            }
+
+            // 密码
+            Text {
+                text: @tr("Password");
+                font-size: 11px;
+                font-weight: 600;
+                color: text-2;
+            }
+
+            Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: input-bg;
+
+                wd-pass-input := TextInput {
+                    x: 8px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 16px;
+                    height: 16px;
+                    color: text-1;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    input-type: password;
+                    text <=> root.edit-webdav-password;
+                }
+            }
+
+            // 错误提示
+            if root.test-error != "" : Text {
+                text: root.test-error;
+                font-size: 11px;
+                font-weight: 600;
+                color: #FF5252;
+            }
+
+            property <color> accent-soft: dark-mode ? #1a2e24 : #e8f5ee;
+
+            // 测试连接 / 添加保存 按钮
+            if !root.test-ok : Rectangle {
+                height: 34px;
+                border-radius: 7px;
+                background: wd-test-ta.has-hover ? accent-soft : accent;
+
+                wd-test-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        if wd-url-input.text != "" {
+                            root.test-ok = false;
+                            root.test-error = "";
+                            root.test-webdav-connection(wd-url-input.text, wd-user-input.text, wd-pass-input.text);
+                        }
+                    }
+                }
+
+                Text {
+                    text: @tr("Test connection");
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: wd-test-ta.has-hover ? accent : #ffffff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // 连接成功 — 添加按钮
+            if root.test-ok && !root.edit-mode : Rectangle {
+                height: 34px;
+                border-radius: 7px;
+                background: wd-add-ta.has-hover ? accent-soft : #4CAF50;
+
+                wd-add-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        if wd-name-input.text != "" && wd-url-input.text != "" {
+                            root.add-webdav-backend(wd-name-input.text, wd-url-input.text, wd-user-input.text, wd-pass-input.text);
+                            root.test-ok = false;
+                            root.test-error = "";
+                            root.edit-name = "";
+                            root.edit-webdav-url = "";
+                            root.edit-webdav-username = "";
+                            root.edit-webdav-password = "";
+                            root.hide-panel();
+                        }
+                    }
+                }
+
+                Text {
+                    text: @tr("Add backend");
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: wd-add-ta.has-hover ? accent : #ffffff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // 连接成功 — 保存按钮
+            if root.test-ok && root.edit-mode : Rectangle {
+                height: 34px;
+                border-radius: 7px;
+                background: wd-save-ta.has-hover ? accent-soft : #4CAF50;
+
+                wd-save-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        if wd-name-input.text != "" && wd-url-input.text != "" {
+                            root.save-webdav-backend(root.edit-id, wd-name-input.text, wd-url-input.text, wd-user-input.text, wd-pass-input.text);
+                            root.test-ok = false;
+                            root.test-error = "";
+                            root.edit-name = "";
+                            root.edit-webdav-url = "";
+                            root.edit-webdav-username = "";
+                            root.edit-webdav-password = "";
+                            root.hide-panel();
+                        }
+                    }
+                }
+
+                Text {
+                    text: @tr("Save");
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: wd-save-ta.has-hover ? accent : #ffffff;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }

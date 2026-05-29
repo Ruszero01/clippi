@@ -12,6 +12,7 @@ use std::sync::Mutex;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BackendType {
     LocalFolder,
+    WebDAV,
 }
 
 /// Connection / health status of a backend.
@@ -36,6 +37,9 @@ pub trait SyncBackend: Send + Sync {
     /// should skip any mtime/etag optimization and always read the file.
     fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String>;
     fn push(&self, payload: &SyncPayload) -> Result<(), String>;
+
+    /// Per-backend sync interval in seconds. Returns 0 to use the global default.
+    fn sync_interval(&self) -> u64;
 
     /// Called after a successful push. Backends can override to clean up
     /// temporary or conflict files (e.g., clippi_sync-*.json).

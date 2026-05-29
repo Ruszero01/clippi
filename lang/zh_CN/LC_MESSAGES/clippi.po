@@ -350,5 +350,20 @@ msgstr "OneDrive、iCloud 等"
 msgid "WebDAV"
 msgstr "WebDAV"
 
-msgid "Coming soon"
-msgstr "即将推出"
+msgid "NAS, Nextcloud, etc."
+msgstr "NAS、Nextcloud 等"
+
+msgid "Server URL"
+msgstr "服务器地址"
+
+msgid "Username"
+msgstr "用户名"
+
+msgid "Password"
+msgstr "密码"
+
+msgid "Test connection"
+msgstr "测试连接"
+
+msgid "Connection failed. Check URL and credentials."
+msgstr "连接失败，请检查地址与认证信息。"

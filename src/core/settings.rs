@@ -24,7 +24,7 @@ const LAUNCH_AGENT_ID: &str = "com.clippi.launcher";
 pub struct BackendConfig {
     pub id: String,
     pub enabled: bool,
-    pub backend_type: String, // "local_folder"
+    pub backend_type: String, // "local_folder" | "webdav"
     pub name: String,
     pub folder_path: String,
     pub device_name: String,
@@ -34,6 +34,15 @@ pub struct BackendConfig {
     pub last_item_count: u32,
     #[serde(default)]
     pub last_tag_count: u32,
+    #[serde(default)]
+    pub sync_interval_secs: Option<u64>, // None = use global default
+    // WebDAV fields
+    #[serde(default)]
+    pub webdav_url: String,
+    #[serde(default)]
+    pub webdav_username: String,
+    #[serde(default)]
+    pub webdav_password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +192,10 @@ impl AppSettings {
                 last_sync_at: String::new(),
                 last_item_count: 0,
                 last_tag_count: 0,
+                sync_interval_secs: None,
+                webdav_url: String::new(),
+                webdav_username: String::new(),
+                webdav_password: String::new(),
             });
             // Clear old fields
             self.sync_enabled = false;

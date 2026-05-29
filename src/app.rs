@@ -19,6 +19,7 @@ use crate::services::focus::FocusService;
 use crate::services::hotkey::HotkeyService;
 use crate::services::sync::SyncManager;
 use crate::services::tray::TrayService;
+use base64::Engine;
 use crate::App;
 use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use slint::{ComponentHandle, LogicalSize, SharedString};
@@ -991,19 +992,29 @@ impl AppController {
         });
 
         let c = ctx.clone();
-        slint_app.on_set_sync_interval(move |secs: i32| {
-            if let Some(app) = c.app.upgrade() {
-                app.set_sync_interval_secs(secs);
+        slint_app.on_set_backend_sync_interval(move |id: SharedString, secs: i32| {
+            // Update per-backend interval in settings
+            {
                 let mut s = c.settings.lock().expect("settings lock poisoned");
-                s.sync_interval_secs = secs as u64;
-                s.save();
+                for cfg in &mut s.sync_backends {
+                    if cfg.id == id.as_str() {
+                        cfg.sync_interval_secs = Some(secs as u64);
+                        s.save();
+                        break;
+                    }
+                }
             }
+            // Reload backends to pick up new interval
+            let _ = c.looper.try_with_sync_manager(|sm| {
+                sm.reload_backends();
+            });
+            // UI model will be refreshed on next poll cycle
         });
 
         let c = ctx.clone();
-        slint_app.on_sync_now(move || {
+        slint_app.on_sync_backend_now(move |id: SharedString| {
             let _ = c.looper.try_with_sync_manager(|sm| {
-                sm.trigger_sync_now();
+                sm.trigger_backend_sync(&id);
             });
         });
 
@@ -1015,10 +1026,67 @@ impl AppController {
         });
 
         let c = ctx.clone();
+        slint_app.on_add_webdav_backend(
+            move |name: SharedString,
+                  url: SharedString,
+                  username: SharedString,
+                  password: SharedString| {
+                let _ = c.looper.try_with_sync_manager(|sm| {
+                    sm.add_webdav_backend(
+                        name.to_string(),
+                        url.to_string(),
+                        username.to_string(),
+                        password.to_string(),
+                    );
+                });
+            },
+        );
+
+        let c = ctx.clone();
         slint_app.on_save_sync_backend(
             move |id: SharedString, name: SharedString, path: SharedString| {
                 let _ = c.looper.try_with_sync_manager(|sm| {
                     sm.edit_backend(&id, &name, &path);
+                });
+            },
+        );
+
+        let c = ctx.clone();
+        slint_app.on_save_webdav_backend(
+            move |id: SharedString,
+                  name: SharedString,
+                  url: SharedString,
+                  username: SharedString,
+                  password: SharedString| {
+                let _ = c.looper.try_with_sync_manager(|sm| {
+                    sm.edit_webdav_backend(
+                        &id,
+                        &name,
+                        &url,
+                        &username,
+                        &password,
+                    );
+                });
+            },
+        );
+
+        let app_weak = slint_app.as_weak();
+        slint_app.on_test_webdav_connection(
+            move |url: SharedString, username: SharedString, password: SharedString| {
+                let app_weak = app_weak.clone();
+                std::thread::spawn(move || {
+                    let ok = test_webdav_conn(&url, &username, &password);
+                    let _ = app_weak.upgrade_in_event_loop(move |app| {
+                        if ok {
+                            app.set_add_backend_test_ok(true);
+                            app.set_add_backend_test_error("".into());
+                        } else {
+                            app.set_add_backend_test_ok(false);
+                            app.set_add_backend_test_error(
+                                i18n::tr("连接失败，请检查地址与认证信息。", "Connection failed. Check URL and credentials.").into()
+                            );
+                        }
+                    });
                 });
             },
         );
@@ -1040,12 +1108,15 @@ impl AppController {
         let c = ctx.clone();
         slint_app.on_edit_sync_backend(move |id: SharedString| {
             let _ = c.looper.try_with_sync_manager(|sm| {
-                if let Some((name, folder, backend_type)) = sm.get_backend_info(&id) {
+                if let Some(info) = sm.get_backend_info(&id) {
                     if let Some(app) = c.app.upgrade() {
                         app.set_add_backend_edit_id(id.clone());
-                        app.set_add_backend_edit_name(SharedString::from(&name));
-                        app.set_add_backend_edit_folder(SharedString::from(&folder));
-                        app.set_add_backend_backend_type(SharedString::from(&backend_type));
+                        app.set_add_backend_edit_name(SharedString::from(&info.name));
+                        app.set_add_backend_edit_folder(SharedString::from(&info.folder));
+                        app.set_add_backend_backend_type(SharedString::from(&info.backend_type));
+                        app.set_add_backend_edit_webdav_url(SharedString::from(&info.webdav_url));
+                        app.set_add_backend_edit_webdav_username(SharedString::from(&info.webdav_username));
+                        app.set_add_backend_edit_webdav_password(SharedString::from(&info.webdav_password));
                         app.set_add_backend_edit_mode(true);
                         app.set_add_backend_panel_visible(true);
                     }
@@ -1060,6 +1131,9 @@ impl AppController {
                 app.set_add_backend_edit_name(SharedString::default());
                 app.set_add_backend_edit_folder(SharedString::default());
                 app.set_add_backend_backend_type(SharedString::default());
+                app.set_add_backend_edit_webdav_url(SharedString::default());
+                app.set_add_backend_edit_webdav_username(SharedString::default());
+                app.set_add_backend_edit_webdav_password(SharedString::default());
                 app.set_add_backend_panel_visible(true);
             }
         });
@@ -1681,7 +1755,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_max_items(settings.max_items as i32);
     app.set_sync_auto_enabled(settings.sync_auto_enabled);
     app.set_sync_favorites_only(settings.sync_favorites_only);
-    app.set_sync_interval_secs(settings.sync_interval_secs as i32);
+    // per-backend interval managed via SyncBackendInfo model
 }
 
 /// Write a clipboard item's content to the system clipboard.
@@ -1906,3 +1980,35 @@ fn verify_clipboard_image(expected_size: u64, timeout_ms: u64) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+
+/// Test a WebDAV connection with a quick HEAD request.
+fn test_webdav_conn(url: &str, username: &str, password: &str) -> bool {
+    let raw = format!("{username}:{password}");
+    let auth = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(&raw));
+    let file_url = format!("{}/clippi_sync.json", url.trim_end_matches('/'));
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(5))
+        .build();
+    for test_url in [file_url.as_str(), url.trim_end_matches('/')] {
+        match agent
+            .head(test_url)
+            .set("Authorization", &auth)
+            .call()
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if (200..400).contains(&status) {
+                    return true;
+                }
+                if status == 401 || status == 403 {
+                    return false;
+                }
+            }
+            Err(ureq::Error::Status(404, _)) => continue,
+            Err(_) => return false,
+        }
+    }
+    false
+}
+

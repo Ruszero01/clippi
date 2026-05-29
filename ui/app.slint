@@ -67,7 +67,6 @@ export component App inherits Window {
     // 云同步
     in property <[SyncBackendInfo]> sync-backends: [];
     in-out property <bool> sync-auto-enabled: true;
-    in-out property <int> sync-interval-secs: 60;
     in-out property <string> sync-status: "";
     in-out property <int> sync-items-added: 0;
     in-out property <int> sync-items-updated: 0;
@@ -85,6 +84,11 @@ export component App inherits Window {
     in-out property <string> add-backend-edit-name: "";
     in-out property <string> add-backend-edit-folder: "";
     in-out property <string> add-backend-backend-type: "";
+    in-out property <string> add-backend-edit-webdav-url: "";
+    in-out property <string> add-backend-edit-webdav-username: "";
+    in-out property <string> add-backend-edit-webdav-password: "";
+    in-out property <bool> add-backend-test-ok: false;
+    in-out property <string> add-backend-test-error: "";
 
     // 右键菜单状态
     in-out property <bool> context-menu-visible: false;
@@ -178,12 +182,15 @@ export component App inherits Window {
     callback set-max-items(int);
     callback toggle-sync-auto-enabled();
     callback toggle-sync-favorites-only();
-    callback set-sync-interval(int);
-    callback sync-now();
+    callback sync-backend-now(string);
+    callback set-backend-sync-interval(string, int);
     callback show-add-backend-panel();
     callback hide-add-backend-panel();
     callback add-sync-backend(string, string);
     callback save-sync-backend(string, string, string);  // (id, name, folder_path)
+    callback add-webdav-backend(string, string, string, string);  // (name, url, username, password)
+    callback save-webdav-backend(string, string, string, string, string);  // (id, name, url, username, password)
+    callback test-webdav-connection(string, string, string);  // (url, username, password)
     callback pick-backend-folder();
     callback remove-sync-backend(string);
     callback toggle-sync-backend(string);
@@ -583,7 +590,6 @@ export component App inherits Window {
                     ocr-enabled: root.ocr-enabled;
                     max-items: root.max-items;
                     sync-auto-enabled: root.sync-auto-enabled;
-                    sync-interval-secs: root.sync-interval-secs;
                     sync-status: root.sync-status;
                     sync-items-added: root.sync-items-added;
                     sync-items-updated: root.sync-items-updated;
@@ -614,12 +620,12 @@ export component App inherits Window {
                     set-max-items(v) => { root.set-max-items(v); }
                     toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
                     toggle-sync-favorites-only => { root.toggle-sync-favorites-only(); }
-                    set-sync-interval(i) => { root.set-sync-interval(i); }
-                    sync-now => { root.sync-now(); }
                     show-add-backend-panel => { root.show-add-backend-panel(); }
                     remove-sync-backend(id) => { root.remove-sync-backend(id); }
                     toggle-sync-backend(id) => { root.toggle-sync-backend(id); }
                     edit-sync-backend(id) => { root.edit-sync-backend(id); }
+                    sync-backend-now(id) => { root.sync-backend-now(id); }
+                    set-backend-sync-interval(id, secs) => { root.set-backend-sync-interval(id, secs); }
                 }
             }
         }
@@ -835,10 +841,18 @@ export component App inherits Window {
             edit-name <=> root.add-backend-edit-name;
             edit-folder <=> root.add-backend-edit-folder;
             backend-type <=> root.add-backend-backend-type;
+            edit-webdav-url <=> root.add-backend-edit-webdav-url;
+            edit-webdav-username <=> root.add-backend-edit-webdav-username;
+            edit-webdav-password <=> root.add-backend-edit-webdav-password;
+            test-ok <=> root.add-backend-test-ok;
+            test-error <=> root.add-backend-test-error;
 
             hide-panel => { root.hide-add-backend-panel(); }
             add-backend(name, path) => { root.add-sync-backend(name, path); }
             save-backend(id, name, path) => { root.save-sync-backend(id, name, path); }
+            add-webdav-backend(name, url, username, password) => { root.add-webdav-backend(name, url, username, password); }
+            save-webdav-backend(id, name, url, username, password) => { root.save-webdav-backend(id, name, url, username, password); }
+            test-webdav-connection(url, user, pass) => { root.test-webdav-connection(url, user, pass); }
             pick-folder => { root.pick-backend-folder(); }
         }
 

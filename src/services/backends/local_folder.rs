@@ -78,6 +78,10 @@ impl SyncBackend for LocalFolderBackend {
         BackendType::LocalFolder
     }
 
+    fn sync_interval(&self) -> u64 {
+        self.config.sync_interval_secs.unwrap_or(60)
+    }
+
     fn check_status(&self) -> BackendStatus {
         let dir = PathBuf::from(&self.config.folder_path);
         if !dir.exists() {
