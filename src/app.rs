@@ -1345,7 +1345,10 @@ impl AppController {
                             (cursor_y as f32 * scale) as i32,
                         )
                     };
-                    app.set_context_menu_x((cursor_x as f32 - pos.x as f32) / scale);
+                    // ContextMenu renders with an offset equal to the main
+                    // content panel's x position (36px in app.slint).
+                    const PANEL_OFFSET: f32 = 36.0;
+                    app.set_context_menu_x((cursor_x as f32 - pos.x as f32) / scale - PANEL_OFFSET);
                     app.set_context_menu_y((cursor_y as f32 - pos.y as f32) / scale);
                 }
 
