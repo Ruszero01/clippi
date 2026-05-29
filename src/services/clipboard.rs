@@ -796,9 +796,9 @@ impl ClipboardService {
     }
 
     /// Update content for an item, recompute hash, and refresh that row
-    pub fn update_content(&mut self, id: i32, text: &str, content_type: &str) {
+    pub fn update_content(&mut self, id: i32, text: &str, content_type: &str, meta_type: &str) {
         if let Ok(db) = self.db.lock() {
-            if let Err(e) = db.update_content(id as i64, text, content_type) {
+            if let Err(e) = db.update_content(id as i64, text, content_type, meta_type) {
                 log::error!("update_content({id}): {e}");
             }
         }

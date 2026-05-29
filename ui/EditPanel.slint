@@ -112,7 +112,9 @@ export component EditPanel inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     text: root.selected-type == "link" ? @tr("URL") :
                           root.selected-type == "path" ? @tr("Path") :
-                          root.selected-type == "color" ? @tr("Color") : @tr("Text");
+                          root.selected-type == "color" ? @tr("Color") :
+                          root.selected-type == "email" ? @tr("Email") :
+                          root.selected-type == "phone" ? @tr("Phone") : @tr("Text");
                     font-size: 10px;
                     color: accent;
                     horizontal-alignment: center;
@@ -310,7 +312,7 @@ export component EditPanel inherits Rectangle {
             x: 8px;
             y: 80px;
             width: 90px;
-            height: 118px;
+            height: 174px;
             border-radius: 6px;
             background: surface;
             border-width: 1px;
@@ -323,7 +325,7 @@ export component EditPanel inherits Rectangle {
                 padding: 4px;
                 spacing: 2px;
 
-                for opt[idx] in [@tr("Text"), @tr("URL"), @tr("Path"), @tr("Color")]: Rectangle {
+                for opt[idx] in [@tr("Text"), @tr("URL"), @tr("Path"), @tr("Color"), @tr("Email"), @tr("Phone")]: Rectangle {
                     height: 26px;
                     border-radius: 4px;
                     background: item-ta.has-hover ? divider : transparent;
@@ -335,7 +337,9 @@ export component EditPanel inherits Rectangle {
                             if idx == 0 { root.selected-type = "plain_text"; }
                             else if idx == 1 { root.selected-type = "link"; }
                             else if idx == 2 { root.selected-type = "path"; }
-                            else { root.selected-type = "color"; }
+                            else if idx == 3 { root.selected-type = "color"; }
+                            else if idx == 4 { root.selected-type = "email"; }
+                            else { root.selected-type = "phone"; }
                             root.type-manually-set = true;
                             root.type-menu-open = false;
                         }
@@ -349,7 +353,9 @@ export component EditPanel inherits Rectangle {
                         color: root.selected-type == "plain_text" && idx == 0 ? accent :
                                root.selected-type == "link" && idx == 1 ? accent :
                                root.selected-type == "path" && idx == 2 ? accent :
-                               root.selected-type == "color" && idx == 3 ? accent : text-1;
+                               root.selected-type == "color" && idx == 3 ? accent :
+                               root.selected-type == "email" && idx == 4 ? accent :
+                               root.selected-type == "phone" && idx == 5 ? accent : text-1;
                         vertical-alignment: center;
                     }
                 }

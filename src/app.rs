@@ -1174,7 +1174,12 @@ impl AppController {
                 if let Ok(Some(item)) = db.get_by_id(id as i64) {
                     if let Some(app) = c.app.upgrade() {
                         app.set_editing_item_id(id);
-                        app.set_editing_item_type(SharedString::from(item.content_type.as_str()));
+                        let edit_type = if item.meta_type == "email" || item.meta_type == "phone" {
+                            item.meta_type.as_str()
+                        } else {
+                            item.content_type.as_str()
+                        };
+                        app.set_editing_item_type(SharedString::from(edit_type));
                         app.set_editing_content(SharedString::from(item.full_text.clone()));
                         app.set_current_view(SharedString::from("edit"));
                     }
@@ -1184,9 +1189,13 @@ impl AppController {
 
         let c = ctx.clone();
         slint_app.on_save_content(move |id, text: SharedString, sel_type: SharedString| {
-            let content_type = sel_type.as_str();
+            let (content_type, meta_type) = match sel_type.as_str() {
+                "email" => ("plain_text", "email"),
+                "phone" => ("plain_text", "phone"),
+                other => (other, ""),
+            };
             let _ = c.looper.try_with_clipboard_service(|cs| {
-                cs.update_content(id, &text, content_type);
+                cs.update_content(id, &text, content_type, meta_type);
             });
             if let Some(app) = c.app.upgrade() {
                 app.set_current_view(SharedString::from("clipboard"));

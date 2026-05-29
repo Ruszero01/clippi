@@ -211,7 +211,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_content(&self, id: i64, text: &str, content_type: &str) -> SqlResult<()> {
+    pub fn update_content(&self, id: i64, text: &str, content_type: &str, meta_type: &str) -> SqlResult<()> {
         let hash = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&text, &mut hasher);
@@ -219,8 +219,8 @@ impl Database {
         };
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE clipboard_items SET full_text = ?1, content_hash = ?2, content_type = ?3, updated_at = ?4, rich_data = '', image_path = '', file_data = '' WHERE id = ?5",
-            params![text, hash as i64, content_type, now, id],
+            "UPDATE clipboard_items SET full_text = ?1, content_hash = ?2, content_type = ?3, updated_at = ?4, rich_data = '', image_path = '', file_data = '', meta_type = ?5 WHERE id = ?6",
+            params![text, hash as i64, content_type, now, meta_type, id],
         )?;
         Ok(())
     }
