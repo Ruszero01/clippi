@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "clippi"
-version = "0.1.2-beta.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "cc",
