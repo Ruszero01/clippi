@@ -126,10 +126,6 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
 
 #[cfg(target_os = "macos")]
 const SLEEP_MS: u64 = 100;
-#[cfg(target_os = "macos")]
-const FOCUS_CHECK_INTERVAL_MS: u64 = 10;
-#[cfg(target_os = "macos")]
-const FOCUS_TIMEOUT_MS: u64 = 500;
 
 #[cfg(target_os = "macos")]
 pub fn restore_paste_target() {
@@ -166,34 +162,17 @@ pub fn paste_sync() {
     send_cmd_v();
 }
 
-#[cfg(target_os = "macos")]
-fn wait_for_focus(pid: i32) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
-    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-    loop {
-        let apps = workspace.runningApplications();
-        let mut active = false;
-        for i in 0..apps.count() {
-            let app = apps.objectAtIndex(i);
-            if app.processIdentifier() == pid {
-                active = app.isActive();
-                break;
-            }
-        }
-        if active || std::time::Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
-    }
-}
-
+/// Send Cmd+V keyboard events directly to the target process via CGEventPostToPid.
+/// This bypasses the HID event tap and does not require the target app to be
+/// frontmost, avoiding TCC Accessibility permission issues in release builds.
 #[cfg(target_os = "macos")]
 fn send_cmd_v() {
     std::thread::sleep(std::time::Duration::from_millis(SLEEP_MS));
-    // Verify target app has focus before pasting (same logic as Windows)
-    if let Some(pid) = crate::platform::focus::get_last_non_clippi_pid() {
-        wait_for_focus(pid);
-    }
+
+    // Get the target PID — must be a valid non-Clippi process
+    let target_pid = crate::platform::focus::get_last_non_clippi_pid();
+    let Some(pid) = target_pid else { return };
+
     let source = core_graphics::event_source::CGEventSource::new(
         core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
     );
@@ -204,25 +183,25 @@ fn send_cmd_v() {
     // Cmd down — modifiers were NOT active before pressing Cmd
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true)
     {
-        event.post(core_graphics::event::CGEventTapLocation::HID);
+        event.post_to_pid(pid);
     }
     // V down — Cmd IS held
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true)
     {
         event.set_flags(cmd_flag);
-        event.post(core_graphics::event::CGEventTapLocation::HID);
+        event.post_to_pid(pid);
     }
     // V up — Cmd IS held
     if let Ok(event) =
         core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false)
     {
         event.set_flags(cmd_flag);
-        event.post(core_graphics::event::CGEventTapLocation::HID);
+        event.post_to_pid(pid);
     }
     // Cmd up — Cmd WAS held before releasing
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source, 0x37, false) {
         event.set_flags(cmd_flag);
-        event.post(core_graphics::event::CGEventTapLocation::HID);
+        event.post_to_pid(pid);
     }
 }
 
