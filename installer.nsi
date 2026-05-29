@@ -24,6 +24,7 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
+!include "WinMessages.nsh"
 
 !define MUI_ABORTWARNING
 !define MUI_ICON "${STAGING}\app.ico"
@@ -44,9 +45,60 @@ SetCompressor /SOLID lzma
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-Function un.onInit
-  ; Kill running instance before any uninstall action
+; Define WM_CLOSE timeout (milliseconds)
+!define CLOSE_TIMEOUT 3000
+
+; Check if Clippi is running by finding its window, then ask user.
+; Uses FindWindow + WM_CLOSE for graceful close, falls back to taskkill /F.
+; No external plugins required — all built-in NSIS functionality.
+!macro CheckAndCloseApp un
+Function ${un}CheckAndCloseApp
+  FindWindow $0 "" "${APP_NAME}"
+  IntCmp $0 0 done
+
+  ; App is running — ask user
+  MessageBox MB_YESNO|MB_ICONQUESTION \
+    "${APP_NAME} 正在运行。$\r$\n$\r$\n点击「是」将自动关闭程序并继续安装，点击「否」取消安装。" \
+    IDYES close IDNO cancel
+
+cancel:
+  Quit
+
+close:
+  DetailPrint "正在关闭 ${APP_NAME}..."
+  ; Send WM_CLOSE to gracefully close the app
+  SendMessage $0 ${WM_CLOSE} 0 0 /TIMEOUT=${CLOSE_TIMEOUT}
+
+  ; Verify the window closed — if still alive, fall back to force kill
+  Sleep 1000
+  FindWindow $0 "" "${APP_NAME}"
+  IntCmp $0 0 done
+
+  ; WM_CLOSE didn't work — ask before force kill
+  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
+    "${APP_NAME} 未能正常关闭。$\r$\n$\r$\n点击「确定」强制终止进程继续安装，点击「取消」退出。" \
+    IDOK forceKill IDCANCEL cancel
+
+forceKill:
   nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
+  Sleep 1000
+
+done:
+FunctionEnd
+!macroend
+
+; Installer .onInit
+!insertmacro CheckAndCloseApp ""
+
+Function .onInit
+  Call CheckAndCloseApp
+FunctionEnd
+
+; Uninstaller un.onInit
+!insertmacro CheckAndCloseApp "un."
+
+Function un.onInit
+  Call un.CheckAndCloseApp
 FunctionEnd
 
 LangString DESC_Core ${LANG_SIMPCHINESE} "核心程序文件（必需）"
@@ -57,9 +109,6 @@ LangString DESC_UnData ${LANG_SIMPCHINESE} "删除所有剪贴板历史记录、
 Section "!Clippi" SectionCore
   SectionIn RO
   SetOutPath "$INSTDIR"
-
-  DetailPrint "Stopping running instance..."
-  nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
 
   File "${STAGING}\${APP_EXE}"
 
