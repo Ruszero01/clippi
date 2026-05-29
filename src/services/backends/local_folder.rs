@@ -114,6 +114,7 @@ impl SyncBackend for LocalFolderBackend {
                         mtime_changed = false;
                     } else {
                         *last = Some(mtime);
+                        mtime_changed = true;
                     }
                 }
             }

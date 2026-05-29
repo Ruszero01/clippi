@@ -169,11 +169,27 @@ pub fn build_snapshot(
         .get_all_sync_items_with_tags()
         .map_err(|e| format!("query items: {e}"))?;
 
+    // Collect unfavorited hashes up front. Items that are unfavorited
+    // (is_favorite=false) AND have a tombstone should be excluded from sync_items
+    // — the tombstone in unfavorited_items is the authoritative signal.
+    let unfav_hashes: std::collections::HashSet<u64> = db
+        .get_unfavorited_recent(30)
+        .map_err(|e| format!("query unfavorite markers: {e}"))?
+        .into_iter()
+        .map(|(hash, _, _)| hash)
+        .collect();
+
     let mut sync_items: Vec<SyncItem> = Vec::with_capacity(items.len());
     let mut used_tag_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for item in items {
         if favorites_only && !item.is_favorite {
+            continue;
+        }
+        // If this item is unfavorited and has a tombstone, the tombstone
+        // communicates the unfavorite — exclude from items[] to avoid
+        // the confusing "both lists" cloud state.
+        if !item.is_favorite && unfav_hashes.contains(&item.content_hash) {
             continue;
         }
 
@@ -970,5 +986,389 @@ mod tests {
         assert_eq!(merged.deleted_items.len(), 2);
         assert!(merged.deleted_items.iter().any(|d| d.content_hash == 1));
         assert!(merged.deleted_items.iter().any(|d| d.content_hash == 2));
+    }
+
+    // ── build_snapshot: unfavorite filtering ──
+
+    /// Helper: create an in-memory Database with schema and a single item.
+    fn setup_db() -> (std::sync::Mutex<Database>, i64, u64) {
+        let db = Database::open(":memory:").expect("open :memory:");
+        let now = chrono::Utc::now().to_rfc3339();
+        let item = SyncItem {
+            content_type: "plain_text".into(),
+            full_text: "hello".into(),
+            content_hash: 0xABCD,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            rich_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            size: 5,
+            tags: vec![],
+            meta_type: String::new(),
+        };
+        let id = db.insert_sync_item_raw(&item).expect("insert");
+        (std::sync::Mutex::new(db), id, 0xABCD)
+    }
+
+    /// Helper: insert a sync item with given params into DB, return (db, id, hash).
+    fn insert_item(
+        db: &Database,
+        text: &str,
+        hash: u64,
+        is_favorite: bool,
+        updated_at: &str,
+    ) -> i64 {
+        let item = SyncItem {
+            content_type: "plain_text".into(),
+            full_text: text.into(),
+            content_hash: hash,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: updated_at.into(),
+            rich_data: String::new(),
+            is_favorite,
+            note: String::new(),
+            size: text.len() as i64,
+            tags: vec![],
+            meta_type: String::new(),
+        };
+        db.insert_sync_item_raw(&item).expect("insert")
+    }
+
+    #[test]
+    fn test_snapshot_unfav_with_tombstone_excluded_from_items() {
+        let (db_mutex, _id, hash) = setup_db();
+        {
+            let db = db_mutex.lock().unwrap();
+            // Simulate: item was favorited, then unfavorited
+            db.set_favorite(_id, true).unwrap(); // was favorited
+            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            // Now unfavorite it (simulating toggle_favorite was_fav=true branch)
+            db.set_favorite(_id, false).unwrap();
+        }
+
+        // Build snapshot with favorites_only=false
+        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+
+        // Item should NOT be in items[] (tombstone communicates unfavorite)
+        assert!(
+            payload.items.iter().find(|i| i.content_hash == hash).is_none(),
+            "unfavorited item with tombstone should be excluded from items[]"
+        );
+        // Tombstone SHOULD be in unfavorited_items[]
+        assert_eq!(payload.unfavorited_items.len(), 1);
+        assert_eq!(payload.unfavorited_items[0].content_hash, hash);
+    }
+
+    #[test]
+    fn test_snapshot_unfav_no_tombstone_stays_in_items() {
+        let (db_mutex, _id, hash) = setup_db();
+        // Item has is_favorite=false, no tombstone (never favorited)
+
+        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+
+        // Item SHOULD be in items[] — it's just a normal unfavorited item
+        let found = payload.items.iter().find(|i| i.content_hash == hash);
+        assert!(found.is_some(), "unfavorited item without tombstone should be in items[]");
+        assert!(!found.unwrap().is_favorite);
+        // No tombstone
+        assert!(payload.unfavorited_items.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_favorited_always_included() {
+        let (db_mutex, _id, hash) = setup_db();
+        {
+            let db = db_mutex.lock().unwrap();
+            db.set_favorite(_id, true).unwrap();
+        }
+
+        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+
+        let found = payload.items.iter().find(|i| i.content_hash == hash);
+        assert!(found.is_some(), "favorited item should always be in items[]");
+        assert!(found.unwrap().is_favorite);
+    }
+
+    #[test]
+    fn test_snapshot_favorites_only_excludes_unfavorited() {
+        let (db_mutex, _id, hash) = setup_db();
+        // Item is_favorite=false, no tombstone
+
+        let payload = build_snapshot(&db_mutex, "test-device", true).unwrap();
+
+        // With favorites_only=true, unfavorited items should be excluded
+        assert!(payload.items.iter().find(|i| i.content_hash == hash).is_none());
+    }
+
+    #[test]
+    fn test_snapshot_refavorite_clears_tombstone_restores_item() {
+        let (db_mutex, _id, hash) = setup_db();
+        {
+            let db = db_mutex.lock().unwrap();
+            // Simulate: favorite → unfavorite → refavorite
+            db.set_favorite(_id, true).unwrap();
+            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            db.set_favorite(_id, false).unwrap();
+            // Now refavorite: remove tombstone
+            db.remove_unfavorite(hash).unwrap();
+            db.set_favorite(_id, true).unwrap();
+        }
+
+        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+
+        // Item should be back in items[] as favorited
+        let found = payload.items.iter().find(|i| i.content_hash == hash);
+        assert!(found.is_some(), "re-favorited item should be in items[]");
+        assert!(found.unwrap().is_favorite);
+        // No tombstone
+        assert!(payload.unfavorited_items.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_mixed_states() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        let db = std::sync::Mutex::new(db);
+
+        // Item A: favorited (hash=1)
+        insert_item(&db.lock().unwrap(), "item a", 1, true, "2026-05-01T10:00:00Z");
+        // Item B: unfavorited with tombstone (hash=2)
+        insert_item(&db.lock().unwrap(), "item b", 2, false, "2026-05-01T10:00:00Z");
+        // Item C: unfavorited without tombstone (hash=3)
+        insert_item(&db.lock().unwrap(), "item c", 3, false, "2026-05-01T10:00:00Z");
+
+        {
+            let db = db.lock().unwrap();
+            db.record_unfavorite(2, "2026-05-01T10:00:00Z", "test-device").unwrap();
+        }
+
+        let payload = build_snapshot(&db, "test-device", false).unwrap();
+
+        // Item A: in items[]
+        assert!(payload.items.iter().any(|i| i.content_hash == 1));
+        // Item B: NOT in items[], in tombstone
+        assert!(payload.items.iter().find(|i| i.content_hash == 2).is_none());
+        assert!(payload.unfavorited_items.iter().any(|u| u.content_hash == 2));
+        // Item C: in items[]
+        assert!(payload.items.iter().any(|i| i.content_hash == 3));
+        assert_eq!(payload.items.len(), 2); // A + C
+        assert_eq!(payload.unfavorited_items.len(), 1); // B
+    }
+
+    #[test]
+    fn test_snapshot_tombstone_without_item_still_present() {
+        // Edge case: tombstone exists but item doesn't (item was deleted)
+        let db = Database::open(":memory:").expect("open :memory:");
+        {
+            let db = &db;
+            db.record_unfavorite(0xDEAD, "2026-05-01T10:00:00Z", "test-device").unwrap();
+        }
+        let db = std::sync::Mutex::new(db);
+
+        let payload = build_snapshot(&db, "test-device", false).unwrap();
+
+        // Tombstone still propagates even without the item
+        assert_eq!(payload.unfavorited_items.len(), 1);
+        assert_eq!(payload.unfavorited_items[0].content_hash, 0xDEAD);
+        assert!(payload.items.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_favorited_with_tombstone_included() {
+        // Edge case: item is favorited but also has a tombstone
+        // (shouldn't happen normally, but if it does, is_favorite wins)
+        let (db_mutex, _id, hash) = setup_db();
+        {
+            let db = db_mutex.lock().unwrap();
+            db.set_favorite(_id, true).unwrap();
+            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device").unwrap();
+        }
+
+        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+
+        // Favorited item should be in items[] even if a stale tombstone exists
+        let found = payload.items.iter().find(|i| i.content_hash == hash);
+        assert!(found.is_some(), "favorited item should be in items[] despite tombstone");
+        assert!(found.unwrap().is_favorite);
+    }
+
+    // ── merge_remote_into_local tests ──
+
+    fn make_remote_payload(
+        items: Vec<SyncItem>,
+        unfavorited_items: Vec<SyncUnfavoritedItem>,
+    ) -> SyncPayload {
+        SyncPayload {
+            version: crate::core::migration::SYNC_VERSION,
+            device_name: "remote-device".into(),
+            synced_at: "2026-05-15T10:00:00Z".into(),
+            items,
+            tags: vec![],
+            deleted_items: vec![],
+            deleted_tags: vec![],
+            unfavorited_items,
+        }
+    }
+
+    #[test]
+    fn test_merge_unfavorite_applied_to_favorited_item() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        // Local: favorited item with hash=100, updated_at T1
+        insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
+        let db = std::sync::Mutex::new(db);
+
+        // Remote: unfavorite marker at T2 (newer)
+        let mut remote = make_remote_payload(
+            vec![],
+            vec![SyncUnfavoritedItem {
+                content_hash: 100,
+                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                device_name: "remote-device".into(),
+            }],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        assert_eq!(stats.items_updated, 1);
+        // Local item should now be unfavorited
+        let db = db.lock().unwrap();
+        let item = db.get_by_hash(100).unwrap().unwrap();
+        assert!(!item.is_favorite, "item should be unfavorited after merge");
+        // Tombstone should be recorded locally
+        assert!(db.is_item_unfavorited(100).unwrap());
+    }
+
+    #[test]
+    fn test_merge_unfavorite_ignored_when_already_unfavorited() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        // Local: already unfavorited item
+        insert_item(&db, "unfavorited", 100, false, "2026-05-01T10:00:00Z");
+        let db = std::sync::Mutex::new(db);
+
+        let mut remote = make_remote_payload(
+            vec![],
+            vec![SyncUnfavoritedItem {
+                content_hash: 100,
+                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                device_name: "remote-device".into(),
+            }],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        // No update needed — already unfavorited
+        assert_eq!(stats.items_updated, 0);
+    }
+
+    #[test]
+    fn test_merge_unfavorite_older_timestamp_ignored() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        // Local: favorited item at T2 (newer than remote)
+        insert_item(&db, "favorited", 100, true, "2026-05-03T10:00:00Z");
+        let db = std::sync::Mutex::new(db);
+
+        // Remote: unfavorite marker at T1 (older)
+        let mut remote = make_remote_payload(
+            vec![],
+            vec![SyncUnfavoritedItem {
+                content_hash: 100,
+                unfavorited_at: "2026-05-01T10:00:00Z".into(), // older
+                device_name: "remote-device".into(),
+            }],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        // Should NOT unfavorite — local is newer (user re-favorited)
+        assert_eq!(stats.items_updated, 0);
+        let db = db.lock().unwrap();
+        let item = db.get_by_hash(100).unwrap().unwrap();
+        assert!(item.is_favorite, "item should stay favorited (local newer)");
+    }
+
+    #[test]
+    fn test_merge_own_unfavorite_ignored() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
+        let db = std::sync::Mutex::new(db);
+
+        // Remote tombstone from the SAME device
+        let mut remote = make_remote_payload(
+            vec![],
+            vec![SyncUnfavoritedItem {
+                content_hash: 100,
+                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                device_name: "local-device".into(), // same device!
+            }],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        // Should ignore own tombstone
+        assert_eq!(stats.items_updated, 0);
+    }
+
+    #[test]
+    fn test_merge_unfavorite_no_local_item_records_tombstone() {
+        // Remote tombstone for item that doesn't exist locally
+        let db = Database::open(":memory:").expect("open :memory:");
+        let db = std::sync::Mutex::new(db);
+
+        let mut remote = make_remote_payload(
+            vec![],
+            vec![SyncUnfavoritedItem {
+                content_hash: 999,
+                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                device_name: "remote-device".into(),
+            }],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        // Should record tombstone for propagation even without the item
+        assert_eq!(stats.items_updated, 0);
+        let db = db.lock().unwrap();
+        assert!(db.is_item_unfavorited(999).unwrap());
+    }
+
+    #[test]
+    fn test_merge_item_fav_false_with_tombstone() {
+        // Simulates the "both lists" scenario: remote has item with is_favorite=false
+        // AND a tombstone. Phase 2.5 should apply the unfavorite, Phase 4 should update.
+        let db = Database::open(":memory:").expect("open :memory:");
+        // Local: favorited item at T1
+        insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
+        let db = std::sync::Mutex::new(db);
+
+        let mut remote = make_remote_payload(
+            vec![SyncItem {
+                content_type: "plain_text".into(),
+                full_text: "favorited".into(),
+                content_hash: 100,
+                created_at: "2026-05-01T08:00:00Z".into(),
+                updated_at: "2026-05-02T10:00:00Z".into(), // T2 > T1
+                rich_data: String::new(),
+                is_favorite: false,
+                note: String::new(),
+                size: 9,
+                tags: vec![],
+                meta_type: String::new(),
+            }],
+            vec![SyncUnfavoritedItem {
+                content_hash: 100,
+                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                device_name: "remote-device".into(),
+            }],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        // Phase 2.5 unfavorites, Phase 4 updates — both count
+        assert!(stats.items_updated >= 1);
+        let db = db.lock().unwrap();
+        let item = db.get_by_hash(100).unwrap().unwrap();
+        assert!(!item.is_favorite, "item should be unfavorited after merge");
+        // Tombstone should be recorded for propagation
+        assert!(db.is_item_unfavorited(100).unwrap());
     }
 }

@@ -282,11 +282,15 @@ impl SyncManager {
     }
 
     /// Toggle a backend enabled/disabled and persist.
+    /// When enabling, triggers an immediate pull to fetch remote data.
     pub fn toggle_backend(&mut self, id: &str) {
+        let id_owned = id.to_string();
+        let mut was_enabled = false;
         {
             let mut s = self.settings.lock().expect("settings lock");
             for cfg in &mut s.sync_backends {
                 if cfg.id == id {
+                    was_enabled = cfg.enabled;
                     cfg.enabled = !cfg.enabled;
                     s.save();
                     break;
@@ -295,6 +299,11 @@ impl SyncManager {
         }
         self.reload_backends();
         self.refresh_model();
+
+        // Trigger an immediate pull when enabling a backend
+        if !was_enabled {
+            self.trigger_backend_sync(&id_owned);
+        }
     }
 
     /// Get backend info by ID for the edit panel.
@@ -393,6 +402,18 @@ impl SyncManager {
                     self.start_sync_cycle(i, interval, true);
                 }
                 break;
+            }
+        }
+    }
+
+    /// Trigger an immediate pull for all enabled backends that aren't running.
+    pub fn trigger_pull_all(&mut self) {
+        for i in 0..self.backends.len() {
+            if self.backends[i].enabled
+                && !self.backends[i].is_running.load(Ordering::SeqCst)
+            {
+                let interval = self.backends[i].backend.sync_interval();
+                self.start_sync_cycle(i, interval, true);
             }
         }
     }

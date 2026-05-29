@@ -217,6 +217,12 @@ impl AppController {
         Self::bind_tag_callbacks(slint_app, &ctx);
         Self::bind_color_paste_callbacks(slint_app, &ctx);
 
+        // Trigger an initial pull on startup to fetch latest remote data.
+        // The semantic hash gate ensures no unnecessary pushes.
+        let _ = ctx.looper.try_with_sync_manager(|sm| {
+            sm.trigger_pull_all();
+        });
+
         // Apply initial window position and suppress auto-hide before first show
         if let Ok(mut fe) = frontend.lock() {
             fe.apply_position();
@@ -977,6 +983,14 @@ impl AppController {
                 let mut s = c.settings.lock().expect("settings lock poisoned");
                 s.sync_auto_enabled = new_val;
                 s.save();
+                drop(s);
+
+                // When enabling auto-sync, trigger an immediate pull for all backends
+                if new_val {
+                    let _ = c.looper.try_with_sync_manager(|sm| {
+                        sm.trigger_pull_all();
+                    });
+                }
             }
         });
 

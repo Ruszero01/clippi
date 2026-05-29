@@ -5,6 +5,15 @@
 - **文本修整工具** — 编辑面板新增文本修整按钮，去除多余空格/空行/Unicode空白字符，智能合并段落
 - **Base64 解码工具** — 编辑面板新增 Base64 解码按钮，支持标准/URL安全/DataURL 三种格式
 
+### Bug 修复
+
+- 被动定时拉取失效 — `LocalFolderBackend::pull()` 中 `mtime_changed` 在远程文件 mtime 变化时未正确设为 `true`，导致定时同步永远返回「已是最新」跳过拉取；手动同步因 `force_push=true` 绕过该逻辑不受影响
+- 取消收藏同步异常 — `build_snapshot` 在 `sync_favorites_only=false` 时将取消收藏条目同时写入 `items[]`（`is_favorite=false`）和 `unfavorited_items[]`（墓碑），造成云端双列表冗余；修复为：存在墓碑的 `is_favorite=false` 条目从 `items[]` 排除，由墓碑作为取消收藏信号的唯一来源
+
+### 优化
+
+- 主动拉取 — 同步主开关开启、各后端独立开关开启、软件启动时主动触发一次拉取，有变更就合并推送，无变更则跳过
+
 # Version 0.1.2
 
 ### 新功能
