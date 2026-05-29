@@ -35,7 +35,7 @@
 
 - Slint native frontend rendering: No webview required, combining low resource footprint with high aesthetics.
 - Fast Rust backend: High performance and robust cross-platform capabilities.
-- Multi-backend cloud sync: Supports OneDrive/iCloud with an extensible architecture (WebDAV and other channels planned).
+- Multi-backend cloud sync: Supports OneDrive/iCloud/WebDAV with an extensible architecture.
 
 ## What Can Clippi Do?
 
@@ -63,7 +63,7 @@
   - Image items: Open original image, Paste OCR text
   - Favorite/Unfavorite, Delete
   - Tag management (add/remove/batch operations)
-- Edit panel: full-text editor + type selector + URL decode toolbar button
+- Edit panel: full-text editor + type selector + URL Decode / JSON Format toolbar buttons
 - Multi-select batch operations (Ctrl/Shift select): batch paste (newline-delimited), batch favorite, batch delete, batch tag
 - Six-level type filter: Text / Rich Text / Images / Files / Links / Colors
   - Link ⇄ Path, File ⇄ Image bidirectional auto-linkage
@@ -102,8 +102,9 @@
 - Plain text copy mode
 
 ### Cloud Sync
-- Multi-backend architecture: support multiple sync services simultaneously
+- Multi-backend architecture: support multiple sync services simultaneously, each with independent toggle and sync interval
 - Local folder backend: sync via OneDrive / iCloud folders
+- WebDAV backend: supports any WebDAV server (NextCloud, ownCloud, etc.), ETag caching + Basic Auth
 - Auto-detect OneDrive (Windows + macOS) and iCloud (macOS) preset paths
 - Cross-device delete & unfavorite propagation (tombstone mechanism, 30-day window)
 - Last-writer-wins (LWW) conflict resolution
@@ -111,13 +112,14 @@
 - Automatic conflict file merging and cleanup
 - Configurable sync interval (30s / 1min / 10min / 30min) + manual instant sync
 - Favorites-only sync mode
+- Async connection test, non-blocking UI
 
 ### Settings
 - General: Auto-start, auto-hide on focus loss, silent start, theme mode, window position, interface language
 - Clipboard: Sort mode, card height, source app, auto-scroll to top, plain-text copy, hover original
 - Hotkey: Global hotkey recording, app blacklist management
 - Data: Custom database path & migration, max saved items limit
-- Sync: Auto-sync toggle, interval, favorites-only mode, multi-backend management (add/delete/edit)
+- Sync: Auto-sync toggle, interval, favorites-only mode, multi-backend management (add/delete/edit), independent backend toggle & interval
 
 ## Tech Stack
 
