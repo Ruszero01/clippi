@@ -42,7 +42,7 @@
 ### Clipboard Monitoring
 - Multi-format content detection (by priority):
   - **Files** — File/folder paths, multi-file support, system icon extraction; single image files auto-recognized as images
-  - **Images** — Automatically process images into thumbnails to save memory; OCR text recognition (Windows Media Ocr / macOS Apple Vision, zero extra dependencies)
+  - **Images** — Automatically process images into thumbnails to save memory; OCR text recognition (Windows Media Ocr / macOS Apple Vision, zero extra dependencies); QR code auto-detection (normal/inverted QR codes)
   - **Links** — URL auto-detection (http/https), domain/path extraction, favicon preview
   - **Colors** — HEX/RGB auto-detection & normalization
   - **Rich Text** — HTML, RTF formats
@@ -60,10 +60,10 @@
 - Right-click context menu (single / batch dual mode):
   - Copy, Paste, Edit, Note
   - Color items: Paste as RGB / Paste as HEX
-  - Image items: Open original image, Paste OCR text
+  - Image items: Open original image, Paste OCR text, Detect QR code
   - Favorite/Unfavorite, Delete
   - Tag management (add/remove/batch operations)
-- Edit panel: full-text editor + type selector + URL Decode / JSON Format toolbar buttons
+- Edit panel: full-text editor + type selector (6 types) + URL Decode / JSON Format / Base64 Decode / Text Trim toolbar buttons
 - Multi-select batch operations (Ctrl/Shift select): batch paste (newline-delimited), batch favorite, batch delete, batch tag
 - Six-level type filter: Text / Rich Text / Images / Files / Links / Colors
   - Link ⇄ Path, File ⇄ Image bidirectional auto-linkage
@@ -71,6 +71,7 @@
 - Tag filtering — Switchable AND/OR logic for multiple tags, combined with other filter dimensions via AND
 - Sorting: by creation time / by last modified time
 - Note inline editing + full content editor
+- Sensitive info preview masking: email shows first 2 chars + domain (`jo***@gmail.com`), phone shows first 3 + last 4 digits (`138****5678`), copy/paste/search still use full content
 
 ### Tag System
 - Create/edit/delete tags, 12 preset colors
@@ -116,7 +117,7 @@
 
 ### Settings
 - General: Auto-start, auto-hide on focus loss, silent start, theme mode, window position, interface language
-- Clipboard: Sort mode, card height, source app, auto-scroll to top, plain-text copy, hover original
+- Clipboard: Sort mode, card height, source app, auto-scroll to top, plain-text copy, hover original, OCR toggle, QR code toggle
 - Hotkey: Global hotkey recording, app blacklist management
 - Data: Custom database path & migration, max saved items limit
 - Sync: Auto-sync toggle, interval, favorites-only mode, multi-backend management (add/delete/edit), independent backend toggle & interval
@@ -170,4 +171,9 @@ cargo run
 | Side Tag Bar | ✅ | ✅ |
 | Version Update Check | ✅ | ✅ |
 | Edit Panel URL Decode | ✅ | ✅ |
+| Edit Panel Base64 Decode | ✅ | ✅ |
+| Edit Panel JSON Format | ✅ | ✅ |
+| Edit Panel Text Trim | ✅ | ✅ |
+| Image QR Code Detection | ✅ | ✅ |
+| Sensitive Info Preview Masking | ✅ | ✅ |
 | Interface Language (zh_CN / en) | ✅ | ✅ |
