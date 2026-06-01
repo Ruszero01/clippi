@@ -146,6 +146,8 @@ pub struct RichData {
     pub rtf: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ocr_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qr_text: Option<String>,
 }
 
 impl RichData {
@@ -543,4 +545,36 @@ pub fn url_path(text: &str) -> String {
 /// Extract the domain from a URL for favicon lookup (same as url_domain).
 pub fn url_to_domain(text: &str) -> String {
     url_domain(text)
+}
+
+/// Mask sensitive content for preview display.
+/// Email: show first 2 chars of local part + "***" + domain (e.g. "ab***@gmail.com")
+/// Phone: show first 3 chars + "****" + last 4 chars (e.g. "138****5678")
+pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
+    match meta_type {
+        "email" => {
+            if let Some(at) = text.find('@') {
+                let local = &text[..at];
+                let domain = &text[at..];
+                let visible = if local.chars().count() <= 2 {
+                    local.chars().take(2).collect::<String>()
+                } else {
+                    local.chars().take(2).collect::<String>()
+                };
+                format!("{}***{}", visible, domain)
+            } else {
+                text.to_string()
+            }
+        }
+        "phone" => {
+            let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            if cleaned.len() <= 7 {
+                return text.to_string();
+            }
+            let prefix: String = cleaned.chars().take(3).collect();
+            let suffix: String = cleaned.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("{}****{}", prefix, suffix)
+        }
+        _ => text.to_string(),
+    }
 }

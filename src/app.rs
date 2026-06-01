@@ -73,6 +73,7 @@ impl AppController {
         let sort_by_created_setting = settings.sort_by_created;
         let copy_as_plain_text_setting = settings.copy_as_plain_text;
         let ocr_enabled_setting = settings.ocr_enabled;
+        let qr_enabled_setting = settings.qr_enabled;
         let max_items_setting = settings.max_items;
         let pinned_tag_ids_setting = settings.pinned_tag_ids.clone();
         let copy_as_plain_text_flag = Arc::new(AtomicBool::new(copy_as_plain_text_setting));
@@ -124,6 +125,7 @@ impl AppController {
         clipboard_service.set_sort_and_refresh(sort_by_created_setting);
         clipboard_service.set_copy_as_plain_text(copy_as_plain_text_setting);
         clipboard_service.set_ocr_enabled(ocr_enabled_setting);
+        clipboard_service.set_qr_enabled(qr_enabled_setting);
         clipboard_service.set_max_items(max_items_setting);
         clipboard_service.set_pinned_tag_ids(pinned_tag_ids_setting.clone());
         clipboard_service.refresh_sidebar_tags(&pinned_tag_ids_setting);
@@ -399,6 +401,32 @@ impl AppController {
             }
         });
 
+        let ctx_qr = ctx.clone();
+        slint_app.on_qr_action(move |id| {
+            if let Ok(db) = ctx_qr.db.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    let rd = RichData::from_json(&item.rich_data);
+                    if let Some(qr_text) = rd.qr_text {
+                        if qr_text.starts_with("http://") || qr_text.starts_with("https://") {
+                            crate::services::update::open_releases_page(&qr_text);
+                        } else {
+                            if let Ok(clip) = ClipboardContext::new() {
+                                let _ = clip.set_text(qr_text);
+                            }
+                            if let Some(app) = ctx_qr.app.upgrade() {
+                                app.set_toast_visible(false);
+                                app.set_toast_message(SharedString::from(i18n::tr(
+                                    "识别结果已写入剪贴板",
+                                    "QR code content copied to clipboard",
+                                )));
+                                app.set_toast_visible(true);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
         let ctx_paste_ocr = ctx.clone();
         slint_app.on_paste_ocr(move |id| {
             // Load item and check for cached OCR text (release DB lock before running OCR)
@@ -460,6 +488,60 @@ impl AppController {
                 }
                 restore_paste_target();
                 paste_after_delay();
+            }
+        });
+
+        let ctx_qr_detect = ctx.clone();
+        slint_app.on_qr_detect(move |id| {
+            let qr_text = if let Ok(db) = ctx_qr_detect.db.lock() {
+                if let Ok(Some(item)) = db.get_by_id(id as i64) {
+                    let rd = RichData::from_json(&item.rich_data);
+                    if let Some(cached) = rd.qr_text {
+                        Some(cached)
+                    } else if !item.image_path.is_empty() {
+                        match crate::core::qr::detect_qr(std::path::Path::new(&item.image_path))
+                        {
+                            Ok(Some(text)) => {
+                                let mut rd2 = RichData::from_json(&item.rich_data);
+                                rd2.qr_text = Some(text.clone());
+                                let _ = db.update_rich_data(id as i64, &rd2.to_json());
+                                Some(text)
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(text) = qr_text {
+                if text.starts_with("http://") || text.starts_with("https://") {
+                    crate::services::update::open_releases_page(&text);
+                } else {
+                    if let Ok(clip) = ClipboardContext::new() {
+                        let _ = clip.set_text(text);
+                    }
+                    if let Some(app) = ctx_qr_detect.app.upgrade() {
+                        app.set_toast_visible(false);
+                        app.set_toast_message(SharedString::from(i18n::tr(
+                            "识别结果已写入剪贴板",
+                            "QR code content copied to clipboard",
+                        )));
+                        app.set_toast_visible(true);
+                    }
+                }
+            } else if let Some(app) = ctx_qr_detect.app.upgrade() {
+                app.set_toast_visible(false);
+                app.set_toast_message(SharedString::from(i18n::tr(
+                    "未识别到二维码",
+                    "No QR code detected",
+                )));
+                app.set_toast_visible(true);
             }
         });
 
@@ -939,6 +1021,20 @@ impl AppController {
                 s.save();
                 let _ = c.looper.try_with_clipboard_service(|cs| {
                     cs.set_ocr_enabled(new_val);
+                });
+            }
+        });
+
+        let c = ctx.clone();
+        slint_app.on_toggle_qr_enabled(move || {
+            if let Some(app) = c.app.upgrade() {
+                let new_val = !app.get_qr_enabled();
+                app.set_qr_enabled(new_val);
+                let mut s = c.settings.lock().expect("settings lock poisoned");
+                s.qr_enabled = new_val;
+                s.save();
+                let _ = c.looper.try_with_clipboard_service(|cs| {
+                    cs.set_qr_enabled(new_val);
                 });
             }
         });
@@ -1805,6 +1901,7 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
     app.set_copy_as_plain_text(settings.copy_as_plain_text);
     app.set_show_original_on_hover(settings.show_original_on_hover);
     app.set_ocr_enabled(settings.ocr_enabled);
+    app.set_qr_enabled(settings.qr_enabled);
     app.set_max_items(settings.max_items as i32);
     app.set_sync_auto_enabled(settings.sync_auto_enabled);
     app.set_sync_favorites_only(settings.sync_favorites_only);

@@ -7,6 +7,7 @@ export component SettingsTabClipboard inherits Rectangle {
     in property <bool> copy-as-plain-text: false;
     in property <bool> show-original-on-hover: false;
     in property <bool> ocr-enabled: true;
+    in property <bool> qr-enabled: true;
 
     callback toggle-sort-by-created();
     callback set-card-height-mode(string);
@@ -15,6 +16,7 @@ export component SettingsTabClipboard inherits Rectangle {
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
     callback toggle-ocr-enabled();
+    callback toggle-qr-enabled();
 
     property <color> surface:       dark-mode ? #232425 : #ffffff;
     property <color> text-1:       dark-mode ? #eaebec : #1a1c2e;
@@ -481,7 +483,7 @@ export component SettingsTabClipboard inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: @tr("Image OCR");
+                        text: @tr("Auto Image OCR");
                         font-size: 12px;
                         font-weight: 600;
                         color: text-1;
@@ -516,6 +518,65 @@ export component SettingsTabClipboard inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         clicked => { root.toggle-ocr-enabled(); }
+                    }
+                }
+            }
+        }
+
+        // QR code recognition toggle
+        Rectangle {
+            height: 66px;
+            border-radius: 10px;
+            background: surface;
+            border-width: 1px;
+            border-color: divider;
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: @tr("Auto QR Detection");
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: text-1;
+                    }
+
+                    Text {
+                        text: root.qr-enabled ? @tr("Auto detect QR in images") : @tr("QR detection disabled");
+                        font-size: 10px;
+                        color: text-3;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.qr-enabled ? accent : divider;
+                    animate background { duration: 200ms; easing: ease-out; }
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: #ffffff;
+                        x: root.qr-enabled ? parent.width - self.width - 2px : 2px;
+                        animate x { duration: 200ms; easing: ease-out; }
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    qr-ta := TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => { root.toggle-qr-enabled(); }
                     }
                 }
             }

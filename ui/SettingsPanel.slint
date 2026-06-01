@@ -25,6 +25,7 @@ export component SettingsPanel inherits Rectangle {
     in property <bool> copy-as-plain-text: false;
     in property <bool> show-original-on-hover: false;
     in property <bool> ocr-enabled: true;
+    in property <bool> qr-enabled: true;
     in property <int> max-items: 0;
     // sync
     in property <bool> sync-auto-enabled: true;
@@ -62,6 +63,7 @@ export component SettingsPanel inherits Rectangle {
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
     callback toggle-ocr-enabled();
+    callback toggle-qr-enabled();
     callback set-max-items(int);
     callback toggle-sync-auto-enabled();
     callback toggle-sync-favorites-only();
@@ -322,6 +324,7 @@ export component SettingsPanel inherits Rectangle {
             copy-as-plain-text: root.copy-as-plain-text;
             show-original-on-hover: root.show-original-on-hover;
             ocr-enabled: root.ocr-enabled;
+            qr-enabled: root.qr-enabled;
             toggle-sort-by-created => { root.toggle-sort-by-created(); }
             set-card-height-mode(mode) => { root.set-card-height-mode(mode); }
             toggle-show-source-app => { root.toggle-show-source-app(); }
@@ -329,6 +332,7 @@ export component SettingsPanel inherits Rectangle {
             toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
             toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
             toggle-ocr-enabled => { root.toggle-ocr-enabled(); }
+            toggle-qr-enabled => { root.toggle-qr-enabled(); }
         }
 
         if (root.active-tab == 2) : SettingsTabHotkey {

@@ -28,6 +28,7 @@ pub struct ClipboardService {
     sort_by_created: bool,
     copy_as_plain_text: bool,
     ocr_enabled: bool,
+    qr_enabled: bool,
     filters: ClipboardFilters,
     pinned_tag_ids: Vec<i64>,
     sidebar_model: Rc<VecModel<crate::TagItem>>,
@@ -64,6 +65,7 @@ impl ClipboardService {
             sort_by_created: false,
             copy_as_plain_text: false,
             ocr_enabled: true,
+            qr_enabled: true,
             filters: ClipboardFilters::default(),
             pinned_tag_ids: Vec::new(),
             sidebar_model: sidebar_model.clone(),
@@ -220,6 +222,10 @@ impl ClipboardService {
 
     pub fn set_ocr_enabled(&mut self, enabled: bool) {
         self.ocr_enabled = enabled;
+    }
+
+    pub fn set_qr_enabled(&mut self, enabled: bool) {
+        self.qr_enabled = enabled;
     }
 
     /// Prune excess non-favorite items from DB and sync model.
@@ -1161,10 +1167,15 @@ impl Pollable for ClipboardService {
                             let engine = crate::core::ocr::create_ocr_engine();
                             match engine.recognize(std::path::Path::new(&img_path)) {
                                 Ok(text) if !text.trim().is_empty() => {
-                                    let mut rd = crate::core::types::RichData::from_json(&existing_rich);
-                                    rd.ocr_text = Some(text);
-                                    let json = rd.to_json();
                                     if let Ok(db) = db_clone.lock() {
+                                        // Re-read to preserve concurrent changes (e.g., QR)
+                                        let current_rich = match db.get_by_id(ocr_item_id) {
+                                            Ok(Some(item)) => item.rich_data,
+                                            _ => existing_rich,
+                                        };
+                                        let mut rd = crate::core::types::RichData::from_json(&current_rich);
+                                        rd.ocr_text = Some(text);
+                                        let json = rd.to_json();
                                         let _ = db.update_rich_data(ocr_item_id, &json);
                                         needs_refresh.store(true, std::sync::atomic::Ordering::SeqCst);
                                     }
@@ -1173,6 +1184,49 @@ impl Pollable for ClipboardService {
                                 Err(e) => log::error!("OCR error for item {}: {}", ocr_item_id, e),
                             }
                         });
+                    }
+
+                    // QR detection for image items (synchronous — rqrr is fast)
+                    if self.qr_enabled
+                        && item.content_type == crate::core::types::ContentType::Image
+                        && !item.image_path.is_empty()
+                    {
+                        let rd = crate::core::types::RichData::from_json(&item.rich_data);
+                        if rd.qr_text.is_none() {
+                            // Check DB for cached result first
+                            let cached_qr = if let Ok(Some(ref existing)) =
+                                db.get_by_hash(item.content_hash)
+                            {
+                                crate::core::types::RichData::from_json(&existing.rich_data).qr_text
+                            } else {
+                                None
+                            };
+                            if let Some(ref qr_text) = cached_qr {
+                                let mut rd = rd;
+                                rd.qr_text = Some(qr_text.clone());
+                                item.rich_data = rd.to_json();
+                            } else {
+                                match crate::core::qr::detect_qr(std::path::Path::new(
+                                    &item.image_path,
+                                )) {
+                                    Ok(Some(text)) => {
+                                        let mut rd = rd;
+                                        rd.qr_text = Some(text);
+                                        let json = rd.to_json();
+                                        item.rich_data = json.clone();
+                                        if let Ok(Some(ref existing)) =
+                                            db.get_by_hash(item.content_hash)
+                                        {
+                                            let _ = db.update_rich_data(existing.id, &json);
+                                        }
+                                    }
+                                    Ok(None) => { /* no QR found */ }
+                                    Err(e) => {
+                                        log::error!("QR detection error: {}", e)
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if !self.filters.matches_item(&item) {
@@ -1783,10 +1837,16 @@ impl ClipboardService {
             tags_overflow,
         ) = build_tag_dots(&item.tags);
         let size_label = build_size_label(item);
+        let has_qr_code = crate::core::types::RichData::from_json(&item.rich_data)
+            .qr_text
+            .is_some();
 
         ClipboardEntry {
             id: item.id as i32,
-            preview: SharedString::from(item.full_text.clone()),
+            preview: SharedString::from(crate::core::types::mask_sensitive_preview(
+                &item.full_text,
+                &item.meta_type,
+            )),
             content_type: SharedString::from(item.content_type.as_str()),
             meta_type: SharedString::from(item.meta_type.clone()),
             time_label: SharedString::from(format_relative_time(&item.updated_at)),
@@ -1836,6 +1896,7 @@ impl ClipboardService {
             tag_name_2,
             tags_overflow,
             size_label: SharedString::from(size_label),
+            has_qr_code,
         }
     }
 }

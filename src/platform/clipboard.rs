@@ -250,7 +250,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             let html = ctx.get_html().ok();
             let rtf = ctx.get_rich_text().ok();
             if html.is_some() || rtf.is_some() {
-                let rich = RichData { html, rtf, ocr_text: None };
+                let rich = RichData { html, rtf, ocr_text: None, qr_text: None };
                 return Some(ClipboardItem::new_text(
                     0,
                     &text,

@@ -98,6 +98,12 @@ pub struct AppSettings {
     pub pinned_tag_ids: Vec<i64>, // 固定在侧边栏的标签 ID
     #[serde(default = "default_ocr_enabled")]
     pub ocr_enabled: bool, // 图片OCR自动识别开关
+    #[serde(default = "default_qr_enabled")]
+    pub qr_enabled: bool, // 图片QR自动识别开关
+}
+
+fn default_qr_enabled() -> bool {
+    true
 }
 
 fn default_ocr_enabled() -> bool {
@@ -141,6 +147,7 @@ impl Default for AppSettings {
             language: String::new(),
             pinned_tag_ids: Vec::new(),
             ocr_enabled: false,
+            qr_enabled: true,
         }
     }
 }

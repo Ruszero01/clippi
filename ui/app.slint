@@ -62,6 +62,7 @@ export component App inherits Window {
     in-out property <bool> copy-as-plain-text: false;
     in-out property <bool> show-original-on-hover: false;
     in-out property <bool> ocr-enabled: true;
+    in-out property <bool> qr-enabled: true;
     in-out property <int> max-items: 0;
     in-out property <int> scroll-trigger: 0;
     // 云同步
@@ -147,6 +148,7 @@ export component App inherits Window {
     callback copy-item(int);
     callback paste-item(int);
     callback paste-ocr(int);
+    callback qr-detect(int);
 
     callback move-window(float, float);
     callback close-window();
@@ -179,6 +181,7 @@ export component App inherits Window {
     callback toggle-copy-as-plain-text();
     callback toggle-show-original-on-hover();
     callback toggle-ocr-enabled();
+    callback toggle-qr-enabled();
     callback set-max-items(int);
     callback toggle-sync-auto-enabled();
     callback toggle-sync-favorites-only();
@@ -205,6 +208,7 @@ export component App inherits Window {
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
+    callback qr-action(int);
     callback open-item-location(int);
     callback paste-as-rgb(int);
     callback paste-as-hex(int);
@@ -526,6 +530,7 @@ export component App inherits Window {
                     show-context-menu(id) => { root.show-context-menu(id); }
                     hide-context-menu => { root.hide-context-menu(); }
                     open-original-image(id) => { root.open-original-image(id); }
+                    qr-action(id) => { root.qr-action(id); }
                     open-item-location(id) => { root.open-item-location(id); }
                     selected-count: root.selected-count;
                     context-menu-is-batch <=> root.context-menu-is-batch;
@@ -594,6 +599,7 @@ export component App inherits Window {
                     copy-as-plain-text: root.copy-as-plain-text;
                     show-original-on-hover: root.show-original-on-hover;
                     ocr-enabled: root.ocr-enabled;
+                    qr-enabled: root.qr-enabled;
                     max-items: root.max-items;
                     sync-auto-enabled: root.sync-auto-enabled;
                     sync-status: root.sync-status;
@@ -623,6 +629,7 @@ export component App inherits Window {
                     toggle-copy-as-plain-text => { root.toggle-copy-as-plain-text(); }
                     toggle-show-original-on-hover => { root.toggle-show-original-on-hover(); }
                     toggle-ocr-enabled => { root.toggle-ocr-enabled(); }
+                    toggle-qr-enabled => { root.toggle-qr-enabled(); }
                     set-max-items(v) => { root.set-max-items(v); }
                     toggle-sync-auto-enabled => { root.toggle-sync-auto-enabled(); }
                     toggle-sync-favorites-only => { root.toggle-sync-favorites-only(); }
@@ -670,6 +677,7 @@ export component App inherits Window {
             batch-delete => { root.batch-delete(); }
             open-original-image(id) => { root.open-original-image(id); }
             paste-ocr(id) => { root.paste-ocr(id); }
+            qr-detect(id) => { root.qr-detect(id); }
             show-tag-picker(id) => { root.show-tag-picker(id); }
         }
 

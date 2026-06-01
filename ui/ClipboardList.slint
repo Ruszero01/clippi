@@ -52,6 +52,7 @@ export component ClipboardList inherits Rectangle {
     callback show-context-menu(int);
     callback hide-context-menu();
     callback open-original-image(int);
+    callback qr-action(int);
     callback open-item-location(int);
     callback select-single(int);
     callback toggle-selection(int);
@@ -556,7 +557,7 @@ export component ClipboardList inherits Rectangle {
                                                    entry.meta-type == "phone" ? @tr("Phone") :
                                                    @tr("Text")) :
                                                   entry.content-type == "rich_text" ? @tr("RTF") :
-                                                  entry.content-type == "image" ? @tr("Image") :
+                                                  entry.content-type == "image" ? (entry.has-qr-code ? @tr("QR") : @tr("Image")) :
                                                   entry.content-type == "file" ? entry.file-icon-text :
                                                   entry.content-type == "link" ? @tr("URL") :
                                                   entry.content-type == "path" ? @tr("Path") : "";
@@ -581,7 +582,7 @@ export component ClipboardList inherits Rectangle {
                                             Text {
                                                 x: (parent.width - self.width) / 2;
                                                 y: (parent.height - self.height) / 2;
-                                                text: "\u{e626}";
+                                                text: entry.has-qr-code ? "\u{e605}" : "\u{e626}";
                                                 font-family: "iconfont";
                                                 font-size: 18px;
                                                 color: tag-text;
@@ -597,7 +598,7 @@ export component ClipboardList inherits Rectangle {
                                             Text {
                                                 x: (parent.width - self.width) / 2;
                                                 y: (parent.height - self.height) / 2;
-                                                text: @tr("Image");
+                                                text: entry.has-qr-code ? @tr("QR") : @tr("Image");
                                                 font-size: 10px;
                                                 color: tag-text;
                                             }
@@ -1199,13 +1200,13 @@ export component ClipboardList inherits Rectangle {
                                 if root.editing-note-id != entry.id && (entry.note == "" || (root.show-original-on-hover && item-ta.has-hover)) && entry.content-type == "image" : Rectangle {
                                     border-radius: 6px;
                                     clip: true;
-                                    background: accent-soft;
+                                    background: tag-bg;
 
                                     if entry.image-path != "" : Image {
                                         width: parent.width;
                                         height: parent.height;
                                         source: entry.thumbnail;
-                                        image-fit: cover;
+                                        image-fit: entry.has-qr-code ? ImageFit.contain : ImageFit.cover;
                                     }
 
                                     if entry.image-path == "" : Text {
@@ -1295,6 +1296,37 @@ export component ClipboardList inherits Rectangle {
                                             font-family: "iconfont";
                                             font-size: 12px;
                                             color: open-img-ta.has-hover ? accent : text-2;
+                                        }
+                                    }
+
+                                    // 二维码按钮（图片含 QR 码时显示）
+                                    if entry.content-type == "image" && entry.has-qr-code : Rectangle {
+                                        width: 18px;
+                                        height: 18px;
+
+                                        qr-ta := TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.toolbar-action = true;
+                                                }
+                                            }
+                                            clicked => {
+                                                search-input.clear-focus();
+                                                root.click-pending = false;
+                                                root.toolbar-action = false;
+                                                root.qr-action(entry.id);
+                                            }
+                                        }
+
+                                        Text {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            text: "\u{e605}";
+                                            font-family: "iconfont";
+                                            font-size: 12px;
+                                            color: qr-ta.has-hover ? accent : text-2;
                                         }
                                     }
 

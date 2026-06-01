@@ -263,14 +263,29 @@ msgstr "打开图片"
 msgid "Paste OCR text"
 msgstr "粘贴 OCR 文本"
 
-msgid "Image OCR"
-msgstr "图片 OCR"
+msgid "Auto Image OCR"
+msgstr "自动图片 OCR"
 
 msgid "Auto OCR for images"
 msgstr "图片自动 OCR"
 
 msgid "OCR disabled"
 msgstr "OCR 已关闭"
+
+msgid "QR"
+msgstr "二维码"
+
+msgid "Detect QR Code"
+msgstr "识别二维码"
+
+msgid "Auto QR Detection"
+msgstr "自动识别二维码"
+
+msgid "Auto detect QR in images"
+msgstr "图片自动识别 QR"
+
+msgid "QR detection disabled"
+msgstr "QR 识别已关闭"
 
 msgid "Tag"
 msgstr "标签"

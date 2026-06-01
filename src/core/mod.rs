@@ -7,6 +7,7 @@ pub mod frontend;
 pub mod i18n;
 pub mod migration;
 pub mod ocr;
+pub mod qr;
 pub mod paths;
 pub mod settings;
 pub mod sync;
