@@ -185,7 +185,9 @@ impl AppSettings {
     fn migrate_sync_fields(&mut self) {
         if self.sync_enabled && !self.sync_data_dir.is_empty() && self.sync_backends.is_empty() {
             let device_name = if self.sync_device_name.is_empty() {
-                crate::services::backends::local_folder::hostname()
+                hostname::get()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string())
             } else {
                 self.sync_device_name.clone()
             };

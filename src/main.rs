@@ -1,29 +1,48 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-slint::include_modules!();
+use gpui::*;
 
-use crate::core::frontend::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH};
-use slint::{ComponentHandle, LogicalSize};
-
-mod app;
+// Core modules are UI-framework independent — keep them
 mod core;
-mod looper;
+// Platform modules are UI-framework independent — keep them
 mod platform;
-mod services;
+// TODO: Migrate these to GPUI
+// mod app;
+// mod looper;
+// mod services;
 
-/// Returns `true` if this is the first instance and the app should start.
-/// Uses a localhost TCP port as a cross-process lock — the OS releases it
-/// automatically when the owning process exits (cleanly or via crash).
+struct ClippiApp;
+
+impl Render for ClippiApp {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .bg(rgba(0x232425ff))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .items_center()
+            .child(
+                div()
+                    .rounded(px(12.))
+                    .bg(rgb(0x7ecba3))
+                    .px(px(24.))
+                    .py(px(12.))
+                    .shadow_md()
+                    .child("Clippi — GPUI Experiment"),
+            )
+    }
+}
+
 fn ensure_single_instance() -> bool {
     std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
 }
 
 fn init_logging(db_path: &str) {
-    let log_path = crate::core::paths::log_path(db_path);
+    let log_path = core::paths::log_path(db_path);
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Rotate: if log > 1 MB, rename to .old before starting fresh
     if let Ok(meta) = std::fs::metadata(&log_path) {
         if meta.len() > 1_000_000 {
             let old = log_path.with_extension("log.old");
@@ -40,133 +59,29 @@ fn init_logging(db_path: &str) {
     }
 }
 
-/// Search for PingFang.ttc under the MobileAsset font directory.
-/// macOS 13+ delivers system CJK fonts via AssetsV2 at hash-based paths.
-/// Returns `None` if not found; caller should fall back to STHeiti.
-#[cfg(target_os = "macos")]
-fn find_pingfang_path() -> Option<String> {
-    let assets_dir =
-        std::fs::read_dir("/System/Library/AssetsV2/com_apple_MobileAsset_Font8").ok()?;
-    for entry in assets_dir.filter_map(|e| e.ok()) {
-        let candidate = entry.path().join("AssetData").join("PingFang.ttc");
-        if candidate.exists() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
 fn main() {
-    // Prevent multiple instances — desktop clipboard manager must be a singleton.
     if !ensure_single_instance() {
         return;
     }
 
-    // On macOS, disable Slint's default menu bar to avoid muda class name conflict
-    // with tray-icon. Both Slint and tray-icon depend on muda (different versions)
-    // which register the same ObjC class "MudaMenuItem", causing a crash.
-    #[cfg(target_os = "macos")]
-    {
-        let backend = i_slint_backend_winit::Backend::builder()
-            .with_default_menu_bar(false)
-            .build()
-            .expect("Failed to create Slint backend");
-        slint::platform::set_platform(Box::new(backend)).expect("Failed to set Slint platform");
-    }
+    let db_path = core::paths::resolve_db_path("");
+    init_logging(&db_path.to_string_lossy());
 
-    // Load settings early so we can initialize logging before UI setup
-    let mut settings = crate::core::settings::AppSettings::load();
-    init_logging(&settings.db_path);
+    log::info!("Starting Clippi (GPUI experiment)");
 
-    // Detect system language on first run.
-    if settings.language.is_empty() {
-        settings.language = crate::core::settings::detect_system_language();
-        settings.save();
-    }
-    crate::core::i18n::set_language(&settings.language);
-
-    let slint_app = App::new().unwrap();
-
-    // select_bundled_translation MUST be called after the first component is created.
-    // Always call it: for "en", Slint uses msgid as-is; for "zh_CN", it loads translations.
-    slint::select_bundled_translation(&settings.language)
-        .unwrap_or_else(|e| eprintln!("Failed to set language: {e}"));
-
-    // Register iconfont after app is initialized
-    {
-        let font_data = include_bytes!("../assets/fonts/iconfont.ttf");
-        let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data.to_vec()));
-        let mut collection = slint::fontique_08::shared_collection();
-        let _fonts = collection.register_fonts(blob, None);
-    }
-
-    // The default SansSerif font lacks CJK glyphs on both macOS and Windows.
-    // Register a system CJK font to prevent missing-glyph boxes (tofu).
-    #[cfg(target_os = "macos")]
-    {
-        let cjk_font_path = find_pingfang_path()
-            .unwrap_or_else(|| "/System/Library/Fonts/STHeiti Medium.ttc".into());
-
-        if let Ok(font_data) = std::fs::read(&cjk_font_path) {
-            let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
-            let mut collection = slint::fontique_08::shared_collection();
-            let cjk_override = slint::fontique_08::fontique::FontInfoOverride {
-                family_name: Some("system-cjk"),
+    Application::new().run(|cx: &mut App| {
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(100.), px(100.)),
+                    size(px(360.), px(480.)),
+                ))),
+                window_background: WindowBackgroundAppearance::Transparent,
+                window_decorations: None,
                 ..Default::default()
-            };
-            collection.register_fonts(blob, Some(cjk_override));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let cjk_font_path = "C:\\Windows\\Fonts\\msyh.ttc";
-        if let Ok(font_data) = std::fs::read(cjk_font_path) {
-            let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
-            let mut collection = slint::fontique_08::shared_collection();
-            let cjk_override = slint::fontique_08::fontique::FontInfoOverride {
-                family_name: Some("system-cjk"),
-                ..Default::default()
-            };
-            collection.register_fonts(blob, Some(cjk_override));
-        }
-    }
-
-    let controller = app::AppController::new(&slint_app).expect("Failed to init");
-    let restart_flag = controller.restart_flag();
-
-    // Show window first to initialize layout, then apply physical-pixel sizing
-    // to prevent DPI-scaling from inflating the window (logical px * scale factor).
-    // This runs before the event loop, so no visible flash occurs.
-    // When silent_start is enabled, skip showing the window entirely.
-    if !slint_app.get_silent_start() {
-        #[cfg(target_os = "macos")]
-        {
-            slint_app.window().show().unwrap();
-            slint_app.window().set_size(LogicalSize::new(
-                DEFAULT_WINDOW_WIDTH,
-                DEFAULT_WINDOW_HEIGHT,
-            ));
-            let mtm = objc2::MainThreadMarker::new().unwrap();
-            let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-            ns_app.activate();
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            slint_app.window().show().unwrap();
-            slint_app.window().set_size(LogicalSize::new(
-                DEFAULT_WINDOW_WIDTH,
-                DEFAULT_WINDOW_HEIGHT,
-            ));
-        }
-    }
-
-    slint::run_event_loop_until_quit().unwrap();
-
-    if restart_flag.load(std::sync::atomic::Ordering::SeqCst) {
-        controller.prepare_restart();
-        crate::core::settings::spawn_new_process();
-    }
-
-    controller.shutdown();
+            },
+            |_window, cx| cx.new(|_cx| ClippiApp),
+        )
+        .unwrap();
+    });
 }
