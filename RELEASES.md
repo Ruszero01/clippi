@@ -2,8 +2,7 @@
 
 ### Bug 修复
 
-- 窗口闪现关闭 — `show_and_focus()` 的自动隐藏抑制期（200ms）与 looper 轮询间隔（200ms）完全一致，`is_suppressed()` 的严格 `<` 比较使下一个 tick 抑制恰好过期，此时 Windows `SetForegroundWindow` 尚未完成前台切换，`FocusService` 误判失焦并立即隐藏窗口。修复：抑制期延长至 600ms，比较改为 `<=`。
-- 资源管理器地址栏粘贴失效 — Clippi 显示时抢占焦点导致资源管理器地址栏退出编辑模式，后续 Ctrl+V 落入文件列表无效。修复：检测粘贴目标为 Explorer 时，在 Ctrl+V 前先发送 Alt+D 重新打开地址栏。
+- 快捷键闪现关闭 — `show_and_focus()` 的自动隐藏抑制期（200ms）与 looper 轮询间隔（200ms）完全一致，`is_suppressed()` 的严格 `<` 比较使下一个 tick 抑制恰好过期，此时 Windows `SetForegroundWindow` 尚未完成前台切换，`FocusService` 误判失焦并立即隐藏窗口。修复：抑制期延长至 600ms，比较改为 `<=`。
 
 # Version 0.1.3
 

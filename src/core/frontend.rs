@@ -208,10 +208,6 @@ impl Frontend {
     pub fn show_and_focus(&mut self) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
 
-        // Capture focused control class BEFORE Clippi takes focus.
-        // Used by paste logic to decide whether to send Alt+D for Explorer.
-        crate::platform::focus::capture_focus_state();
-
         self.needs_reload.store(true, Ordering::SeqCst);
         // 600ms delay allows SetForegroundWindow to complete before auto-hide runs
         self.suppress_until =
