@@ -12,7 +12,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
+    SetForegroundWindow, GUITHREADINFO,
 };
 
 #[cfg(target_os = "windows")]
@@ -133,6 +134,32 @@ unsafe fn send_alt_d() {
     SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
 }
 
+/// Check if the currently focused control in a window is an Edit control.
+/// Explorer's search box is a persistent Edit — if it has focus, we paste
+/// directly instead of sending Alt+D (which would jump to the address bar).
+#[cfg(target_os = "windows")]
+unsafe fn is_focused_edit(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    let thread_id = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
+    if thread_id == 0 {
+        return false;
+    }
+    let mut gui_info: GUITHREADINFO = std::mem::zeroed();
+    gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if GetGUIThreadInfo(thread_id, &mut gui_info) == 0 {
+        return false;
+    }
+    if gui_info.hwndFocus.is_null() {
+        return false;
+    }
+    let mut class_buf = [0u16; 16];
+    let len = GetClassNameW(
+        gui_info.hwndFocus,
+        class_buf.as_mut_ptr(),
+        class_buf.len() as i32,
+    );
+    len > 0 && String::from_utf16_lossy(&class_buf[..len as usize]) == "Edit"
+}
+
 #[cfg(target_os = "windows")]
 fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     // Initial delay for SetForegroundWindow to take effect
@@ -144,18 +171,28 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     if let Some(hwnd) = target_hwnd {
         let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
         if unsafe { IsWindow(hwnd) } != 0 {
-            paste_to_explorer = is_explorer_window(hwnd);
+            if is_explorer_window(hwnd) {
+                let deadline =
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+                loop {
+                    if unsafe { GetForegroundWindow() } == hwnd {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        FOCUS_CHECK_INTERVAL_MS,
+                    ));
+                }
 
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
-            loop {
-                if unsafe { GetForegroundWindow() } == hwnd {
-                    break;
+                // Only send Alt+D if the focused control in Explorer is NOT an Edit.
+                // If an Edit control has focus (e.g., search box), it persisted through
+                // the focus-loss and we can paste directly into it.
+                if !unsafe { is_focused_edit(hwnd) } {
+                    paste_to_explorer = true;
                 }
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
             }
         }
     }
