@@ -556,11 +556,7 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
             if let Some(at) = text.find('@') {
                 let local = &text[..at];
                 let domain = &text[at..];
-                let visible = if local.chars().count() <= 2 {
-                    local.chars().take(2).collect::<String>()
-                } else {
-                    local.chars().take(2).collect::<String>()
-                };
+                let visible = local.chars().take(2).collect::<String>();
                 format!("{}***{}", visible, domain)
             } else {
                 text.to_string()

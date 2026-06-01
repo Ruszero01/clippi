@@ -2169,9 +2169,7 @@ fn trim_text(text: &str) -> String {
     // Normalize line endings: CRLF → LF, Unicode separators → LF
     let text = text
         .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace('\u{2028}', "\n") // LINE SEPARATOR
-        .replace('\u{2029}', "\n"); // PARAGRAPH SEPARATOR
+        .replace(['\r', '\u{2028}', '\u{2029}'], "\n"); // LINE/PARAGRAPH SEPARATORS
 
     let mut result = String::with_capacity(text.len());
 
@@ -2212,9 +2210,8 @@ fn decode_base64(text: &str) -> String {
     };
     // Try standard decoding first, then URL-safe
     use base64::Engine;
-    match base64::engine::general_purpose::STANDARD.decode(encoded) {
-        Ok(bytes) => return String::from_utf8_lossy(&bytes).into_owned(),
-        Err(_) => {}
+    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+        return String::from_utf8_lossy(&bytes).into_owned();
     }
     match base64::engine::general_purpose::URL_SAFE.decode(encoded) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
