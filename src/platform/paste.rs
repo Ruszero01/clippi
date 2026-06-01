@@ -170,29 +170,27 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     // Verify target window is actually foreground before pasting
     if let Some(hwnd) = target_hwnd {
         let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-        if unsafe { IsWindow(hwnd) } != 0 {
-            if is_explorer_window(hwnd) {
-                let deadline =
-                    std::time::Instant::now()
-                        + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
-                loop {
-                    if unsafe { GetForegroundWindow() } == hwnd {
-                        break;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        FOCUS_CHECK_INTERVAL_MS,
-                    ));
+        if unsafe { IsWindow(hwnd) } != 0 && is_explorer_window(hwnd) {
+            let deadline =
+                std::time::Instant::now()
+                    + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+            loop {
+                if unsafe { GetForegroundWindow() } == hwnd {
+                    break;
                 }
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(
+                    FOCUS_CHECK_INTERVAL_MS,
+                ));
+            }
 
-                // Only send Alt+D if the focused control in Explorer is NOT an Edit.
-                // If an Edit control has focus (e.g., search box), it persisted through
-                // the focus-loss and we can paste directly into it.
-                if !unsafe { is_focused_edit(hwnd) } {
-                    paste_to_explorer = true;
-                }
+            // Only send Alt+D if the focused control in Explorer is NOT an Edit.
+            // If an Edit control has focus (e.g., search box), it persisted through
+            // the focus-loss and we can paste directly into it.
+            if !unsafe { is_focused_edit(hwnd) } {
+                paste_to_explorer = true;
             }
         }
     }
