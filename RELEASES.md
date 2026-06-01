@@ -1,3 +1,9 @@
+# Version 0.1.4
+
+### Bug 修复
+
+- 快捷键闪现关闭 — `show_and_focus()` 的自动隐藏抑制期（200ms）与 looper 轮询间隔（200ms）完全一致，`is_suppressed()` 的严格 `<` 比较使下一个 tick 抑制恰好过期，此时 Windows `SetForegroundWindow` 尚未完成前台切换，`FocusService` 误判失焦并立即隐藏窗口。修复：抑制期延长至 600ms，比较改为 `<=`。
+
 # Version 0.1.3
 
 ### 新功能

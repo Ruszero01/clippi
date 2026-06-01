@@ -209,8 +209,9 @@ impl Frontend {
         use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
 
         self.needs_reload.store(true, Ordering::SeqCst);
+        // 600ms delay allows SetForegroundWindow to complete before auto-hide runs
         self.suppress_until =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(600));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             self.sync_system_theme();
@@ -247,8 +248,9 @@ impl Frontend {
     #[allow(deprecated)] // TODO: migrate to NSApp.activate once objc2 binding is available
     pub fn show_and_focus(&mut self) {
         self.needs_reload.store(true, Ordering::SeqCst);
+        // 600ms ensures NSApp.activate completes before auto-hide kicks in
         self.suppress_until =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(600));
         self.visible = true;
         if let Some(app) = self.app.upgrade() {
             self.sync_system_theme();
@@ -391,7 +393,7 @@ impl Frontend {
 
     pub fn is_suppressed(&self) -> bool {
         if let Some(until) = self.suppress_until {
-            if std::time::Instant::now() < until {
+            if std::time::Instant::now() <= until {
                 return true;
             }
         }

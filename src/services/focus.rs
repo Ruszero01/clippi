@@ -117,7 +117,7 @@ impl Pollable for FocusService {
             return;
         }
 
-        // Check suppress (200ms after show)
+        // Check suppress (600ms after show)
         let is_suppressed = {
             if let Ok(fe) = self.frontend.lock() {
                 fe.is_suppressed()
