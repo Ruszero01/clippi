@@ -12,8 +12,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
-    SetForegroundWindow, GUITHREADINFO,
+    GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
 };
 
 #[cfg(target_os = "windows")]
@@ -134,32 +133,6 @@ unsafe fn send_alt_d() {
     SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
 }
 
-/// Check if the currently focused control in a window is an Edit control.
-/// Explorer's search box is a persistent Edit — if it has focus, we paste
-/// directly instead of sending Alt+D (which would jump to the address bar).
-#[cfg(target_os = "windows")]
-unsafe fn is_focused_edit(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
-    let thread_id = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
-    if thread_id == 0 {
-        return false;
-    }
-    let mut gui_info: GUITHREADINFO = std::mem::zeroed();
-    gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-    if GetGUIThreadInfo(thread_id, &mut gui_info) == 0 {
-        return false;
-    }
-    if gui_info.hwndFocus.is_null() {
-        return false;
-    }
-    let mut class_buf = [0u16; 16];
-    let len = GetClassNameW(
-        gui_info.hwndFocus,
-        class_buf.as_mut_ptr(),
-        class_buf.len() as i32,
-    );
-    len > 0 && String::from_utf16_lossy(&class_buf[..len as usize]) == "Edit"
-}
-
 #[cfg(target_os = "windows")]
 fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     // Initial delay for SetForegroundWindow to take effect
@@ -186,10 +159,10 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
                 ));
             }
 
-            // Only send Alt+D if the focused control in Explorer is NOT an Edit.
-            // If an Edit control has focus (e.g., search box), it persisted through
-            // the focus-loss and we can paste directly into it.
-            if !unsafe { is_focused_edit(hwnd) } {
+            // Only send Alt+D if the user was NOT in an Edit control before Clippi
+            // took focus (e.g., address bar that reverted to breadcrumbs).
+            // If the user was in an Edit (search box), paste directly.
+            if !crate::platform::focus::was_last_focused_edit() {
                 paste_to_explorer = true;
             }
         }

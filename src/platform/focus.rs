@@ -20,13 +20,13 @@ use windows_sys::Win32::UI::Accessibility::{
 use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DispatchMessageW, GetForegroundWindow, GetWindowTextW,
-    GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, TranslateMessage,
-    EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE, WINEVENT_OUTOFCONTEXT, WM_QUIT,
+    DestroyIcon, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,
+    GetWindowTextW, GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, TranslateMessage,
+    EVENT_SYSTEM_FOREGROUND, GUITHREADINFO, MSG, PM_REMOVE, WINEVENT_OUTOFCONTEXT, WM_QUIT,
 };
 
 #[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(target_os = "windows")]
 use std::sync::Mutex;
 
@@ -46,6 +46,12 @@ pub struct ForegroundAppInfo {
 /// Last non-Clippi foreground window (paste target)
 #[cfg(target_os = "windows")]
 static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Was the focused control in the last non-Clippi window an Edit control?
+/// Captured before Clippi takes focus. Used to decide whether to send Alt+D
+/// before pasting to Explorer (skip Alt+D if user was in search box).
+#[cfg(target_os = "windows")]
+static LAST_FOCUSED_IS_EDIT: AtomicBool = AtomicBool::new(false);
 
 /// Last foreground window title (raw UTF-16 buffer)
 #[cfg(target_os = "windows")]
@@ -183,6 +189,52 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
     Ok(FocusWatcher {})
+}
+
+/// Capture whether the currently focused control in the foreground window is an
+/// Edit control. Must be called BEFORE Clippi takes focus (i.e., at the start of
+/// `show_and_focus`). Used to decide whether to send Alt+D when pasting to Explorer:
+/// if the user was in an Edit control (search box), paste directly; otherwise open
+/// the address bar first.
+#[cfg(target_os = "windows")]
+pub fn capture_focus_state() {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_null() {
+            LAST_FOCUSED_IS_EDIT.store(false, Ordering::SeqCst);
+            return;
+        }
+        let thread_id = GetWindowThreadProcessId(fg, std::ptr::null_mut());
+        if thread_id == 0 {
+            LAST_FOCUSED_IS_EDIT.store(false, Ordering::SeqCst);
+            return;
+        }
+        let mut gui_info: GUITHREADINFO = std::mem::zeroed();
+        gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        if GetGUIThreadInfo(thread_id, &mut gui_info) == 0 {
+            LAST_FOCUSED_IS_EDIT.store(false, Ordering::SeqCst);
+            return;
+        }
+        if gui_info.hwndFocus.is_null() {
+            LAST_FOCUSED_IS_EDIT.store(false, Ordering::SeqCst);
+            return;
+        }
+        let mut class_buf = [0u16; 16];
+        let len = GetClassNameW(
+            gui_info.hwndFocus,
+            class_buf.as_mut_ptr(),
+            class_buf.len() as i32,
+        );
+        let is_edit =
+            len > 0 && String::from_utf16_lossy(&class_buf[..len as usize]) == "Edit";
+        LAST_FOCUSED_IS_EDIT.store(is_edit, Ordering::SeqCst);
+    }
+}
+
+/// Check the focus state captured before Clippi took focus.
+#[cfg(target_os = "windows")]
+pub fn was_last_focused_edit() -> bool {
+    LAST_FOCUSED_IS_EDIT.load(Ordering::SeqCst)
 }
 
 /// Get the paste target window handle
