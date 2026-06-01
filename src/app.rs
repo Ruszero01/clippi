@@ -253,6 +253,15 @@ impl AppController {
         // allocator won't return to the OS without a hint.
         crate::platform::util::trim_process_working_set();
 
+        // Run cache cleanup in background — removes orphaned images and
+        // expired icon caches without blocking startup.
+        {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                crate::core::cache_cleanup::cleanup_unused_cache(&db.lock().expect("db lock"));
+            });
+        }
+
         Ok(Self {
             looper,
             listener: Some(listener),

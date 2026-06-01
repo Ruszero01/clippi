@@ -568,6 +568,24 @@ impl Database {
         rows.collect()
     }
 
+    /// Collect all image file hashes (stem of image_path) currently referenced in the database.
+    pub fn get_all_image_hashes(&self) -> SqlResult<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT image_path FROM clipboard_items WHERE image_path != ''")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut hashes = Vec::new();
+        for path in rows.flatten() {
+            if let Some(hash) = std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+            {
+                hashes.push(hash.to_string());
+            }
+        }
+        Ok(hashes)
+    }
+
     /// Prune oldest non-favorite items when total exceeds max_items.
     /// Returns the ids of deleted items. max_items == 0 means unlimited.
     pub fn prune_excess_non_favorites(&self, max_items: u32) -> SqlResult<Vec<i64>> {

@@ -1,5 +1,6 @@
 //! Core layer - pure Rust, no platform code
 
+pub mod cache_cleanup;
 pub mod color;
 pub mod db;
 pub mod filters;
