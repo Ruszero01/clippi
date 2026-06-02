@@ -18,6 +18,7 @@ clippi.toml
 # Claude Code
 .claude/
 CLAUDE.md
+AGENTS.md
 docs/
 .superpowers/
 

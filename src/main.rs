@@ -1,38 +1,28 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+use std::borrow::Cow;
+
 use gpui::*;
+
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 // Core modules are UI-framework independent — keep them
 mod core;
 // Platform modules are UI-framework independent — keep them
 mod platform;
-// TODO: Migrate these to GPUI
+// GPUI state layer (new)
+mod state;
+// GPUI UI components (new)
+mod ui;
+// GPUI polling and services (migrating from Slint)
+mod services;
+// Slint-era modules (disabled, being migrated)
 // mod app;
 // mod looper;
-// mod services;
 
-struct ClippiApp;
-
-impl Render for ClippiApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .bg(rgba(0x232425ff))
-            .flex()
-            .flex_col()
-            .justify_center()
-            .items_center()
-            .child(
-                div()
-                    .rounded(px(12.))
-                    .bg(rgb(0x7ecba3))
-                    .px(px(24.))
-                    .py(px(12.))
-                    .shadow_md()
-                    .child("Clippi — GPUI Experiment"),
-            )
-    }
-}
+// Root view lives in ui::root — use that instead of inline ClippiApp
+use ui::root::RootView;
 
 fn ensure_single_instance() -> bool {
     std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
@@ -70,6 +60,15 @@ fn main() {
     log::info!("Starting Clippi (GPUI experiment)");
 
     Application::new().run(|cx: &mut App| {
+        gpui_component::init(cx);
+        if let Err(err) = cx.text_system().add_fonts(vec![Cow::Borrowed(
+            include_bytes!("../assets/fonts/iconfont.ttf").as_slice(),
+        )]) {
+            log::error!("Failed to load iconfont.ttf: {err}");
+        }
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
+
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -77,10 +76,33 @@ fn main() {
                     size(px(360.), px(480.)),
                 ))),
                 window_background: WindowBackgroundAppearance::Transparent,
-                window_decorations: None,
+                titlebar: Some(TitlebarOptions {
+                    appears_transparent: true,
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|_cx| ClippiApp),
+            |window, cx| {
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    use windows_sys::Win32::Graphics::Dwm::{
+                        DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY,
+                    };
+                    const DWMNCRP_DISABLED: u32 = 1;
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                            let _ = DwmSetWindowAttribute(
+                                wh.hwnd.get() as _,
+                                DWMWA_NCRENDERING_POLICY as u32,
+                                &DWMNCRP_DISABLED as *const u32 as *const _,
+                                std::mem::size_of::<u32>() as u32,
+                            );
+                        }
+                    }
+                }
+                let view = cx.new(|cx| RootView::new(window, cx));
+                cx.new(|cx| gpui_component::Root::new(view, window, cx))
+            },
         )
         .unwrap();
     });
