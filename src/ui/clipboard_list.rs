@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::v_virtual_list;
 use gpui_component::scroll::Scrollbar;
+use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
 
 use crate::core::types::ClipboardItem;
@@ -22,19 +22,23 @@ pub struct ClipboardListView {
     item_sizes: Rc<Vec<Size<Pixels>>>,
     card_height_mode: String,
     scroll_handle: VirtualListScrollHandle,
+    focus_handle: FocusHandle,
     selected_ids: Vec<i64>,
+    selected_index: Option<usize>,
     state: Entity<AppState>,
 }
 
 impl ClipboardListView {
-    pub fn new(items: Vec<ClipboardItem>, state: Entity<AppState>) -> Self {
-        let item_sizes = Rc::new(Self::compute_sizes(&items, "medium"));
+    pub fn new(items: Vec<ClipboardItem>, state: Entity<AppState>, cx: &mut App) -> Self {
+        let item_sizes = Rc::new(Self::compute_sizes(&items, "auto"));
         Self {
             items,
             item_sizes,
-            card_height_mode: "medium".into(),
+            card_height_mode: "auto".into(),
             scroll_handle: VirtualListScrollHandle::new(),
+            focus_handle: cx.focus_handle(),
             selected_ids: Vec::new(),
+            selected_index: None,
             state,
         }
     }
@@ -43,7 +47,68 @@ impl ClipboardListView {
         self.item_sizes = Rc::new(Self::compute_sizes(&items, &self.card_height_mode));
         self.items = items;
         self.selected_ids.clear();
+        self.selected_index = None;
         cx.notify();
+    }
+
+    pub fn focus(&self, window: &mut Window) {
+        self.focus_handle.focus(window);
+    }
+
+    fn select_index(
+        &mut self,
+        index: usize,
+        scroll_strategy: ScrollStrategy,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = self.items.get(index) else {
+            return;
+        };
+        let item_id = item.id;
+        self.selected_ids.clear();
+        self.selected_ids.push(item_id);
+        self.selected_index = Some(index);
+        self.scroll_handle.scroll_to_item(index, scroll_strategy);
+        let _ = self.state.update(cx, move |state, _cx| {
+            state.select_single(item_id);
+        });
+        cx.notify();
+    }
+
+    fn select_index_without_scroll(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(item) = self.items.get(index) else {
+            return;
+        };
+        let item_id = item.id;
+        self.selected_ids.clear();
+        self.selected_ids.push(item_id);
+        self.selected_index = Some(index);
+        let _ = self.state.update(cx, move |state, _cx| {
+            state.select_single(item_id);
+        });
+        cx.notify();
+    }
+
+    fn select_next(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+        let next_index = self
+            .selected_index
+            .map(|index| (index + 1).min(self.items.len().saturating_sub(1)))
+            .unwrap_or(0);
+        self.select_index(next_index, scroll_strategy, cx);
+    }
+
+    fn select_previous(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+        let previous_index = self
+            .selected_index
+            .map(|index| index.saturating_sub(1))
+            .unwrap_or(0);
+        self.select_index(previous_index, scroll_strategy, cx);
     }
 
     fn compute_sizes(items: &[ClipboardItem], mode: &str) -> Vec<Size<Pixels>> {
@@ -60,15 +125,30 @@ impl ClipboardListView {
 }
 
 impl Render for ClipboardListView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let item_sizes = self.item_sizes.clone();
         let items_count = self.item_sizes.len();
         let view = cx.entity();
         let list_entity = view.clone();
+        let focus_handle = self.focus_handle.clone();
 
         let empty_state = items_count == 0;
 
         div()
+            .track_focus(&focus_handle)
+            .on_key_down(window.listener_for(&view, |this, event: &KeyDownEvent, _window, cx| {
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        this.select_previous(ScrollStrategy::Top, cx);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        this.select_next(ScrollStrategy::Bottom, cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
             .flex_1()
             .h_full()
             .w_full()
@@ -116,18 +196,14 @@ impl Render for ClipboardListView {
                                         let item = this.items.get(i)?;
                                         let item_id = item.id;
                                         let selected = this.selected_ids.contains(&item_id);
-                                        let state = this.state.clone();
                                         let list_view = list_entity.clone();
+                                        let focus_handle = this.focus_handle.clone();
                                         let handler: Rc<dyn Fn(usize, &mut Window, &mut App)> =
-                                            Rc::new(move |idx, _window, cx| {
+                                            Rc::new(move |idx, window, cx| {
                                                 log::info!("Clicked item at index {idx}");
-                                                let _ = state.update(cx, move |state, _cx| {
-                                                    state.select_single(item_id);
-                                                });
+                                                focus_handle.focus(window);
                                                 let _ = list_view.update(cx, move |this, cx| {
-                                                    this.selected_ids.clear();
-                                                    this.selected_ids.push(item_id);
-                                                    cx.notify();
+                                                    this.select_index_without_scroll(idx, cx);
                                                 });
                                             });
                                         Some(

@@ -40,7 +40,8 @@ impl RootView {
         let state = cx.new(|_cx| AppState::new(settings));
         let app_state = state.read(cx);
         let items = app_state.items.clone();
-        let list_view = cx.new(|_cx| ClipboardListView::new(items, state.clone()));
+        let list_view = cx.new(|cx| ClipboardListView::new(items, state.clone(), cx));
+        list_view.update(cx, |list, _cx| list.focus(window));
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone()));
         let search_bar = cx.new(|cx| SearchBar::new(state.clone(), list_view.clone(), window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(cx));
