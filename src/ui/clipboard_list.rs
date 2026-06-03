@@ -277,6 +277,17 @@ impl Render for ClipboardListView {
             .overflow_hidden()
             .rounded_b(px(12.))
             .bg(rgb(0x191a1b))
+            .on_mouse_move({
+                let list_for_clear = list_entity.clone();
+                move |_ev, _window, cx| {
+                    let _ = list_for_clear.update(cx, |this, cx| {
+                        if this.hovered_index.is_some() {
+                            this.hovered_index = None;
+                            cx.notify();
+                        }
+                    });
+                }
+            })
             .px(px(8.))
             .pt(px(4.))
             .pb(px(8.))
