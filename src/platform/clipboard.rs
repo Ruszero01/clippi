@@ -247,10 +247,18 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         }
 
         if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {
-            let html = ctx.get_html().ok();
+            let html = ctx
+                .get_html()
+                .ok()
+                .map(|html| normalize_clipboard_html(&html));
             let rtf = ctx.get_rich_text().ok();
             if html.is_some() || rtf.is_some() {
-                let rich = RichData { html, rtf, ocr_text: None, qr_text: None };
+                let rich = RichData {
+                    html,
+                    rtf,
+                    ocr_text: None,
+                    qr_text: None,
+                };
                 return Some(ClipboardItem::new_text(
                     0,
                     &text,
@@ -271,6 +279,41 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     }
 
     None
+}
+
+fn normalize_clipboard_html(html: &str) -> String {
+    let Some(header_end) = html.find("<html").or_else(|| html.find("<!DOCTYPE")) else {
+        return html.to_string();
+    };
+
+    let header = &html[..header_end];
+    if !header.lines().any(|line| line.starts_with("Version:")) {
+        return html.to_string();
+    }
+
+    if let (Some(start), Some(end)) = (
+        parse_cf_html_offset(header, "StartFragment:"),
+        parse_cf_html_offset(header, "EndFragment:"),
+    ) {
+        if start < end && end <= html.len() {
+            return String::from_utf8_lossy(&html.as_bytes()[start..end])
+                .trim()
+                .to_string();
+        }
+    }
+
+    html[header_end..]
+        .replace("<!--StartFragment-->", "")
+        .replace("<!--EndFragment-->", "")
+        .trim()
+        .to_string()
+}
+
+fn parse_cf_html_offset(header: &str, key: &str) -> Option<usize> {
+    header.lines().find_map(|line| {
+        line.strip_prefix(key)
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    })
 }
 
 /// Parse PNG image dimensions from raw bytes without full decoding.

@@ -6,10 +6,12 @@
 //! - Main panel offset 36px from left, 12px border-radius, 1px border
 //! - Titlebar + stacked views (clipboard / settings / edit)
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
+use std::time::Duration;
 
 use crate::core::settings::AppSettings;
+use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
@@ -17,8 +19,8 @@ use super::search_bar::SearchBar;
 use super::settings::SettingsPanel;
 use super::sidebar::Sidebar;
 use super::tag_filter::TagFilterPanel;
-use super::titlebar::{Titlebar, TitlebarEvent};
 use super::theme::ClippiTheme;
+use super::titlebar::{Titlebar, TitlebarEvent};
 
 pub struct RootView {
     state: Entity<AppState>,
@@ -28,9 +30,11 @@ pub struct RootView {
     settings_panel: Entity<SettingsPanel>,
     sidebar: Entity<Sidebar>,
     tag_filter_panel: Entity<TagFilterPanel>,
+    clipboard_service: GpuiClipboardService,
     current_view: String,
     pinned: bool,
     theme: ClippiTheme,
+    _clipboard_poll_task: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -47,7 +51,26 @@ impl RootView {
         let settings_panel = cx.new(|cx| SettingsPanel::new(cx));
         let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone()));
         let tag_filter_panel = cx.new(|cx| {
-            TagFilterPanel::new(state.clone(), list_view.clone(), search_bar.clone(), window, cx)
+            TagFilterPanel::new(
+                state.clone(),
+                list_view.clone(),
+                search_bar.clone(),
+                window,
+                cx,
+            )
+        });
+        let clipboard_service = GpuiClipboardService::new();
+        let _clipboard_poll_task = cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_millis(
+                crate::services::poll_loop::POLL_INTERVAL_MS,
+            ))
+            .await;
+            let Some(this) = this.upgrade() else {
+                break;
+            };
+            if this.update(cx, |this, cx| this.poll_clipboard(cx)).is_err() {
+                break;
+            }
         });
         let titlebar_for_events = titlebar.clone();
         let _subscriptions = vec![
@@ -57,21 +80,25 @@ impl RootView {
             cx.observe(&tag_filter_panel, |_this, _, cx| {
                 cx.notify();
             }),
-            cx.subscribe(&titlebar, move |this, _, event: &TitlebarEvent, cx| match event {
-                TitlebarEvent::TogglePin => {
-                    this.pinned = !this.pinned;
-                    let pinned = this.pinned;
-                    titlebar_for_events.update(cx, |titlebar, cx| {
-                        titlebar.set_pinned(pinned, cx);
-                    });
-                    cx.notify();
-                }
-                TitlebarEvent::OpenSettings => {
-                    this.current_view = "settings".into();
-                    this.search_bar.update(cx, |bar, cx| bar.close_tag_panel(cx));
-                    cx.notify();
-                }
-            }),
+            cx.subscribe(
+                &titlebar,
+                move |this, _, event: &TitlebarEvent, cx| match event {
+                    TitlebarEvent::TogglePin => {
+                        this.pinned = !this.pinned;
+                        let pinned = this.pinned;
+                        titlebar_for_events.update(cx, |titlebar, cx| {
+                            titlebar.set_pinned(pinned, cx);
+                        });
+                        cx.notify();
+                    }
+                    TitlebarEvent::OpenSettings => {
+                        this.current_view = "settings".into();
+                        this.search_bar
+                            .update(cx, |bar, cx| bar.close_tag_panel(cx));
+                        cx.notify();
+                    }
+                },
+            ),
         ];
         let theme = ClippiTheme::dark();
 
@@ -83,10 +110,27 @@ impl RootView {
             settings_panel,
             sidebar,
             tag_filter_panel,
+            clipboard_service,
             current_view: "clipboard".into(),
             pinned: false,
             theme,
+            _clipboard_poll_task,
             _subscriptions,
+        }
+    }
+
+    fn poll_clipboard(&mut self, cx: &mut Context<Self>) {
+        let changed = {
+            let service = &mut self.clipboard_service;
+            self.state
+                .update(cx, |state, _cx| service.poll_state(state))
+        };
+
+        if changed {
+            let items = self.state.read(cx).items.clone();
+            self.list_view
+                .update(cx, |list, cx| list.set_items(items, cx));
+            cx.notify();
         }
     }
 
@@ -111,16 +155,20 @@ impl Render for RootView {
         div()
             .relative()
             .size_full()
-            .child(
-                div().absolute().left(px(0.)).top(px(84.)).child(sidebar),
-            )
+            .child(div().absolute().left(px(0.)).top(px(84.)).child(sidebar))
             .child(
                 div()
                     .absolute()
-                    .left(px(36.)).right(px(0.)).top(px(0.)).bottom(px(0.))
-                    .rounded(px(12.)).bg(theme.bg)
-                    .border(px(1.)).border_color(theme.divider)
-                    .flex().flex_col()
+                    .left(px(36.))
+                    .right(px(0.))
+                    .top(px(0.))
+                    .bottom(px(0.))
+                    .rounded(px(12.))
+                    .bg(theme.bg)
+                    .border(px(1.))
+                    .border_color(theme.divider)
+                    .flex()
+                    .flex_col()
                     .occlude()
                     .child(titlebar)
                     .when(is_clipboard, |panel| {
@@ -130,20 +178,24 @@ impl Render for RootView {
             )
             .when(tag_panel_open && is_clipboard, |root| {
                 let search_for_backdrop = search_bar.clone();
-                root
-                    .child(
-                        // Backdrop
-                        div().absolute().size_full()
-                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
-                            }),
-                    )
-                    .child(
-                        // Panel — occluded to prevent click-through to backdrop
-                        div().absolute().right(px(8.)).top(px(106.))
-                            .occlude()
-                            .child(tag_filter_panel),
-                    )
+                root.child(
+                    // Backdrop
+                    div().absolute().size_full().on_mouse_down(
+                        MouseButton::Left,
+                        move |_ev, _window, cx| {
+                            search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
+                        },
+                    ),
+                )
+                .child(
+                    // Panel — occluded to prevent click-through to backdrop
+                    div()
+                        .absolute()
+                        .right(px(8.))
+                        .top(px(106.))
+                        .occlude()
+                        .child(tag_filter_panel),
+                )
             })
     }
 }
