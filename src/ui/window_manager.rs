@@ -63,7 +63,9 @@ pub struct WindowManager {
     state: Entity<AppState>,
     clipboard_service: GpuiClipboardService,
 
-    // ── Window handle (AnyWindowHandle for cross-async access) ──
+    // ── Raw window handle (HWND on Windows) ──
+    #[allow(dead_code)]
+    hwnd: isize,
     window_handle: Option<AnyWindowHandle>,
 
     // ── Poll task ──
@@ -118,6 +120,7 @@ impl WindowManager {
             blacklist: settings.hotkey_blacklist.clone(),
             state,
             clipboard_service,
+            hwnd: 0,
             window_handle: None,
             _poll_task: None,
         };
@@ -317,14 +320,13 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                FindWindowW, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOMOVE,
-                SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOW,
+                SetForegroundWindow, SetWindowPos, ShowWindow,
+                HWND_TOP, SWP_NOMOVE, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOW,
             };
 
-            if let Some((x, y)) = self.calculate_position() {
-                let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
-                let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
-                if !hwnd.is_null() {
+            let hwnd = self.hwnd as *mut std::ffi::c_void;
+            if !hwnd.is_null() {
+                if let Some((x, y)) = self.calculate_position() {
                     unsafe {
                         SetWindowPos(
                             hwnd,
@@ -335,19 +337,12 @@ impl WindowManager {
                             0,
                             SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE,
                         );
-                        ShowWindow(hwnd, SW_SHOW);
-                        SetForegroundWindow(hwnd);
-                    };
+                    }
                 }
-            } else {
-                let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
-                let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
-                if !hwnd.is_null() {
-                    unsafe {
-                        ShowWindow(hwnd, SW_SHOW);
-                        SetForegroundWindow(hwnd);
-                    };
-                }
+                unsafe {
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                };
             }
         }
 
@@ -368,26 +363,22 @@ impl WindowManager {
 
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SW_HIDE};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+
+            let hwnd = self.hwnd as *mut std::ffi::c_void;
 
             // Save position in Remember mode
-            if self.position_mode == PositionMode::Remember {
-                let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
-                let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
-                if !hwnd.is_null() {
-                    use windows_sys::Win32::Foundation::POINT;
-                    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
-                    let mut pt = POINT { x: 0, y: 0 };
-                    unsafe {
-                        ClientToScreen(hwnd, &mut pt);
-                    }
-                    self.saved_x = pt.x;
-                    self.saved_y = pt.y;
+            if self.position_mode == PositionMode::Remember && !hwnd.is_null() {
+                use windows_sys::Win32::Foundation::POINT;
+                use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+                let mut pt = POINT { x: 0, y: 0 };
+                unsafe {
+                    ClientToScreen(hwnd, &mut pt);
                 }
+                self.saved_x = pt.x;
+                self.saved_y = pt.y;
             }
 
-            let title: Vec<u16> = "Clippi\0".encode_utf16().collect();
-            let hwnd = unsafe { FindWindowW(std::ptr::null_mut(), title.as_ptr()) };
             if !hwnd.is_null() {
                 unsafe { ShowWindow(hwnd, SW_HIDE) };
             }
@@ -411,6 +402,15 @@ impl WindowManager {
     }
 
     // ── Public setters ────────────────────────────────────────────────
+
+    /// Store the raw window handle (HWND on Windows) for platform operations.
+    #[cfg(target_os = "windows")]
+    pub fn set_hwnd(&mut self, hwnd: isize) {
+        self.hwnd = hwnd;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn set_hwnd(&mut self, _hwnd: isize) {}
 
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;

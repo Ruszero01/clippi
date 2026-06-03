@@ -106,6 +106,18 @@ fn main() {
                 let state = cx.new(|_cx| AppState::new(AppSettings::load()));
                 let window_manager =
                     cx.new(|cx| WindowManager::new(state.clone(), cx));
+
+                // ── Store raw window handle for platform operations ──
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                            let hwnd = wh.hwnd.get() as isize;
+                            window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
+                        }
+                    }
+                }
+
                 let view = cx.new(|cx| {
                     RootView::new(window, state.clone(), window_manager.clone(), cx)
                 });
