@@ -356,6 +356,7 @@ impl Render for ClipboardListView {
                                                 .py(px(5.))
                                                 .on_mouse_move({
                                                     move |_ev, _window, cx| {
+                                                        cx.stop_propagation();
                                                         let _ = list_for_hover.update(
                                                             cx,
                                                             |this, cx| {

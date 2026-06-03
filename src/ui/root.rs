@@ -190,6 +190,7 @@ impl Render for RootView {
                     div().absolute().size_full().on_mouse_down(
                         MouseButton::Left,
                         move |_ev, _window, cx| {
+                            cx.stop_propagation();
                             search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
                         },
                     ),
@@ -221,6 +222,7 @@ impl Render for RootView {
                             .on_mouse_down(MouseButton::Left, {
                                 let l = list.clone();
                                 move |_ev, _window, cx| {
+                                    cx.stop_propagation();
                                     let _ = l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
                                 }
                             }),

@@ -1051,6 +1051,7 @@ impl RenderOnce for ClipboardCard {
                     .absolute()
                     .top(px(3.))
                     .right(px(4.))
+                    .occlude()
                     .child(HoverToolbar::new(toolbar_props).on_action(
                         move |action, _window, cx| {
                             if let Some(ref handler) = on_toolbar_action {
