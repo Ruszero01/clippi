@@ -14,3 +14,4 @@ pub mod tag_picker;
 pub mod theme;
 pub mod titlebar;
 pub mod toast;
+pub mod window_manager;
