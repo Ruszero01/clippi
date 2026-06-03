@@ -114,6 +114,9 @@ impl WindowManager {
 
         let clipboard_service = GpuiClipboardService::new();
 
+        // ── Initialize tray ──
+        let tray = Some(TrayManager::new());
+
         let mut wm = Self {
             position_mode: PositionMode::from_str(&settings.window_position_mode),
             pinned: false,
@@ -130,6 +133,7 @@ impl WindowManager {
             blacklist: settings.hotkey_blacklist.clone(),
             state,
             clipboard_service,
+            tray,
             hwnd: 0,
             window_handle: None,
             _poll_task: None,
