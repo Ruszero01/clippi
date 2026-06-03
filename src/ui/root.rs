@@ -77,6 +77,12 @@ impl RootView {
                         .update(cx, |tb, cx| tb.set_pinned(*pinned, cx));
                     cx.notify();
                 }
+                WindowManagerEvent::OpenSettings => {
+                    // TODO: Switch to settings view when settings panel
+                    // is fully migrated to GPUI.
+                    // this.current_view = "settings".into();
+                    // cx.notify();
+                }
             },
         );
 
