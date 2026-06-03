@@ -333,6 +333,10 @@ impl WindowManager {
         self.pinned = false;
         cx.emit(WindowManagerEvent::PinnedChanged(false));
 
+        // ── Reload items from DB (they were cleared on hide) ──
+        self.state.update(cx, |state, _cx| state.reload_items());
+        cx.emit(WindowManagerEvent::ClipboardChanged);
+
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -376,6 +380,9 @@ impl WindowManager {
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
         self.dismiss_ui(cx);
+
+        // ── Release memory: clear items list (mirrors Slint release_model_resources) ──
+        self.state.update(cx, |state, _cx| state.clear_items());
 
         #[cfg(target_os = "windows")]
         {

@@ -86,6 +86,14 @@ impl AppState {
         }
     }
 
+    /// Clear all items from memory to free resources while window is hidden.
+    /// Items are reloaded from DB on next `reload_items()` call.
+    pub fn clear_items(&mut self) {
+        self.items.clear();
+        self.items.shrink_to_fit();
+        self.selected_ids.clear();
+    }
+
     /// Update keyword filter and reload visible items.
     pub fn set_keyword(&mut self, keyword: &str) {
         self.filters.set_keyword(keyword);
