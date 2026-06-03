@@ -500,7 +500,7 @@ pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32
 
 #[derive(IntoElement)]
 pub struct ClipboardCard {
-    item: ClipboardItem,
+    item: Rc<ClipboardItem>,
     selected: bool,
     index: usize,
     selection_order: usize,
@@ -509,7 +509,7 @@ pub struct ClipboardCard {
 }
 
 impl ClipboardCard {
-    pub fn new(item: ClipboardItem, selected: bool, index: usize) -> Self {
+    pub fn new(item: Rc<ClipboardItem>, selected: bool, index: usize) -> Self {
         Self {
             item,
             selected,

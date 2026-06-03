@@ -383,6 +383,7 @@ impl WindowManager {
 
         // ── Release memory: clear items list (mirrors Slint release_model_resources) ──
         self.state.update(cx, |state, _cx| state.clear_items());
+        cx.emit(WindowManagerEvent::ClipboardChanged);
 
         #[cfg(target_os = "windows")]
         {

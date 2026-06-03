@@ -119,7 +119,6 @@ impl ClipboardListView {
                 size(px(308.), px(h))
             })
             .collect();
-        log::info!("ClipboardListView::compute_sizes: {} items", sizes.len());
         sizes
     }
 }
@@ -200,7 +199,6 @@ impl Render for ClipboardListView {
                                         let focus_handle = this.focus_handle.clone();
                                         let handler: Rc<dyn Fn(usize, &mut Window, &mut App)> =
                                             Rc::new(move |idx, window, cx| {
-                                                log::info!("Clicked item at index {idx}");
                                                 focus_handle.focus(window);
                                                 let _ = list_view.update(cx, move |this, cx| {
                                                     this.select_index_without_scroll(idx, cx);
@@ -212,7 +210,7 @@ impl Render for ClipboardListView {
                                                 .h_full()
                                                 .py(px(5.))
                                                 .child(
-                                                    ClipboardCard::new(item.clone(), selected, i)
+                                                    ClipboardCard::new(Rc::new(item.clone()), selected, i)
                                                         .on_click(handler),
                                                 )
                                                 .into_any_element(),
