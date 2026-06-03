@@ -174,6 +174,9 @@ impl WindowManager {
 
         // 4. Focus / auto-hide logic
         self.poll_focus(cx);
+
+        // 5. Tray events
+        self.poll_tray(cx);
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
@@ -223,6 +226,67 @@ impl WindowManager {
         }
 
         self.hide(cx);
+    }
+
+    // ── Tray event polling ───────────────────────────────────────────
+
+    fn poll_tray(&mut self, cx: &mut Context<Self>) {
+        let action = match self.tray.as_ref() {
+            Some(t) => t.poll(),
+            None => return,
+        };
+
+        match action {
+            Some(TrayAction::Show) => {
+                self.show_and_focus(cx);
+            }
+            Some(TrayAction::OpenSettings) => {
+                cx.emit(WindowManagerEvent::OpenSettings);
+            }
+            Some(TrayAction::Restart) => {
+                self.do_restart(cx);
+            }
+            Some(TrayAction::Quit) => {
+                self.do_quit(cx);
+            }
+            Some(TrayAction::CheckUpdate) => {
+                update::open_releases_page(RELEASES_URL);
+            }
+            None => {}
+        }
+    }
+
+    /// Prepare for graceful shutdown: save geometry, flush WAL,
+    /// release platform resources.
+    fn prepare_shutdown(&mut self, cx: &mut Context<Self>) {
+        let (sx, sy, sw, sh) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
+        self.state.update(cx, |state, _cx| {
+            let _ = state.db.checkpoint();
+            let settings = &mut state.settings;
+            if sx >= 0 && sy >= 0 {
+                settings.saved_window_x = sx;
+                settings.saved_window_y = sy;
+            }
+            if sw > 0.0 && sh > 0.0 {
+                settings.saved_window_width = sw;
+                settings.saved_window_height = sh;
+            }
+            settings.save();
+        });
+        self.shutdown();
+    }
+
+    /// Fully quit the application.
+    fn do_quit(&mut self, cx: &mut Context<Self>) {
+        self.prepare_shutdown(cx);
+        cx.shutdown();
+    }
+
+    /// Restart the application: flush, spawn new process, then quit.
+    fn do_restart(&mut self, cx: &mut Context<Self>) {
+        self.prepare_shutdown(cx);
+        crate::core::settings::spawn_new_process();
+        cx.shutdown();
     }
 
     // ── Foreground detection ──────────────────────────────────────────
