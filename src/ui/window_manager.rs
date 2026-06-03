@@ -18,10 +18,15 @@ use crate::platform::focus::{start_focus_watcher, FocusWatcher};
 use crate::platform::hotkey::{create_hotkey_listener, HotkeyListener};
 use crate::platform::monitor;
 use crate::services::gpui_clipboard::GpuiClipboardService;
+use crate::platform::tray::{TrayAction, TrayManager};
+use crate::services::update;
 use crate::state::app::AppState;
 
 /// Shared foreground app name for cross-service coordination.
 pub type ForegroundAppName = Arc<Mutex<String>>;
+
+/// GitHub releases page for the Clippi project.
+const RELEASES_URL: &str = "https://github.com/Ruszero01/clippi/releases";
 
 /// Events emitted by WindowManager for consumption by RootView.
 pub enum WindowManagerEvent {
@@ -29,6 +34,9 @@ pub enum WindowManagerEvent {
     ClipboardChanged,
     /// Pin state changed (unpinned on hotkey show, or toggled by titlebar).
     PinnedChanged(bool),
+    /// Tray menu "Settings" clicked — switch to settings view.
+    /// TODO: Implement when settings panel GPUI migration is complete.
+    OpenSettings,
 }
 
 /// Unified window manager entity.
@@ -66,6 +74,9 @@ pub struct WindowManager {
     #[allow(dead_code)]
     hwnd: isize,
     window_handle: Option<AnyWindowHandle>,
+
+    // ── 系统托盘 ──
+    tray: Option<TrayManager>,
 
     // ── Poll task ──
     _poll_task: Option<Task<()>>,
