@@ -108,7 +108,7 @@ impl WindowManager {
             pinned: false,
             auto_hide: settings.auto_hide,
             visible: true,
-            suppress_until: Some(Instant::now() + Duration::from_millis(500)),
+            suppress_until: Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS)),
             hotkey,
             focus_watcher,
             foreground_app_name,
@@ -186,11 +186,12 @@ impl WindowManager {
     }
 
     fn poll_clipboard(&mut self, cx: &mut Context<Self>) {
-        self.state.update(cx, |state, _cx| {
+        let changed = self.state.update(cx, |state, _cx| {
             self.clipboard_service.poll_state(state)
         });
-        // Always emit — the subscriber can decide to skip if nothing changed.
-        cx.emit(WindowManagerEvent::ClipboardChanged);
+        if changed {
+            cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
     }
 
     fn poll_focus(&mut self, cx: &mut Context<Self>) {
