@@ -65,6 +65,12 @@ struct RawMenuItem {
 
 const SEPARATOR_LABEL: &str = "__sep__";
 const MENU_WIDTH: f32 = 164.0;
+/// Height of a single menu item row.
+const ITEM_HEIGHT: f32 = 30.0;
+/// Height of a separator (3px gap + 1px line + 3px gap).
+const SEPARATOR_HEIGHT: f32 = 7.0;
+/// Vertical padding (4px top + 4px bottom).
+const MENU_V_PADDING: f32 = 8.0;
 
 impl ContextMenu {
     pub fn new() -> Self {
@@ -297,10 +303,26 @@ impl ContextMenu {
         self.on_dismiss = Some(Rc::new(handler));
         self
     }
+
+    /// Estimate the rendered height of this menu based on its items.
+    pub fn estimated_height(&self) -> f32 {
+        let mut h: f32 = MENU_V_PADDING;
+        for item in &self.items {
+            if item.label == SEPARATOR_LABEL {
+                h += SEPARATOR_HEIGHT;
+            } else {
+                h += ITEM_HEIGHT;
+            }
+        }
+        h
+    }
 }
 
 impl RenderOnce for ContextMenu {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        // Compute menu height BEFORE destructuring self
+        let menu_h = self.estimated_height();
+
         let Self {
             items,
             x,
@@ -321,10 +343,18 @@ impl RenderOnce for ContextMenu {
         let danger = rgb(0xff5f57);
         let fav_color = rgb(0xd8a155);
 
-        // Clamp position to container bounds
+        // Clamp position to container bounds with height awareness.
+        // Flips the menu above the cursor if it would overflow the bottom edge.
         let menu_w = MENU_WIDTH;
         let clamped_x = x.clamp(4.0, (container_width - menu_w - 4.0).max(4.0));
-        let clamped_y = y.clamp(4.0, (container_height - 4.0).max(4.0));
+        // Prefer below cursor; flip above if it overflows the bottom.
+        let clamped_y = if y + menu_h + 4.0 <= container_height {
+            // Fits below cursor — small 2px gap from click point
+            y.clamp(4.0, container_height - menu_h - 4.0)
+        } else {
+            // Flip above cursor — 8px gap from click point
+            (y - menu_h - 8.0).clamp(4.0, container_height - menu_h - 4.0)
+        };
 
         div()
             .absolute()

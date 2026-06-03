@@ -143,7 +143,7 @@ impl RootView {
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar.clone();
         let titlebar = self.titlebar.clone();
         let list_view = self.list_view.clone();
@@ -153,6 +153,11 @@ impl Render for RootView {
         let tag_panel_open = self.search_bar.read(cx).tag_panel_open();
         let is_clipboard = self.current_view == "clipboard";
         let theme = &self.theme;
+
+        // Actual window dimensions for positioning overlays
+        let viewport = window.viewport_size();
+        let win_w = f32::from(viewport.width);
+        let win_h = f32::from(viewport.height);
 
         div()
             .relative()
@@ -226,7 +231,7 @@ impl Render for RootView {
                             if is_batch {
                                 let count = l.read(cx).selected_count;
                                 ContextMenu::for_batch(count)
-                                    .with_position(menu_x, menu_y, 360.0, 600.0)
+                                    .with_position(menu_x, menu_y, win_w, win_h)
                                     .on_action({
                                         let l = l.clone();
                                         move |action, window, cx| {
@@ -247,7 +252,7 @@ impl Render for RootView {
                             } else if let Some(ref clip_item) = item {
                                 let ctx = MenuItemContext::from_item(clip_item);
                                 ContextMenu::for_item(&ctx)
-                                    .with_position(menu_x, menu_y, 360.0, 600.0)
+                                    .with_position(menu_x, menu_y, win_w, win_h)
                                     .on_action({
                                         let l = l.clone();
                                         move |action, window, cx| {
