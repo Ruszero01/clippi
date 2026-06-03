@@ -76,7 +76,6 @@ impl WindowManager {
     /// Create the window manager and start all background services.
     pub fn new(
         state: Entity<AppState>,
-        window_handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) -> Self {
         let settings = state.read(cx).settings.clone();
@@ -119,7 +118,7 @@ impl WindowManager {
             blacklist: settings.hotkey_blacklist.clone(),
             state,
             clipboard_service,
-            window_handle: Some(window_handle),
+            window_handle: None,
             _poll_task: None,
         };
 

@@ -104,13 +104,8 @@ fn main() {
                     }
                 }
                 let state = cx.new(|_cx| AppState::new(AppSettings::load()));
-                let window_handle = cx
-                    .windows()
-                    .into_iter()
-                    .next()
-                    .expect("window should be registered before callback");
                 let window_manager =
-                    cx.new(|cx| WindowManager::new(state.clone(), window_handle, cx));
+                    cx.new(|cx| WindowManager::new(state.clone(), cx));
                 let view = cx.new(|cx| {
                     RootView::new(window, state.clone(), window_manager.clone(), cx)
                 });
