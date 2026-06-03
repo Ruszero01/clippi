@@ -367,20 +367,45 @@ impl Render for ClipboardListView {
                                                                 if let Some(item) =
                                                                     this.items.get(i)
                                                                 {
+                                                                    let already_selected =
+                                                                        this.selected_ids
+                                                                            .contains(&item.id);
                                                                     let is_batch = this
                                                                         .selected_ids
                                                                         .len()
                                                                         > 1
-                                                                        && this
-                                                                            .selected_ids
-                                                                            .contains(
-                                                                                &item.id,
-                                                                            );
-                                                                    this.context_menu_visible = true;
+                                                                        && already_selected;
+                                                                    if !already_selected {
+                                                                        // Right-click on
+                                                                        // unselected item →
+                                                                        // select it first
+                                                                        this.selected_ids
+                                                                            .clear();
+                                                                        this.selected_ids
+                                                                            .push(item.id);
+                                                                        this.selected_index =
+                                                                            Some(i);
+                                                                        this.selected_count = 1;
+                                                                        let item_id = item.id;
+                                                                        let _ = this.state.update(
+                                                                            cx,
+                                                                            move |state, _cx| {
+                                                                                state.select_single(
+                                                                                    item_id,
+                                                                                );
+                                                                            },
+                                                                        );
+                                                                    }
+                                                                    this.context_menu_visible =
+                                                                        true;
                                                                     this.context_menu_x =
-                                                                        f32::from(ev.position.x);
+                                                                        f32::from(
+                                                                            ev.position.x,
+                                                                        );
                                                                     this.context_menu_y =
-                                                                        f32::from(ev.position.y);
+                                                                        f32::from(
+                                                                            ev.position.y,
+                                                                        );
                                                                     this.context_menu_item =
                                                                         Some(item.clone());
                                                                     this.context_menu_is_batch =
