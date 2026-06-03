@@ -109,6 +109,16 @@ fn main() {
                 let view = cx.new(|cx| {
                     RootView::new(window, state.clone(), window_manager.clone(), cx)
                 });
+
+                // Intercept window close — hide to background instead of
+                // destroying the window. Returns false to prevent GPUI
+                // from closing the window and exiting the process.
+                let wm_close = window_manager.clone();
+                window.on_window_should_close(cx, move |_window, cx| {
+                    wm_close.update(cx, |wm, cx| wm.hide(cx));
+                    false
+                });
+
                 cx.new(|cx| gpui_component::Root::new(view, window, cx))
             },
         )
