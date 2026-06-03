@@ -19,6 +19,8 @@ use crate::core::types::{
     ClipboardItem, ContentType, FileData, FileInfo, RichData,
 };
 
+use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
+
 /// Get a content type iconfont glyph for display.
 fn type_icon(item: &ClipboardItem) -> &'static str {
     // Use meta-type specific icons for email
@@ -506,6 +508,9 @@ pub struct ClipboardCard {
     selection_order: usize,
     on_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
     on_right_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    is_hovered: bool,
+    selected_count: usize,
+    on_toolbar_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
 }
 
 impl ClipboardCard {
@@ -517,6 +522,9 @@ impl ClipboardCard {
             selection_order: 0,
             on_click: None,
             on_right_click: None,
+            is_hovered: false,
+            selected_count: 0,
+            on_toolbar_action: None,
         }
     }
 
@@ -527,6 +535,25 @@ impl ClipboardCard {
 
     pub fn on_right_click(mut self, handler: Rc<dyn Fn(usize, &mut Window, &mut App)>) -> Self {
         self.on_right_click = Some(handler);
+        self
+    }
+
+    /// Set whether this card is hovered (shows toolbar).
+    pub fn hovered(mut self, hovered: bool) -> Self {
+        self.is_hovered = hovered;
+        self
+    }
+
+    pub fn selected_count(mut self, count: usize) -> Self {
+        self.selected_count = count;
+        self
+    }
+
+    pub fn on_toolbar_action(
+        mut self,
+        handler: impl Fn(&str, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_toolbar_action = Some(Rc::new(handler));
         self
     }
 }
@@ -540,6 +567,9 @@ impl RenderOnce for ClipboardCard {
             selection_order,
             on_click,
             on_right_click,
+            is_hovered,
+            selected_count,
+            on_toolbar_action,
         } = self;
 
         let surface = rgb(0x232425);
@@ -987,7 +1017,7 @@ impl RenderOnce for ClipboardCard {
         };
 
         // Selection badge (top-left)
-        if selected && selection_order > 0 {
+        let card = if selected && selection_order > 0 {
             card.child(
                 div()
                     .absolute()
@@ -1007,6 +1037,27 @@ impl RenderOnce for ClipboardCard {
                             .text_color(rgb(0xffffff))
                             .child(format!("{}", selection_order)),
                     ),
+            )
+        } else {
+            card
+        };
+
+        // ── Hover toolbar ──
+        if is_hovered {
+            let toolbar_props =
+                HoverToolbarProps::from_item(&item, selected_count, selected);
+            card.child(
+                div()
+                    .absolute()
+                    .top(px(3.))
+                    .right(px(4.))
+                    .child(HoverToolbar::new(toolbar_props).on_action(
+                        move |action, _window, cx| {
+                            if let Some(ref handler) = on_toolbar_action {
+                                handler(action, _window, cx);
+                            }
+                        },
+                    )),
             )
         } else {
             card

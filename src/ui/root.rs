@@ -13,6 +13,7 @@ use crate::state::app::AppState;
 use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
 use super::clipboard_list::ClipboardListView;
+use super::context_menu::{ContextMenu, MenuItemContext};
 use super::search_bar::SearchBar;
 use super::settings::SettingsPanel;
 use super::sidebar::Sidebar;
@@ -198,5 +199,78 @@ impl Render for RootView {
                         .child(tag_filter_panel),
                 )
             })
+            .when(
+                self.list_view.read(cx).context_menu_visible() && is_clipboard,
+                |root| {
+                    let list = self.list_view.clone();
+                    let list_for_action = self.list_view.clone();
+                    let (menu_x, menu_y) = list.read(cx).context_menu_position();
+                    let is_batch = list.read(cx).context_menu_is_batch();
+                    let item = list.read(cx).context_menu_item().cloned();
+
+                    // Backdrop — click to dismiss
+                    root.child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .on_mouse_down(MouseButton::Left, {
+                                let l = list.clone();
+                                move |_ev, _window, cx| {
+                                    let _ = l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
+                                }
+                            }),
+                    )
+                    .child(
+                        div().absolute().occlude().child({
+                            let l = list_for_action.clone();
+                            if is_batch {
+                                let count = l.read(cx).selected_count;
+                                ContextMenu::for_batch(count)
+                                    .with_position(menu_x, menu_y, 360.0, 600.0)
+                                    .on_action({
+                                        let l = l.clone();
+                                        move |action, window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.handle_menu_action(action, window, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_dismiss({
+                                        let l = l.clone();
+                                        move |_window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.hide_context_menu(cx);
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else if let Some(ref clip_item) = item {
+                                let ctx = MenuItemContext::from_item(clip_item);
+                                ContextMenu::for_item(&ctx)
+                                    .with_position(menu_x, menu_y, 360.0, 600.0)
+                                    .on_action({
+                                        let l = l.clone();
+                                        move |action, window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.handle_menu_action(action, window, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_dismiss({
+                                        let l = l.clone();
+                                        move |_window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.hide_context_menu(cx);
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }
+                        }),
+                    )
+                },
+            )
     }
 }
