@@ -14,7 +14,6 @@ use crate::core::frontend::{
     PANEL_OFFSET_X, SUPPRESS_DURATION_MS,
 };
 use crate::core::settings::AppSettings;
-use crate::platform::blacklist::is_clippi_foreground;
 use crate::platform::focus::{start_focus_watcher, FocusWatcher};
 use crate::platform::hotkey::{create_hotkey_listener, HotkeyListener};
 use crate::platform::monitor;
@@ -200,14 +199,31 @@ impl WindowManager {
         // Update foreground app name for blacklist
         self.update_foreground_app_name();
 
-        let is_clippi = is_clippi_foreground();
+        let is_self_fg = self.is_self_foreground();
 
         // ── Auto-hide logic ──
-        if !self.auto_hide || self.pinned || !self.visible || self.is_suppressed() || is_clippi {
+        // Guard conditions: any true → skip auto-hide
+        if !self.auto_hide || self.pinned || !self.visible || self.is_suppressed() || is_self_fg {
             return;
         }
 
         self.hide(cx);
+    }
+
+    // ── Foreground detection ──────────────────────────────────────────
+
+    /// Check if our own window is the current foreground window.
+    /// Uses direct HWND comparison to avoid dependence on window title.
+    fn is_self_foreground(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+            self.hwnd != 0 && unsafe { GetForegroundWindow() } as isize == self.hwnd
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            crate::platform::blacklist::is_clippi_foreground()
+        }
     }
 
     // ── Foreground tracking ───────────────────────────────────────────
@@ -215,7 +231,7 @@ impl WindowManager {
     fn update_foreground_app_name(&mut self) {
         use crate::platform::focus::get_foreground_app_info;
 
-        if is_clippi_foreground() {
+        if self.is_self_foreground() {
             if let Ok(mut fg) = self.foreground_app_name.lock() {
                 fg.clear();
             }
