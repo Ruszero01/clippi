@@ -124,14 +124,49 @@ impl ClipboardListView {
 }
 
 impl Render for ClipboardListView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    #[allow(refining_impl_trait_reachable)]
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let item_sizes = self.item_sizes.clone();
         let items_count = self.item_sizes.len();
         let view = cx.entity();
-        let list_entity = view.clone();
         let focus_handle = self.focus_handle.clone();
 
         let empty_state = items_count == 0;
+
+        // Empty state — render a lightweight static placeholder, completely
+        // avoiding the virtual list subtree so GPUI releases its element cache.
+        if empty_state {
+            return div()
+                .flex_1()
+                .h_full()
+                .w_full()
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .px(px(8.))
+                .pt(px(4.))
+                .pb(px(8.))
+                .rounded_b(px(12.))
+                .bg(rgb(0x191a1b))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(rgb(0x919496))
+                        .child("No items yet"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(0x5f6264))
+                        .child("Copied items will appear here"),
+                )
+                .into_any_element();
+        }
+
+        // Normal state — virtual scrolling list
+        let list_entity = view.clone();
 
         div()
             .track_focus(&focus_handle)
@@ -233,5 +268,6 @@ impl Render for ClipboardListView {
                             ),
                     )
             })
+            .into_any_element()
     }
 }
