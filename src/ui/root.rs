@@ -8,11 +8,9 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use std::time::Duration;
 
-use crate::core::settings::AppSettings;
-use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::state::app::AppState;
+use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
 use super::clipboard_list::ClipboardListView;
 use super::search_bar::SearchBar;
@@ -24,24 +22,27 @@ use super::titlebar::{Titlebar, TitlebarEvent};
 
 pub struct RootView {
     state: Entity<AppState>,
+    window_manager: Entity<WindowManager>,
     titlebar: Entity<Titlebar>,
     list_view: Entity<ClipboardListView>,
     search_bar: Entity<SearchBar>,
     settings_panel: Entity<SettingsPanel>,
     sidebar: Entity<Sidebar>,
     tag_filter_panel: Entity<TagFilterPanel>,
-    clipboard_service: GpuiClipboardService,
     current_view: String,
     pinned: bool,
     theme: ClippiTheme,
-    _clipboard_poll_task: Task<()>,
+    _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
 }
 
 impl RootView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let settings = AppSettings::load();
-        let state = cx.new(|_cx| AppState::new(settings));
+    pub fn new(
+        window: &mut Window,
+        state: Entity<AppState>,
+        window_manager: Entity<WindowManager>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let app_state = state.read(cx);
         let items = app_state.items.clone();
         let list_view = cx.new(|cx| ClipboardListView::new(items, state.clone(), cx));
@@ -59,19 +60,27 @@ impl RootView {
                 cx,
             )
         });
-        let clipboard_service = GpuiClipboardService::new();
-        let _clipboard_poll_task = cx.spawn(async move |this, cx| loop {
-            Timer::after(Duration::from_millis(
-                crate::services::poll_loop::POLL_INTERVAL_MS,
-            ))
-            .await;
-            let Some(this) = this.upgrade() else {
-                break;
-            };
-            if this.update(cx, |this, cx| this.poll_clipboard(cx)).is_err() {
-                break;
-            }
-        });
+
+        // Subscribe to WindowManager events for clipboard changes and pin state.
+        let _wm_subscription = cx.subscribe(
+            &window_manager,
+            move |this, _wm, event: &WindowManagerEvent, cx| match event {
+                WindowManagerEvent::ClipboardChanged => {
+                    let items = this.state.read(cx).items.clone();
+                    this.list_view
+                        .update(cx, |list, cx| list.set_items(items, cx));
+                    cx.notify();
+                }
+                WindowManagerEvent::PinnedChanged(pinned) => {
+                    this.pinned = *pinned;
+                    this.titlebar
+                        .update(cx, |tb, cx| tb.set_pinned(*pinned, cx));
+                    cx.notify();
+                }
+            },
+        );
+
+        let wm = window_manager.clone();
         let titlebar_for_events = titlebar.clone();
         let _subscriptions = vec![
             cx.observe(&search_bar, |_this, _, cx| {
@@ -86,6 +95,7 @@ impl RootView {
                     TitlebarEvent::TogglePin => {
                         this.pinned = !this.pinned;
                         let pinned = this.pinned;
+                        wm.update(cx, |wm, cx| wm.set_pinned(pinned, cx));
                         titlebar_for_events.update(cx, |titlebar, cx| {
                             titlebar.set_pinned(pinned, cx);
                         });
@@ -104,33 +114,18 @@ impl RootView {
 
         Self {
             state,
+            window_manager,
             titlebar,
             list_view,
             search_bar,
             settings_panel,
             sidebar,
             tag_filter_panel,
-            clipboard_service,
             current_view: "clipboard".into(),
             pinned: false,
             theme,
-            _clipboard_poll_task,
+            _wm_subscription,
             _subscriptions,
-        }
-    }
-
-    fn poll_clipboard(&mut self, cx: &mut Context<Self>) {
-        let changed = {
-            let service = &mut self.clipboard_service;
-            self.state
-                .update(cx, |state, _cx| service.poll_state(state))
-        };
-
-        if changed {
-            let items = self.state.read(cx).items.clone();
-            self.list_view
-                .update(cx, |list, cx| list.set_items(items, cx));
-            cx.notify();
         }
     }
 

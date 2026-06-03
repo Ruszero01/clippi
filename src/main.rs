@@ -23,6 +23,9 @@ mod services;
 
 // Root view lives in ui::root — use that instead of inline ClippiApp
 use ui::root::RootView;
+use ui::window_manager::WindowManager;
+use state::app::AppState;
+use core::settings::AppSettings;
 
 fn ensure_single_instance() -> bool {
     std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
@@ -100,7 +103,17 @@ fn main() {
                         }
                     }
                 }
-                let view = cx.new(|cx| RootView::new(window, cx));
+                let state = cx.new(|_cx| AppState::new(AppSettings::load()));
+                let window_handle = cx
+                    .windows()
+                    .into_iter()
+                    .next()
+                    .expect("window should be registered before callback");
+                let window_manager =
+                    cx.new(|cx| WindowManager::new(state.clone(), window_handle, cx));
+                let view = cx.new(|cx| {
+                    RootView::new(window, state.clone(), window_manager.clone(), cx)
+                });
                 cx.new(|cx| gpui_component::Root::new(view, window, cx))
             },
         )
