@@ -385,6 +385,12 @@ impl WindowManager {
         self.state.update(cx, |state, _cx| state.clear_items());
         cx.emit(WindowManagerEvent::ClipboardChanged);
 
+        // ── Flush WAL and trim working set (mirrors Slint periodic maintenance) ──
+        self.state.update(cx, |state, _cx| {
+            let _ = state.db.checkpoint();
+        });
+        crate::platform::util::trim_process_working_set();
+
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
