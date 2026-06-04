@@ -255,4 +255,165 @@ impl AppState {
             (self.settings.max_items as usize).saturating_mul(2).max(200)
         }
     }
+
+    /// Copy a single item to the system clipboard (no paste simulation).
+    pub fn copy_item(&self, id: i64, copy_as_plain_text: bool) {
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("copy_item: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("copy_item: db error for {id}: {e}");
+                return;
+            }
+        };
+        crate::services::clipboard_ops::write_item_to_clipboard(&item, copy_as_plain_text);
+    }
+
+    /// Paste a single item: write to clipboard, restore focus, simulate Ctrl+V.
+    pub fn paste_item(&self, id: i64, copy_as_plain_text: bool) {
+        use crate::core::types::ContentType;
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("paste_item: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("paste_item: db error for {id}: {e}");
+                return;
+            }
+        };
+
+        let is_file = item.content_type == ContentType::File;
+        let expected = item.full_text.clone();
+        crate::services::clipboard_ops::write_item_to_clipboard(&item, copy_as_plain_text);
+
+        if !expected.is_empty() && !is_file {
+            crate::services::clipboard_ops::verify_clipboard_content(&expected, 200);
+        }
+        if is_file {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        restore_paste_target();
+        paste_after_delay();
+    }
+
+    /// Convert a color item from HEX to RGB and paste.
+    pub fn paste_as_rgb(&self, id: i64) {
+        use crate::core::color::detect_color;
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            _ => {
+                log::warn!("paste_as_rgb: item {id} not found");
+                return;
+            }
+        };
+
+        if let Some(color) = detect_color(&item.full_text) {
+            let rgb_text = color.to_rgb();
+            if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
+                let _ = clipboard_rs::Clipboard::set_text(&ctx, rgb_text.clone());
+            }
+            crate::services::clipboard_ops::verify_clipboard_content(&rgb_text, 200);
+            restore_paste_target();
+            paste_after_delay();
+        }
+    }
+
+    /// Convert a color item from RGB to HEX and paste.
+    pub fn paste_as_hex(&self, id: i64) {
+        use crate::core::color::detect_color;
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            _ => {
+                log::warn!("paste_as_hex: item {id} not found");
+                return;
+            }
+        };
+
+        if let Some(color) = detect_color(&item.full_text) {
+            let hex_text = color.to_css_hex();
+            if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
+                let _ = clipboard_rs::Clipboard::set_text(&ctx, hex_text.clone());
+            }
+            crate::services::clipboard_ops::verify_clipboard_content(&hex_text, 200);
+            restore_paste_target();
+            paste_after_delay();
+        }
+    }
+
+    /// Batch paste multiple items sequentially.
+    pub fn batch_paste(&self, ids: &[i64], copy_as_plain_text: bool) {
+        use crate::core::types::ContentType;
+        use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
+
+        let items: Vec<crate::core::types::ClipboardItem> = ids
+            .iter()
+            .filter_map(|&id| self.db.get_by_id(id).ok().flatten())
+            .collect();
+
+        let n = items.len();
+        for (i, item) in items.iter().enumerate() {
+            // Newline separator between items (not before first)
+            if i > 0 {
+                if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
+                    let _ = clipboard_rs::Clipboard::set_text(&ctx, "\n".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                restore_paste_target();
+                paste_sync();
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+
+            let expected = item.full_text.clone();
+            crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
+
+            // Verify clipboard before pasting
+            if item.content_type == ContentType::Image {
+                if let Ok(meta) = std::fs::metadata(&item.image_path) {
+                    let size = meta.len();
+                    if !crate::services::clipboard_ops::verify_clipboard_image(size, 300) {
+                        log::warn!("batch_paste: image verification failed for item {}", item.id);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            } else if item.content_type != ContentType::File {
+                if !crate::services::clipboard_ops::verify_clipboard_content(&expected, 300) {
+                    log::warn!("batch_paste: text verification timed out for item {}", item.id);
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            restore_paste_target();
+
+            if i < n - 1 {
+                paste_sync();
+                let delay = if item.content_type == ContentType::Image {
+                    let file_size = std::fs::metadata(&item.image_path)
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    let size_delay = (file_size / 10_000) as u64;
+                    size_delay.clamp(200, 3000)
+                } else {
+                    100
+                };
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            } else {
+                paste_after_delay();
+            }
+        }
+    }
 }
