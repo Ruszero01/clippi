@@ -10,7 +10,7 @@ use gpui::prelude::FluentBuilder;
 use gpui_component::scroll::Scrollbar;
 use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::InputState;
 
 use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
@@ -482,6 +482,8 @@ impl Render for ClipboardListView {
                             move |this, range, _window, _cx| {
                                 let selected_count = this.selected_count;
                                 let hovered_index = this.hovered_index;
+                                let editing_note_id = this.editing_note_id;
+                                let note_input = this.note_input.clone();
                                 range
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
@@ -517,6 +519,7 @@ impl Render for ClipboardListView {
                                         let list_for_right = list_entity.clone();
                                         let list_for_hover = list_entity.clone();
                                         let list_for_toolbar = list_entity.clone();
+                                        let list_for_note_commit = list_entity.clone();
 
                                         // Compute 1-based selection order for badge display
                                         let selection_order = this
@@ -617,8 +620,8 @@ impl Render for ClipboardListView {
                                                         );
                                                     },
                                                 )
-                                                .child(
-                                                    ClipboardCard::new(
+                                                .child({
+                                                    let card = ClipboardCard::new(
                                                         Rc::new(item_clone),
                                                         selected,
                                                         i,
@@ -626,6 +629,15 @@ impl Render for ClipboardListView {
                                                     .hovered(is_hovered)
                                                     .selected_count(selected_count)
                                                     .selection_order(selection_order)
+                                                    .editing(editing_note_id == item_id)
+                                                    .on_commit_note({
+                                                        let list_for_commit = list_for_note_commit.clone();
+                                                        move |_window, cx| {
+                                                            let _ = list_for_commit.update(cx, |this, cx| {
+                                                                this.commit_note_edit(cx);
+                                                            });
+                                                        }
+                                                    })
                                                     .on_click(click_handler)
                                                     .on_toolbar_action(
                                                         move |action, window, cx| {
@@ -681,8 +693,16 @@ impl Render for ClipboardListView {
                                                             );
                                                         },
                                                     )
-                                                    })
-                                                )
+                                                    });
+
+                                                    let card = if editing_note_id == item_id {
+                                                        card.note_input(note_input.clone())
+                                                    } else {
+                                                        card
+                                                    };
+
+                                                    card
+                                                })
                                                 .into_any_element(),
                                         )
                                     })
