@@ -167,11 +167,12 @@ impl RenderOnce for ConfirmDialog {
 
         let confirm_color = if is_danger { danger() } else { accent() };
 
-        // Full-window overlay: semi-transparent backdrop + centered modal card
+        // Transparent overlay (covers parent) + centered modal card.
+        // Backdrop is fully transparent — the user sees through to the
+        // panel content below. Clicking the backdrop cancels the dialog.
         div()
             .absolute()
             .size_full()
-            .bg(overlay())
             .flex()
             .items_center()
             .justify_center()

@@ -343,7 +343,17 @@ impl Render for RootView {
                         None => div().into_any_element(),
                     };
 
-                    root.child(dialog_element)
+                    // Constrain to main panel bounds (left=36px offset for sidebar).
+                    // ConfirmDialog fills this container and centers the modal card within it.
+                    root.child(
+                        div()
+                            .absolute()
+                            .left(px(36.))
+                            .right(px(0.))
+                            .top(px(0.))
+                            .bottom(px(0.))
+                            .child(dialog_element),
+                    )
                 },
             )
     }
