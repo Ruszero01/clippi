@@ -199,6 +199,7 @@ impl Render for SettingsPanel {
                             .h_full()
                             .px(px(8.))
                             .pt(px(8.))
+                            .pb(px(12.))
                             .overflow_y_scrollbar()
                             .child(match active {
                         0 => self.render_general_tab(_window, cx).into_any_element(),

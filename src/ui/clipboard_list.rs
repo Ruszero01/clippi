@@ -443,7 +443,7 @@ impl ClipboardListView {
         let sizes: Vec<_> = items
             .iter()
             .map(|item| {
-                let h = estimate_card_height(item, mode) + 10.0; // Slint ListView row padding: 5px top + bottom
+                let h = estimate_card_height(item, mode) + 16.0; // row padding + rendering margin
                 size(px(308.), px(h))
             })
             .collect();
