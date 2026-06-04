@@ -511,6 +511,7 @@ pub struct ClipboardCard {
     is_hovered: bool,
     selected_count: usize,
     on_toolbar_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
+    on_double_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
 }
 
 impl ClipboardCard {
@@ -525,6 +526,7 @@ impl ClipboardCard {
             is_hovered: false,
             selected_count: 0,
             on_toolbar_action: None,
+            on_double_click: None,
         }
     }
 
@@ -565,6 +567,14 @@ impl ClipboardCard {
         self.on_toolbar_action = Some(Rc::new(handler));
         self
     }
+
+    pub fn on_double_click(
+        mut self,
+        handler: Rc<dyn Fn(usize, &mut Window, &mut App)>,
+    ) -> Self {
+        self.on_double_click = Some(handler);
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -579,6 +589,7 @@ impl RenderOnce for ClipboardCard {
             is_hovered,
             selected_count,
             on_toolbar_action,
+            on_double_click,
         } = self;
 
         let surface = rgb(0x232425);
@@ -625,10 +636,19 @@ impl RenderOnce for ClipboardCard {
 
         // Wire click handler
         let base = if let Some(handler) = on_click {
+            let double_click_handler = on_double_click.clone();
             base.cursor(CursorStyle::PointingHand).on_mouse_down(
                 MouseButton::Left,
                 move |ev, window, cx| {
-                    handler(index, ev.modifiers, window, cx);
+                    if ev.click_count == 2 {
+                        // Double-click → paste
+                        if let Some(ref dbl_handler) = double_click_handler {
+                            dbl_handler(index, window, cx);
+                        }
+                    } else {
+                        // Single click → select
+                        handler(index, ev.modifiers, window, cx);
+                    }
                 },
             )
         } else {

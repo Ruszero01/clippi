@@ -574,7 +574,50 @@ impl Render for ClipboardListView {
                                                                 },
                                                             );
                                                         },
-                                                    ),
+                                                    )
+                                                    .on_double_click({
+                                                    let list_for_dbl = list_entity.clone();
+                                                    Rc::new(
+                                                        move |idx, _window, cx| {
+                                                            let _ = list_for_dbl.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    let plain = this
+                                                                        .state
+                                                                        .read(cx)
+                                                                        .settings
+                                                                        .copy_as_plain_text;
+                                                                    if this.selected_count > 1 {
+                                                                        let ids = this
+                                                                            .selected_ids
+                                                                            .clone();
+                                                                        this.state.update(
+                                                                            cx,
+                                                                            |s, _cx| {
+                                                                                s.batch_paste(
+                                                                                    &ids, plain,
+                                                                                );
+                                                                            },
+                                                                        );
+                                                                    } else if let Some(item) =
+                                                                        this.items.get(idx)
+                                                                    {
+                                                                        let item_id = item.id;
+                                                                        this.state.update(
+                                                                            cx,
+                                                                            |s, _cx| {
+                                                                                s.paste_item(
+                                                                                    item_id,
+                                                                                    plain,
+                                                                                );
+                                                                            },
+                                                                        );
+                                                                    }
+                                                                },
+                                                            );
+                                                        },
+                                                    )
+                                                    })
                                                 )
                                                 .into_any_element(),
                                         )
