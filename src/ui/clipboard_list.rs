@@ -296,8 +296,14 @@ impl ClipboardListView {
                 self.state
                     .update(cx, |s, _cx| s.batch_paste(&ids, plain));
             }
+            "edit_note" => {
+                if let Some(ref item) = self.context_menu_item {
+                    // Context menu: start with empty (no note context available)
+                    self.start_note_edit(item.id, "", _window, cx);
+                }
+            }
             // Other actions deferred to follow-up
-            "edit" | "edit_note" | "toggle_favorite" | "delete"
+            "edit" | "toggle_favorite" | "delete"
             | "open_image" | "paste_ocr" | "qr_detect" | "show_tag_picker"
             | "batch_favorite" | "batch_delete" => {}
             _ => {}
@@ -327,9 +333,19 @@ impl ClipboardListView {
                 self.state
                     .update(cx, |s, _cx| s.batch_paste(&ids, plain));
             }
+            "edit_note" => {
+                if let Some(index) = self.hovered_index {
+                    let (note_id, note_text) = match self.items.get(index) {
+                        Some(item) => (item.id, item.note.clone()),
+                        None => return,
+                    };
+                    // Hover toolbar: pre-fill existing note
+                    self.start_note_edit(note_id, &note_text, _window, cx);
+                }
+            }
             // Other hover toolbar actions deferred to follow-up
             "open_image" | "qr_action" | "open_location" | "edit"
-            | "edit_note" | "toggle_favorite" | "delete"
+            | "toggle_favorite" | "delete"
             | "batch_favorite" | "batch_delete" => {}
             _ => {}
         }
