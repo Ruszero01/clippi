@@ -4,6 +4,7 @@
 //! are temporarily disabled until they're refactored to use GPUI types.
 
 pub mod backends;
+pub mod clipboard_ops;
 pub mod gpui_clipboard;
 pub mod poll_loop;
 // TODO: Refactor these to remove slint dependencies
