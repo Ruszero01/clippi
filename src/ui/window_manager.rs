@@ -427,7 +427,7 @@ impl WindowManager {
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 SetForegroundWindow, SetWindowPos, ShowWindow,
-                HWND_TOP, SWP_NOMOVE, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOW,
+                HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOW,
             };
 
             let hwnd = self.hwnd as *mut std::ffi::c_void;
