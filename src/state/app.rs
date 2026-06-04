@@ -430,4 +430,18 @@ impl AppState {
         self.batch_pasting
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
+
+    /// Update the note field for a clipboard item.
+    /// Writes to DB (includes updated_at) and syncs the in-memory items list.
+    pub fn update_note(&mut self, id: i64, note: &str) {
+        match self.db.update_note(id, note) {
+            Ok(_) => {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.note = note.to_string();
+                    item.updated_at = chrono::Utc::now();
+                }
+            }
+            Err(e) => log::error!("update_note({id}): {e}"),
+        }
+    }
 }
