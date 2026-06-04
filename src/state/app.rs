@@ -179,6 +179,11 @@ impl AppState {
         self.selected_ids.push(id);
     }
 
+    /// Replace selection with a range of IDs (for Ctrl+click toggle and Shift+click range).
+    pub fn range_select(&mut self, ids: &[i64]) {
+        self.selected_ids = ids.to_vec();
+    }
+
     /// Clear all selections.
     pub fn clear_selection(&mut self) {
         self.selected_ids.clear();

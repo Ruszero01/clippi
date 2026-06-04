@@ -506,7 +506,7 @@ pub struct ClipboardCard {
     selected: bool,
     index: usize,
     selection_order: usize,
-    on_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    on_click: Option<Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>>,
     on_right_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
     is_hovered: bool,
     selected_count: usize,
@@ -528,7 +528,10 @@ impl ClipboardCard {
         }
     }
 
-    pub fn on_click(mut self, handler: Rc<dyn Fn(usize, &mut Window, &mut App)>) -> Self {
+    pub fn on_click(
+        mut self,
+        handler: Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>,
+    ) -> Self {
         self.on_click = Some(handler);
         self
     }
@@ -546,6 +549,12 @@ impl ClipboardCard {
 
     pub fn selected_count(mut self, count: usize) -> Self {
         self.selected_count = count;
+        self
+    }
+
+    /// Set the 1-based selection order for the badge (0 = hidden).
+    pub fn selection_order(mut self, order: usize) -> Self {
+        self.selection_order = order;
         self
     }
 
@@ -618,8 +627,8 @@ impl RenderOnce for ClipboardCard {
         let base = if let Some(handler) = on_click {
             base.cursor(CursorStyle::PointingHand).on_mouse_down(
                 MouseButton::Left,
-                move |_ev, window, cx| {
-                    handler(index, window, cx);
+                move |ev, window, cx| {
+                    handler(index, ev.modifiers, window, cx);
                 },
             )
         } else {
@@ -1016,23 +1025,24 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // Selection badge (top-left)
-        let card = if selected && selection_order > 0 {
+        // Selection badge — small circle centered at card top-left corner (0,0).
+        // Only shown when multi-selecting (>1).
+        let card = if selected && selected_count > 1 {
             card.child(
                 div()
                     .absolute()
-                    .left(px(2.))
-                    .top(px(2.))
-                    .w(px(12.))
-                    .h(px(12.))
-                    .rounded(px(3.))
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w(px(16.))
+                    .h(px(16.))
+                    .rounded_full()
                     .bg(accent)
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(
                         div()
-                            .text_size(px(7.))
+                            .text_size(px(8.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(0xffffff))
                             .child(format!("{}", selection_order)),

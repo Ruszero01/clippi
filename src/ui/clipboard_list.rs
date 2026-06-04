@@ -25,6 +25,7 @@ pub struct ClipboardListView {
     focus_handle: FocusHandle,
     selected_ids: Vec<i64>,
     selected_index: Option<usize>,
+    anchor_index: Option<usize>,
     state: Entity<AppState>,
     // ── Hover tracking ──
     hovered_index: Option<usize>,
@@ -49,6 +50,7 @@ impl ClipboardListView {
             focus_handle: cx.focus_handle(),
             selected_ids: Vec::new(),
             selected_index: None,
+            anchor_index: None,
             state,
             hovered_index: None,
             context_menu_visible: false,
@@ -65,6 +67,7 @@ impl ClipboardListView {
         self.items = items;
         self.selected_ids.clear();
         self.selected_index = None;
+        self.anchor_index = None;
         self.selected_count = 0;
         self.hovered_index = None;
         cx.notify();
@@ -102,9 +105,70 @@ impl ClipboardListView {
         self.selected_ids.clear();
         self.selected_ids.push(item_id);
         self.selected_index = Some(index);
+        self.anchor_index = Some(index);
         self.selected_count = 1;
         let _ = self.state.update(cx, move |state, _cx| {
             state.select_single(item_id);
+        });
+        cx.notify();
+    }
+
+    /// Toggle selection of an item (Ctrl+click).
+    fn toggle_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(item) = self.items.get(index) else {
+            return;
+        };
+        let item_id = item.id;
+        if let Some(pos) = self.selected_ids.iter().position(|&x| x == item_id) {
+            self.selected_ids.remove(pos);
+            if self.selected_ids.is_empty() {
+                self.anchor_index = None;
+                self.selected_index = None;
+            }
+        } else {
+            self.selected_ids.push(item_id);
+            self.anchor_index = Some(index);
+            self.selected_index = Some(index);
+        }
+        self.selected_count = self.selected_ids.len();
+        let selected = self.selected_ids.clone();
+        let _ = self.state.update(cx, move |state, _cx| {
+            state.range_select(&selected);
+        });
+        cx.notify();
+    }
+
+    /// Range select from anchor to given index (Shift+click).
+    fn range_select_to_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let anchor = match self.anchor_index {
+            Some(a) => a,
+            None => {
+                // No anchor — fall back to single select
+                self.select_index_without_scroll(index, cx);
+                return;
+            }
+        };
+        self.selected_ids.clear();
+        if anchor <= index {
+            // Selecting downward: anchor (top) gets #1, count goes down
+            for i in anchor..=index {
+                if let Some(item) = self.items.get(i) {
+                    self.selected_ids.push(item.id);
+                }
+            }
+        } else {
+            // Selecting upward: anchor (bottom) gets #1, count goes up
+            for i in (index..=anchor).rev() {
+                if let Some(item) = self.items.get(i) {
+                    self.selected_ids.push(item.id);
+                }
+            }
+        }
+        self.selected_index = Some(index);
+        self.selected_count = self.selected_ids.len();
+        let selected = self.selected_ids.clone();
+        let _ = self.state.update(cx, move |state, _cx| {
+            state.range_select(&selected);
         });
         cx.notify();
     }
@@ -288,9 +352,9 @@ impl Render for ClipboardListView {
                     });
                 }
             })
-            .px(px(8.))
             .pt(px(4.))
             .pb(px(8.))
+            .px(px(8.))
             .when(empty_state, |el| {
                 el.child(
                     div()
@@ -337,17 +401,38 @@ impl Render for ClipboardListView {
                                         let item_clone = item.clone();
 
                                         let click_handler: Rc<
-                                            dyn Fn(usize, &mut Window, &mut App),
-                                        > = Rc::new(move |idx, window, cx| {
-                                            focus_handle.focus(window);
-                                            let _ = list_view.update(cx, move |this, cx| {
-                                                this.select_index_without_scroll(idx, cx);
-                                            });
-                                        });
+                                            dyn Fn(usize, Modifiers, &mut Window, &mut App),
+                                        > = Rc::new(
+                                            move |idx, modifiers, window, cx| {
+                                                focus_handle.focus(window);
+                                                let _ = list_view.update(
+                                                    cx,
+                                                    move |this, cx| {
+                                                        if modifiers.control {
+                                                            this.toggle_index(idx, cx);
+                                                        } else if modifiers.shift {
+                                                            this.range_select_to_index(idx, cx);
+                                                        } else {
+                                                            this.select_index_without_scroll(
+                                                                idx, cx,
+                                                            );
+                                                        }
+                                                    },
+                                                );
+                                            },
+                                        );
 
                                         let list_for_right = list_entity.clone();
                                         let list_for_hover = list_entity.clone();
                                         let list_for_toolbar = list_entity.clone();
+
+                                        // Compute 1-based selection order for badge display
+                                        let selection_order = this
+                                            .selected_ids
+                                            .iter()
+                                            .position(|&id| id == item_id)
+                                            .map(|p| p + 1)
+                                            .unwrap_or(0);
 
                                         Some(
                                             div()
@@ -397,6 +482,7 @@ impl Render for ClipboardListView {
                                                                             .push(item.id);
                                                                         this.selected_index =
                                                                             Some(i);
+                                                                        this.anchor_index = Some(i);
                                                                         this.selected_count = 1;
                                                                         let item_id = item.id;
                                                                         let _ = this.state.update(
@@ -436,6 +522,7 @@ impl Render for ClipboardListView {
                                                     )
                                                     .hovered(is_hovered)
                                                     .selected_count(selected_count)
+                                                    .selection_order(selection_order)
                                                     .on_click(click_handler)
                                                     .on_toolbar_action(
                                                         move |action, window, cx| {
