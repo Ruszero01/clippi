@@ -10,6 +10,8 @@ use crate::core::settings::AppSettings;
 use crate::core::types::ClipboardItem;
 use crate::core::types::TagInfo;
 use crate::core::types::next_tag_color;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// Root application state entity.
 ///
@@ -34,6 +36,9 @@ pub struct AppState {
     pub editing_tag_id: i64,
     pub editing_tag_name: String,
     pub editing_tag_color: String,
+    /// Shared with clipboard listener — set true during batch paste
+    /// to prevent recording intermediate writes (newline separators).
+    pub batch_pasting: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -75,6 +80,7 @@ impl AppState {
             editing_tag_id: -1,
             editing_tag_name: String::new(),
             editing_tag_color: "#3B82F6".into(),
+            batch_pasting: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -357,6 +363,11 @@ impl AppState {
         use crate::core::types::ContentType;
         use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
 
+        // Suppress clipboard recording during batch paste to prevent
+        // intermediate writes (newline separators) from being captured.
+        self.batch_pasting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         let items: Vec<crate::core::types::ClipboardItem> = ids
             .iter()
             .filter_map(|&id| self.db.get_by_id(id).ok().flatten())
@@ -415,5 +426,8 @@ impl AppState {
                 paste_after_delay();
             }
         }
+        // Restore clipboard recording — batch paste is complete.
+        self.batch_pasting
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }

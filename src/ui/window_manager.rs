@@ -139,6 +139,13 @@ impl WindowManager {
             _poll_task: None,
         };
 
+        // Share the batch_pasting flag with AppState so it can suppress
+        // clipboard recording during batch paste operations.
+        let batch_pasting = wm.clipboard_service.batch_pasting();
+        wm.state.update(cx, |s, _cx| {
+            s.batch_pasting = batch_pasting;
+        });
+
         // Start the unified poll loop
         wm.start_poll_loop(cx);
 

@@ -23,6 +23,13 @@ impl GpuiClipboardService {
         Self { shared, listener }
     }
 
+    /// Access the `batch_pasting` flag shared with the clipboard listener.
+    /// Set to `true` during batch paste to prevent the listener from
+    /// recording intermediate clipboard writes (e.g., newline separators).
+    pub fn batch_pasting(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.shared.batch_pasting.clone()
+    }
+
     pub fn poll_state(&mut self, state: &mut AppState) -> bool {
         if self
             .shared
