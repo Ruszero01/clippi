@@ -11,6 +11,7 @@
 use std::rc::Rc;
 
 use gpui::*;
+use gpui_component::input::InputState;
 use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
@@ -512,6 +513,12 @@ pub struct ClipboardCard {
     selected_count: usize,
     on_toolbar_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
     on_double_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    /// Whether this card is in note-editing mode (shows inline editor).
+    editing: bool,
+    /// Shared InputState from ClipboardListView (only Some when editing is true).
+    note_input: Option<Entity<InputState>>,
+    /// Called when note editing is committed (Enter / confirm button).
+    on_commit_note: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
 }
 
 impl ClipboardCard {
@@ -527,6 +534,9 @@ impl ClipboardCard {
             selected_count: 0,
             on_toolbar_action: None,
             on_double_click: None,
+            editing: false,
+            note_input: None,
+            on_commit_note: None,
         }
     }
 
@@ -575,6 +585,27 @@ impl ClipboardCard {
         self.on_double_click = Some(handler);
         self
     }
+
+    /// Set whether this card is in note-editing mode.
+    pub fn editing(mut self, editing: bool) -> Self {
+        self.editing = editing;
+        self
+    }
+
+    /// Set the shared InputState for inline note editing.
+    pub fn note_input(mut self, input: Entity<InputState>) -> Self {
+        self.note_input = Some(input);
+        self
+    }
+
+    /// Called when note is committed (Enter / confirm button).
+    pub fn on_commit_note(
+        mut self,
+        handler: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_commit_note = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -590,6 +621,9 @@ impl RenderOnce for ClipboardCard {
             selected_count,
             on_toolbar_action,
             on_double_click,
+            editing: _,
+            note_input: _,
+            on_commit_note: _,
         } = self;
 
         let surface = rgb(0x232425);
