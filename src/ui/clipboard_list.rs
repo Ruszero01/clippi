@@ -10,6 +10,7 @@ use gpui::prelude::FluentBuilder;
 use gpui_component::scroll::Scrollbar;
 use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
+use gpui_component::input::{Input, InputState};
 
 use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
@@ -37,10 +38,16 @@ pub struct ClipboardListView {
     context_menu_is_batch: bool,
     // ── Cached selected count ──
     pub(crate) selected_count: usize,
+    // ── Note editing state ──
+    /// Which item is currently in note-edit mode (-1 = none).
+    editing_note_id: i64,
+    /// Shared InputState entity for the inline note editor.
+    /// Created once at init, value is updated when editing starts.
+    note_input: Entity<InputState>,
 }
 
 impl ClipboardListView {
-    pub fn new(items: Vec<ClipboardItem>, state: Entity<AppState>, cx: &mut App) -> Self {
+    pub fn new(items: Vec<ClipboardItem>, state: Entity<AppState>, window: &mut Window, cx: &mut App) -> Self {
         let item_sizes = Rc::new(Self::compute_sizes(&items, "auto"));
         Self {
             items,
@@ -59,6 +66,8 @@ impl ClipboardListView {
             context_menu_item: None,
             context_menu_is_batch: false,
             selected_count: 0,
+            editing_note_id: -1,
+            note_input: cx.new(|cx| InputState::new(window, cx).placeholder("Add a note...")),
         }
     }
 
