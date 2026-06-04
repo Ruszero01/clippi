@@ -204,9 +204,10 @@ impl Database {
     }
 
     pub fn update_note(&self, id: i64, note: &str) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE clipboard_items SET note = ?1 WHERE id = ?2",
-            params![note, id],
+            "UPDATE clipboard_items SET note = ?1, updated_at = ?2 WHERE id = ?3",
+            params![note, now, id],
         )?;
         Ok(())
     }
