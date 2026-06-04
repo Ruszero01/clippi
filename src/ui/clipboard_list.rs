@@ -236,6 +236,8 @@ impl ClipboardListView {
         let text = SharedString::from(initial_text.to_string());
         self.note_input.update(cx, move |input, cx| {
             input.set_value(text, window, cx);
+            // Auto-focus so user can type immediately
+            input.focus_handle(cx).focus(window);
         });
         cx.notify();
     }
@@ -499,6 +501,7 @@ impl Render for ClipboardListView {
                                                     cx,
                                                     move |this, cx| {
                                                         // Click on a different card → commit note first
+                                                        // Click on the editing card → let Input handle it
                                                         if this.editing_note_id > 0 {
                                                             let clicked_id = this
                                                                 .items
@@ -507,6 +510,9 @@ impl Render for ClipboardListView {
                                                                 .unwrap_or(-1);
                                                             if this.editing_note_id != clicked_id {
                                                                 this.commit_note_edit(cx);
+                                                            } else {
+                                                                // Don't steal focus from the note input
+                                                                return;
                                                             }
                                                         }
                                                         if modifiers.control {
