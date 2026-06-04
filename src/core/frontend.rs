@@ -79,22 +79,33 @@ pub fn clamp_to_work_area(
     (x, y)
 }
 
+/// Compute effective window dimensions from settings.
+///
+/// Uses saved dimensions when > 0 (with DEFAULT minimum), otherwise returns
+/// the DEFAULT dimensions. Returns `(width, height)` in logical pixels.
+pub fn effective_window_size(settings: &crate::core::settings::AppSettings) -> (f32, f32) {
+    let w = if settings.saved_window_width > 0.0 {
+        settings.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
+    } else {
+        DEFAULT_WINDOW_WIDTH
+    };
+    let h = if settings.saved_window_height > 0.0 {
+        settings.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
+    } else {
+        DEFAULT_WINDOW_HEIGHT
+    };
+    (w, h)
+}
+
 /// Calculate the initial window position based on settings.
 ///
 /// Returns `(x, y)` in physical pixels (Windows) or logical points (macOS),
 /// or `None` if the monitor layout is unavailable (falls back to a safe default).
 pub fn calculate_initial_position(settings: &crate::core::settings::AppSettings) -> Option<(i32, i32)> {
     let mode = PositionMode::from_str(&settings.window_position_mode);
-    let win_w = if settings.saved_window_width > 0.0 {
-        settings.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
-    } else {
-        DEFAULT_WINDOW_WIDTH
-    } as i32;
-    let win_h = if settings.saved_window_height > 0.0 {
-        settings.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
-    } else {
-        DEFAULT_WINDOW_HEIGHT
-    } as i32;
+    let (win_w, win_h) = effective_window_size(settings);
+    let win_w = win_w as i32;
+    let win_h = win_h as i32;
 
     match mode {
         PositionMode::Center => calc_center(win_w, win_h),

@@ -74,22 +74,11 @@ fn main() {
 
         let settings = AppSettings::load();
 
-        let settings_for_window = settings.clone();
-        let initial_pos = core::frontend::calculate_initial_position(&settings_for_window)
+        let initial_pos = core::frontend::calculate_initial_position(&settings)
             .map(|(x, y)| point(px(x as f32), px(y as f32)))
             .unwrap_or(point(px(100.), px(100.)));
-        let initial_size = size(
-            px(if settings_for_window.saved_window_width > 0.0 {
-                settings_for_window.saved_window_width
-            } else {
-                core::frontend::DEFAULT_WINDOW_WIDTH
-            }),
-            px(if settings_for_window.saved_window_height > 0.0 {
-                settings_for_window.saved_window_height
-            } else {
-                core::frontend::DEFAULT_WINDOW_HEIGHT
-            }),
-        );
+        let (ew, eh) = core::frontend::effective_window_size(&settings);
+        let initial_size = size(px(ew), px(eh));
 
         cx.open_window(
             WindowOptions {
@@ -119,7 +108,7 @@ fn main() {
                         }
                     }
                 }
-                let state = cx.new(|_cx| AppState::new(settings.clone()));
+                let state = cx.new(|_cx| AppState::new(settings));
                 let window_manager =
                     cx.new(|cx| WindowManager::new(state.clone(), cx));
 
