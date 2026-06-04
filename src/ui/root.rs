@@ -125,9 +125,12 @@ impl RootView {
                         cx.notify();
                     }
                     SettingsEvent::ThemeChanged(theme_str) => {
-                        let appearance = cx.window_appearance();
-                        this.theme =
-                            ClippiTheme::from_setting(theme_str, Some(appearance));
+                        // NOTE: cx is &mut App here, not WindowContext, so we
+                        // can't query window_appearance(). Pass None — the
+                        // "system" theme will default to dark in that case.
+                        // TODO: store window_appearance on RootView at creation
+                        // time and use it here for accurate system theme detection.
+                        this.theme = ClippiTheme::from_setting(theme_str, None);
                         let _ = this.settings_panel.update(cx, |panel, cx| {
                             panel.reload_theme(cx);
                         });
