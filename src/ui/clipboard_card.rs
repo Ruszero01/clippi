@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use gpui::*;
-use gpui_component::input::InputState;
+use gpui_component::input::{Input, InputState};
 use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
@@ -621,9 +621,9 @@ impl RenderOnce for ClipboardCard {
             selected_count,
             on_toolbar_action,
             on_double_click,
-            editing: _,
-            note_input: _,
-            on_commit_note: _,
+            editing,
+            note_input,
+            on_commit_note,
         } = self;
 
         let surface = rgb(0x232425);
@@ -824,7 +824,77 @@ impl RenderOnce for ClipboardCard {
         };
 
         // ── Right: content area ──
-        let content = if !note.is_empty() {
+        let content = if editing {
+            // ── Inline note editor ──
+            let commit = on_commit_note.clone();
+            let note_input_ref = note_input.clone();
+
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    // Single-line text input
+                    div()
+                        .w_full()
+                        .h(px(24.))
+                        .child({
+                            let input_entity = note_input_ref.expect("note_input must be set when editing");
+                            Input::new(&input_entity)
+                                .appearance(false)
+                                .bordered(false)
+                                .focus_bordered(false)
+                                .w_full()
+                                .h_full()
+                                .text_size(px(12.))
+                        }),
+                )
+                .child(
+                    // Confirm button (checkmark icon \u{e611})
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .child(
+                            div()
+                                .w(px(20.))
+                                .h(px(20.))
+                                .rounded(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(rgba(0xffffff10)))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let commit = commit.clone();
+                                    move |_ev, window, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(ref handler) = commit {
+                                            handler(window, cx);
+                                        }
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .font_family("iconfont")
+                                        .text_size(px(12.))
+                                        .text_color(accent)
+                                        .child("\u{e611}"), // ✓ checkmark
+                                ),
+                        ),
+                )
+                .on_key_down({
+                    let commit = commit.clone();
+                    move |ev: &KeyDownEvent, window, cx| {
+                        if ev.keystroke.key.as_str() == "enter" {
+                            if let Some(ref handler) = commit {
+                                handler(window, cx);
+                            }
+                        }
+                    }
+                })
+        } else if !note.is_empty() {
             div().flex_1().flex().items_center().child(
                 div()
                     .w_full()
