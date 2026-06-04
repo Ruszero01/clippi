@@ -11,13 +11,16 @@
 
 use gpui::*;
 
-use crate::core::settings::AppSettings;
+use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
+use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
 pub enum SettingsEvent {
     /// User clicked the back button — return to clipboard view.
     Back,
+    /// Theme setting changed — RootView should rebuild its ClippiTheme.
+    ThemeChanged(String),
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}
@@ -25,24 +28,43 @@ impl EventEmitter<SettingsEvent> for SettingsPanel {}
 /// The settings panel entity.
 pub struct SettingsPanel {
     active_tab: usize,
-    settings: AppSettings,
+    state: Entity<AppState>,
+    window_manager: Entity<WindowManager>,
     theme: ClippiTheme,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
 
 impl SettingsPanel {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        let settings = AppSettings::load();
+    pub fn new(
+        state: Entity<AppState>,
+        window_manager: Entity<WindowManager>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let theme = {
+            let settings = &state.read(cx).settings;
+            ClippiTheme::from_setting(&settings.theme, None)
+        };
         Self {
             active_tab: 0,
-            settings,
-            theme: ClippiTheme::dark(),
+            state,
+            window_manager,
+            theme,
         }
     }
 
     pub fn set_tab(&mut self, tab: usize, cx: &mut Context<Self>) {
         self.active_tab = tab;
+        cx.notify();
+    }
+
+    /// Reload theme from current AppState settings (called by RootView after ThemeChanged).
+    pub fn reload_theme(&mut self, cx: &mut Context<Self>) {
+        let new_theme = {
+            let settings = &self.state.read(cx).settings;
+            ClippiTheme::from_setting(&settings.theme, None)
+        };
+        self.theme = new_theme;
         cx.notify();
     }
 }
