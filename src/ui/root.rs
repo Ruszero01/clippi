@@ -305,7 +305,10 @@ impl Render for RootView {
                                     let l = list.clone();
                                     move |_window, cx| {
                                         s.update(cx, |s, _cx| s.delete_item(id));
-                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                        l.update(cx, |lst, cx| {
+                                            lst.sync_items_from_state(cx);
+                                            lst.dismiss_confirm_dialog(cx);
+                                        });
                                     }
                                 })
                                 .on_cancel({
@@ -323,7 +326,10 @@ impl Render for RootView {
                                     let l = list.clone();
                                     move |_window, cx| {
                                         s.update(cx, |s, _cx| s.batch_delete());
-                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                        l.update(cx, |lst, cx| {
+                                            lst.sync_items_from_state(cx);
+                                            lst.dismiss_confirm_dialog(cx);
+                                        });
                                     }
                                 })
                                 .on_cancel({

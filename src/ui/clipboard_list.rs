@@ -94,6 +94,15 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    /// Reload local items from AppState without resetting UI state.
+    /// Use after mutations (toggle_favorite, delete) to keep the list in sync.
+    pub(crate) fn sync_items_from_state(&mut self, cx: &mut Context<Self>) {
+        let app_items = self.state.read(cx).items.clone();
+        self.item_sizes = Rc::new(Self::compute_sizes(&app_items, &self.card_height_mode));
+        self.items = app_items;
+        cx.notify();
+    }
+
     pub fn focus(&self, window: &mut Window) {
         self.focus_handle.focus(window);
     }
@@ -339,6 +348,7 @@ impl ClipboardListView {
                 if let Some(ref item) = self.context_menu_item {
                     let id = item.id;
                     self.state.update(cx, |s, _cx| s.toggle_favorite(id));
+                    self.sync_items_from_state(cx);
                 }
             }
             "delete" => {
@@ -355,6 +365,7 @@ impl ClipboardListView {
             }
             "batch_favorite" => {
                 self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
+                self.sync_items_from_state(cx);
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
@@ -404,6 +415,7 @@ impl ClipboardListView {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
                         self.state.update(cx, |s, _cx| s.toggle_favorite(item.id));
+                        self.sync_items_from_state(cx);
                     }
                 }
             }
@@ -421,6 +433,7 @@ impl ClipboardListView {
             }
             "batch_favorite" => {
                 self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
+                self.sync_items_from_state(cx);
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
