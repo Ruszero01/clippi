@@ -79,10 +79,10 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::OpenSettings => {
-                    // TODO: Switch to settings view when settings panel
-                    // is fully migrated to GPUI.
-                    // this.current_view = "settings".into();
-                    // cx.notify();
+                    this.current_view = "settings".into();
+                    this.search_bar
+                        .update(cx, |bar, cx| bar.close_tag_panel(cx));
+                    cx.notify();
                 }
             },
         );
