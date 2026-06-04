@@ -116,14 +116,11 @@ impl ConfirmDialog {
 
     // ── Preset factory methods ──
 
-    /// Single item delete confirmation.
-    pub fn delete_single(preview: &str) -> Self {
+    /// Single item delete confirmation — simple yes/no.
+    pub fn delete_single() -> Self {
         Self::new()
             .title("Confirm Delete")
-            .message(format!(
-                "Delete \"{}\"?\nThis action cannot be undone.",
-                preview
-            ))
+            .message("Are you sure you want to delete this item?")
             .confirm_label("Delete")
             .danger(true)
     }

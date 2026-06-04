@@ -22,7 +22,7 @@ use super::clipboard_card::{ClipboardCard, estimate_card_height};
 /// (e.g. RemoveBlacklist { app_name: String } for hotkey settings).
 #[derive(Clone)]
 pub(crate) enum ConfirmDialogState {
-    DeleteSingle { id: i64, preview: String },
+    DeleteSingle { id: i64 },
     DeleteBatch { count: usize },
 }
 
@@ -354,12 +354,8 @@ impl ClipboardListView {
             "delete" => {
                 if let Some(ref item) = self.context_menu_item {
                     let id = item.id;
-                    let preview = truncate_for_dialog(&item.full_text);
                     self.hide_context_menu(cx);
-                    self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle {
-                        id,
-                        preview,
-                    });
+                    self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle { id });
                     return; // Don't call hide_context_menu again at end
                 }
             }
@@ -422,11 +418,8 @@ impl ClipboardListView {
             "delete" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
-                        let preview = truncate_for_dialog(&item.full_text);
-                        self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle {
-                            id: item.id,
-                            preview,
-                        });
+                        self.confirm_dialog =
+                            Some(ConfirmDialogState::DeleteSingle { id: item.id });
                         cx.notify();
                     }
                 }
@@ -455,19 +448,6 @@ impl ClipboardListView {
             })
             .collect();
         sizes
-    }
-}
-
-/// Truncate text for confirm dialog preview.
-/// Max ~30 chars, newlines collapsed to spaces.
-fn truncate_for_dialog(text: &str) -> String {
-    let text = text.trim().replace('\n', " ");
-    if text.chars().count() > 30 {
-        format!("{}...", text.chars().take(30).collect::<String>())
-    } else if text.is_empty() {
-        "(empty)".into()
-    } else {
-        text
     }
 }
 

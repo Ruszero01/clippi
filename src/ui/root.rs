@@ -298,8 +298,8 @@ impl Render for RootView {
                     // Read dialog state and clone what we need before closures
                     let dialog = list.read(cx).confirm_dialog_state().cloned();
                     let dialog_element: AnyElement = match dialog {
-                        Some(ConfirmDialogState::DeleteSingle { id, preview }) => {
-                            ConfirmDialog::delete_single(&preview)
+                        Some(ConfirmDialogState::DeleteSingle { id }) => {
+                            ConfirmDialog::delete_single()
                                 .on_confirm({
                                     let s = app_state.clone();
                                     let l = list.clone();
