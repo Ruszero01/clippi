@@ -47,6 +47,11 @@ pub struct ForegroundAppInfo {
 #[cfg(target_os = "windows")]
 static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
+/// Our own window handle (set at window creation).
+/// Used by `is_clippi_window` to avoid depending on window title.
+#[cfg(target_os = "windows")]
+static CLIPPI_HWND: AtomicUsize = AtomicUsize::new(0);
+
 /// Last foreground window title (raw UTF-16 buffer)
 #[cfg(target_os = "windows")]
 static LAST_FOREGROUND_TITLE: Mutex<[u16; 512]> = Mutex::new([0u16; 512]);
@@ -196,6 +201,19 @@ pub fn get_last_non_clippi_window() -> Option<HWND> {
     }
 }
 
+/// Register our window HWND so the focus watcher can identify us.
+#[cfg(target_os = "windows")]
+pub fn set_clippi_hwnd(hwnd: isize) {
+    CLIPPI_HWND.store(hwnd as usize, Ordering::SeqCst);
+}
+
+/// Check if the given HWND is our Clippi window.
+#[cfg(target_os = "windows")]
+pub fn is_our_window(hwnd: isize) -> bool {
+    let our = CLIPPI_HWND.load(Ordering::SeqCst);
+    our != 0 && hwnd as usize == our
+}
+
 /// Get the paste target PID
 #[cfg(target_os = "macos")]
 pub fn get_last_non_clippi_pid() -> Option<i32> {
@@ -209,14 +227,8 @@ pub fn get_last_non_clippi_pid() -> Option<i32> {
 
 #[cfg(target_os = "windows")]
 fn is_clippi_window(hwnd: HWND) -> bool {
-    let mut buffer: [u16; 256] = [0; 256];
-    let len = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), 256) };
-    if len > 0 {
-        let title = String::from_utf16_lossy(&buffer[..len as usize]);
-        title == "Clippi"
-    } else {
-        false
-    }
+    let our_hwnd = CLIPPI_HWND.load(Ordering::SeqCst);
+    our_hwnd != 0 && hwnd as usize == our_hwnd
 }
 
 #[cfg(target_os = "windows")]

@@ -516,6 +516,7 @@ impl WindowManager {
     #[cfg(target_os = "windows")]
     pub fn set_hwnd(&mut self, hwnd: isize) {
         self.hwnd = hwnd;
+        crate::platform::focus::set_clippi_hwnd(hwnd);
     }
 
     #[cfg(not(target_os = "windows"))]

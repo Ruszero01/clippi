@@ -5,22 +5,11 @@
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-/// Check if Clippi window is currently in foreground (by window title)
+/// Check if Clippi window is currently in foreground (by HWND comparison)
 #[cfg(target_os = "windows")]
 pub fn is_clippi_foreground() -> bool {
     let fg = unsafe { GetForegroundWindow() };
-    if fg.is_null() {
-        return false;
-    }
-    let mut buffer: [u16; 256] = [0; 256];
-    let len = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(fg, buffer.as_mut_ptr(), 256)
-    };
-    if len > 0 {
-        let fg_title = String::from_utf16_lossy(&buffer[..len as usize]);
-        return fg_title == "Clippi";
-    }
-    false
+    !fg.is_null() && crate::platform::focus::is_our_window(fg as isize)
 }
 
 #[cfg(target_os = "macos")]

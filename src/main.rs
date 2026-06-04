@@ -80,7 +80,6 @@ fn main() {
                 ))),
                 window_background: WindowBackgroundAppearance::Transparent,
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Clippi".into()),
                     appears_transparent: true,
                     ..Default::default()
                 }),
