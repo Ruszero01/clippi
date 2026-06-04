@@ -500,20 +500,9 @@ impl Render for ClipboardListView {
                                                 let _ = list_view.update(
                                                     cx,
                                                     move |this, cx| {
-                                                        // Click on a different card → commit note first
-                                                        // Click on the editing card → let Input handle it
+                                                        // Clicking another card while editing → commit first
                                                         if this.editing_note_id > 0 {
-                                                            let clicked_id = this
-                                                                .items
-                                                                .get(idx)
-                                                                .map(|it| it.id)
-                                                                .unwrap_or(-1);
-                                                            if this.editing_note_id != clicked_id {
-                                                                this.commit_note_edit(cx);
-                                                            } else {
-                                                                // Don't steal focus from the note input
-                                                                return;
-                                                            }
+                                                            this.commit_note_edit(cx);
                                                         }
                                                         if modifiers.control {
                                                             this.toggle_index(idx, cx);
@@ -640,7 +629,6 @@ impl Render for ClipboardListView {
                                                             });
                                                         }
                                                     })
-                                                    .on_click(click_handler)
                                                     .on_toolbar_action(
                                                         move |action, window, cx| {
                                                             let _ = list_for_toolbar.update(
@@ -697,10 +685,12 @@ impl Render for ClipboardListView {
                                                     )
                                                     });
 
+                                                    // Editing card: no click handler → Input receives clicks directly
+                                                    // Normal card: full click handler + edit-commit check
                                                     let card = if editing_note_id == item_id {
                                                         card.note_input(note_input.clone())
                                                     } else {
-                                                        card
+                                                        card.on_click(click_handler)
                                                     };
 
                                                     card
