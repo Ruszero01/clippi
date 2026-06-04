@@ -46,7 +46,7 @@ impl RootView {
     ) -> Self {
         let app_state = state.read(cx);
         let items = app_state.items.clone();
-        let list_view = cx.new(|cx| ClipboardListView::new(items, state.clone(), cx));
+        let list_view = cx.new(|cx| ClipboardListView::new(items, state.clone(), window, cx));
         list_view.update(cx, |list, _cx| list.focus(window));
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone()));
         let search_bar = cx.new(|cx| SearchBar::new(state.clone(), list_view.clone(), window, cx));
