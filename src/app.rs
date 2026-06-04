@@ -1925,8 +1925,14 @@ fn init_ui_from_settings(app: &App, settings: &AppSettings) {
 fn write_item_to_clipboard(
     item: &crate::core::types::ClipboardItem,
     copy_as_plain_text: bool,
-    _shared: &ClipboardShared,
+    shared: &ClipboardShared,
 ) {
+    // Prevent the clipboard watcher from re-recording our own writes.
+    shared.skip_next.store(true, std::sync::atomic::Ordering::SeqCst);
+    // Push into pending so the item gets upserted (refreshes updated_at).
+    if let Ok(mut pending) = shared.pending.lock() {
+        pending.push(item.clone());
+    }
     crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
 }
 
