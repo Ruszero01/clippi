@@ -51,7 +51,7 @@ impl RootView {
         list_view.update(cx, |list, _cx| list.focus(window));
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone()));
         let search_bar = cx.new(|cx| SearchBar::new(state.clone(), list_view.clone(), window, cx));
-        let settings_panel = cx.new(|cx| SettingsPanel::new(cx));
+        let settings_panel = cx.new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), cx));
         let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone()));
         let tag_filter_panel = cx.new(|cx| {
             TagFilterPanel::new(
@@ -122,6 +122,15 @@ impl RootView {
                 move |this, _panel, event: &SettingsEvent, cx| match event {
                     SettingsEvent::Back => {
                         this.current_view = "clipboard".into();
+                        cx.notify();
+                    }
+                    SettingsEvent::ThemeChanged(theme_str) => {
+                        let appearance = cx.window_appearance();
+                        this.theme =
+                            ClippiTheme::from_setting(theme_str, Some(appearance));
+                        let _ = this.settings_panel.update(cx, |panel, cx| {
+                            panel.reload_theme(cx);
+                        });
                         cx.notify();
                     }
                 },
