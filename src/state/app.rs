@@ -10,7 +10,7 @@ use crate::core::settings::AppSettings;
 use crate::core::types::ClipboardItem;
 use crate::core::types::TagInfo;
 use crate::core::types::next_tag_color;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Root application state entity.
@@ -39,6 +39,13 @@ pub struct AppState {
     /// Shared with clipboard listener — set true during batch paste
     /// to prevent recording intermediate writes (newline separators).
     pub batch_pasting: Arc<AtomicBool>,
+    /// Shared with SyncManager — true when local data has changed.
+    /// [FUTURE] When SyncManager is migrated to GPUI, pass this Arc to
+    /// SyncManager::new() so it can detect local changes and trigger sync
+    /// cycles. Tombstone recording (record_item_deletion, record_unfavorite,
+    /// remove_unfavorite) is already handled in the data mutation methods
+    /// below — SyncManager only needs to observe this flag.
+    pub sync_dirty: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -81,6 +88,7 @@ impl AppState {
             editing_tag_name: String::new(),
             editing_tag_color: "#3B82F6".into(),
             batch_pasting: Arc::new(AtomicBool::new(false)),
+            sync_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -443,5 +451,184 @@ impl AppState {
             }
             Err(e) => log::error!("update_note({id}): {e}"),
         }
+    }
+
+    /// Toggle favorite status for a single item.
+    ///
+    /// # Tombstones (sync)
+    /// - Favorited → unfavorited: records `unfavorited_items` tombstone
+    /// - Unfavorited → favorited: removes existing `unfavorited_items` tombstone
+    /// - Sets `sync_dirty = true`
+    ///
+    /// # Incremental update
+    /// Updates `item.is_favorite` and `item.updated_at` in `self.items` directly,
+    /// unless the favorites filter is active (needs full reload for accuracy).
+    pub fn toggle_favorite(&mut self, id: i64) {
+        let needs_full_refresh = self.filters.is_favorites_active();
+
+        // Read current state before toggling (needed for tombstone direction)
+        let was_fav = self
+            .db
+            .get_by_id(id)
+            .ok()
+            .flatten()
+            .is_some_and(|item| item.is_favorite);
+
+        if let Err(e) = self.db.toggle_favorite(id) {
+            log::error!("toggle_favorite({id}): {e}");
+            return;
+        }
+
+        // Tombstone management
+        if was_fav {
+            // Was favorited, now unfavorited — record tombstone
+            if let Ok(Some(item)) = self.db.get_by_id(id) {
+                let now = chrono::Utc::now().to_rfc3339();
+                let device = crate::services::backends::local_folder::hostname();
+                if let Err(e) = self.db.record_unfavorite(item.content_hash, &now, &device) {
+                    log::error!("record_unfavorite({}): {e}", item.content_hash);
+                }
+            }
+        } else {
+            // Was unfavorited, now favorited — remove tombstone
+            if let Ok(Some(item)) = self.db.get_by_id(id) {
+                if let Err(e) = self.db.remove_unfavorite(item.content_hash) {
+                    log::error!("remove_unfavorite({}): {e}", item.content_hash);
+                }
+            }
+        }
+
+        self.sync_dirty.store(true, Ordering::SeqCst);
+
+        if needs_full_refresh {
+            self.reload_items();
+            self.clear_selection();
+        } else {
+            // Incremental update: flip is_favorite + bump updated_at
+            if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                item.is_favorite = !item.is_favorite;
+                item.updated_at = chrono::Utc::now();
+            }
+        }
+    }
+
+    /// Delete a single item and record deletion tombstone for sync.
+    ///
+    /// # Tombstones (sync)
+    /// - Records `deleted_items` tombstone with content_hash, timestamp, device_name
+    /// - Sets `sync_dirty = true`
+    ///
+    /// # Side effects
+    /// - Removes item from `self.items`
+    /// - Removes id from `self.selected_ids`
+    pub fn delete_item(&mut self, id: i64) {
+        // Read item first to get content_hash for tombstone
+        if let Ok(Some(item)) = self.db.get_by_id(id) {
+            let hash = item.content_hash;
+            let now = chrono::Utc::now().to_rfc3339();
+            let device = crate::services::backends::local_folder::hostname();
+
+            if let Err(e) = self.db.delete_item(id) {
+                log::error!("delete_item({id}): {e}");
+                return;
+            }
+
+            // Record deletion tombstone for sync propagation
+            if let Err(e) = self.db.record_item_deletion(hash, &now, &device) {
+                log::error!("record_item_deletion({hash}): {e}");
+            }
+        } else {
+            log::warn!("delete_item({id}): item not found");
+            return;
+        }
+
+        self.sync_dirty.store(true, Ordering::SeqCst);
+
+        // Remove from in-memory items and selection
+        self.items.retain(|it| it.id != id);
+        self.selected_ids.retain(|&sid| sid != id);
+    }
+
+    /// Batch toggle favorite on all selected items.
+    /// Loops selected_ids, applies the same toggle + tombstone logic per item.
+    pub fn batch_toggle_favorite(&mut self) {
+        let needs_full_refresh = self.filters.is_favorites_active();
+        let now = chrono::Utc::now().to_rfc3339();
+        let device = crate::services::backends::local_folder::hostname();
+
+        let ids: Vec<i64> = self.selected_ids.clone();
+        for &id in &ids {
+            let was_fav = self
+                .db
+                .get_by_id(id)
+                .ok()
+                .flatten()
+                .is_some_and(|item| item.is_favorite);
+
+            if let Err(e) = self.db.toggle_favorite(id) {
+                log::error!("batch toggle_favorite({id}): {e}");
+                continue;
+            }
+
+            if was_fav {
+                if let Ok(Some(item)) = self.db.get_by_id(id) {
+                    if let Err(e) = self.db.record_unfavorite(item.content_hash, &now, &device) {
+                        log::error!("batch record_unfavorite({}): {e}", item.content_hash);
+                    }
+                }
+            } else {
+                if let Ok(Some(item)) = self.db.get_by_id(id) {
+                    if let Err(e) = self.db.remove_unfavorite(item.content_hash) {
+                        log::error!("batch remove_unfavorite({}): {e}", item.content_hash);
+                    }
+                }
+            }
+        }
+
+        self.sync_dirty.store(true, Ordering::SeqCst);
+
+        if needs_full_refresh {
+            self.reload_items();
+            self.clear_selection();
+        } else {
+            // Incremental update: flip is_favorite + bump updated_at for each
+            for id in &ids {
+                if let Some(item) = self.items.iter_mut().find(|it| &it.id == id) {
+                    item.is_favorite = !item.is_favorite;
+                    item.updated_at = chrono::Utc::now();
+                }
+            }
+        }
+    }
+
+    /// Batch delete all selected items.
+    /// Records deletion tombstones for each deleted item.
+    pub fn batch_delete(&mut self) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let device = crate::services::backends::local_folder::hostname();
+
+        // Collect hashes before deleting
+        let mut hashes: Vec<u64> = Vec::with_capacity(self.selected_ids.len());
+        for &id in &self.selected_ids {
+            if let Ok(Some(item)) = self.db.get_by_id(id) {
+                hashes.push(item.content_hash);
+            }
+            if let Err(e) = self.db.delete_item(id) {
+                log::error!("batch delete_item({id}): {e}");
+            }
+        }
+
+        // Record tombstones for sync
+        for h in &hashes {
+            if let Err(e) = self.db.record_item_deletion(*h, &now, &device) {
+                log::error!("batch record_item_deletion({h}): {e}");
+            }
+        }
+
+        self.sync_dirty.store(true, Ordering::SeqCst);
+
+        // Remove from in-memory items
+        let ids: Vec<i64> = self.selected_ids.drain(..).collect();
+        self.items.retain(|it| !ids.contains(&it.id));
     }
 }
