@@ -72,12 +72,28 @@ fn main() {
         gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
 
+        let settings = AppSettings::load();
+
+        let settings_for_window = settings.clone();
+        let initial_pos = core::frontend::calculate_initial_position(&settings_for_window)
+            .map(|(x, y)| point(px(x as f32), px(y as f32)))
+            .unwrap_or(point(px(100.), px(100.)));
+        let initial_size = size(
+            px(if settings_for_window.saved_window_width > 0.0 {
+                settings_for_window.saved_window_width
+            } else {
+                core::frontend::DEFAULT_WINDOW_WIDTH
+            }),
+            px(if settings_for_window.saved_window_height > 0.0 {
+                settings_for_window.saved_window_height
+            } else {
+                core::frontend::DEFAULT_WINDOW_HEIGHT
+            }),
+        );
+
         cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    point(px(100.), px(100.)),
-                    size(px(360.), px(480.)),
-                ))),
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(initial_pos, initial_size))),
                 window_background: WindowBackgroundAppearance::Transparent,
                 titlebar: Some(TitlebarOptions {
                     appears_transparent: true,
@@ -103,7 +119,7 @@ fn main() {
                         }
                     }
                 }
-                let state = cx.new(|_cx| AppState::new(AppSettings::load()));
+                let state = cx.new(|_cx| AppState::new(settings.clone()));
                 let window_manager =
                     cx.new(|cx| WindowManager::new(state.clone(), cx));
 

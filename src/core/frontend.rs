@@ -78,3 +78,64 @@ pub fn clamp_to_work_area(
     let y = y.max(area.y).min(max_y);
     (x, y)
 }
+
+/// Calculate the initial window position based on settings.
+///
+/// Returns `(x, y)` in physical pixels (Windows) or logical points (macOS),
+/// or `None` if the monitor layout is unavailable (falls back to a safe default).
+pub fn calculate_initial_position(settings: &crate::core::settings::AppSettings) -> Option<(i32, i32)> {
+    let mode = PositionMode::from_str(&settings.window_position_mode);
+    let win_w = if settings.saved_window_width > 0.0 {
+        settings.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
+    } else {
+        DEFAULT_WINDOW_WIDTH
+    } as i32;
+    let win_h = if settings.saved_window_height > 0.0 {
+        settings.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
+    } else {
+        DEFAULT_WINDOW_HEIGHT
+    } as i32;
+
+    match mode {
+        PositionMode::Center => calc_center(win_w, win_h),
+        PositionMode::FollowMouse => calc_follow_mouse(win_w, win_h),
+        PositionMode::Remember => calc_remember(settings, win_w, win_h)
+            .or_else(|| calc_center(win_w, win_h)),
+    }
+}
+
+fn calc_center(win_w: i32, win_h: i32) -> Option<(i32, i32)> {
+    let (cx, cy) = monitor::get_cursor_pos()?;
+    let area = monitor::get_monitor_work_area(cx, cy)?;
+    let x = area.x + (area.width - win_w) / 2;
+    let y = area.y + (area.height - win_h) / 2;
+    Some((x, y))
+}
+
+fn calc_follow_mouse(win_w: i32, win_h: i32) -> Option<(i32, i32)> {
+    let (cx, cy) = monitor::get_cursor_pos()?;
+    let area = monitor::get_monitor_work_area(cx, cy)?;
+    Some(clamp_to_work_area(
+        cx - PANEL_OFFSET_X as i32,
+        cy,
+        win_w,
+        win_h,
+        &area,
+    ))
+}
+
+fn calc_remember(
+    settings: &crate::core::settings::AppSettings,
+    win_w: i32,
+    win_h: i32,
+) -> Option<(i32, i32)> {
+    let (sx, sy) = (settings.saved_window_x, settings.saved_window_y);
+    if sx < 0 || sy < 0 {
+        return None;
+    }
+    if !monitor::is_point_on_monitor(sx, sy) {
+        return None;
+    }
+    let area = monitor::get_monitor_work_area(sx, sy)?;
+    Some(clamp_to_work_area(sx, sy, win_w, win_h, &area))
+}
