@@ -229,6 +229,30 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    /// Start editing the note for an item.
+    /// `initial_text` — from item.note (hover toolbar) or "" (context menu).
+    fn start_note_edit(&mut self, id: i64, initial_text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing_note_id = id;
+        let text = SharedString::from(initial_text.to_string());
+        self.note_input.update(cx, move |input, cx| {
+            input.set_value(text, window, cx);
+        });
+        cx.notify();
+    }
+
+    /// Commit the current note edit to DB and exit edit mode.
+    fn commit_note_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing_note_id > 0 {
+            let id = self.editing_note_id;
+            let text = self.note_input.read(cx).value().to_string();
+            self.state.update(cx, |state, _cx| {
+                state.update_note(id, &text);
+            });
+        }
+        self.editing_note_id = -1;
+        cx.notify();
+    }
+
     pub(crate) fn hide_context_menu(&mut self, cx: &mut Context<Self>) {
         self.context_menu_visible = false;
         self.context_menu_item = None;
