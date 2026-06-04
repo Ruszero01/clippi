@@ -99,20 +99,29 @@ pub fn effective_window_size(settings: &crate::core::settings::AppSettings) -> (
 
 /// Calculate the initial window position based on settings.
 ///
-/// Returns `(x, y)` in physical pixels (Windows) or logical points (macOS),
-/// or `None` if the monitor layout is unavailable (falls back to a safe default).
+/// Returns `(x, y)` in **logical pixels** suitable for GPUI's `px()`.
+/// Internally converts from physical pixels (Windows) to logical pixels
+/// using the monitor's DPI scale factor. Returns `None` if the monitor
+/// layout is unavailable.
 pub fn calculate_initial_position(settings: &crate::core::settings::AppSettings) -> Option<(i32, i32)> {
     let mode = PositionMode::from_str(&settings.window_position_mode);
     let (win_w, win_h) = effective_window_size(settings);
     let win_w = win_w as i32;
     let win_h = win_h as i32;
 
-    match mode {
-        PositionMode::Center => calc_center(win_w, win_h),
-        PositionMode::FollowMouse => calc_follow_mouse(win_w, win_h),
+    // Compute position in physical pixels first (matching SetWindowPos convention)
+    let (phys_x, phys_y) = match mode {
+        PositionMode::Center => calc_center(win_w, win_h)?,
+        PositionMode::FollowMouse => calc_follow_mouse(win_w, win_h)?,
         PositionMode::Remember => calc_remember(settings, win_w, win_h)
-            .or_else(|| calc_center(win_w, win_h)),
-    }
+            .or_else(|| calc_center(win_w, win_h))?,
+    };
+
+    // Convert physical → logical pixels using the monitor's DPI scale factor
+    let scale = monitor::get_scale_factor(phys_x, phys_y);
+    let logical_x = (phys_x as f32 / scale).round() as i32;
+    let logical_y = (phys_y as f32 / scale).round() as i32;
+    Some((logical_x, logical_y))
 }
 
 fn calc_center(win_w: i32, win_h: i32) -> Option<(i32, i32)> {

@@ -30,7 +30,7 @@ impl SettingsPanel {
         let theme_str = app.settings.theme.clone();
         let position_mode = app.settings.window_position_mode.clone();
         let language = app.settings.language.clone();
-        drop(app);
+        // borrow released here — `app` is a &AppState reference
 
         // Derive display indices from string settings
         let theme_idx = match theme_str.as_str() {

@@ -25,7 +25,7 @@ impl SettingsPanel {
         let show_original_on_hover = app.settings.show_original_on_hover;
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
-        drop(app);
+        // borrow released here — `app` is a &AppState reference
 
         div()
             .flex()
