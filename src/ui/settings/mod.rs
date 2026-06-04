@@ -10,6 +10,7 @@
 //! Tab rendering methods (`render_*_tab`) serve as extension points.
 
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
@@ -199,6 +200,182 @@ impl Render for SettingsPanel {
                         4 => self.render_sync_tab().into_any_element(),
                         _ => div().into_any_element(),
                     }),
+            )
+    }
+}
+
+// ── Reusable control helpers ──
+
+impl SettingsPanel {
+    /// Render a settings row with a toggle switch on the right.
+    fn setting_row_with_toggle(
+        &self,
+        label: &str,
+        desc: &str,
+        value: bool,
+        on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let theme = &self.theme;
+        let surface = theme.surface;
+        let divider = theme.divider;
+        let accent = theme.accent;
+        let text_1 = theme.text_1;
+        let text_3 = theme.text_3;
+
+        div()
+            .h(px(66.))
+            .rounded(px(10.))
+            .bg(surface)
+            .border(px(1.))
+            .border_color(divider)
+            .px(px(14.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            // Left: label + description
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(text_3)
+                            .child(desc.to_string()),
+                    ),
+            )
+            // Right: toggle switch (40×22px, 11px radius)
+            .child(
+                div()
+                    .w(px(40.))
+                    .h(px(22.))
+                    .rounded(px(11.))
+                    .bg(if value { accent } else { divider })
+                    .px(px(2.))
+                    .flex()
+                    .items_center()
+                    .when(value, |d| d.justify_end())
+                    .when(!value, |d| d.justify_start())
+                    .cursor(CursorStyle::PointingHand)
+                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                        on_toggle(_window, cx);
+                    })
+                    .child(
+                        // White circle knob (18×18px)
+                        div()
+                            .w(px(18.))
+                            .h(px(18.))
+                            .rounded(px(9.))
+                            .bg(rgb(0xffffff)),
+                    ),
+            )
+    }
+
+    /// Render a settings row with an option button group on the right.
+    fn setting_row_with_options(
+        &self,
+        label: &str,
+        desc: &str,
+        options: &[(&'static str, &'static str)],
+        active_key: &str,
+        on_select: impl Fn(&'static str, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let theme = &self.theme;
+        let surface = theme.surface;
+        let divider = theme.divider;
+        let accent = theme.accent;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
+        let on_select = std::rc::Rc::new(on_select);
+
+        div()
+            .h(px(66.))
+            .rounded(px(10.))
+            .bg(surface)
+            .border(px(1.))
+            .border_color(divider)
+            .px(px(14.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            // Left: label + description
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(text_3)
+                            .child(desc.to_string()),
+                    ),
+            )
+            // Right: option buttons
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.))
+                    .children(options.iter().map(|(key, display_label)| {
+                        let selected = *key == active_key;
+                        let btn_bg = if selected {
+                            accent
+                        } else {
+                            rgba(0x00000000)
+                        };
+                        let btn_text = if selected {
+                            rgb(0xffffff)
+                        } else {
+                            text_2
+                        };
+                        let btn_weight = if selected {
+                            FontWeight::BOLD
+                        } else {
+                            FontWeight::default()
+                        };
+                        let key = *key;
+                        let on_select = on_select.clone();
+
+                        div()
+                            .h(px(26.))
+                            .rounded(px(7.))
+                            .px(px(8.))
+                            .bg(btn_bg)
+                            .when(!selected, |d| d.border(px(1.)).border_color(divider))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                on_select(key, _window, cx);
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(btn_weight)
+                                    .text_color(btn_text)
+                                    .child(*display_label),
+                            )
+                    })),
             )
     }
 }
