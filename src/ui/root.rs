@@ -15,7 +15,7 @@ use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 use super::clipboard_list::ClipboardListView;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::search_bar::SearchBar;
-use super::settings::SettingsPanel;
+use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
 use super::tag_filter::TagFilterPanel;
 use super::theme::ClippiTheme;
@@ -112,6 +112,15 @@ impl RootView {
                         this.current_view = "settings".into();
                         this.search_bar
                             .update(cx, |bar, cx| bar.close_tag_panel(cx));
+                        cx.notify();
+                    }
+                },
+            ),
+            cx.subscribe(
+                &settings_panel,
+                move |this, _panel, event: &SettingsEvent, cx| match event {
+                    SettingsEvent::Back => {
+                        this.current_view = "clipboard".into();
                         cx.notify();
                     }
                 },
