@@ -78,18 +78,10 @@ fn main() {
             .map(|(x, y)| point(px(x as f32), px(y as f32)))
             .unwrap_or(point(px(100.), px(100.)));
         let (ew, eh) = core::frontend::effective_window_size(&settings);
-        // effective_window_size returns logical-pixel values from defaults,
-        // but saved_window_width/height may be physical pixels from the old
-        // Slint app. Convert to logical via the system DPI scale factor.
-        // Once GPUI saves dimensions on first resize, they'll be logical.
-        let scale = platform::monitor::get_scale_factor(0, 0);
-        let initial_size = if settings.saved_window_width > 0.0 {
-            // Saved values might be physical pixels — convert to logical
-            size(px(ew / scale), px(eh / scale))
-        } else {
-            // Default values are already logical pixels
-            size(px(ew), px(eh))
-        };
+        // effective_window_size returns logical-pixel values: the DEFAULT
+        // constants are logical, and saved_window_width/height are already
+        // logical (saved by GPUI during resize). No DPI conversion needed.
+        let initial_size = size(px(ew), px(eh));
 
         cx.open_window(
             WindowOptions {
