@@ -433,6 +433,10 @@ impl Render for ClipboardListView {
                 let list_for_clear = list_entity.clone();
                 move |_ev, _window, cx| {
                     let _ = list_for_clear.update(cx, |this, cx| {
+                        // If editing, commit before clearing hover
+                        if this.editing_note_id > 0 {
+                            this.commit_note_edit(cx);
+                        }
                         if this.hovered_index.is_some() {
                             this.hovered_index = None;
                             cx.notify();
@@ -533,6 +537,17 @@ impl Render for ClipboardListView {
                                                         let _ = list_for_hover.update(
                                                             cx,
                                                             |this, cx| {
+                                                                // If editing a different card, commit before changing hover
+                                                                let target_id = this
+                                                                    .items
+                                                                    .get(i)
+                                                                    .map(|it| it.id)
+                                                                    .unwrap_or(-1);
+                                                                if this.editing_note_id > 0
+                                                                    && this.editing_note_id != target_id
+                                                                {
+                                                                    this.commit_note_edit(cx);
+                                                                }
                                                                 if this.hovered_index != Some(i) {
                                                                     this.hovered_index = Some(i);
                                                                     cx.notify();
