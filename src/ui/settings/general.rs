@@ -8,9 +8,7 @@ use gpui::*;
 
 use crate::core::frontend::PositionMode;
 use crate::core::settings::set_auto_start;
-use crate::state::app::AppState;
 use crate::ui::settings::SettingsEvent;
-use crate::ui::window_manager::WindowManager;
 
 use super::SettingsPanel;
 

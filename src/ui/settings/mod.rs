@@ -11,6 +11,10 @@
 
 use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui_component::scroll::ScrollableElement;
+
+mod clipboard;
+mod general;
 
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
@@ -185,16 +189,16 @@ impl Render for SettingsPanel {
                             )
                     })),
             )
-            // ── Tab content (fills remaining space) ──
-            // TODO: add scroll support when tab content exceeds available height.
+            // ── Tab content (fills remaining space, scrollable) ──
             .child(
                 div()
                     .flex_1()
                     .px(px(8.))
                     .pt(px(8.))
+                    .overflow_y_scrollbar()
                     .child(match active {
-                        0 => self.render_general_tab().into_any_element(),
-                        1 => self.render_clipboard_tab().into_any_element(),
+                        0 => self.render_general_tab(_window, cx).into_any_element(),
+                        1 => self.render_clipboard_tab(_window, cx).into_any_element(),
                         2 => self.render_hotkey_tab().into_any_element(),
                         3 => self.render_data_tab().into_any_element(),
                         4 => self.render_sync_tab().into_any_element(),
@@ -380,34 +384,9 @@ impl SettingsPanel {
     }
 }
 
-// ── Tab rendering stubs ──
-// Each returns a placeholder container. Replace with actual settings
-// controls when migrating individual tab content from Slint.
-// Signature: `fn render_*_tab(&self) -> impl IntoElement`
+// ── Tab rendering stubs (not yet migrated) ──
 
 impl SettingsPanel {
-    fn render_general_tab(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(100.))
-            .text_color(self.theme.text_3)
-            .text_size(px(13.))
-            .child("General settings")
-    }
-
-    fn render_clipboard_tab(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(100.))
-            .text_color(self.theme.text_3)
-            .text_size(px(13.))
-            .child("Clipboard settings")
-    }
-
     fn render_hotkey_tab(&self) -> impl IntoElement {
         div()
             .flex()

@@ -4,8 +4,6 @@
 
 use gpui::*;
 
-use crate::state::app::AppState;
-
 use super::SettingsPanel;
 
 impl SettingsPanel {
