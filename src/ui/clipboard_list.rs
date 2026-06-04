@@ -497,6 +497,8 @@ impl Render for ClipboardListView {
         let list_entity = view.clone();
 
         div()
+            .flex_1()
+            .overflow_hidden()
             .track_focus(&focus_handle)
             .on_key_down(window.listener_for(&view, |this, event: &KeyDownEvent, _window, cx| {
                 match event.keystroke.key.as_str() {
