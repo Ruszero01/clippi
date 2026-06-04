@@ -335,19 +335,22 @@ impl WindowManager {
 
     fn calculate_position(&self) -> Option<(i32, i32)> {
         let (win_w, win_h) = self.effective_window_size();
-        let win_w_i32 = win_w as i32;
-        let win_h_i32 = win_h as i32;
-
-        let sidebar_offset = PANEL_OFFSET_X as i32;
+        // Convert logical → physical pixels for Windows SetWindowPos.
+        // monitor::get_cursor_pos() returns physical pixels; window dimensions
+        // and sidebar offset are in logical pixels and must be scaled.
+        let scale = monitor::get_scale_factor(0, 0);
+        let win_w_phys = (win_w * scale) as i32;
+        let win_h_phys = (win_h * scale) as i32;
+        let sidebar_offset = (PANEL_OFFSET_X * scale) as i32;
 
         match self.position_mode {
-            PositionMode::Center => self.calc_center(win_w_i32, win_h_i32),
+            PositionMode::Center => self.calc_center(win_w_phys, win_h_phys),
             PositionMode::FollowMouse => {
-                self.calc_follow_mouse(win_w_i32, win_h_i32, sidebar_offset)
+                self.calc_follow_mouse(win_w_phys, win_h_phys, sidebar_offset)
             }
             PositionMode::Remember => self
-                .calc_remember(win_w_i32, win_h_i32)
-                .or_else(|| self.calc_center(win_w_i32, win_h_i32)),
+                .calc_remember(win_w_phys, win_h_phys)
+                .or_else(|| self.calc_center(win_w_phys, win_h_phys)),
         }
     }
 

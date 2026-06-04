@@ -129,8 +129,11 @@ fn calc_center(win_w: i32, win_h: i32) -> Option<(i32, i32)> {
 fn calc_follow_mouse(win_w: i32, win_h: i32) -> Option<(i32, i32)> {
     let (cx, cy) = monitor::get_cursor_pos()?;
     let area = monitor::get_monitor_work_area(cx, cy)?;
+    // Scale sidebar offset to physical pixels to match cursor coordinates
+    let scale = monitor::get_scale_factor(cx, cy);
+    let sidebar_offset = (PANEL_OFFSET_X * scale) as i32;
     Some(clamp_to_work_area(
-        cx - PANEL_OFFSET_X as i32,
+        cx - sidebar_offset,
         cy,
         win_w,
         win_h,
