@@ -232,18 +232,44 @@ impl ClipboardListView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!("Context menu action: {}", action);
+        let plain = self.state.read(cx).settings.copy_as_plain_text;
         match action {
-            "copy" | "paste" | "edit" | "edit_note" | "toggle_favorite" | "delete"
-            | "paste_as_rgb" | "paste_as_hex" | "open_image" | "paste_ocr"
-            | "qr_detect" | "show_tag_picker" | "batch_paste" | "batch_favorite"
-            | "batch_delete" => {
-                self.hide_context_menu(cx);
+            "copy" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.copy_item(item_id, plain));
+                }
             }
-            _ => {
-                self.hide_context_menu(cx);
+            "paste" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_item(item_id, plain));
+                }
             }
+            "paste_as_rgb" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_as_rgb(item_id));
+                }
+            }
+            "paste_as_hex" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_as_hex(item_id));
+                }
+            }
+            "batch_paste" => {
+                let ids = self.selected_ids.clone();
+                self.state
+                    .update(cx, |s, _cx| s.batch_paste(&ids, plain));
+            }
+            // Other actions deferred to follow-up
+            "edit" | "edit_note" | "toggle_favorite" | "delete"
+            | "open_image" | "paste_ocr" | "qr_detect" | "show_tag_picker"
+            | "batch_favorite" | "batch_delete" => {}
+            _ => {}
         }
+        self.hide_context_menu(cx);
     }
 
     fn handle_toolbar_action(
@@ -252,15 +278,28 @@ impl ClipboardListView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!("Toolbar action: {}", action);
+        let plain = self.state.read(cx).settings.copy_as_plain_text;
         match action {
-            "copy" | "open_image" | "qr_action" | "open_location" | "edit"
-            | "edit_note" | "toggle_favorite" | "delete" | "batch_paste"
+            "copy" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        let item_id = item.id;
+                        self.state.update(cx, |s, _cx| s.copy_item(item_id, plain));
+                    }
+                }
+            }
+            // Batch toolbar actions
+            "batch_paste" => {
+                let ids = self.selected_ids.clone();
+                self.state
+                    .update(cx, |s, _cx| s.batch_paste(&ids, plain));
+            }
+            // Other hover toolbar actions deferred to follow-up
+            "open_image" | "qr_action" | "open_location" | "edit"
+            | "edit_note" | "toggle_favorite" | "delete"
             | "batch_favorite" | "batch_delete" => {}
             _ => {}
         }
-        // Hover toolbar actions currently no-op; backend wiring in follow-up
-        let _ = cx;
     }
 
     fn compute_sizes(items: &[ClipboardItem], mode: &str) -> Vec<Size<Pixels>> {
