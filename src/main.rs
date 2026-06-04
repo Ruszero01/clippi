@@ -74,18 +74,14 @@ fn main() {
 
         let settings = AppSettings::load();
 
-        let initial_pos = core::frontend::calculate_initial_position(&settings)
-            .map(|(x, y)| point(px(x as f32), px(y as f32)))
-            .unwrap_or(point(px(100.), px(100.)));
-        let (ew, eh) = core::frontend::effective_window_size(&settings);
-        // effective_window_size returns logical-pixel values: the DEFAULT
-        // constants are logical, and saved_window_width/height are already
-        // logical (saved by GPUI during resize). No DPI conversion needed.
-        let initial_size = size(px(ew), px(eh));
+        // Calculate initial position (physical pixels) and size (logical pixels)
+        // before the settings are moved into AppState. We use SetWindowPos on
+        // Windows because GPUI's window_bounds with transparent windows is unreliable.
+        let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
+        let (initial_logical_w, initial_logical_h) = core::frontend::effective_window_size(&settings);
 
         cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(initial_pos, initial_size))),
                 window_background: WindowBackgroundAppearance::Transparent,
                 titlebar: Some(TitlebarOptions {
                     appears_transparent: true,
@@ -115,13 +111,34 @@ fn main() {
                 let window_manager =
                     cx.new(|cx| WindowManager::new(state.clone(), cx));
 
-                // ── Store raw window handle for platform operations ──
+                // ── Store raw window handle + set initial position/size ──
                 #[cfg(target_os = "windows")]
                 {
                     if let Ok(handle) = window.window_handle() {
                         if let RawWindowHandle::Win32(wh) = handle.as_raw() {
                             let hwnd = wh.hwnd.get() as isize;
                             window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
+
+                            // Set initial position and size via platform API.
+                            // calculate_initial_position returns physical pixels
+                            // (matching SetWindowPos convention on Windows).
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                SetWindowPos, HWND_TOP, SWP_NOACTIVATE,
+                            };
+                            if let Some((x, y)) = initial_phys_pos {
+                                let scale = platform::monitor::get_scale_factor(x, y);
+                                let phys_w = (initial_logical_w * scale) as i32;
+                                let phys_h = (initial_logical_h * scale) as i32;
+                                unsafe {
+                                    SetWindowPos(
+                                        hwnd as _,
+                                        HWND_TOP,
+                                        x, y,
+                                        phys_w, phys_h,
+                                        SWP_NOACTIVATE,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
