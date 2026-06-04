@@ -193,10 +193,14 @@ impl Render for SettingsPanel {
             .child(
                 div()
                     .flex_1()
-                    .px(px(8.))
-                    .pt(px(8.))
-                    .overflow_y_scrollbar()
-                    .child(match active {
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .h_full()
+                            .px(px(8.))
+                            .pt(px(8.))
+                            .overflow_y_scrollbar()
+                            .child(match active {
                         0 => self.render_general_tab(_window, cx).into_any_element(),
                         1 => self.render_clipboard_tab(_window, cx).into_any_element(),
                         2 => self.render_hotkey_tab().into_any_element(),
@@ -205,6 +209,7 @@ impl Render for SettingsPanel {
                         _ => div().into_any_element(),
                     }),
             )
+        )
     }
 }
 
