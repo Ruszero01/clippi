@@ -3,6 +3,7 @@
 pub mod add_backend;
 pub mod clipboard_card;
 pub mod clipboard_list;
+pub mod confirm_dialog;
 pub mod context_menu;
 pub mod hover_toolbar;
 pub mod edit_panel;

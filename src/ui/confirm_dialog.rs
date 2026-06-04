@@ -1,0 +1,276 @@
+//! Confirm dialog — modal overlay for destructive action confirmation.
+//!
+//! Reusable confirmation dialog with full-window backdrop, centered card,
+//! and cancel/confirm buttons. Supports danger styling for destructive actions.
+//! Used for delete confirmations (single/batch) and hotkey blacklist removal.
+//!
+//! # Usage
+//!
+//! ```ignore
+//! ConfirmDialog::delete_single("example text")
+//!     .on_confirm(|_window, cx| { /* delete logic */ })
+//!     .on_cancel(|_window, cx| { /* dismiss */ })
+//!     .into_any_element()
+//! ```
+
+use std::rc::Rc;
+
+use gpui::*;
+
+// ── Color helpers (matching existing ClippiTheme / ContextMenu) ──
+// NOTE: gpui::rgb/rgba are not const fn, so we use regular functions.
+
+fn surface() -> Rgba {
+    rgb(0x2c2d2e)
+}
+fn text_1() -> Rgba {
+    rgb(0xeaebec)
+}
+fn text_2() -> Rgba {
+    rgb(0x919496)
+}
+fn danger() -> Rgba {
+    rgb(0xff5f57)
+}
+fn accent() -> Rgba {
+    rgb(0x7ecba3)
+}
+fn border() -> Rgba {
+    rgba(0xffffff14)
+}
+fn overlay() -> Rgba {
+    rgba(0x00000066)
+}
+fn hover_bg() -> Rgba {
+    rgba(0xffffff10)
+}
+
+// ── Component ──
+
+#[derive(IntoElement)]
+pub struct ConfirmDialog {
+    title: String,
+    message: String,
+    confirm_label: String,
+    cancel_label: String,
+    danger: bool,
+    on_confirm: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_cancel: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+}
+
+impl ConfirmDialog {
+    pub fn new() -> Self {
+        Self {
+            title: String::new(),
+            message: String::new(),
+            confirm_label: "Confirm".into(),
+            cancel_label: "Cancel".into(),
+            danger: false,
+            on_confirm: None,
+            on_cancel: None,
+        }
+    }
+
+    // ── Builder methods ──
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
+
+    pub fn confirm_label(mut self, label: impl Into<String>) -> Self {
+        self.confirm_label = label.into();
+        self
+    }
+
+    pub fn cancel_label(mut self, label: impl Into<String>) -> Self {
+        self.cancel_label = label.into();
+        self
+    }
+
+    pub fn danger(mut self, danger: bool) -> Self {
+        self.danger = danger;
+        self
+    }
+
+    pub fn on_confirm(
+        mut self,
+        handler: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_confirm = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_cancel(
+        mut self,
+        handler: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_cancel = Some(Rc::new(handler));
+        self
+    }
+
+    // ── Preset factory methods ──
+
+    /// Single item delete confirmation.
+    pub fn delete_single(preview: &str) -> Self {
+        Self::new()
+            .title("Confirm Delete")
+            .message(format!(
+                "Delete \"{}\"?\nThis action cannot be undone.",
+                preview
+            ))
+            .confirm_label("Delete")
+            .danger(true)
+    }
+
+    /// Batch delete confirmation for N selected items.
+    pub fn delete_batch(count: usize) -> Self {
+        Self::new()
+            .title("Confirm Batch Delete")
+            .message(format!(
+                "Delete {} selected items?\nThis action cannot be undone.",
+                count
+            ))
+            .confirm_label("Delete")
+            .danger(true)
+    }
+
+    /// [FUTURE] Remove app from hotkey blacklist confirmation.
+    pub fn remove_blacklist(app_name: &str) -> Self {
+        Self::new()
+            .title("Remove from Blacklist")
+            .message(format!(
+                "Stop ignoring clipboard from \"{}\"?",
+                app_name
+            ))
+            .confirm_label("Remove")
+            .danger(false)
+    }
+}
+
+impl RenderOnce for ConfirmDialog {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let Self {
+            title,
+            message,
+            confirm_label,
+            cancel_label,
+            danger: is_danger,
+            on_confirm,
+            on_cancel,
+        } = self;
+
+        let confirm_color = if is_danger { danger() } else { accent() };
+
+        // Full-window overlay: semi-transparent backdrop + centered modal card
+        div()
+            .absolute()
+            .size_full()
+            .bg(overlay())
+            .flex()
+            .items_center()
+            .justify_center()
+            // Backdrop click → cancel
+            .on_mouse_down(MouseButton::Left, {
+                let on_cancel = on_cancel.clone();
+                move |_ev, _window, cx| {
+                    cx.stop_propagation();
+                    if let Some(ref handler) = on_cancel {
+                        handler(_window, cx);
+                    }
+                }
+            })
+            .child(
+                // Modal card — occluded to prevent click-through to backdrop
+                div()
+                    .w(px(280.))
+                    .bg(surface())
+                    .rounded(px(12.))
+                    .border(px(1.))
+                    .border_color(border())
+                    .p(px(16.))
+                    .occlude()
+                    // Title — 14px bold, text_1
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1())
+                            .child(title),
+                    )
+                    // Message — 12px, text_2, 8px top margin
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(text_2())
+                            .mt(px(8.))
+                            .child(message),
+                    )
+                    // Button row — flex row, justify_end, 8px gap, 16px top margin
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .justify_end()
+                            .gap(px(8.))
+                            .mt(px(16.))
+                            // Cancel button
+                            .child({
+                                let label = cancel_label.clone();
+                                let on_cancel = on_cancel.clone();
+                                div()
+                                    .h(px(24.))
+                                    .px(px(12.))
+                                    .rounded(px(4.))
+                                    .text_size(px(12.))
+                                    .text_color(text_2())
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| style.bg(hover_bg()))
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let on_cancel = on_cancel.clone();
+                                        move |_ev, _window, cx| {
+                                            cx.stop_propagation();
+                                            if let Some(ref handler) = on_cancel {
+                                                handler(_window, cx);
+                                            }
+                                        }
+                                    })
+                                    .child(label)
+                            })
+                            // Confirm button
+                            .child({
+                                let label = confirm_label.clone();
+                                let on_confirm = on_confirm.clone();
+                                let confirm_color = confirm_color;
+                                div()
+                                    .h(px(24.))
+                                    .px(px(12.))
+                                    .rounded(px(4.))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0xffffff))
+                                    .bg(confirm_color)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| style.opacity(0.85))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(ref handler) = on_confirm {
+                                            handler(_window, cx);
+                                        }
+                                    })
+                                    .child(label)
+                            }),
+                    ),
+            )
+    }
+}
