@@ -1131,7 +1131,9 @@ impl RenderOnce for ClipboardCard {
             );
 
         // ── Assemble card ──
-        let card = base.child(icon_area).child(content).child(bottom_info);
+        let card = base.child(icon_area).child(content);
+        // Hide bottom tags/time row during note editing
+        let card = if !editing { card.child(bottom_info) } else { card };
 
         // Fav indicator bar (left edge, scales with card height)
         let card = if is_fav {
@@ -1176,8 +1178,8 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // ── Hover toolbar ──
-        if is_hovered {
+        // ── Hover toolbar (hidden during note editing) ──
+        if is_hovered && !editing {
             let toolbar_props =
                 HoverToolbarProps::from_item(&item, selected_count, selected);
             card.child(
