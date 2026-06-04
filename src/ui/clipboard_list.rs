@@ -247,9 +247,15 @@ impl ClipboardListView {
         if self.editing_note_id > 0 {
             let id = self.editing_note_id;
             let text = self.note_input.read(cx).value().to_string();
-            self.state.update(cx, |state, _cx| {
-                state.update_note(id, &text);
+            // Persist to DB via AppState
+            let note_text = text.clone();
+            self.state.update(cx, move |state, _cx| {
+                state.update_note(id, &note_text);
             });
+            // Also update local items list so the card re-renders with the note
+            if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                item.note = text;
+            }
         }
         self.editing_note_id = -1;
         cx.notify();
