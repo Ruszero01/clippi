@@ -12,7 +12,8 @@ use gpui::*;
 use crate::state::app::AppState;
 use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
-use super::clipboard_list::ClipboardListView;
+use super::clipboard_list::{ClipboardListView, ConfirmDialogState};
+use super::confirm_dialog::ConfirmDialog;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::search_bar::SearchBar;
 use super::settings::{SettingsEvent, SettingsPanel};
@@ -286,6 +287,57 @@ impl Render for RootView {
                             }
                         }),
                     )
+                },
+            )
+            .when(
+                self.list_view.read(cx).confirm_dialog_state().is_some() && is_clipboard,
+                |root| {
+                    let list = self.list_view.clone();
+                    let app_state = self.state.clone();
+
+                    // Read dialog state and clone what we need before closures
+                    let dialog = list.read(cx).confirm_dialog_state().cloned();
+                    let dialog_element: AnyElement = match dialog {
+                        Some(ConfirmDialogState::DeleteSingle { id, preview }) => {
+                            ConfirmDialog::delete_single(&preview)
+                                .on_confirm({
+                                    let s = app_state.clone();
+                                    let l = list.clone();
+                                    move |_window, cx| {
+                                        s.update(cx, |s, _cx| s.delete_item(id));
+                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                    }
+                                })
+                                .on_cancel({
+                                    let l = list.clone();
+                                    move |_window, cx| {
+                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                        Some(ConfirmDialogState::DeleteBatch { count }) => {
+                            ConfirmDialog::delete_batch(count)
+                                .on_confirm({
+                                    let s = app_state.clone();
+                                    let l = list.clone();
+                                    move |_window, cx| {
+                                        s.update(cx, |s, _cx| s.batch_delete());
+                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                    }
+                                })
+                                .on_cancel({
+                                    let l = list.clone();
+                                    move |_window, cx| {
+                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                        None => div().into_any_element(),
+                    };
+
+                    root.child(dialog_element)
                 },
             )
     }
