@@ -17,6 +17,15 @@ use crate::state::app::AppState;
 
 use super::clipboard_card::{ClipboardCard, estimate_card_height};
 
+/// Types of confirmation dialogs that can be shown.
+/// [FUTURE] Add variants here for other confirmation scenarios
+/// (e.g. RemoveBlacklist { app_name: String } for hotkey settings).
+#[derive(Clone)]
+pub(crate) enum ConfirmDialogState {
+    DeleteSingle { id: i64, preview: String },
+    DeleteBatch { count: usize },
+}
+
 /// The clipboard list view entity.
 pub struct ClipboardListView {
     items: Vec<ClipboardItem>,
@@ -44,6 +53,8 @@ pub struct ClipboardListView {
     /// Shared InputState entity for the inline note editor.
     /// Created once at init, value is updated when editing starts.
     note_input: Entity<InputState>,
+    /// Active confirmation dialog (None = hidden).
+    confirm_dialog: Option<ConfirmDialogState>,
 }
 
 impl ClipboardListView {
@@ -68,6 +79,7 @@ impl ClipboardListView {
             selected_count: 0,
             editing_note_id: -1,
             note_input: cx.new(|cx| InputState::new(window, cx).placeholder("Add a note...")),
+            confirm_dialog: None,
         }
     }
 
@@ -269,6 +281,17 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    /// Get the current confirmation dialog state, if any.
+    pub fn confirm_dialog_state(&self) -> Option<&ConfirmDialogState> {
+        self.confirm_dialog.as_ref()
+    }
+
+    /// Dismiss the active confirmation dialog.
+    pub fn dismiss_confirm_dialog(&mut self, cx: &mut Context<Self>) {
+        self.confirm_dialog = None;
+        cx.notify();
+    }
+
     pub(crate) fn handle_menu_action(
         &mut self,
         action: &str,
@@ -312,10 +335,34 @@ impl ClipboardListView {
                     self.start_note_edit(item.id, "", _window, cx);
                 }
             }
-            // Other actions deferred to follow-up
-            "edit" | "toggle_favorite" | "delete"
-            | "open_image" | "paste_ocr" | "qr_detect" | "show_tag_picker"
-            | "batch_favorite" | "batch_delete" => {}
+            "toggle_favorite" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let id = item.id;
+                    self.state.update(cx, |s, _cx| s.toggle_favorite(id));
+                }
+            }
+            "delete" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let id = item.id;
+                    let preview = truncate_for_dialog(&item.full_text);
+                    self.hide_context_menu(cx);
+                    self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle {
+                        id,
+                        preview,
+                    });
+                    return; // Don't call hide_context_menu again at end
+                }
+            }
+            "batch_favorite" => {
+                self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
+            }
+            "batch_delete" => {
+                let count = self.selected_ids.len();
+                self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
+                cx.notify();
+            }
+            // Other actions still deferred to follow-up
+            "edit" | "open_image" | "paste_ocr" | "qr_detect" | "show_tag_picker" => {}
             _ => {}
         }
         self.hide_context_menu(cx);
@@ -353,10 +400,35 @@ impl ClipboardListView {
                     self.start_note_edit(note_id, &note_text, _window, cx);
                 }
             }
-            // Other hover toolbar actions deferred to follow-up
-            "open_image" | "qr_action" | "open_location" | "edit"
-            | "toggle_favorite" | "delete"
-            | "batch_favorite" | "batch_delete" => {}
+            "toggle_favorite" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        self.state.update(cx, |s, _cx| s.toggle_favorite(item.id));
+                    }
+                }
+            }
+            "delete" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        let preview = truncate_for_dialog(&item.full_text);
+                        self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle {
+                            id: item.id,
+                            preview,
+                        });
+                        cx.notify();
+                    }
+                }
+            }
+            "batch_favorite" => {
+                self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
+            }
+            "batch_delete" => {
+                let count = self.selected_ids.len();
+                self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
+                cx.notify();
+            }
+            // Other actions still deferred to follow-up
+            "open_image" | "qr_action" | "open_location" | "edit" => {}
             _ => {}
         }
     }
@@ -370,6 +442,19 @@ impl ClipboardListView {
             })
             .collect();
         sizes
+    }
+}
+
+/// Truncate text for confirm dialog preview.
+/// Max ~30 chars, newlines collapsed to spaces.
+fn truncate_for_dialog(text: &str) -> String {
+    let text = text.trim().replace('\n', " ");
+    if text.chars().count() > 30 {
+        format!("{}...", text.chars().take(30).collect::<String>())
+    } else if text.is_empty() {
+        "(empty)".into()
+    } else {
+        text
     }
 }
 
