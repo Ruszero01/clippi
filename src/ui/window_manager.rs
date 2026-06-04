@@ -441,7 +441,7 @@ impl WindowManager {
                             y,
                             0,
                             0,
-                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE,
+                            SWP_NOACTIVATE | SWP_NOSIZE,
                         );
                     }
                 }
