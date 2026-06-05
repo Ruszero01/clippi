@@ -192,6 +192,7 @@ impl Render for SettingsPanel {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
+                    .rounded_b(px(12.))
                     .pt(px(8.))
                     .pb(px(20.))
                     .child(
