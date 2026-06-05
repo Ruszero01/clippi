@@ -81,7 +81,7 @@ impl Render for Titlebar {
             .flex_shrink_0()
             .rounded_t(px(12.))
             .bg(theme.titlebar_bg)
-            // Left: logo + app name
+            // Left: logo + app name (also serves as drag area)
             .child(
                 div()
                     .flex()
@@ -90,6 +90,7 @@ impl Render for Titlebar {
                     .pl(px(12.))
                     .pr(px(4.))
                     .gap(px(7.))
+                    .window_control_area(WindowControlArea::Drag)
                     // Logo (20x20, loaded from assets)
                     .child(
                         gpui::img(std::path::Path::new("assets/LOGO_notext.ico"))

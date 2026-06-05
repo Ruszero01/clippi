@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputState};
 
 use crate::core::types::{tag_preset_colors, TagInfo};
 use crate::state::app::AppState;
@@ -27,7 +27,6 @@ pub struct TagFilterPanel {
     create_input: Entity<InputState>,
     edit_name_input: Entity<InputState>,
     last_edit_tag_id: i64,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl TagFilterPanel {
@@ -41,34 +40,6 @@ impl TagFilterPanel {
         let create_input = cx.new(|cx| InputState::new(window, cx).placeholder("Tag name..."));
         let edit_name_input = cx.new(|cx| InputState::new(window, cx));
 
-        let state_enter = state.clone();
-        let list_enter = list_view.clone();
-        let search_enter = search_bar.clone();
-        let input_enter = create_input.clone();
-        let this_enter = cx.entity().clone();
-
-        let _subscriptions = vec![
-            cx.subscribe(&create_input, move |_this, _, ev: &InputEvent, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-            cx.subscribe(&create_input, move |_this, _, ev: &InputEvent, cx| {
-                if !matches!(ev, InputEvent::PressEnter { .. }) {
-                    return;
-                }
-                let name = input_enter.read(cx).value().to_string();
-                if name.trim().is_empty() {
-                    return;
-                }
-                state_enter.update(cx, |s, _cx| s.create_tag(name.trim()));
-                let items = state_enter.read(cx).items.clone();
-                list_enter.update(cx, |l, cx| l.set_items(items, cx));
-                search_enter.update(cx, |_b, cx| cx.notify());
-                this_enter.update(cx, |_this, cx| cx.notify());
-            }),
-        ];
-
         Self {
             state,
             list_view,
@@ -76,14 +47,26 @@ impl TagFilterPanel {
             create_input,
             edit_name_input,
             last_edit_tag_id: -1,
-            _subscriptions,
         }
     }
 
-    fn refresh_list(&self, cx: &mut App) {
+    pub(crate) fn refresh_list(&self, cx: &mut App) {
         let items = self.state.read(cx).items.clone();
         self.list_view.update(cx, |l, cx| l.set_items(items, cx));
         self.search_bar.update(cx, |_b, cx| cx.notify());
+    }
+
+    pub(crate) fn cancel_edit_tag(&self, cx: &mut App) {
+        self.state.update(cx, |s, _cx| s.cancel_edit_tag());
+    }
+
+    pub(crate) fn set_edit_tag_color(&self, color: &str, cx: &mut App) {
+        self.state.update(cx, |s, _cx| s.set_edit_tag_color(color));
+    }
+
+    pub(crate) fn update_tag(&self, tag_id: i64, name: &str, color: &str, cx: &mut App) {
+        self.state.update(cx, |s, _cx| s.update_tag(tag_id, name, color));
+        self.refresh_list(cx);
     }
 
     fn toggle_filter(&self, tag_id: i64, cx: &mut App) {
@@ -117,6 +100,22 @@ impl TagFilterPanel {
         self.refresh_list(cx);
     }
 
+    /// Read the create input value, create a tag if non-empty,
+    /// then clear the input. Used by both the "+" button and Enter.
+    fn create_tag_from_input(&self, window: &mut Window, cx: &mut App) {
+        let name = self.create_input.read(cx).value().to_string();
+        if !name.trim().is_empty() {
+            self.create_tag(name.trim(), cx);
+        }
+        self.create_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+    }
+
+    pub fn edit_name_input(&self) -> &Entity<InputState> {
+        &self.edit_name_input
+    }
+
     fn delete_tag(&self, tag_id: i64, cx: &mut App) {
         self.state.update(cx, |s, _cx| s.delete_tag(tag_id));
         self.refresh_list(cx);
@@ -133,16 +132,8 @@ impl Render for TagFilterPanel {
             .collect();
         let tag_match_all = app_state.filters.is_tag_match_all();
         let has_tag_filter = !app_state.filters.tag_ids.is_empty();
-        let editing_tag_id = app_state.editing_tag_id;
-        let _editing_tag_name = app_state.editing_tag_name.clone();
-        let editing_tag_color = app_state.editing_tag_color.clone();
         let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window.appearance()));
         let _ = app_state;
-
-        // Track editing tag id changes
-        if editing_tag_id != self.last_edit_tag_id {
-            self.last_edit_tag_id = editing_tag_id;
-        }
 
         let is_dark = theme.bg == rgb(0x191a1b);
         let accent = theme.accent;
@@ -163,11 +154,6 @@ impl Render for TagFilterPanel {
             rgba(0xff5f5720)
         } else {
             rgba(0xff5f5718)
-        };
-        let edit_backdrop_bg = if is_dark {
-            rgba(0x00000060)
-        } else {
-            rgba(0x00000030)
         };
 
         let rows: Vec<Vec<(TagInfo, bool)>> = tags.chunks(2).map(|r| r.to_vec()).collect();
@@ -249,7 +235,23 @@ impl Render for TagFilterPanel {
                                     .h(px(20.))
                                     .text_size(px(11.))
                                     .text_color(text_1),
-                            ),
+                            )
+                            // Handle Enter key on the parent div — uses the raw
+                            // KeyDownEvent (like the clipboard note editor does),
+                            // bypassing InputEvent::PressEnter subscriptions
+                            // which cause stack corruption during action dispatch.
+                            .on_key_down({
+                                let this = this.clone();
+                                move |ev: &KeyDownEvent, window, cx| {
+                                    if ev.keystroke.key.as_str() == "enter" {
+                                        cx.stop_propagation();
+                                        this.update(cx, |panel, cx| {
+                                            panel.create_tag_from_input(window, cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                }
+                            }),
                     )
                     .child({
                         let this = this.clone();
@@ -271,14 +273,14 @@ impl Render for TagFilterPanel {
                                     .hover(|style| style.text_color(rgb(0xffffff)))
                                     .child("+"),
                             )
-                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                this.update(cx, |panel, cx| {
-                                    let name = panel.create_input.read(cx).value().to_string();
-                                    if !name.trim().is_empty() {
-                                        panel.create_tag(name.trim(), cx);
+                            .on_mouse_down(MouseButton::Left, {
+                                let this = this.clone();
+                                move |_ev, window, cx| {
+                                    this.update(cx, |panel, cx| {
+                                        panel.create_tag_from_input(window, cx);
                                         cx.notify();
-                                    }
-                                });
+                                    });
+                                }
                             })
                     })
             })
@@ -401,84 +403,12 @@ impl Render for TagFilterPanel {
                         .child("No tags. Create above"),
                 )
             })
-            // ── TagEditPanel overlay ──
-            .when(editing_tag_id >= 0, move |el| {
-                let this = this_entity.clone();
-                let this_for_backdrop = this_entity.clone();
-                el.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .rounded(px(8.))
-                        .child(
-                            // Backdrop — click outside edit panel to cancel
-                            div()
-                                .absolute()
-                                .size_full()
-                                .bg(edit_backdrop_bg)
-                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                    this_for_backdrop.update(cx, |panel, cx| {
-                                        panel.state.update(cx, |s, _cx| s.cancel_edit_tag());
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            // Edit panel wrapper — on top of backdrop
-                            div()
-                                .absolute()
-                                .size_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(render_edit_panel(
-                                    &self.edit_name_input,
-                                    &editing_tag_color,
-                                    theme.clone(),
-                                    {
-                                        let this = this.clone();
-                                        move |_w, cx| {
-                                            this.update(cx, |panel, cx| {
-                                                panel
-                                                    .state
-                                                    .update(cx, |s, _cx| s.cancel_edit_tag());
-                                                cx.notify();
-                                            })
-                                        }
-                                    },
-                                    {
-                                        let this = this.clone();
-                                        move |_w, cx, color| {
-                                            this.update(cx, |panel, cx| {
-                                                panel.state.update(cx, |s, _cx| {
-                                                    s.set_edit_tag_color(&color)
-                                                });
-                                                cx.notify();
-                                            })
-                                        }
-                                    },
-                                    {
-                                        let this = this.clone();
-                                        move |_w, cx, name, color| {
-                                            this.update(cx, |panel, cx| {
-                                                panel.state.update(cx, |s, _cx| {
-                                                    s.update_tag(editing_tag_id, &name, &color)
-                                                });
-                                                panel.refresh_list(cx);
-                                                cx.notify();
-                                            })
-                                        }
-                                    },
-                                )),
-                        ),
-                )
-            })
     }
 }
 
 // ── TagEditPanel render helper ──
 
-fn render_edit_panel(
+pub fn render_edit_panel(
     name_input: &Entity<InputState>,
     color: &str,
     theme: ClippiTheme,

@@ -18,7 +18,7 @@ use super::context_menu::{ContextMenu, MenuItemContext};
 use super::search_bar::SearchBar;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
-use super::tag_filter::TagFilterPanel;
+use super::tag_filter::{render_edit_panel, TagFilterPanel};
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
 
@@ -37,6 +37,7 @@ pub struct RootView {
     /// Cached at creation time so the ThemeChanged handler (which only
     /// has access to `&mut App`) can resolve the "system" theme correctly.
     window_appearance: WindowAppearance,
+    last_edit_tag_id: i64,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
 }
@@ -191,6 +192,7 @@ impl RootView {
             pinned: false,
             theme,
             window_appearance,
+            last_edit_tag_id: -1,
             _wm_subscription,
             _subscriptions,
         }
@@ -248,28 +250,98 @@ impl Render for RootView {
                     })
                     .when(!is_clipboard, |panel| panel.child(settings_panel)),
             )
+            // Tag filter panel — ConfirmDialog pattern:
+            // full-screen backdrop that closes on click outside,
+            // panel positioned top-right, occlude prevents click-through.
             .when(tag_panel_open && is_clipboard, |root| {
                 let search_for_backdrop = search_bar.clone();
                 root.child(
-                    // Backdrop
-                    div().absolute().size_full().on_mouse_down(
-                        MouseButton::Left,
-                        move |_ev, _window, cx| {
-                            cx.stop_propagation();
-                            search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
-                        },
-                    ),
-                )
-                .child(
-                    // Panel — occluded to prevent click-through to backdrop
                     div()
                         .absolute()
-                        .right(px(8.))
-                        .top(px(106.))
-                        .occlude()
-                        .child(tag_filter_panel),
+                        .size_full()
+                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                            cx.stop_propagation();
+                            search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
+                        })
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(8.))
+                                .top(px(106.))
+                                .occlude()
+                                .child(tag_filter_panel),
+                        ),
                 )
             })
+            // Tag edit overlay — centered in main panel area (left:36px)
+            .when(
+                {
+                    let app_state = self.state.read(cx);
+                    let editing_id = app_state.editing_tag_id;
+                    if editing_id >= 0 && editing_id != self.last_edit_tag_id {
+                        self.last_edit_tag_id = editing_id;
+                        let edit_name = app_state.editing_tag_name.clone();
+                        let edit_input =
+                            self.tag_filter_panel.read(cx).edit_name_input().clone();
+                        let _ = edit_input.update(cx, |input, cx| {
+                            input.set_value(&edit_name, window, cx);
+                        });
+                    }
+                    editing_id >= 0 && is_clipboard
+                },
+                |root| {
+                    let app_state = self.state.read(cx);
+                    let editing_tag_id = app_state.editing_tag_id;
+                    let editing_tag_color = app_state.editing_tag_color.clone();
+                    let edit_name_input =
+                        self.tag_filter_panel.read(cx).edit_name_input().clone();
+                    let tag_filter = self.tag_filter_panel.clone();
+
+                    root.child(
+                        div()
+                            .absolute()
+                            .left(px(36.))
+                            .right(px(0.))
+                            .top(px(0.))
+                            .bottom(px(0.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(render_edit_panel(
+                                &edit_name_input,
+                                &editing_tag_color,
+                                self.theme.clone(),
+                                {
+                                    let tf = tag_filter.clone();
+                                    move |_w, cx| {
+                                        let _ = tf.update(cx, |panel, cx| {
+                                            panel.cancel_edit_tag(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                                {
+                                    let tf = tag_filter.clone();
+                                    move |_w, cx, color| {
+                                        let _ = tf.update(cx, |panel, cx| {
+                                            panel.set_edit_tag_color(&color, cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                                {
+                                    let tf = tag_filter.clone();
+                                    move |_w, cx, name, color| {
+                                        let _ = tf.update(cx, |panel, cx| {
+                                            panel.update_tag(editing_tag_id, &name, &color, cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            )),
+                    )
+                },
+            )
             .when(
                 self.list_view.read(cx).context_menu_visible() && is_clipboard,
                 |root| {
