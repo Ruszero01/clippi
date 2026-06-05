@@ -34,6 +34,9 @@ pub struct RootView {
     current_view: String,
     pinned: bool,
     theme: ClippiTheme,
+    /// Cached at creation time so the ThemeChanged handler (which only
+    /// has access to `&mut App`) can resolve the "system" theme correctly.
+    window_appearance: WindowAppearance,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
 }
@@ -47,7 +50,8 @@ impl RootView {
     ) -> Self {
         let app_state = state.read(cx);
         let items = app_state.items.clone();
-        let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window.appearance()));
+        let window_appearance = window.appearance();
+        let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window_appearance));
         let list_view =
             cx.new(|cx| ClipboardListView::new(items, state.clone(), theme.clone(), window, cx));
         list_view.update(cx, |list, _cx| list.focus(window));
@@ -55,8 +59,9 @@ impl RootView {
         let search_bar = cx
             .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
         let settings_panel =
-            cx.new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), cx));
-        let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone()));
+            cx.new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), cx));
+        let sidebar = cx
+            .new(|_cx| Sidebar::new(state.clone(), list_view.clone(), &theme));
         let tag_filter_panel = cx.new(|cx| {
             TagFilterPanel::new(
                 state.clone(),
@@ -129,13 +134,30 @@ impl RootView {
                         cx.notify();
                     }
                     SettingsEvent::ThemeChanged(theme_str) => {
-                        // NOTE: cx is &mut App here, not WindowContext, so we
-                        // can't query window_appearance(). Pass None — the
-                        // "system" theme will default to dark in that case.
-                        // TODO: store window_appearance on RootView at creation
-                        // time and use it here for accurate system theme detection.
-                        this.theme = ClippiTheme::from_setting(theme_str, None);
+                        // Use cached window_appearance from creation time so
+                        // "system" theme resolves correctly even though we
+                        // only have &mut App here (not WindowContext).
+                        this.theme =
+                            ClippiTheme::from_setting(theme_str, Some(this.window_appearance));
                         let theme = this.theme.clone();
+
+                        // Sync gpui_component theme so that Input, Scrollbar
+                        // and other gpui_component widgets follow our theme.
+                        let is_dark = theme.bg == rgb(0x191a1b);
+                        gpui_component::Theme::change(
+                            if is_dark {
+                                gpui_component::ThemeMode::Dark
+                            } else {
+                                gpui_component::ThemeMode::Light
+                            },
+                            None,
+                            cx,
+                        );
+                        // Must restore transparent background after Theme::change
+                        // resets it — otherwise the window loses transparency.
+                        gpui_component::Theme::global_mut(cx).background =
+                            Hsla::transparent_black();
+
                         let _ = this.titlebar.update(cx, |titlebar, cx| {
                             titlebar.set_theme(theme.clone(), cx);
                         });
@@ -146,7 +168,10 @@ impl RootView {
                             list_view.set_theme(theme.clone(), cx);
                         });
                         let _ = this.settings_panel.update(cx, |panel, cx| {
-                            panel.reload_theme(cx);
+                            panel.reload_theme(theme.clone(), cx);
+                        });
+                        let _ = this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.set_theme(&theme, cx);
                         });
                         cx.notify();
                     }
@@ -165,6 +190,7 @@ impl RootView {
             current_view: "clipboard".into(),
             pinned: false,
             theme,
+            window_appearance,
             _wm_subscription,
             _subscriptions,
         }

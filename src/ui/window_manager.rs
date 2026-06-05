@@ -181,6 +181,9 @@ impl WindowManager {
 
         // 5. Tray events
         self.poll_tray(cx);
+
+        // 6. Capture window geometry for persistence
+        self.capture_window_geometry(cx);
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
@@ -257,6 +260,81 @@ impl WindowManager {
                 update::open_releases_page(RELEASES_URL);
             }
             None => {}
+        }
+    }
+
+    /// Capture the current window size from the platform and update
+    /// saved_w / saved_h. Called from the poll loop while the window
+    /// is visible. On Windows this uses GetWindowRect; on other platforms
+    /// it is a no-op (window size is not yet tracked).
+    fn capture_window_geometry(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::Foundation::RECT;
+            use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+            if self.hwnd == 0 {
+                return;
+            }
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            let ok = unsafe { GetWindowRect(self.hwnd as *mut std::ffi::c_void, &mut rect) };
+            if ok == 0 {
+                return;
+            }
+            let phys_w = rect.right - rect.left;
+            let phys_h = rect.bottom - rect.top;
+            if phys_w <= 0 || phys_h <= 0 {
+                return;
+            }
+
+            // Convert physical → logical pixels
+            let scale = crate::platform::monitor::get_scale_factor(rect.left, rect.top);
+            let logical_w = phys_w as f32 / scale;
+            let logical_h = phys_h as f32 / scale;
+
+            // Also capture the position (in physical pixels — save_geometry expects logical)
+            let phys_x = rect.left;
+            let phys_y = rect.top;
+
+            let changed = (self.saved_w - logical_w).abs() > 1.0
+                || (self.saved_h - logical_h).abs() > 1.0
+                || self.saved_x != phys_x
+                || self.saved_y != phys_y;
+
+            if changed {
+                self.saved_w = logical_w;
+                self.saved_h = logical_h;
+                self.saved_x = phys_x;
+                self.saved_y = phys_y;
+
+                // Persist to settings
+                self.state.update(cx, |state, _cx| {
+                    let settings = &mut state.settings;
+                    if self.saved_x >= 0 && self.saved_y >= 0 {
+                        settings.saved_window_x = self.saved_x;
+                        settings.saved_window_y = self.saved_y;
+                    }
+                    if self.saved_w > 0.0 && self.saved_h > 0.0 {
+                        settings.saved_window_width = self.saved_w;
+                        settings.saved_window_height = self.saved_h;
+                    }
+                    settings.save();
+                });
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = cx;
         }
     }
 

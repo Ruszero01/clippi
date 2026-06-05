@@ -18,6 +18,7 @@ use crate::core::types::TagInfo;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
+use super::theme::ClippiTheme;
 
 /// Sidebar entity for displaying and managing tags.
 pub struct Sidebar {
@@ -30,15 +31,26 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
-    pub fn new(state: Entity<AppState>, list_view: Entity<ClipboardListView>) -> Self {
+    pub fn new(
+        state: Entity<AppState>,
+        list_view: Entity<ClipboardListView>,
+        theme: &ClippiTheme,
+    ) -> Self {
+        let dark_mode = theme.bg == rgb(0x191a1b);
         Self {
             state,
             list_view,
             rendered_tag_ids: Vec::new(),
             unchecked_unpinned_since: HashMap::new(),
             transition_generations: HashMap::new(),
-            dark_mode: true,
+            dark_mode,
         }
+    }
+
+    /// Update theme (called when user changes theme in settings).
+    pub fn set_theme(&mut self, theme: &ClippiTheme, cx: &mut Context<Self>) {
+        self.dark_mode = theme.bg == rgb(0x191a1b);
+        cx.notify();
     }
 }
 

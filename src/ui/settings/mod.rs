@@ -45,12 +45,9 @@ impl SettingsPanel {
     pub fn new(
         state: Entity<AppState>,
         window_manager: Entity<WindowManager>,
-        cx: &mut Context<Self>,
+        theme: ClippiTheme,
+        _cx: &mut Context<Self>,
     ) -> Self {
-        let theme = {
-            let settings = &state.read(cx).settings;
-            ClippiTheme::from_setting(&settings.theme, None)
-        };
         Self {
             active_tab: 0,
             state,
@@ -65,13 +62,9 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    /// Reload theme from current AppState settings (called by RootView after ThemeChanged).
-    pub fn reload_theme(&mut self, cx: &mut Context<Self>) {
-        let new_theme = {
-            let settings = &self.state.read(cx).settings;
-            ClippiTheme::from_setting(&settings.theme, None)
-        };
-        self.theme = new_theme;
+    /// Reload theme from the computed ClippiTheme (called by RootView after ThemeChanged).
+    pub fn reload_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
         cx.notify();
     }
 }

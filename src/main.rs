@@ -69,10 +69,22 @@ fn main() {
         )]) {
             log::error!("Failed to load iconfont.ttf: {err}");
         }
-        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
-        gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
 
         let settings = AppSettings::load();
+
+        // Set gpui_component theme based on user settings (not hardcoded Dark).
+        let is_dark = match settings.theme.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => core::settings::is_system_dark_mode(),
+        };
+        let theme_mode = if is_dark {
+            gpui_component::ThemeMode::Dark
+        } else {
+            gpui_component::ThemeMode::Light
+        };
+        gpui_component::Theme::change(theme_mode, None, cx);
+        gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
 
         // Calculate initial position (physical pixels) and size (logical pixels)
         // before the settings are moved into AppState. We use SetWindowPos on
