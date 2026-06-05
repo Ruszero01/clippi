@@ -120,6 +120,7 @@ fn main() {
                         }
                     }
                 }
+                let silent_start = settings.silent_start;
                 let state = cx.new(|_cx| AppState::new(settings));
                 let window_manager = cx.new(|cx| WindowManager::new(state.clone(), cx));
 
@@ -168,6 +169,15 @@ fn main() {
                     wm_close.update(cx, |wm, cx| wm.hide(cx));
                     false
                 });
+
+                // Silent start: defer hide until after window is fully initialized,
+                // so GPUI doesn't override the hidden state with its own show.
+                if silent_start {
+                    let wm_hide = window_manager.clone();
+                    cx.defer(move |cx| {
+                        wm_hide.update(cx, |wm, cx| wm.hide(cx));
+                    });
+                }
 
                 cx.new(|cx| gpui_component::Root::new(view, window, cx))
             },
