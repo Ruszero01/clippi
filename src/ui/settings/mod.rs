@@ -9,9 +9,13 @@
 //! Individual settings controls will be added in follow-up work.
 //! Tab rendering methods (`render_*_tab`) serve as extension points.
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use gpui_transitions::WindowUseTransition;
 
 mod clipboard;
 mod general;
@@ -37,6 +41,8 @@ pub struct SettingsPanel {
     window_manager: Entity<WindowManager>,
     theme: ClippiTheme,
     scroll_handle: ScrollHandle,
+    /// Track toggle values + generation counter for transition animation.
+    toggle_states: HashMap<String, (bool, u64)>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -54,6 +60,7 @@ impl SettingsPanel {
             window_manager,
             theme,
             scroll_handle: ScrollHandle::default(),
+            toggle_states: HashMap::new(),
         }
     }
 
@@ -70,7 +77,7 @@ impl SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_tab;
         let theme = &self.theme;
         let this = cx.entity().clone();
@@ -209,10 +216,10 @@ impl Render for SettingsPanel {
                                             .pb(px(36.))
                                             .child(match active {
                                                 0 => self
-                                                    .render_general_tab(_window, cx)
+                                                    .render_general_tab(window, cx)
                                                     .into_any_element(),
                                                 1 => self
-                                                    .render_clipboard_tab(_window, cx)
+                                                    .render_clipboard_tab(window, cx)
                                                     .into_any_element(),
                                                 2 => self.render_hotkey_tab().into_any_element(),
                                                 3 => self.render_data_tab().into_any_element(),
@@ -241,12 +248,14 @@ impl Render for SettingsPanel {
 // ── Reusable control helpers ──
 
 impl SettingsPanel {
-    /// Render a settings row with a toggle switch on the right.
+    /// Render a settings row with an animated toggle switch on the right.
     fn setting_row_with_toggle(
-        &self,
+        &mut self,
         label: &str,
         desc: &str,
         value: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
         on_toggle: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         let theme = &self.theme;
@@ -255,6 +264,34 @@ impl SettingsPanel {
         let accent = theme.accent;
         let text_1 = theme.text_1;
         let text_3 = theme.text_3;
+
+        // ── Animate toggle knob position ──
+        let key = label.to_string();
+        let entry = self.toggle_states.entry(key.clone()).or_insert((value, 0));
+        if entry.0 != value {
+            entry.0 = value;
+            entry.1 += 1;
+        }
+        let gen = entry.1;
+
+        let knob_on_x = 20.0;  // margin_left when ON
+        let knob_off_x = 2.0;  // margin_left when OFF
+        let target_x = if value { knob_on_x } else { knob_off_x };
+        let duration = Duration::from_millis(200);
+
+        // Hash the label to a stable u64 for the transition key
+        let hash_key = key.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+        let transition_key = hash_key.wrapping_add(gen << 32);
+
+        let knob_transition = window
+            .use_keyed_transition(
+                ("settings-toggle-knob", transition_key),
+                cx,
+                duration,
+                move |_, _| target_x,
+            )
+            .with_easing(ease_in_out);
+        let knob_x = *knob_transition.evaluate(window, cx);
 
         div()
             .h(px(66.))
@@ -287,29 +324,25 @@ impl SettingsPanel {
                             .child(desc.to_string()),
                     ),
             )
-            // Right: toggle switch (40×22px, 11px radius)
+            // Right: toggle switch (40×22px, 11px radius) with animated knob
             .child(
                 div()
                     .w(px(40.))
                     .h(px(22.))
                     .rounded(px(11.))
                     .bg(if value { accent } else { divider })
-                    .px(px(2.))
-                    .flex()
-                    .items_center()
-                    .when(value, |d| d.justify_end())
-                    .when(!value, |d| d.justify_start())
                     .cursor(CursorStyle::PointingHand)
                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                         on_toggle(_window, cx);
                     })
                     .child(
-                        // White circle knob (18×18px)
+                        // White circle knob (18×18px) — animated position
                         div()
                             .w(px(18.))
                             .h(px(18.))
                             .rounded(px(9.))
-                            .bg(rgb(0xffffff)),
+                            .bg(rgb(0xffffff))
+                            .ml(px(knob_x)),
                     ),
             )
     }
@@ -440,5 +473,13 @@ impl SettingsPanel {
             .text_color(self.theme.text_3)
             .text_size(px(13.))
             .child("Sync settings")
+    }
+}
+
+fn ease_in_out(delta: f32) -> f32 {
+    if delta < 0.5 {
+        2.0 * delta * delta
+    } else {
+        1.0 - (-2.0 * delta + 2.0).powi(2) / 2.0
     }
 }

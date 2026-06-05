@@ -8,8 +8,8 @@ use super::SettingsPanel;
 
 impl SettingsPanel {
     pub fn render_clipboard_tab(
-        &self,
-        _window: &mut Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.clone();
@@ -45,6 +45,8 @@ impl SettingsPanel {
                     "Sort by created",
                     desc,
                     sort_by_created,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.sort_by_created = !s.settings.sort_by_created;
@@ -88,6 +90,8 @@ impl SettingsPanel {
                     "Show source app",
                     desc,
                     show_source_app,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.show_source_app = !s.settings.show_source_app;
@@ -110,6 +114,8 @@ impl SettingsPanel {
                     "Scroll to top",
                     desc,
                     auto_scroll_to_top,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.auto_scroll_to_top = !s.settings.auto_scroll_to_top;
@@ -132,6 +138,8 @@ impl SettingsPanel {
                     "Copy as plain text",
                     desc,
                     copy_as_plain_text,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.copy_as_plain_text = !s.settings.copy_as_plain_text;
@@ -154,6 +162,8 @@ impl SettingsPanel {
                     "Show original on hover",
                     desc,
                     show_original_on_hover,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.show_original_on_hover = !s.settings.show_original_on_hover;
@@ -176,6 +186,8 @@ impl SettingsPanel {
                     "Auto Image OCR",
                     desc,
                     ocr_enabled,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.ocr_enabled = !s.settings.ocr_enabled;
@@ -198,6 +210,8 @@ impl SettingsPanel {
                     "Auto QR Detection",
                     desc,
                     qr_enabled,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.qr_enabled = !s.settings.qr_enabled;

@@ -14,8 +14,8 @@ use super::SettingsPanel;
 
 impl SettingsPanel {
     pub fn render_general_tab(
-        &self,
-        _window: &mut Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.clone();
@@ -68,6 +68,8 @@ impl SettingsPanel {
                     "Auto-start",
                     "Run on system startup",
                     auto_start,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         let new_val = state.update(_cx, |s, _cx| {
                             s.settings.auto_start = !s.settings.auto_start;
@@ -89,6 +91,8 @@ impl SettingsPanel {
                     "Auto-hide",
                     "Hide on focus loss",
                     auto_hide,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         let new_val = state.update(_cx, |s, _cx| {
                             s.settings.auto_hide = !s.settings.auto_hide;
@@ -107,6 +111,8 @@ impl SettingsPanel {
                     "Silent start",
                     "Start silently in tray",
                     silent_start,
+                    window,
+                    cx,
                     move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.silent_start = !s.settings.silent_start;
