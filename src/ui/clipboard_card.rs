@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::text::{TextView, TextViewStyle};
@@ -689,7 +690,8 @@ impl RenderOnce for ClipboardCard {
             .border(px(1.))
             .border_color(border_color)
             .rounded(px(10.))
-            .shadow_md()
+            .when(is_dark, |el| el.shadow_md())
+            .when(!is_dark, |el| el.shadow_sm())
             .flex()
             .flex_row()
             .p(px(10.))

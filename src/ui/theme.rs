@@ -84,7 +84,7 @@ impl ClippiTheme {
             surface: rgb(0xffffff),
             surface_hover: rgb(0xf4f5fb),
             surface_press: rgb(0xebedf5),
-            titlebar_bg: rgb(0xffffff),
+            titlebar_bg: rgb(0xf2f3f8),
 
             text_1: rgb(0x1a1c2e),
             text_2: rgb(0x7c809a),
