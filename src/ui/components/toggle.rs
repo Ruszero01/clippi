@@ -28,7 +28,13 @@ pub fn render_toggle(
         entry.1 += 1;
     }
 
-    let target_x = if value { 20.0 } else { 2.0 };
+    // Start from opposite side, then animate to target.
+    // This mirrors the sidebar tag animation pattern.
+    let (initial_x, target_x) = if value {
+        (2.0, 20.0)
+    } else {
+        (20.0, 2.0)
+    };
     let hash_key = key
         .bytes()
         .fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
@@ -39,9 +45,13 @@ pub fn render_toggle(
             ("settings-toggle-knob", transition_key),
             cx,
             Duration::from_millis(200),
-            move |_, _| target_x,
+            move |_, _| initial_x,
         )
         .with_easing(ease_in_out);
+    knob_transition.update(cx, |value, cx| {
+        *value = target_x;
+        cx.notify();
+    });
     let knob_x = *knob_transition.evaluate(window, cx);
 
     div()
@@ -49,6 +59,8 @@ pub fn render_toggle(
         .h(px(22.))
         .rounded(px(11.))
         .bg(if value { accent } else { track_off })
+        .flex()
+        .items_center()
         .cursor(CursorStyle::PointingHand)
         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
             on_toggle(_window, cx);
