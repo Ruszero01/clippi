@@ -10,18 +10,17 @@
 //! Tab rendering methods (`render_*_tab`) serve as extension points.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
-use gpui_transitions::WindowUseTransition;
 
 mod clipboard;
 mod general;
 
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
+use crate::ui::toggle::render_toggle;
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
@@ -265,34 +264,6 @@ impl SettingsPanel {
         let text_1 = theme.text_1;
         let text_3 = theme.text_3;
 
-        // ── Animate toggle knob position ──
-        let key = label.to_string();
-        let entry = self.toggle_states.entry(key.clone()).or_insert((value, 0));
-        if entry.0 != value {
-            entry.0 = value;
-            entry.1 += 1;
-        }
-        let gen = entry.1;
-
-        let knob_on_x = 20.0;  // margin_left when ON
-        let knob_off_x = 2.0;  // margin_left when OFF
-        let target_x = if value { knob_on_x } else { knob_off_x };
-        let duration = Duration::from_millis(200);
-
-        // Hash the label to a stable u64 for the transition key
-        let hash_key = key.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
-        let transition_key = hash_key.wrapping_add(gen << 32);
-
-        let knob_transition = window
-            .use_keyed_transition(
-                ("settings-toggle-knob", transition_key),
-                cx,
-                duration,
-                move |_, _| target_x,
-            )
-            .with_easing(ease_in_out);
-        let knob_x = *knob_transition.evaluate(window, cx);
-
         div()
             .h(px(66.))
             .rounded(px(10.))
@@ -304,7 +275,6 @@ impl SettingsPanel {
             .flex_row()
             .items_center()
             .justify_between()
-            // Left: label + description
             .child(
                 div()
                     .flex()
@@ -324,27 +294,16 @@ impl SettingsPanel {
                             .child(desc.to_string()),
                     ),
             )
-            // Right: toggle switch (40×22px, 11px radius) with animated knob
-            .child(
-                div()
-                    .w(px(40.))
-                    .h(px(22.))
-                    .rounded(px(11.))
-                    .bg(if value { accent } else { divider })
-                    .cursor(CursorStyle::PointingHand)
-                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                        on_toggle(_window, cx);
-                    })
-                    .child(
-                        // White circle knob (18×18px) — animated position
-                        div()
-                            .w(px(18.))
-                            .h(px(18.))
-                            .rounded(px(9.))
-                            .bg(rgb(0xffffff))
-                            .ml(px(knob_x)),
-                    ),
-            )
+            .child(render_toggle(
+                value,
+                label,
+                accent,
+                divider,
+                &mut self.toggle_states,
+                window,
+                cx,
+                on_toggle,
+            ))
     }
 
     /// Render a settings row with an option button group on the right.
@@ -473,13 +432,5 @@ impl SettingsPanel {
             .text_color(self.theme.text_3)
             .text_size(px(13.))
             .child("Sync settings")
-    }
-}
-
-fn ease_in_out(delta: f32) -> f32 {
-    if delta < 0.5 {
-        2.0 * delta * delta
-    } else {
-        1.0 - (-2.0 * delta + 2.0).powi(2) / 2.0
     }
 }
