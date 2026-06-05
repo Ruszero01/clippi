@@ -20,7 +20,7 @@ mod general;
 
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
-use crate::ui::toggle::render_toggle;
+use crate::ui::components::toggle::render_toggle;
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.

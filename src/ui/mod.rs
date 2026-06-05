@@ -3,7 +3,7 @@
 pub mod add_backend;
 pub mod clipboard_card;
 pub mod clipboard_list;
-pub mod confirm_dialog;
+pub mod components;
 pub mod context_menu;
 pub mod edit_panel;
 pub mod hover_toolbar;
@@ -15,6 +15,5 @@ pub mod tag_filter;
 pub mod tag_picker;
 pub mod theme;
 pub mod titlebar;
-pub mod toggle;
 pub mod toast;
 pub mod window_manager;

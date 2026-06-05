@@ -13,7 +13,7 @@ use crate::state::app::AppState;
 use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
 use super::clipboard_list::{ClipboardListView, ConfirmDialogState};
-use super::confirm_dialog::ConfirmDialog;
+use super::components::confirm_dialog::ConfirmDialog;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::search_bar::SearchBar;
 use super::settings::{SettingsEvent, SettingsPanel};
