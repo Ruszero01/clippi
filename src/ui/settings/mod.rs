@@ -9,9 +9,9 @@
 //! Individual settings controls will be added in follow-up work.
 //! Tab rendering methods (`render_*_tab`) serve as extension points.
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::scroll::ScrollableElement;
+use gpui::*;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 
 mod clipboard;
 mod general;
@@ -36,6 +36,7 @@ pub struct SettingsPanel {
     state: Entity<AppState>,
     window_manager: Entity<WindowManager>,
     theme: ClippiTheme,
+    scroll_handle: ScrollHandle,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -55,6 +56,7 @@ impl SettingsPanel {
             state,
             window_manager,
             theme,
+            scroll_handle: ScrollHandle::default(),
         }
     }
 
@@ -180,37 +182,66 @@ impl Render for SettingsPanel {
                                     .child(*name),
                             )
                             // Active underline indicator (2px)
-                            .child(
-                                div()
-                                    .w_full()
-                                    .h(px(2.))
-                                    .mt(px(4.))
-                                    .bg(underline_bg),
-                            )
+                            .child(div().w_full().h(px(2.)).mt(px(4.)).bg(underline_bg))
                     })),
             )
             // ── Tab content (fills remaining space, scrollable) ──
             .child(
                 div()
                     .flex_1()
+                    .w_full()
+                    .flex()
+                    .flex_col()
                     .overflow_hidden()
+                    .pt(px(8.))
+                    .pb(px(20.))
                     .child(
                         div()
-                            .h_full()
-                            .px(px(8.))
-                            .pt(px(8.))
-                            .pb(px(12.))
-                            .overflow_y_scrollbar()
-                            .child(match active {
-                        0 => self.render_general_tab(_window, cx).into_any_element(),
-                        1 => self.render_clipboard_tab(_window, cx).into_any_element(),
-                        2 => self.render_hotkey_tab().into_any_element(),
-                        3 => self.render_data_tab().into_any_element(),
-                        4 => self.render_sync_tab().into_any_element(),
-                        _ => div().into_any_element(),
-                    }),
+                            .relative()
+                            .flex_1()
+                            .w_full()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .id("settings-scroll-area")
+                                    .size_full()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.scroll_handle)
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .flex()
+                                            .flex_col()
+                                            .px(px(8.))
+                                            .pb(px(36.))
+                                            .child(match active {
+                                                0 => self
+                                                    .render_general_tab(_window, cx)
+                                                    .into_any_element(),
+                                                1 => self
+                                                    .render_clipboard_tab(_window, cx)
+                                                    .into_any_element(),
+                                                2 => self.render_hotkey_tab().into_any_element(),
+                                                3 => self.render_data_tab().into_any_element(),
+                                                4 => self.render_sync_tab().into_any_element(),
+                                                _ => div().into_any_element(),
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(4.))
+                                    .right(px(0.))
+                                    .bottom(px(10.))
+                                    .w(px(16.))
+                                    .child(
+                                        Scrollbar::vertical(&self.scroll_handle)
+                                            .scrollbar_show(ScrollbarShow::Scrolling),
+                                    ),
+                            ),
+                    ),
             )
-        )
     }
 }
 
@@ -347,16 +378,8 @@ impl SettingsPanel {
                     .gap(px(4.))
                     .children(options.iter().map(|(key, display_label)| {
                         let selected = *key == active_key;
-                        let btn_bg = if selected {
-                            accent
-                        } else {
-                            rgba(0x00000000)
-                        };
-                        let btn_text = if selected {
-                            rgb(0xffffff)
-                        } else {
-                            text_2
-                        };
+                        let btn_bg = if selected { accent } else { rgba(0x00000000) };
+                        let btn_text = if selected { rgb(0xffffff) } else { text_2 };
                         let btn_weight = if selected {
                             FontWeight::BOLD
                         } else {

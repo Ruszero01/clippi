@@ -5,17 +5,21 @@
 
 use std::rc::Rc;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::scroll::Scrollbar;
+use gpui::*;
+use gpui_component::input::InputState;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
-use gpui_component::input::InputState;
 
 use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
 
-use super::clipboard_card::{ClipboardCard, estimate_card_height};
+use super::clipboard_card::{estimate_card_height, ClipboardCard};
+
+const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 16.0;
+const CLIPBOARD_BOTTOM_SCROLL_INSET: f32 = 36.0;
+const CLIPBOARD_SCROLLBAR_WIDTH: f32 = 16.0;
 
 /// Types of confirmation dialogs that can be shown.
 /// [FUTURE] Add variants here for other confirmation scenarios
@@ -58,7 +62,12 @@ pub struct ClipboardListView {
 }
 
 impl ClipboardListView {
-    pub fn new(items: Vec<ClipboardItem>, state: Entity<AppState>, window: &mut Window, cx: &mut App) -> Self {
+    pub fn new(
+        items: Vec<ClipboardItem>,
+        state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
         let item_sizes = Rc::new(Self::compute_sizes(&items, "auto"));
         Self {
             items,
@@ -252,7 +261,13 @@ impl ClipboardListView {
 
     /// Start editing the note for an item.
     /// `initial_text` — from item.note (hover toolbar) or "" (context menu).
-    fn start_note_edit(&mut self, id: i64, initial_text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_note_edit(
+        &mut self,
+        id: i64,
+        initial_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.editing_note_id = id;
         let text = SharedString::from(initial_text.to_string());
         self.note_input.update(cx, move |input, cx| {
@@ -335,8 +350,7 @@ impl ClipboardListView {
             }
             "batch_paste" => {
                 let ids = self.selected_ids.clone();
-                self.state
-                    .update(cx, |s, _cx| s.batch_paste(&ids, plain));
+                self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
             }
             "edit_note" => {
                 if let Some(ref item) = self.context_menu_item {
@@ -394,8 +408,7 @@ impl ClipboardListView {
             // Batch toolbar actions
             "batch_paste" => {
                 let ids = self.selected_ids.clone();
-                self.state
-                    .update(cx, |s, _cx| s.batch_paste(&ids, plain));
+                self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
             }
             "edit_note" => {
                 if let Some(index) = self.hovered_index {
@@ -442,8 +455,12 @@ impl ClipboardListView {
     fn compute_sizes(items: &[ClipboardItem], mode: &str) -> Vec<Size<Pixels>> {
         let sizes: Vec<_> = items
             .iter()
-            .map(|item| {
-                let h = estimate_card_height(item, mode) + 16.0; // row padding + rendering margin
+            .enumerate()
+            .map(|(index, item)| {
+                let mut h = estimate_card_height(item, mode) + CLIPBOARD_ROW_VERTICAL_SPACE;
+                if index + 1 == items.len() {
+                    h += CLIPBOARD_BOTTOM_SCROLL_INSET;
+                }
                 size(px(308.), px(h))
             })
             .collect();
@@ -500,8 +517,12 @@ impl Render for ClipboardListView {
             .flex_1()
             .overflow_hidden()
             .track_focus(&focus_handle)
-            .on_key_down(window.listener_for(&view, |this, event: &KeyDownEvent, _window, cx| {
-                match event.keystroke.key.as_str() {
+            .on_key_down(
+                window.listener_for(&view, |this, event: &KeyDownEvent, _window, cx| match event
+                    .keystroke
+                    .key
+                    .as_str()
+                {
                     "up" => {
                         this.select_previous(ScrollStrategy::Top, cx);
                         cx.stop_propagation();
@@ -511,11 +532,11 @@ impl Render for ClipboardListView {
                         cx.stop_propagation();
                     }
                     _ => {}
-                }
-            }))
-            .flex_1()
-            .h_full()
+                }),
+            )
             .w_full()
+            .flex()
+            .flex_col()
             .overflow_hidden()
             .rounded_b(px(12.))
             .bg(rgb(0x191a1b))
@@ -531,7 +552,7 @@ impl Render for ClipboardListView {
                 }
             })
             .pt(px(4.))
-            .pb(px(8.))
+            .pb(px(14.))
             .px(px(8.))
             .when(empty_state, |el| {
                 el.child(
@@ -558,7 +579,8 @@ impl Render for ClipboardListView {
             })
             .when(!empty_state, |el| {
                 el.relative()
-                    .h_full()
+                    .flex_1()
+                    .w_full()
                     .overflow_hidden()
                     .child(
                         v_virtual_list(
@@ -582,29 +604,22 @@ impl Render for ClipboardListView {
 
                                         let click_handler: Rc<
                                             dyn Fn(usize, Modifiers, &mut Window, &mut App),
-                                        > = Rc::new(
-                                            move |idx, modifiers, window, cx| {
-                                                focus_handle.focus(window);
-                                                let _ = list_view.update(
-                                                    cx,
-                                                    move |this, cx| {
-                                                        // Clicking another card while editing → commit first
-                                                        if this.editing_note_id > 0 {
-                                                            this.commit_note_edit(cx);
-                                                        }
-                                                        if modifiers.control {
-                                                            this.toggle_index(idx, cx);
-                                                        } else if modifiers.shift {
-                                                            this.range_select_to_index(idx, cx);
-                                                        } else {
-                                                            this.select_index_without_scroll(
-                                                                idx, cx,
-                                                            );
-                                                        }
-                                                    },
-                                                );
-                                            },
-                                        );
+                                        > = Rc::new(move |idx, modifiers, window, cx| {
+                                            focus_handle.focus(window);
+                                            let _ = list_view.update(cx, move |this, cx| {
+                                                // Clicking another card while editing → commit first
+                                                if this.editing_note_id > 0 {
+                                                    this.commit_note_edit(cx);
+                                                }
+                                                if modifiers.control {
+                                                    this.toggle_index(idx, cx);
+                                                } else if modifiers.shift {
+                                                    this.range_select_to_index(idx, cx);
+                                                } else {
+                                                    this.select_index_without_scroll(idx, cx);
+                                                }
+                                            });
+                                        });
 
                                         let list_for_right = list_entity.clone();
                                         let list_for_hover = list_entity.clone();
@@ -640,29 +655,24 @@ impl Render for ClipboardListView {
                                                 })
                                                 .on_mouse_down(
                                                     MouseButton::Right,
-                                                    move |ev: &MouseDownEvent,
-                                                          _window,
-                                                          cx| {
+                                                    move |ev: &MouseDownEvent, _window, cx| {
                                                         let _ = list_for_right.update(
                                                             cx,
                                                             |this, cx| {
                                                                 if let Some(item) =
                                                                     this.items.get(i)
                                                                 {
-                                                                    let already_selected =
-                                                                        this.selected_ids
-                                                                            .contains(&item.id);
-                                                                    let is_batch = this
+                                                                    let already_selected = this
                                                                         .selected_ids
-                                                                        .len()
-                                                                        > 1
-                                                                        && already_selected;
+                                                                        .contains(&item.id);
+                                                                    let is_batch =
+                                                                        this.selected_ids.len() > 1
+                                                                            && already_selected;
                                                                     if !already_selected {
                                                                         // Right-click on
                                                                         // unselected item →
                                                                         // select it first
-                                                                        this.selected_ids
-                                                                            .clear();
+                                                                        this.selected_ids.clear();
                                                                         this.selected_ids
                                                                             .push(item.id);
                                                                         this.selected_index =
@@ -673,22 +683,19 @@ impl Render for ClipboardListView {
                                                                         let _ = this.state.update(
                                                                             cx,
                                                                             move |state, _cx| {
-                                                                                state.select_single(
-                                                                                    item_id,
-                                                                                );
+                                                                                state
+                                                                                    .select_single(
+                                                                                        item_id,
+                                                                                    );
                                                                             },
                                                                         );
                                                                     }
                                                                     this.context_menu_visible =
                                                                         true;
                                                                     this.context_menu_x =
-                                                                        f32::from(
-                                                                            ev.position.x,
-                                                                        );
+                                                                        f32::from(ev.position.x);
                                                                     this.context_menu_y =
-                                                                        f32::from(
-                                                                            ev.position.y,
-                                                                        );
+                                                                        f32::from(ev.position.y);
                                                                     this.context_menu_item =
                                                                         Some(item.clone());
                                                                     this.context_menu_is_batch =
@@ -710,29 +717,30 @@ impl Render for ClipboardListView {
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)
                                                     .on_commit_note({
-                                                        let list_for_commit = list_for_note_commit.clone();
+                                                        let list_for_commit =
+                                                            list_for_note_commit.clone();
                                                         move |_window, cx| {
-                                                            let _ = list_for_commit.update(cx, |this, cx| {
-                                                                this.commit_note_edit(cx);
-                                                            });
-                                                        }
-                                                    })
-                                                    .on_toolbar_action(
-                                                        move |action, window, cx| {
-                                                            let _ = list_for_toolbar.update(
+                                                            let _ = list_for_commit.update(
                                                                 cx,
                                                                 |this, cx| {
-                                                                    this.handle_toolbar_action(
-                                                                        action, window, cx,
-                                                                    );
+                                                                    this.commit_note_edit(cx);
                                                                 },
                                                             );
-                                                        },
-                                                    )
+                                                        }
+                                                    })
+                                                    .on_toolbar_action(move |action, window, cx| {
+                                                        let _ = list_for_toolbar.update(
+                                                            cx,
+                                                            |this, cx| {
+                                                                this.handle_toolbar_action(
+                                                                    action, window, cx,
+                                                                );
+                                                            },
+                                                        );
+                                                    })
                                                     .on_double_click({
-                                                    let list_for_dbl = list_entity.clone();
-                                                    Rc::new(
-                                                        move |idx, _window, cx| {
+                                                        let list_for_dbl = list_entity.clone();
+                                                        Rc::new(move |idx, _window, cx| {
                                                             let _ = list_for_dbl.update(
                                                                 cx,
                                                                 |this, cx| {
@@ -761,16 +769,14 @@ impl Render for ClipboardListView {
                                                                             cx,
                                                                             |s, _cx| {
                                                                                 s.paste_item(
-                                                                                    item_id,
-                                                                                    plain,
+                                                                                    item_id, plain,
                                                                                 );
                                                                             },
                                                                         );
                                                                     }
                                                                 },
                                                             );
-                                                        },
-                                                    )
+                                                        })
                                                     });
 
                                                     // Editing card: no click handler → Input receives clicks directly
@@ -794,12 +800,13 @@ impl Render for ClipboardListView {
                     .child(
                         div()
                             .absolute()
-                            .top(px(0.))
+                            .top(px(4.))
                             .right(px(0.))
-                            .bottom(px(0.))
-                            .w(px(6.))
+                            .bottom(px(10.))
+                            .w(px(CLIPBOARD_SCROLLBAR_WIDTH))
                             .child(
-                                Scrollbar::vertical(&self.scroll_handle),
+                                Scrollbar::vertical(&self.scroll_handle)
+                                    .scrollbar_show(ScrollbarShow::Scrolling),
                             ),
                     )
             })
