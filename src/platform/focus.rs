@@ -20,9 +20,9 @@ use windows_sys::Win32::UI::Accessibility::{
 use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DispatchMessageW, GetForegroundWindow, GetWindowTextW,
-    GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, TranslateMessage,
-    EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE, WINEVENT_OUTOFCONTEXT, WM_QUIT,
+    DestroyIcon, DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    PeekMessageW, PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
+    WINEVENT_OUTOFCONTEXT, WM_QUIT,
 };
 
 #[cfg(target_os = "windows")]

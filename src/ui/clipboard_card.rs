@@ -21,6 +21,7 @@ use crate::core::types::{
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
+use super::theme::ClippiTheme;
 
 /// Get a content type iconfont glyph for display.
 fn type_icon(item: &ClipboardItem) -> &'static str {
@@ -506,6 +507,7 @@ pub struct ClipboardCard {
     item: Rc<ClipboardItem>,
     selected: bool,
     index: usize,
+    theme: ClippiTheme,
     selection_order: usize,
     on_click: Option<Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>>,
     on_right_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
@@ -527,6 +529,7 @@ impl ClipboardCard {
             item,
             selected,
             index,
+            theme: ClippiTheme::dark(),
             selection_order: 0,
             on_click: None,
             on_right_click: None,
@@ -564,6 +567,11 @@ impl ClipboardCard {
         self
     }
 
+    pub fn theme(mut self, theme: ClippiTheme) -> Self {
+        self.theme = theme;
+        self
+    }
+
     /// Set the 1-based selection order for the badge (0 = hidden).
     pub fn selection_order(mut self, order: usize) -> Self {
         self.selection_order = order;
@@ -578,10 +586,7 @@ impl ClipboardCard {
         self
     }
 
-    pub fn on_double_click(
-        mut self,
-        handler: Rc<dyn Fn(usize, &mut Window, &mut App)>,
-    ) -> Self {
+    pub fn on_double_click(mut self, handler: Rc<dyn Fn(usize, &mut Window, &mut App)>) -> Self {
         self.on_double_click = Some(handler);
         self
     }
@@ -599,10 +604,7 @@ impl ClipboardCard {
     }
 
     /// Called when note is committed (Enter / confirm button).
-    pub fn on_commit_note(
-        mut self,
-        handler: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_commit_note(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_commit_note = Some(Rc::new(handler));
         self
     }
@@ -614,6 +616,7 @@ impl RenderOnce for ClipboardCard {
             item,
             selected,
             index,
+            theme,
             selection_order,
             on_click,
             on_right_click,
@@ -626,17 +629,41 @@ impl RenderOnce for ClipboardCard {
             on_commit_note,
         } = self;
 
-        let surface = rgb(0x232425);
-        let divider = rgb(0x2b2c2d);
-        let accent = rgb(0x7ecba3);
-        let fav_color = rgb(0xd8a155);
-        let tag_bg = rgb(0x2c2e2f);
-        let tag_text = rgb(0xddf5e4);
-        let text_1 = rgb(0xeaebec);
-        let text_2 = rgb(0x919496);
-        let text_3 = rgb(0x5f6264);
-        let pill_bg = rgba(0x232425e8);
-        let pill_border = rgba(0xffffff20);
+        let surface = theme.surface;
+        let divider = theme.divider;
+        let accent = theme.accent;
+        let fav_color = theme.fav_color;
+        let tag_bg = theme.tag_bg;
+        let tag_text = theme.tag_text;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
+        let is_dark = theme.bg == rgb(0x191a1b);
+        let pill_bg = if is_dark {
+            rgba(0x232425e8)
+        } else {
+            rgba(0xffffffe8)
+        };
+        let pill_border = if is_dark {
+            rgba(0xffffff20)
+        } else {
+            rgba(0x00000014)
+        };
+        let color_border = if is_dark {
+            rgba(0xffffff20)
+        } else {
+            rgba(0x00000018)
+        };
+        let subtle_row_bg = if is_dark {
+            rgb(0x2b2c2d)
+        } else {
+            rgb(0xf4f5fb)
+        };
+        let hover_bg = if is_dark {
+            rgba(0xffffff10)
+        } else {
+            rgba(0x0000000a)
+        };
         let time_str = format_relative_time(&item.updated_at);
         let is_fav = item.is_favorite;
         let content_type = item.content_type;
@@ -722,7 +749,7 @@ impl RenderOnce for ClipboardCard {
                                 .rounded(px(4.))
                                 .bg(color_swatch)
                                 .border(px(1.))
-                                .border_color(rgba(0xffffff20)),
+                                .border_color(color_border),
                         ),
                 )
                 .child(
@@ -732,7 +759,7 @@ impl RenderOnce for ClipboardCard {
                         .rounded(px(3.))
                         .bg(color_swatch)
                         .border(px(1.))
-                        .border_color(rgba(0xffffff20))
+                        .border_color(color_border)
                         .p(px(2.))
                         .flex()
                         .items_center()
@@ -836,53 +863,47 @@ impl RenderOnce for ClipboardCard {
                 .gap(px(2.))
                 .child(
                     // Single-line text input
-                    div()
-                        .w_full()
-                        .h(px(24.))
-                        .child({
-                            let input_entity = note_input_ref.expect("note_input must be set when editing");
-                            Input::new(&input_entity)
-                                .appearance(false)
-                                .bordered(false)
-                                .focus_bordered(false)
-                                .w_full()
-                                .h_full()
-                                .text_size(px(12.))
-                        }),
+                    div().w_full().h(px(24.)).child({
+                        let input_entity =
+                            note_input_ref.expect("note_input must be set when editing");
+                        Input::new(&input_entity)
+                            .appearance(false)
+                            .bordered(false)
+                            .focus_bordered(false)
+                            .w_full()
+                            .h_full()
+                            .text_size(px(12.))
+                    }),
                 )
                 .child(
                     // Confirm button (checkmark icon \u{e611})
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .child(
-                            div()
-                                .w(px(20.))
-                                .h(px(20.))
-                                .rounded(px(4.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.bg(rgba(0xffffff10)))
-                                .on_mouse_down(MouseButton::Left, {
-                                    let commit = commit.clone();
-                                    move |_ev, window, cx| {
-                                        cx.stop_propagation();
-                                        if let Some(ref handler) = commit {
-                                            handler(window, cx);
-                                        }
+                    div().flex().flex_row().justify_end().child(
+                        div()
+                            .w(px(20.))
+                            .h(px(20.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.bg(hover_bg))
+                            .on_mouse_down(MouseButton::Left, {
+                                let commit = commit.clone();
+                                move |_ev, window, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(ref handler) = commit {
+                                        handler(window, cx);
                                     }
-                                })
-                                .child(
-                                    div()
-                                        .font_family("iconfont")
-                                        .text_size(px(12.))
-                                        .text_color(accent)
-                                        .child("\u{e611}"), // ✓ checkmark
-                                ),
-                        ),
+                                }
+                            })
+                            .child(
+                                div()
+                                    .font_family("iconfont")
+                                    .text_size(px(12.))
+                                    .text_color(accent)
+                                    .child("\u{e611}"), // ✓ checkmark
+                            ),
+                    ),
                 )
                 .on_key_down({
                     let commit = commit.clone();
@@ -1040,7 +1061,7 @@ impl RenderOnce for ClipboardCard {
                             let icon = if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
                             let row = div()
                                 .rounded(px(4.))
-                                .bg(rgb(0x2b2c2d))
+                                .bg(subtle_row_bg)
                                 .px(px(6.))
                                 .py(px(4.))
                                 .flex()
@@ -1133,7 +1154,11 @@ impl RenderOnce for ClipboardCard {
         // ── Assemble card ──
         let card = base.child(icon_area).child(content);
         // Hide bottom tags/time row during note editing
-        let card = if !editing { card.child(bottom_info) } else { card };
+        let card = if !editing {
+            card.child(bottom_info)
+        } else {
+            card
+        };
 
         // Fav indicator bar (left edge, scales with card height)
         let card = if is_fav {
@@ -1180,21 +1205,17 @@ impl RenderOnce for ClipboardCard {
 
         // ── Hover toolbar (hidden during note editing) ──
         if is_hovered && !editing {
-            let toolbar_props =
-                HoverToolbarProps::from_item(&item, selected_count, selected);
+            let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected);
             card.child(
-                div()
-                    .absolute()
-                    .top(px(3.))
-                    .right(px(4.))
-                    .occlude()
-                    .child(HoverToolbar::new(toolbar_props).on_action(
-                        move |action, _window, cx| {
+                div().absolute().top(px(3.)).right(px(4.)).occlude().child(
+                    HoverToolbar::new(toolbar_props)
+                        .theme(theme.clone())
+                        .on_action(move |action, _window, cx| {
                             if let Some(ref handler) = on_toolbar_action {
                                 handler(action, _window, cx);
                             }
-                        },
-                    )),
+                        }),
+                ),
             )
         } else {
             card

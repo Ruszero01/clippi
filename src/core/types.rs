@@ -568,7 +568,14 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
                 return text.to_string();
             }
             let prefix: String = cleaned.chars().take(3).collect();
-            let suffix: String = cleaned.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            let suffix: String = cleaned
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             format!("{}****{}", prefix, suffix)
         }
         _ => text.to_string(),

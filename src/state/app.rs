@@ -7,9 +7,9 @@
 use crate::core::db::Database;
 use crate::core::filters::ClipboardFilters;
 use crate::core::settings::AppSettings;
+use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
 use crate::core::types::TagInfo;
-use crate::core::types::next_tag_color;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -65,7 +65,8 @@ impl AppState {
         let db = Database::open(&db_path.to_string_lossy())
             .unwrap_or_else(|e| panic!("Failed to open database at {db_path:?}: {e}"));
 
-        let items = db.load_filtered_with_tags(&ClipboardFilters::default(), query_limit, order_by)
+        let items = db
+            .load_filtered_with_tags(&ClipboardFilters::default(), query_limit, order_by)
             .unwrap_or_else(|e| {
                 log::error!("Failed to load initial items: {e}");
                 Vec::new()
@@ -94,7 +95,10 @@ impl AppState {
 
     /// Reload items from database with current filters.
     pub fn reload_items(&mut self) {
-        match self.db.load_filtered_with_tags(&self.filters, self.query_limit(), self.order_by()) {
+        match self
+            .db
+            .load_filtered_with_tags(&self.filters, self.query_limit(), self.order_by())
+        {
             Ok(items) => self.items = items,
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
@@ -118,7 +122,8 @@ impl AppState {
     /// Toggle a content-type filter and reload visible items.
     pub fn toggle_type_filter(&mut self, type_name: &str) {
         if type_name == "file" {
-            let activate = !self.filters.is_type_active("file") && !self.filters.is_type_active("image");
+            let activate =
+                !self.filters.is_type_active("file") && !self.filters.is_type_active("image");
             for expanded in ["file", "image"] {
                 let is_active = self.filters.is_type_active(expanded);
                 if activate != is_active {
@@ -162,7 +167,12 @@ impl AppState {
 
     /// Toggle whether a tag is pinned in the side tag bar, then persist settings.
     pub fn toggle_pinned_tag(&mut self, tag_id: i64) {
-        if let Some(pos) = self.settings.pinned_tag_ids.iter().position(|&id| id == tag_id) {
+        if let Some(pos) = self
+            .settings
+            .pinned_tag_ids
+            .iter()
+            .position(|&id| id == tag_id)
+        {
             self.settings.pinned_tag_ids.remove(pos);
         } else {
             self.settings.pinned_tag_ids.push(tag_id);
@@ -266,7 +276,9 @@ impl AppState {
         if self.settings.max_items == 0 {
             200
         } else {
-            (self.settings.max_items as usize).saturating_mul(2).max(200)
+            (self.settings.max_items as usize)
+                .saturating_mul(2)
+                .max(200)
         }
     }
 
@@ -402,7 +414,10 @@ impl AppState {
                 if let Ok(meta) = std::fs::metadata(&item.image_path) {
                     let size = meta.len();
                     if !crate::services::clipboard_ops::verify_clipboard_image(size, 300) {
-                        log::warn!("batch_paste: image verification failed for item {}", item.id);
+                        log::warn!(
+                            "batch_paste: image verification failed for item {}",
+                            item.id
+                        );
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 } else {
@@ -410,7 +425,10 @@ impl AppState {
                 }
             } else if item.content_type != ContentType::File {
                 if !crate::services::clipboard_ops::verify_clipboard_content(&expected, 300) {
-                    log::warn!("batch_paste: text verification timed out for item {}", item.id);
+                    log::warn!(
+                        "batch_paste: text verification timed out for item {}",
+                        item.id
+                    );
                 }
             } else {
                 std::thread::sleep(std::time::Duration::from_millis(50));

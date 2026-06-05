@@ -57,12 +57,15 @@ mod win {
 
     impl OcrEngine for WindowsOcrEngine {
         fn recognize(&self, image_path: &Path) -> OcrResult {
-            let path_str = image_path.to_str().ok_or_else(|| "OCR: invalid image path".to_string())?;
+            let path_str = image_path
+                .to_str()
+                .ok_or_else(|| "OCR: invalid image path".to_string())?;
 
-            let file = windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path_str))
-                .map_err(|e| format!("OCR StorageFile: {e}"))?
-                .get()
-                .map_err(|e| format!("OCR StorageFile get: {e}"))?;
+            let file =
+                windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path_str))
+                    .map_err(|e| format!("OCR StorageFile: {e}"))?
+                    .get()
+                    .map_err(|e| format!("OCR StorageFile get: {e}"))?;
 
             let stream = file
                 .OpenAsync(windows::Storage::FileAccessMode::Read)
@@ -88,19 +91,21 @@ mod win {
             // ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"]
             // Try zh-Hans first for Chinese accuracy, then user languages, then en-US
             let language_tags: &[(bool, &str)] = &[
-                (false, "zh-Hans"),   // Simplified Chinese (primary)
-                (true, ""),           // User profile languages
-                (false, "en-US"),     // English final fallback
+                (false, "zh-Hans"), // Simplified Chinese (primary)
+                (true, ""),         // User profile languages
+                (false, "en-US"),   // English final fallback
             ];
 
             for &(use_profile, tag) in language_tags {
                 let engine = if use_profile {
                     windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages().ok()
                 } else {
-                    let lang = match windows::Globalization::Language::CreateLanguage(&HSTRING::from(tag)) {
-                        Ok(l) => l,
-                        Err(_) => continue,
-                    };
+                    let lang =
+                        match windows::Globalization::Language::CreateLanguage(&HSTRING::from(tag))
+                        {
+                            Ok(l) => l,
+                            Err(_) => continue,
+                        };
                     windows::Media::Ocr::OcrEngine::TryCreateFromLanguage(&lang).ok()
                 };
 
@@ -147,15 +152,17 @@ mod mac {
             let path_str = image_path
                 .to_str()
                 .ok_or_else(|| "OCR: non-UTF-8 path".to_string())?;
-            let c_path = CString::new(path_str)
-                .map_err(|_| "OCR: path contains null byte".to_string())?;
+            let c_path =
+                CString::new(path_str).map_err(|_| "OCR: path contains null byte".to_string())?;
 
             let ptr = unsafe { clippi_ocr_recognize(c_path.as_ptr()) };
             if ptr.is_null() {
                 return Err("OCR: recognition failed".to_string());
             }
 
-            let result = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+            let result = unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned();
             unsafe { clippi_ocr_free_string(ptr) };
             Ok(result)
         }

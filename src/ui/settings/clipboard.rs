@@ -36,7 +36,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if sort_by_created { "First created" } else { "Last modified" };
+                let desc = if sort_by_created {
+                    "First created"
+                } else {
+                    "Last modified"
+                };
                 self.setting_row_with_toggle(
                     "Sort by created",
                     desc,
@@ -56,7 +60,12 @@ impl SettingsPanel {
                 self.setting_row_with_options(
                     "Card height",
                     "Adjust card height",
-                    &[("high", "Tall"), ("medium", "Med"), ("low", "Short"), ("auto", "Auto")],
+                    &[
+                        ("high", "Tall"),
+                        ("medium", "Med"),
+                        ("low", "Short"),
+                        ("auto", "Auto"),
+                    ],
                     &card_height_mode,
                     move |key, _window, _cx| {
                         state.update(_cx, |s, _cx| {
@@ -70,7 +79,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if show_source_app { "Show source app icon" } else { "Show content type only" };
+                let desc = if show_source_app {
+                    "Show source app icon"
+                } else {
+                    "Show content type only"
+                };
                 self.setting_row_with_toggle(
                     "Show source app",
                     desc,
@@ -88,7 +101,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if auto_scroll_to_top { "Scroll to top on open" } else { "Keep last scroll position" };
+                let desc = if auto_scroll_to_top {
+                    "Scroll to top on open"
+                } else {
+                    "Keep last scroll position"
+                };
                 self.setting_row_with_toggle(
                     "Scroll to top",
                     desc,
@@ -106,7 +123,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if copy_as_plain_text { "Save as plain text only" } else { "Keep rich formatting" };
+                let desc = if copy_as_plain_text {
+                    "Save as plain text only"
+                } else {
+                    "Keep rich formatting"
+                };
                 self.setting_row_with_toggle(
                     "Copy as plain text",
                     desc,
@@ -124,7 +145,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if show_original_on_hover { "Show original on hover" } else { "Cards with notes show note" };
+                let desc = if show_original_on_hover {
+                    "Show original on hover"
+                } else {
+                    "Cards with notes show note"
+                };
                 self.setting_row_with_toggle(
                     "Show original on hover",
                     desc,
@@ -142,7 +167,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if ocr_enabled { "Auto OCR for images" } else { "OCR disabled" };
+                let desc = if ocr_enabled {
+                    "Auto OCR for images"
+                } else {
+                    "OCR disabled"
+                };
                 self.setting_row_with_toggle(
                     "Auto Image OCR",
                     desc,
@@ -160,7 +189,11 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                let desc = if qr_enabled { "Auto detect QR in images" } else { "QR detection disabled" };
+                let desc = if qr_enabled {
+                    "Auto detect QR in images"
+                } else {
+                    "QR detection disabled"
+                };
                 self.setting_row_with_toggle(
                     "Auto QR Detection",
                     desc,

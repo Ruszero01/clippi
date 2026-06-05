@@ -10,12 +10,12 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_transitions::WindowUseTransition;
 
-use crate::state::app::AppState;
 use crate::core::types::TagInfo;
+use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
 
@@ -63,7 +63,9 @@ impl Render for Sidebar {
         let previous_rendered_ids = self.rendered_tag_ids.clone();
         for previous_id in previous_rendered_ids.clone() {
             if !active_or_pinned_ids.contains(&previous_id) {
-                self.unchecked_unpinned_since.entry(previous_id).or_insert(now);
+                self.unchecked_unpinned_since
+                    .entry(previous_id)
+                    .or_insert(now);
             }
         }
         self.unchecked_unpinned_since.retain(|id, started_at| {
@@ -71,7 +73,12 @@ impl Render for Sidebar {
                 && now.duration_since(*started_at) < Duration::from_millis(300)
         });
 
-        let display_tags = ordered_sidebar_tags(&tags, &active_tag_ids, &pinned_tag_ids, &self.unchecked_unpinned_since);
+        let display_tags = ordered_sidebar_tags(
+            &tags,
+            &active_tag_ids,
+            &pinned_tag_ids,
+            &self.unchecked_unpinned_since,
+        );
         for tag in &display_tags {
             let newly_entering = active_tag_ids.contains(&tag.id)
                 && !pinned_tag_ids.contains(&tag.id)
@@ -114,7 +121,8 @@ impl Render for Sidebar {
                 let bar_color = parse_tag_color(&tag.color);
                 let label = tag.name;
                 let tag_id = tag.id;
-                let transition_generation = transition_generations.get(&tag_id).copied().unwrap_or(0);
+                let transition_generation =
+                    transition_generations.get(&tag_id).copied().unwrap_or(0);
                 let tag_key = (tag_id as u64).wrapping_add(transition_generation << 32);
                 let state_for_left = state_for_click.clone();
                 let list_for_left = list_for_click.clone();
@@ -122,12 +130,9 @@ impl Render for Sidebar {
                 let sidebar_for_right = sidebar_for_notify.clone();
 
                 let row_x_transition = window
-                    .use_keyed_transition(
-                        ("sidebar-tag-x", tag_key),
-                        cx,
-                        duration,
-                        move |_, _| initial_row_x,
-                    )
+                    .use_keyed_transition(("sidebar-tag-x", tag_key), cx, duration, move |_, _| {
+                        initial_row_x
+                    })
                     .with_easing(ease_in_out);
                 row_x_transition.update(cx, |value, cx| {
                     *value = target_row_x;
@@ -193,14 +198,10 @@ impl Render for Sidebar {
                     } else {
                         CursorStyle::Arrow
                     })
-                    .when(interactable, move |row| row.hover(move |style| style.bg(row_bg_hover)))
-                    .child(
-                        div()
-                            .w(px(3.))
-                            .h(bar_height)
-                            .rounded(px(2.))
-                            .bg(bar_color),
-                    )
+                    .when(interactable, move |row| {
+                        row.hover(move |style| style.bg(row_bg_hover))
+                    })
+                    .child(div().w(px(3.)).h(bar_height).rounded(px(2.)).bg(bar_color))
                     .child(
                         div()
                             .w(px(43.))
@@ -223,12 +224,15 @@ impl Render for Sidebar {
                         });
                         list_for_left.update(cx, |list, cx| list.set_items(items, cx));
                     })
-                    .on_mouse_down(MouseButton::Right, move |_ev, _window, cx| {
-                        state_for_right.update(cx, |state, _cx| {
-                            state.toggle_pinned_tag(tag_id);
-                        });
-                        sidebar_for_right.update(cx, |_sidebar, cx| cx.notify());
-                    })
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        move |_ev, _window, cx| {
+                            state_for_right.update(cx, |state, _cx| {
+                                state.toggle_pinned_tag(tag_id);
+                            });
+                            sidebar_for_right.update(cx, |_sidebar, cx| cx.notify());
+                        },
+                    )
                 } else {
                     row
                 }

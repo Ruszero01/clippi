@@ -27,12 +27,16 @@ pub struct Titlebar {
 }
 
 impl Titlebar {
-    pub fn new(state: Entity<AppState>, list_view: Entity<ClipboardListView>) -> Self {
+    pub fn new(
+        state: Entity<AppState>,
+        list_view: Entity<ClipboardListView>,
+        theme: ClippiTheme,
+    ) -> Self {
         Self {
             state,
             list_view,
             pinned: false,
-            theme: ClippiTheme::dark(),
+            theme,
         }
     }
 
@@ -43,6 +47,11 @@ impl Titlebar {
 
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;
+        cx.notify();
+    }
+
+    pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
         cx.notify();
     }
 }

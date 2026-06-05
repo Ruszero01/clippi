@@ -26,14 +26,22 @@ impl TagPickerPanel {
             .into_iter()
             .map(|t| {
                 let state = if assigned_ids.contains(&t.id) {
-                    if is_batch { TagState::Partial } else { TagState::All }
+                    if is_batch {
+                        TagState::Partial
+                    } else {
+                        TagState::All
+                    }
                 } else {
                     TagState::None
                 };
                 (t, state)
             })
             .collect();
-        Self { tags: tags_with_state, on_toggle: None, on_add: None }
+        Self {
+            tags: tags_with_state,
+            on_toggle: None,
+            on_add: None,
+        }
     }
 
     pub fn on_toggle(mut self, handler: impl Fn(i64, &mut Window, &mut App) + 'static) -> Self {
@@ -88,7 +96,11 @@ impl RenderOnce for TagPickerPanel {
                     .px(px(10.))
                     .py(px(6.))
                     .text_size(px(12.))
-                    .text_color(if is_active { rgb(0xe0e0e0) } else { rgb(0x999999) })
+                    .text_color(if is_active {
+                        rgb(0xe0e0e0)
+                    } else {
+                        rgb(0x999999)
+                    })
                     .cursor(CursorStyle::PointingHand)
                     .hover(|style| style.bg(rgba(0xffffff10)));
 
@@ -105,7 +117,11 @@ impl RenderOnce for TagPickerPanel {
                         .w(px(14.))
                         .h(px(14.))
                         .rounded(px(3.))
-                        .bg(if is_active { rgb(0x3d7ef5) } else { rgb(0x3d3e42) })
+                        .bg(if is_active {
+                            rgb(0x3d7ef5)
+                        } else {
+                            rgb(0x3d3e42)
+                        })
                         .text_size(px(10.))
                         .text_color(rgb(0xffffff))
                         .flex()

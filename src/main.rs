@@ -22,10 +22,10 @@ mod services;
 // mod looper;
 
 // Root view lives in ui::root — use that instead of inline ClippiApp
+use core::settings::AppSettings;
+use state::app::AppState;
 use ui::root::RootView;
 use ui::window_manager::WindowManager;
-use state::app::AppState;
-use core::settings::AppSettings;
 
 fn ensure_single_instance() -> bool {
     std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
@@ -78,7 +78,8 @@ fn main() {
         // before the settings are moved into AppState. We use SetWindowPos on
         // Windows because GPUI's window_bounds with transparent windows is unreliable.
         let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
-        let (initial_logical_w, initial_logical_h) = core::frontend::effective_window_size(&settings);
+        let (initial_logical_w, initial_logical_h) =
+            core::frontend::effective_window_size(&settings);
 
         cx.open_window(
             WindowOptions {
@@ -108,8 +109,7 @@ fn main() {
                     }
                 }
                 let state = cx.new(|_cx| AppState::new(settings));
-                let window_manager =
-                    cx.new(|cx| WindowManager::new(state.clone(), cx));
+                let window_manager = cx.new(|cx| WindowManager::new(state.clone(), cx));
 
                 // ── Store raw window handle + set initial position/size ──
                 #[cfg(target_os = "windows")]
@@ -133,8 +133,10 @@ fn main() {
                                     SetWindowPos(
                                         hwnd as _,
                                         HWND_TOP,
-                                        x, y,
-                                        phys_w, phys_h,
+                                        x,
+                                        y,
+                                        phys_w,
+                                        phys_h,
                                         SWP_NOACTIVATE,
                                     );
                                 }
@@ -143,9 +145,8 @@ fn main() {
                     }
                 }
 
-                let view = cx.new(|cx| {
-                    RootView::new(window, state.clone(), window_manager.clone(), cx)
-                });
+                let view =
+                    cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
 
                 // Intercept window close — hide to background instead of
                 // destroying the window. Returns false to prevent GPUI

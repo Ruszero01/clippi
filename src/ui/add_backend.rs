@@ -6,7 +6,9 @@ use gpui::*;
 pub struct AddBackendPanel;
 
 impl AddBackendPanel {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl RenderOnce for AddBackendPanel {

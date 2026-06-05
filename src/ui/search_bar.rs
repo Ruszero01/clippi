@@ -4,11 +4,15 @@
 //! - 28px search box, 10px border-radius, surface bg, divider border
 //! - Filter buttons: 22px height, 5px border-radius, icon+label layout
 //! - Active state: accent text + 22% accent bg overlay
-//! - Tag filter button at right end
+//! - Type/tag toolbar switches to icon-only when the window is narrow
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui::{InteractiveElement, StatefulInteractiveElement};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::tooltip::Tooltip;
 
+use crate::core::frontend::PANEL_OFFSET_X;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
@@ -21,12 +25,40 @@ struct FilterDef {
 }
 
 const FILTER_TYPES: &[FilterDef] = &[
-    FilterDef { label: "Text", key: "plain_text", icon: "\u{e60e}" },
-    FilterDef { label: "RTF", key: "rich_text", icon: "\u{e6ae}" },
-    FilterDef { label: "Files", key: "file", icon: "\u{e646}" },
-    FilterDef { label: "Links", key: "link", icon: "\u{e6d7}" },
-    FilterDef { label: "Color", key: "color", icon: "\u{e610}" },
+    FilterDef {
+        label: "Text",
+        key: "plain_text",
+        icon: "\u{e60e}",
+    },
+    FilterDef {
+        label: "RTF",
+        key: "rich_text",
+        icon: "\u{e6ae}",
+    },
+    FilterDef {
+        label: "Files",
+        key: "file",
+        icon: "\u{e646}",
+    },
+    FilterDef {
+        label: "Links",
+        key: "link",
+        icon: "\u{e6d7}",
+    },
+    FilterDef {
+        label: "Color",
+        key: "color",
+        icon: "\u{e610}",
+    },
 ];
+
+const SEARCH_BAR_HORIZONTAL_PADDING: f32 = 16.0;
+const TOOLBAR_GROUP_GAP: f32 = 6.0;
+const TOOLBAR_DIVIDER_WIDTH: f32 = 1.0;
+const TAG_FILTER_BUTTON_WIDTH: f32 = 24.0;
+const TYPE_FILTER_TEXT_GAP: f32 = 4.0;
+const TYPE_FILTER_ICON_GAP: f32 = 3.0;
+const TYPE_FILTER_TEXT_MIN_SLOT_WIDTH: f32 = 50.0;
 
 pub struct SearchBar {
     input: Entity<InputState>,
@@ -41,6 +73,7 @@ impl SearchBar {
     pub fn new(
         state: Entity<AppState>,
         list_view: Entity<ClipboardListView>,
+        theme: ClippiTheme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -68,7 +101,7 @@ impl SearchBar {
             state,
             list_view,
             tag_panel_open: false,
-            theme: ClippiTheme::dark(),
+            theme,
             _subscriptions,
         }
     }
@@ -79,6 +112,11 @@ impl SearchBar {
 
     pub fn close_tag_panel(&mut self, cx: &mut Context<Self>) {
         self.tag_panel_open = false;
+        cx.notify();
+    }
+
+    pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
         cx.notify();
     }
 
@@ -97,7 +135,7 @@ impl SearchBar {
 }
 
 impl Render for SearchBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &self.theme;
         let accent = theme.accent;
         let text_2 = theme.text_2;
@@ -107,6 +145,28 @@ impl Render for SearchBar {
         let this = cx.entity().clone();
         let state_snapshot = self.state.read(cx);
         let has_tag_filter = !state_snapshot.filters.tag_ids.is_empty();
+        let viewport = window.viewport_size();
+        let toolbar_width =
+            f32::from(viewport.width) - PANEL_OFFSET_X - SEARCH_BAR_HORIZONTAL_PADDING;
+        let type_count = FILTER_TYPES.len() as f32;
+        let type_toolbar_width = (toolbar_width
+            - (TOOLBAR_GROUP_GAP * 2.0)
+            - TOOLBAR_DIVIDER_WIDTH
+            - TAG_FILTER_BUTTON_WIDTH)
+            .max(0.0);
+        let text_gap_total = TYPE_FILTER_TEXT_GAP * (type_count - 1.0).max(0.0);
+        let type_slot_width = (type_toolbar_width - text_gap_total).max(0.0) / type_count.max(1.0);
+        let icon_only = type_slot_width < TYPE_FILTER_TEXT_MIN_SLOT_WIDTH;
+        let inactive_button_bg = if theme.bg == rgb(0x191a1b) {
+            rgba(0xffffff0a)
+        } else {
+            rgba(0x00000008)
+        };
+        let toolbar_divider = if theme.bg == rgb(0x191a1b) {
+            rgba(0xffffff18)
+        } else {
+            rgba(0x00000014)
+        };
 
         div()
             .flex()
@@ -154,14 +214,23 @@ impl Render for SearchBar {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .justify_between()
+                    .justify_start()
+                    .gap(px(TOOLBAR_GROUP_GAP))
                     .h(px(22.))
+                    .w_full()
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .gap(px(6.))
-                            .children(FILTER_TYPES.iter().map(|f| {
+                            .flex_1()
+                            .min_w(px(0.))
+                            .items_center()
+                            .gap(if icon_only {
+                                px(TYPE_FILTER_ICON_GAP)
+                            } else {
+                                px(TYPE_FILTER_TEXT_GAP)
+                            })
+                            .children(FILTER_TYPES.iter().enumerate().map(|(index, f)| {
                                 let is_active = if f.key == "file" {
                                     state_snapshot.filters.is_type_active("file")
                                         || state_snapshot.filters.is_type_active("image")
@@ -171,7 +240,7 @@ impl Render for SearchBar {
                                 let filter_bg = if is_active {
                                     theme.accent_overlay()
                                 } else {
-                                    rgba(0x00000000)
+                                    inactive_button_bg
                                 };
                                 let filter_text = if is_active { accent } else { text_2 };
                                 let filter_weight = if is_active {
@@ -183,17 +252,34 @@ impl Render for SearchBar {
                                 let list_view = self.list_view.clone();
                                 let this = this.clone();
                                 let key = f.key;
+                                let label = f.label;
 
                                 div()
+                                    .id(("filter-type", index))
                                     .h(px(22.))
+                                    .when(icon_only, |button| {
+                                        button.flex_1().min_w(px(0.)).justify_center()
+                                    })
+                                    .when(!icon_only, |button| {
+                                        button
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .justify_center()
+                                            .px(px(5.))
+                                            .gap(px(2.))
+                                    })
+                                    .flex_shrink_0()
                                     .rounded(px(5.))
                                     .bg(filter_bg)
-                                    .px(px(6.))
                                     .flex()
                                     .flex_row()
                                     .items_center()
-                                    .gap(px(3.))
                                     .cursor(CursorStyle::PointingHand)
+                                    .when(icon_only, move |button| {
+                                        button.tooltip(move |window, cx| {
+                                            Tooltip::new(label).build(window, cx)
+                                        })
+                                    })
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         Self::apply_type_filter(&state, &list_view, key, cx);
                                         let _ = this.update(cx, |_bar, cx| cx.notify());
@@ -205,43 +291,46 @@ impl Render for SearchBar {
                                             .text_color(filter_text)
                                             .child(f.icon.to_string()),
                                     )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .font_weight(filter_weight)
-                                            .text_color(filter_text)
-                                            .child(f.label.to_string()),
-                                    )
+                                    .when(!icon_only, |button| {
+                                        button.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .font_weight(filter_weight)
+                                                .text_color(filter_text)
+                                                .child(label.to_string()),
+                                        )
+                                    })
                             })),
                     )
                     .child(
                         div()
+                            .w(px(TOOLBAR_DIVIDER_WIDTH))
+                            .h(px(14.))
+                            .flex_shrink_0()
+                            .bg(toolbar_divider),
+                    )
+                    .child(
+                        div()
+                            .w(px(TAG_FILTER_BUTTON_WIDTH))
+                            .flex_shrink_0()
                             .flex()
-                            .flex_row()
                             .items_center()
-                            .gap(px(2.))
+                            .justify_center()
                             .child(
                                 div()
-                                    .w(px(1.))
-                                    .h(px(14.))
-                                    .bg(if theme.bg == rgb(0x191a1b) {
-                                        rgba(0xffffff18)
-                                    } else {
-                                        rgba(0x00000014)
-                                    }),
-                            )
-                            .child(
-                                div()
+                                    .id("filter-tags")
                                     .w(px(24.))
                                     .h(px(22.))
+                                    .flex_shrink_0()
                                     .rounded(px(5.))
                                     .flex()
                                     .items_center()
                                     .justify_center()
+                                    .tooltip(|window, cx| Tooltip::new("Tags").build(window, cx))
                                     .bg(if has_tag_filter {
                                         theme.accent_overlay()
                                     } else {
-                                        rgba(0x00000000)
+                                        inactive_button_bg
                                     })
                                     .cursor(CursorStyle::PointingHand)
                                     .on_mouse_down(MouseButton::Left, {
@@ -257,7 +346,11 @@ impl Render for SearchBar {
                                         div()
                                             .text_size(px(14.))
                                             .font_family("iconfont")
-                                            .text_color(if has_tag_filter { accent } else { text_2 })
+                                            .text_color(if has_tag_filter {
+                                                accent
+                                            } else {
+                                                text_2
+                                            })
                                             .child("\u{ec07}"),
                                     ),
                             ),

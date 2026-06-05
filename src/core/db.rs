@@ -212,7 +212,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_content(&self, id: i64, text: &str, content_type: &str, meta_type: &str) -> SqlResult<()> {
+    pub fn update_content(
+        &self,
+        id: i64,
+        text: &str,
+        content_type: &str,
+        meta_type: &str,
+    ) -> SqlResult<()> {
         let hash = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&text, &mut hasher);
@@ -232,7 +238,9 @@ impl Database {
         let now = chrono::Utc::now().to_rfc3339();
         // Clear any existing tombstone — the user is recreating a tag
         // that was previously deleted.
-        let _ = self.conn.execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
+        let _ = self
+            .conn
+            .execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
         self.conn.execute(
             "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
             params![name, color, now],
@@ -844,7 +852,9 @@ impl Database {
         updated_at: &str,
     ) -> SqlResult<i64> {
         // Clear any existing tombstone — a remote device recreated this tag.
-        let _ = self.conn.execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
+        let _ = self
+            .conn
+            .execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
         self.conn.execute(
             "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
             params![name, color, updated_at],

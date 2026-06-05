@@ -98,18 +98,12 @@ impl ConfirmDialog {
         self
     }
 
-    pub fn on_confirm(
-        mut self,
-        handler: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_confirm(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_confirm = Some(Rc::new(handler));
         self
     }
 
-    pub fn on_cancel(
-        mut self,
-        handler: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_cancel(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(handler));
         self
     }
@@ -141,10 +135,7 @@ impl ConfirmDialog {
     pub fn remove_blacklist(app_name: &str) -> Self {
         Self::new()
             .title("Remove from Blacklist")
-            .message(format!(
-                "Stop ignoring clipboard from \"{}\"?",
-                app_name
-            ))
+            .message(format!("Stop ignoring clipboard from \"{}\"?", app_name))
             .confirm_label("Remove")
             .danger(false)
     }

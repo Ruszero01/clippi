@@ -148,7 +148,11 @@ impl SettingsPanel {
                 self.setting_row_with_options(
                     "Position",
                     "Popup position",
-                    &[("center", "Center"), ("follow", "Follow"), ("remember", "Pin")],
+                    &[
+                        ("center", "Center"),
+                        ("follow", "Follow"),
+                        ("remember", "Pin"),
+                    ],
                     match position_idx {
                         1 => "follow",
                         2 => "remember",

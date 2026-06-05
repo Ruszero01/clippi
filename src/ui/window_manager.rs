@@ -10,15 +10,15 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use crate::core::frontend::{
-    clamp_to_work_area, PositionMode, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
-    PANEL_OFFSET_X, SUPPRESS_DURATION_MS,
+    clamp_to_work_area, PositionMode, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, PANEL_OFFSET_X,
+    SUPPRESS_DURATION_MS,
 };
 use crate::core::settings::AppSettings;
 use crate::platform::focus::{start_focus_watcher, FocusWatcher};
 use crate::platform::hotkey::{create_hotkey_listener, HotkeyListener};
 use crate::platform::monitor;
-use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::platform::tray::{TrayAction, TrayManager};
+use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::services::update;
 use crate::state::app::AppState;
 
@@ -86,10 +86,7 @@ impl EventEmitter<WindowManagerEvent> for WindowManager {}
 
 impl WindowManager {
     /// Create the window manager and start all background services.
-    pub fn new(
-        state: Entity<AppState>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let settings = state.read(cx).settings.clone();
 
         // ── Initialize hotkey listener ──
@@ -155,16 +152,16 @@ impl WindowManager {
     // ── Poll loop ──────────────────────────────────────────────────────
 
     fn start_poll_loop(&mut self, cx: &mut Context<Self>) {
-        self._poll_task = Some(cx.spawn(async move |weak_self, cx| {
-            loop {
-                Timer::after(Duration::from_millis(
-                    crate::services::poll_loop::POLL_INTERVAL_MS,
-                ))
-                .await;
-                let Some(this) = weak_self.upgrade() else { break };
-                if this.update(cx, |wm, cx| wm.poll(cx)).is_err() {
-                    break;
-                }
+        self._poll_task = Some(cx.spawn(async move |weak_self, cx| loop {
+            Timer::after(Duration::from_millis(
+                crate::services::poll_loop::POLL_INTERVAL_MS,
+            ))
+            .await;
+            let Some(this) = weak_self.upgrade() else {
+                break;
+            };
+            if this.update(cx, |wm, cx| wm.poll(cx)).is_err() {
+                break;
             }
         }));
     }
@@ -212,9 +209,9 @@ impl WindowManager {
     }
 
     fn poll_clipboard(&mut self, cx: &mut Context<Self>) {
-        let changed = self.state.update(cx, |state, _cx| {
-            self.clipboard_service.poll_state(state)
-        });
+        let changed = self
+            .state
+            .update(cx, |state, _cx| self.clipboard_service.poll_state(state));
         if changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
         }
@@ -362,12 +359,7 @@ impl WindowManager {
         Some((x, y))
     }
 
-    fn calc_follow_mouse(
-        &self,
-        win_w: i32,
-        win_h: i32,
-        sidebar_offset: i32,
-    ) -> Option<(i32, i32)> {
+    fn calc_follow_mouse(&self, win_w: i32, win_h: i32, sidebar_offset: i32) -> Option<(i32, i32)> {
         let (cx, cy) = monitor::get_cursor_pos()?;
         let area = monitor::get_monitor_work_area(cx, cy)?;
         // Offset by sidebar width so the main panel aligns with the cursor
@@ -416,8 +408,7 @@ impl WindowManager {
 
     /// Show the window, calculate position, and bring it to foreground.
     pub fn show_and_focus(&mut self, cx: &mut Context<Self>) {
-        self.suppress_until =
-            Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+        self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
         self.visible = true;
         self.pinned = false;
         cx.emit(WindowManagerEvent::PinnedChanged(false));
@@ -429,23 +420,15 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetForegroundWindow, SetWindowPos, ShowWindow,
-                HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOW,
+                SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE,
+                SWP_NOSIZE, SW_SHOW,
             };
 
             let hwnd = self.hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
                 if let Some((x, y)) = self.calculate_position() {
                     unsafe {
-                        SetWindowPos(
-                            hwnd,
-                            HWND_TOP,
-                            x,
-                            y,
-                            0,
-                            0,
-                            SWP_NOACTIVATE | SWP_NOSIZE,
-                        );
+                        SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
                     }
                 }
                 unsafe {

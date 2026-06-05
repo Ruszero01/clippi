@@ -12,6 +12,8 @@ use gpui::*;
 
 use crate::core::types::{ContentType, RichData};
 
+use super::theme::ClippiTheme;
+
 /// Properties that determine which toolbar buttons to show.
 pub struct HoverToolbarProps {
     pub content_type: ContentType,
@@ -44,6 +46,7 @@ impl HoverToolbarProps {
 #[derive(IntoElement)]
 pub struct HoverToolbar {
     props: HoverToolbarProps,
+    theme: ClippiTheme,
     on_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
 }
 
@@ -51,14 +54,17 @@ impl HoverToolbar {
     pub fn new(props: HoverToolbarProps) -> Self {
         Self {
             props,
+            theme: ClippiTheme::dark(),
             on_action: None,
         }
     }
 
-    pub fn on_action(
-        mut self,
-        handler: impl Fn(&str, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn theme(mut self, theme: ClippiTheme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    pub fn on_action(mut self, handler: impl Fn(&str, &mut Window, &mut App) + 'static) -> Self {
         self.on_action = Some(Rc::new(handler));
         self
     }
@@ -66,15 +72,33 @@ impl HoverToolbar {
 
 impl RenderOnce for HoverToolbar {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let Self { props, on_action } = self;
+        let Self {
+            props,
+            theme,
+            on_action,
+        } = self;
 
         // Theme colors (dark mode — matching Slint original)
-        let accent = rgb(0x7ecba3);
-        let text_2 = rgb(0x919496);
-        let danger = rgb(0xff5f57);
-        let fav_color = rgb(0xd8a155);
-        let pill_bg = rgba(0x232425e8);
-        let pill_border = rgba(0xffffff20);
+        let accent = theme.accent;
+        let text_2 = theme.text_2;
+        let danger = theme.danger;
+        let fav_color = theme.fav_color;
+        let is_dark = theme.bg == rgb(0x191a1b);
+        let pill_bg = if is_dark {
+            rgba(0x232425e8)
+        } else {
+            rgba(0xfffffff0)
+        };
+        let pill_border = if is_dark {
+            rgba(0xffffff20)
+        } else {
+            rgba(0x00000014)
+        };
+        let hover_bg = if is_dark {
+            rgba(0xffffff10)
+        } else {
+            rgba(0x0000000a)
+        };
 
         let is_single = props.selected_count <= 1;
         let is_batch = props.selected_count > 1 && props.is_selected;
@@ -123,9 +147,7 @@ impl RenderOnce for HoverToolbar {
             }
 
             // Edit (not image or file)
-            if props.content_type != ContentType::Image
-                && props.content_type != ContentType::File
-            {
+            if props.content_type != ContentType::Image && props.content_type != ContentType::File {
                 buttons.push((
                     "\u{e648}",
                     "edit",
@@ -213,7 +235,7 @@ impl RenderOnce for HoverToolbar {
                     .justify_center()
                     .rounded(px(3.))
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(rgba(0xffffff10)))
+                    .hover(move |style| style.bg(hover_bg))
                     .child({
                         let icon = icon.clone();
                         let color_normal = color_fn(false);

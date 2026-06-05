@@ -16,6 +16,7 @@ use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
+use super::theme::ClippiTheme;
 
 const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 16.0;
 const CLIPBOARD_BOTTOM_SCROLL_INSET: f32 = 36.0;
@@ -59,12 +60,14 @@ pub struct ClipboardListView {
     note_input: Entity<InputState>,
     /// Active confirmation dialog (None = hidden).
     confirm_dialog: Option<ConfirmDialogState>,
+    theme: ClippiTheme,
 }
 
 impl ClipboardListView {
     pub fn new(
         items: Vec<ClipboardItem>,
         state: Entity<AppState>,
+        theme: ClippiTheme,
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
@@ -89,6 +92,7 @@ impl ClipboardListView {
             editing_note_id: -1,
             note_input: cx.new(|cx| InputState::new(window, cx).placeholder("Add a note...")),
             confirm_dialog: None,
+            theme,
         }
     }
 
@@ -305,6 +309,11 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
     /// Get the current confirmation dialog state, if any.
     pub fn confirm_dialog_state(&self) -> Option<&ConfirmDialogState> {
         self.confirm_dialog.as_ref()
@@ -475,6 +484,10 @@ impl Render for ClipboardListView {
         let items_count = self.item_sizes.len();
         let view = cx.entity();
         let focus_handle = self.focus_handle.clone();
+        let theme = self.theme.clone();
+        let bg = theme.bg;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
 
         let empty_state = items_count == 0;
 
@@ -494,17 +507,17 @@ impl Render for ClipboardListView {
                 .pt(px(4.))
                 .pb(px(8.))
                 .rounded_b(px(12.))
-                .bg(rgb(0x191a1b))
+                .bg(bg)
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(0x919496))
+                        .text_color(text_2)
                         .child("No items yet"),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(0x5f6264))
+                        .text_color(text_3)
                         .child("Copied items will appear here"),
                 )
                 .into_any_element();
@@ -539,7 +552,7 @@ impl Render for ClipboardListView {
             .flex_col()
             .overflow_hidden()
             .rounded_b(px(12.))
-            .bg(rgb(0x191a1b))
+            .bg(bg)
             .on_mouse_move({
                 let list_for_clear = list_entity.clone();
                 move |_ev, _window, cx| {
@@ -566,13 +579,13 @@ impl Render for ClipboardListView {
                         .child(
                             div()
                                 .text_size(px(13.))
-                                .text_color(rgb(0x919496))
+                                .text_color(text_2)
                                 .child("No items yet"),
                         )
                         .child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(0x5f6264))
+                                .text_color(text_3)
                                 .child("Copied items will appear here"),
                         ),
                 )
@@ -712,6 +725,7 @@ impl Render for ClipboardListView {
                                                         selected,
                                                         i,
                                                     )
+                                                    .theme(theme.clone())
                                                     .hovered(is_hovered)
                                                     .selected_count(selected_count)
                                                     .selection_order(selection_order)

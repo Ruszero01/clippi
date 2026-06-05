@@ -102,7 +102,9 @@ pub fn effective_window_size(settings: &crate::core::settings::AppSettings) -> (
 /// Returns `(x, y)` in **physical pixels** (Windows) or logical points (macOS),
 /// suitable for `SetWindowPos` on Windows. Returns `None` if the monitor
 /// layout is unavailable.
-pub fn calculate_initial_position(settings: &crate::core::settings::AppSettings) -> Option<(i32, i32)> {
+pub fn calculate_initial_position(
+    settings: &crate::core::settings::AppSettings,
+) -> Option<(i32, i32)> {
     let mode = PositionMode::from_str(&settings.window_position_mode);
     let (win_w, win_h) = effective_window_size(settings);
     // Convert logical → physical for monitor calculations
@@ -113,8 +115,9 @@ pub fn calculate_initial_position(settings: &crate::core::settings::AppSettings)
     match mode {
         PositionMode::Center => calc_center(win_w, win_h),
         PositionMode::FollowMouse => calc_follow_mouse(win_w, win_h),
-        PositionMode::Remember => calc_remember(settings, win_w, win_h)
-            .or_else(|| calc_center(win_w, win_h)),
+        PositionMode::Remember => {
+            calc_remember(settings, win_w, win_h).or_else(|| calc_center(win_w, win_h))
+        }
     }
 }
 

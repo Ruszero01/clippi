@@ -3,8 +3,8 @@
 //! Extracted from the Slint `app.rs` callback layer so both the Slint and
 //! GPUI frontends can share clipboard write logic.
 
-use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use crate::core::types::{ClipboardItem, ContentType, RichData};
+use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 
 /// Write a clipboard item's content to the system clipboard.
 ///

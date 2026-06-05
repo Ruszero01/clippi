@@ -329,9 +329,7 @@ pub fn merge_remote_into_local(
             // Already tombstoned — but the remote tombstone may have a newer
             // deleted_at. Replace the local tombstone if remote is newer so
             // stale timestamps don't propagate to other devices.
-            if let Ok(Some(local_at)) =
-                db.get_item_tombstone_deleted_at(tombstone.content_hash)
-            {
+            if let Ok(Some(local_at)) = db.get_item_tombstone_deleted_at(tombstone.content_hash) {
                 if rfc3339_newer(&tombstone.deleted_at, &local_at) {
                     let _ = db.remove_item_tombstone(tombstone.content_hash);
                     let _ = db.record_item_deletion(
@@ -380,16 +378,11 @@ pub fn merge_remote_into_local(
         }
         if db.is_item_unfavorited(uf.content_hash).unwrap_or(false) {
             // Already marked — replace if remote marker is newer.
-            if let Ok(Some(local_at)) =
-                db.get_unfavorite_deleted_at(uf.content_hash)
-            {
+            if let Ok(Some(local_at)) = db.get_unfavorite_deleted_at(uf.content_hash) {
                 if rfc3339_newer(&uf.unfavorited_at, &local_at) {
                     let _ = db.remove_unfavorite(uf.content_hash);
-                    let _ = db.record_unfavorite(
-                        uf.content_hash,
-                        &uf.unfavorited_at,
-                        &uf.device_name,
-                    );
+                    let _ =
+                        db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
                 }
             }
             continue;
@@ -402,22 +395,15 @@ pub fn merge_remote_into_local(
                 if remote_ts.is_some_and(|r| r > local_item.updated_at) {
                     let _ = db.set_favorite(local_item.id, false);
                     stats.items_updated += 1;
-                    let _ = db.record_unfavorite(
-                        uf.content_hash,
-                        &uf.unfavorited_at,
-                        &uf.device_name,
-                    );
+                    let _ =
+                        db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
                 }
                 // else: item was re-favorited after unfavorite, skip
             }
             // else: already not favorited, nothing to do
         } else {
             // No local item — record marker for propagation.
-            let _ = db.record_unfavorite(
-                uf.content_hash,
-                &uf.unfavorited_at,
-                &uf.device_name,
-            );
+            let _ = db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
         }
     }
 
@@ -438,9 +424,7 @@ pub fn merge_remote_into_local(
         }
         if db.is_tag_tombstoned(&tombstone.name).unwrap_or(false) {
             // Already tombstoned — replace if remote tombstone is newer.
-            if let Ok(Some(local_at)) =
-                db.get_tag_tombstone_deleted_at(&tombstone.name)
-            {
+            if let Ok(Some(local_at)) = db.get_tag_tombstone_deleted_at(&tombstone.name) {
                 if rfc3339_newer(&tombstone.deleted_at, &local_at) {
                     let _ = db.remove_tag_tombstone(&tombstone.name);
                     let _ = db.record_tag_deletion(
@@ -493,9 +477,7 @@ pub fn merge_remote_into_local(
                 {
                     continue;
                 }
-            } else if let Ok(Some(deleted_at)) =
-                db.get_tag_tombstone_deleted_at(&remote_tag.name)
-            {
+            } else if let Ok(Some(deleted_at)) = db.get_tag_tombstone_deleted_at(&remote_tag.name) {
                 let remote_ts = parse_rfc3339(&remote_tag.updated_at);
                 let del_ts = parse_rfc3339(&deleted_at);
                 if remote_ts.is_some_and(|r| del_ts.is_some_and(|d| d >= r)) {
@@ -1042,7 +1024,8 @@ mod tests {
             let db = db_mutex.lock().unwrap();
             // Simulate: item was favorited, then unfavorited
             db.set_favorite(_id, true).unwrap(); // was favorited
-            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device")
+                .unwrap();
             // Now unfavorite it (simulating toggle_favorite was_fav=true branch)
             db.set_favorite(_id, false).unwrap();
         }
@@ -1052,7 +1035,11 @@ mod tests {
 
         // Item should NOT be in items[] (tombstone communicates unfavorite)
         assert!(
-            payload.items.iter().find(|i| i.content_hash == hash).is_none(),
+            payload
+                .items
+                .iter()
+                .find(|i| i.content_hash == hash)
+                .is_none(),
             "unfavorited item with tombstone should be excluded from items[]"
         );
         // Tombstone SHOULD be in unfavorited_items[]
@@ -1069,7 +1056,10 @@ mod tests {
 
         // Item SHOULD be in items[] — it's just a normal unfavorited item
         let found = payload.items.iter().find(|i| i.content_hash == hash);
-        assert!(found.is_some(), "unfavorited item without tombstone should be in items[]");
+        assert!(
+            found.is_some(),
+            "unfavorited item without tombstone should be in items[]"
+        );
         assert!(!found.unwrap().is_favorite);
         // No tombstone
         assert!(payload.unfavorited_items.is_empty());
@@ -1086,7 +1076,10 @@ mod tests {
         let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
 
         let found = payload.items.iter().find(|i| i.content_hash == hash);
-        assert!(found.is_some(), "favorited item should always be in items[]");
+        assert!(
+            found.is_some(),
+            "favorited item should always be in items[]"
+        );
         assert!(found.unwrap().is_favorite);
     }
 
@@ -1098,7 +1091,11 @@ mod tests {
         let payload = build_snapshot(&db_mutex, "test-device", true).unwrap();
 
         // With favorites_only=true, unfavorited items should be excluded
-        assert!(payload.items.iter().find(|i| i.content_hash == hash).is_none());
+        assert!(payload
+            .items
+            .iter()
+            .find(|i| i.content_hash == hash)
+            .is_none());
     }
 
     #[test]
@@ -1108,7 +1105,8 @@ mod tests {
             let db = db_mutex.lock().unwrap();
             // Simulate: favorite → unfavorite → refavorite
             db.set_favorite(_id, true).unwrap();
-            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device")
+                .unwrap();
             db.set_favorite(_id, false).unwrap();
             // Now refavorite: remove tombstone
             db.remove_unfavorite(hash).unwrap();
@@ -1131,15 +1129,34 @@ mod tests {
         let db = std::sync::Mutex::new(db);
 
         // Item A: favorited (hash=1)
-        insert_item(&db.lock().unwrap(), "item a", 1, true, "2026-05-01T10:00:00Z");
+        insert_item(
+            &db.lock().unwrap(),
+            "item a",
+            1,
+            true,
+            "2026-05-01T10:00:00Z",
+        );
         // Item B: unfavorited with tombstone (hash=2)
-        insert_item(&db.lock().unwrap(), "item b", 2, false, "2026-05-01T10:00:00Z");
+        insert_item(
+            &db.lock().unwrap(),
+            "item b",
+            2,
+            false,
+            "2026-05-01T10:00:00Z",
+        );
         // Item C: unfavorited without tombstone (hash=3)
-        insert_item(&db.lock().unwrap(), "item c", 3, false, "2026-05-01T10:00:00Z");
+        insert_item(
+            &db.lock().unwrap(),
+            "item c",
+            3,
+            false,
+            "2026-05-01T10:00:00Z",
+        );
 
         {
             let db = db.lock().unwrap();
-            db.record_unfavorite(2, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            db.record_unfavorite(2, "2026-05-01T10:00:00Z", "test-device")
+                .unwrap();
         }
 
         let payload = build_snapshot(&db, "test-device", false).unwrap();
@@ -1148,7 +1165,10 @@ mod tests {
         assert!(payload.items.iter().any(|i| i.content_hash == 1));
         // Item B: NOT in items[], in tombstone
         assert!(payload.items.iter().find(|i| i.content_hash == 2).is_none());
-        assert!(payload.unfavorited_items.iter().any(|u| u.content_hash == 2));
+        assert!(payload
+            .unfavorited_items
+            .iter()
+            .any(|u| u.content_hash == 2));
         // Item C: in items[]
         assert!(payload.items.iter().any(|i| i.content_hash == 3));
         assert_eq!(payload.items.len(), 2); // A + C
@@ -1161,7 +1181,8 @@ mod tests {
         let db = Database::open(":memory:").expect("open :memory:");
         {
             let db = &db;
-            db.record_unfavorite(0xDEAD, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            db.record_unfavorite(0xDEAD, "2026-05-01T10:00:00Z", "test-device")
+                .unwrap();
         }
         let db = std::sync::Mutex::new(db);
 
@@ -1181,14 +1202,18 @@ mod tests {
         {
             let db = db_mutex.lock().unwrap();
             db.set_favorite(_id, true).unwrap();
-            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device").unwrap();
+            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device")
+                .unwrap();
         }
 
         let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
 
         // Favorited item should be in items[] even if a stale tombstone exists
         let found = payload.items.iter().find(|i| i.content_hash == hash);
-        assert!(found.is_some(), "favorited item should be in items[] despite tombstone");
+        assert!(
+            found.is_some(),
+            "favorited item should be in items[] despite tombstone"
+        );
         assert!(found.unwrap().is_favorite);
     }
 

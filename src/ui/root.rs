@@ -47,11 +47,15 @@ impl RootView {
     ) -> Self {
         let app_state = state.read(cx);
         let items = app_state.items.clone();
-        let list_view = cx.new(|cx| ClipboardListView::new(items, state.clone(), window, cx));
+        let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window.appearance()));
+        let list_view =
+            cx.new(|cx| ClipboardListView::new(items, state.clone(), theme.clone(), window, cx));
         list_view.update(cx, |list, _cx| list.focus(window));
-        let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone()));
-        let search_bar = cx.new(|cx| SearchBar::new(state.clone(), list_view.clone(), window, cx));
-        let settings_panel = cx.new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), cx));
+        let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
+        let search_bar = cx
+            .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
+        let settings_panel =
+            cx.new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), cx));
         let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone()));
         let tag_filter_panel = cx.new(|cx| {
             TagFilterPanel::new(
@@ -131,6 +135,16 @@ impl RootView {
                         // TODO: store window_appearance on RootView at creation
                         // time and use it here for accurate system theme detection.
                         this.theme = ClippiTheme::from_setting(theme_str, None);
+                        let theme = this.theme.clone();
+                        let _ = this.titlebar.update(cx, |titlebar, cx| {
+                            titlebar.set_theme(theme.clone(), cx);
+                        });
+                        let _ = this.search_bar.update(cx, |search_bar, cx| {
+                            search_bar.set_theme(theme.clone(), cx);
+                        });
+                        let _ = this.list_view.update(cx, |list_view, cx| {
+                            list_view.set_theme(theme.clone(), cx);
+                        });
                         let _ = this.settings_panel.update(cx, |panel, cx| {
                             panel.reload_theme(cx);
                         });
@@ -139,8 +153,6 @@ impl RootView {
                 },
             ),
         ];
-        let theme = ClippiTheme::dark();
-
         Self {
             state,
             window_manager,
@@ -175,6 +187,11 @@ impl Render for RootView {
         let tag_panel_open = self.search_bar.read(cx).tag_panel_open();
         let is_clipboard = self.current_view == "clipboard";
         let theme = &self.theme;
+        let panel_border = if theme.bg == rgb(0x191a1b) {
+            rgb(0x3a3b3c)
+        } else {
+            rgb(0xd0d2de)
+        };
 
         // Actual window dimensions for positioning overlays
         let viewport = window.viewport_size();
@@ -195,7 +212,7 @@ impl Render for RootView {
                     .rounded(px(12.))
                     .bg(theme.bg)
                     .border(px(1.))
-                    .border_color(theme.divider)
+                    .border_color(panel_border)
                     .flex()
                     .flex_col()
                     .occlude()
@@ -249,56 +266,54 @@ impl Render for RootView {
                                 }
                             }),
                     )
-                    .child(
-                        div().absolute().occlude().child({
-                            let l = list_for_action.clone();
-                            if is_batch {
-                                let count = l.read(cx).selected_count;
-                                ContextMenu::for_batch(count)
-                                    .with_position(menu_x, menu_y, win_w, win_h)
-                                    .on_action({
-                                        let l = l.clone();
-                                        move |action, window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
-                                                lst.handle_menu_action(action, window, cx);
-                                            });
-                                        }
-                                    })
-                                    .on_dismiss({
-                                        let l = l.clone();
-                                        move |_window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
-                                                lst.hide_context_menu(cx);
-                                            });
-                                        }
-                                    })
-                                    .into_any_element()
-                            } else if let Some(ref clip_item) = item {
-                                let ctx = MenuItemContext::from_item(clip_item);
-                                ContextMenu::for_item(&ctx)
-                                    .with_position(menu_x, menu_y, win_w, win_h)
-                                    .on_action({
-                                        let l = l.clone();
-                                        move |action, window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
-                                                lst.handle_menu_action(action, window, cx);
-                                            });
-                                        }
-                                    })
-                                    .on_dismiss({
-                                        let l = l.clone();
-                                        move |_window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
-                                                lst.hide_context_menu(cx);
-                                            });
-                                        }
-                                    })
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            }
-                        }),
-                    )
+                    .child(div().absolute().occlude().child({
+                        let l = list_for_action.clone();
+                        if is_batch {
+                            let count = l.read(cx).selected_count;
+                            ContextMenu::for_batch(count)
+                                .with_position(menu_x, menu_y, win_w, win_h)
+                                .on_action({
+                                    let l = l.clone();
+                                    move |action, window, cx| {
+                                        let _ = l.update(cx, |lst, cx| {
+                                            lst.handle_menu_action(action, window, cx);
+                                        });
+                                    }
+                                })
+                                .on_dismiss({
+                                    let l = l.clone();
+                                    move |_window, cx| {
+                                        let _ = l.update(cx, |lst, cx| {
+                                            lst.hide_context_menu(cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element()
+                        } else if let Some(ref clip_item) = item {
+                            let ctx = MenuItemContext::from_item(clip_item);
+                            ContextMenu::for_item(&ctx)
+                                .with_position(menu_x, menu_y, win_w, win_h)
+                                .on_action({
+                                    let l = l.clone();
+                                    move |action, window, cx| {
+                                        let _ = l.update(cx, |lst, cx| {
+                                            lst.handle_menu_action(action, window, cx);
+                                        });
+                                    }
+                                })
+                                .on_dismiss({
+                                    let l = l.clone();
+                                    move |_window, cx| {
+                                        let _ = l.update(cx, |lst, cx| {
+                                            lst.hide_context_menu(cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element()
+                        } else {
+                            div().into_any_element()
+                        }
+                    }))
                 },
             )
             .when(

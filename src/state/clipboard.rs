@@ -47,7 +47,12 @@ impl ClipboardState {
     /// Range-select items by index range.
     pub fn range_select(&mut self, start: usize, end: usize) {
         self.selected_ids.clear();
-        for item in self.items.iter().take(end.max(start) + 1).skip(start.min(end)) {
+        for item in self
+            .items
+            .iter()
+            .take(end.max(start) + 1)
+            .skip(start.min(end))
+        {
             self.selected_ids.push(item.id);
         }
     }

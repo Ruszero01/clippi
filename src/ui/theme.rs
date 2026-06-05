@@ -123,6 +123,10 @@ impl ClippiTheme {
 
     /// Accent color as a 22% opacity overlay (used for active filter button backgrounds).
     pub fn accent_overlay(&self) -> Rgba {
-        rgba(0x7ecba322)
+        if self.bg == rgb(0x191a1b) {
+            rgba(0x7ecba322)
+        } else {
+            rgba(0x6ab89022)
+        }
     }
 }

@@ -12,7 +12,10 @@ pub struct EditPanel {
 
 impl EditPanel {
     pub fn new(item_text: String, note_text: String) -> Self {
-        Self { item_text, note_text }
+        Self {
+            item_text,
+            note_text,
+        }
     }
 }
 
