@@ -243,6 +243,7 @@ impl Render for RootView {
                     .border_color(panel_border)
                     .flex()
                     .flex_col()
+                    .overflow_hidden()
                     .occlude()
                     .child(titlebar)
                     .when(is_clipboard, |panel| {

@@ -20,7 +20,7 @@ mod general;
 
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
-use crate::ui::components::toggle::render_toggle;
+use crate::ui::components::toggle::{render_toggle, ToggleTransitionState};
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
@@ -41,7 +41,7 @@ pub struct SettingsPanel {
     theme: ClippiTheme,
     scroll_handle: ScrollHandle,
     /// Track toggle values + generation counter for transition animation.
-    toggle_states: HashMap<String, (bool, u64)>,
+    toggle_states: HashMap<String, ToggleTransitionState>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -84,7 +84,10 @@ impl Render for SettingsPanel {
         div()
             .flex()
             .flex_col()
-            .size_full()
+            .flex_1()
+            .w_full()
+            .overflow_hidden()
+            .rounded_b(px(12.))
             .bg(theme.bg)
             // ── Navigation bar (height 36px, mt 8px matching Slint y=8px) ──
             .child(
@@ -193,8 +196,8 @@ impl Render for SettingsPanel {
                     .flex_col()
                     .overflow_hidden()
                     .rounded_b(px(12.))
+                    .bg(theme.bg)
                     .pt(px(8.))
-                    .pb(px(20.))
                     .child(
                         div()
                             .relative()
@@ -213,7 +216,7 @@ impl Render for SettingsPanel {
                                             .flex()
                                             .flex_col()
                                             .px(px(8.))
-                                            .pb(px(36.))
+                                            .pb(px(56.))
                                             .child(match active {
                                                 0 => self
                                                     .render_general_tab(window, cx)
