@@ -9,7 +9,11 @@ use crate::core::filters::ClipboardFilters;
 use crate::core::settings::AppSettings;
 use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
+use crate::core::types::ContentType;
+use crate::core::types::FileData;
+use crate::core::types::RichData;
 use crate::core::types::TagInfo;
+use clipboard_rs::{Clipboard, ClipboardContext};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -39,6 +43,12 @@ pub struct AppState {
     /// Shared with clipboard listener — set true during batch paste
     /// to prevent recording intermediate writes (newline separators).
     pub batch_pasting: Arc<AtomicBool>,
+    /// Shared with clipboard listener — set true before writing OCR/color
+    /// conversion text to clipboard. The listener skips one cycle and
+    /// updates the baseline sequence number so the internal write is never
+    /// detected as a new history entry (unlike batch_pasting which only
+    /// provides a time window).
+    pub skip_next: Arc<AtomicBool>,
     /// Shared with SyncManager — true when local data has changed.
     /// [FUTURE] When SyncManager is migrated to GPUI, pass this Arc to
     /// SyncManager::new() so it can detect local changes and trigger sync
@@ -46,6 +56,7 @@ pub struct AppState {
     /// remove_unfavorite) is already handled in the data mutation methods
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
+    pub toast_message: Option<String>,
 }
 
 impl AppState {
@@ -89,7 +100,9 @@ impl AppState {
             editing_tag_name: String::new(),
             editing_tag_color: "#3B82F6".into(),
             batch_pasting: Arc::new(AtomicBool::new(false)),
+            skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
+            toast_message: None,
         }
     }
 
@@ -264,6 +277,72 @@ impl AppState {
         }
     }
 
+    pub fn clear_toast(&mut self) {
+        self.toast_message = None;
+    }
+
+    fn show_toast(&mut self, message: impl Into<String>) {
+        self.toast_message = Some(message.into());
+    }
+
+    pub fn toggle_item_tag(&mut self, item_id: i64, tag_id: i64) {
+        let has_tag = self
+            .items
+            .iter()
+            .find(|item| item.id == item_id)
+            .is_some_and(|item| item.tags.iter().any(|tag| tag.id == tag_id));
+        let result = if has_tag {
+            self.db.remove_item_tag(item_id, tag_id)
+        } else {
+            self.db.add_item_tag(item_id, tag_id)
+        };
+        if let Err(e) = result {
+            log::error!("toggle_item_tag({item_id}, {tag_id}): {e}");
+            return;
+        }
+        self.sync_dirty.store(true, Ordering::SeqCst);
+        self.reload_items();
+    }
+
+    pub fn batch_add_tag(&mut self, ids: &[i64], tag_id: i64) {
+        for &id in ids {
+            if let Err(e) = self.db.add_item_tag(id, tag_id) {
+                log::error!("batch_add_tag({id}, {tag_id}): {e}");
+            }
+        }
+        self.sync_dirty.store(true, Ordering::SeqCst);
+        self.reload_items();
+    }
+
+    pub fn batch_remove_tag(&mut self, ids: &[i64], tag_id: i64) {
+        for &id in ids {
+            if let Err(e) = self.db.remove_item_tag(id, tag_id) {
+                log::error!("batch_remove_tag({id}, {tag_id}): {e}");
+            }
+        }
+        self.sync_dirty.store(true, Ordering::SeqCst);
+        self.reload_items();
+    }
+
+    pub fn clear_item_tags(&mut self, item_id: i64) {
+        if let Err(e) = self.db.clear_item_tags(item_id) {
+            log::error!("clear_item_tags({item_id}): {e}");
+            return;
+        }
+        self.sync_dirty.store(true, Ordering::SeqCst);
+        self.reload_items();
+    }
+
+    pub fn clear_tags_for_items(&mut self, ids: &[i64]) {
+        for &id in ids {
+            if let Err(e) = self.db.clear_item_tags(id) {
+                log::error!("clear_tags_for_items({id}): {e}");
+            }
+        }
+        self.sync_dirty.store(true, Ordering::SeqCst);
+        self.reload_items();
+    }
+
     fn order_by(&self) -> &'static str {
         if self.settings.sort_by_created {
             "created_at"
@@ -279,6 +358,214 @@ impl AppState {
             (self.settings.max_items as usize)
                 .saturating_mul(2)
                 .max(200)
+        }
+    }
+
+    pub fn open_original_image(&self, id: i64) {
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("open_original_image: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("open_original_image: db error for {id}: {e}");
+                return;
+            }
+        };
+        if !item.image_path.is_empty() {
+            let path = item.image_path.clone();
+            // Spawn on a background thread — ShellExecuteW can pump Windows
+            // messages internally (DDE/COM) and deadlock if called from the
+            // GPUI main thread event handler.
+            std::thread::spawn(move || {
+                open_system_target(&path);
+            });
+        }
+    }
+
+    pub fn open_item_location(&self, id: i64) {
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("open_item_location: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("open_item_location: db error for {id}: {e}");
+                return;
+            }
+        };
+
+        match item.content_type {
+            ContentType::Link | ContentType::Path => {
+                if !item.full_text.is_empty() {
+                    let text = item.full_text.clone();
+                    // Spawn on a background thread to avoid ShellExecuteW
+                    // deadlock on the GPUI main thread (DDE/COM message pumping).
+                    std::thread::spawn(move || {
+                        open_system_target(&text);
+                    });
+                }
+            }
+            ContentType::File => {
+                let file_data = FileData::from_json(&item.file_data);
+                if let Some(first) = file_data.files.first() {
+                    let path = first.path.clone();
+                    // Spawn on a background thread to avoid ShellExecuteW
+                    // deadlock on the GPUI main thread (DDE/COM message pumping).
+                    std::thread::spawn(move || {
+                        reveal_file_location(&path);
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn qr_action(&mut self, id: i64) {
+        let qr_text = match self.db.get_by_id(id) {
+            Ok(Some(item)) => RichData::from_json(&item.rich_data).qr_text,
+            Ok(None) => {
+                log::warn!("qr_action: item {id} not found");
+                None
+            }
+            Err(e) => {
+                log::error!("qr_action: db error for {id}: {e}");
+                None
+            }
+        };
+
+        if let Some(text) = qr_text {
+            self.handle_qr_text(text);
+        } else {
+            self.show_toast("No QR code detected");
+        }
+    }
+
+    pub fn qr_detect(&mut self, id: i64) {
+        let qr_text = match self.db.get_by_id(id) {
+            Ok(Some(item)) => {
+                let rich = RichData::from_json(&item.rich_data);
+                if rich.qr_text.is_some() {
+                    rich.qr_text
+                } else if !item.image_path.is_empty() {
+                    match crate::core::qr::detect_qr(std::path::Path::new(&item.image_path)) {
+                        Ok(Some(text)) => {
+                            let mut next_rich = RichData::from_json(&item.rich_data);
+                            next_rich.qr_text = Some(text.clone());
+                            if let Err(e) = self.db.update_rich_data(id, &next_rich.to_json()) {
+                                log::error!("qr_detect: update rich_data failed for {id}: {e}");
+                            }
+                            self.reload_items();
+                            Some(text)
+                        }
+                        Ok(None) => None,
+                        Err(e) => {
+                            log::error!("qr_detect: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            Ok(None) => {
+                log::warn!("qr_detect: item {id} not found");
+                None
+            }
+            Err(e) => {
+                log::error!("qr_detect: db error for {id}: {e}");
+                None
+            }
+        };
+
+        if let Some(text) = qr_text {
+            self.handle_qr_text(text);
+        } else {
+            self.show_toast("No QR code detected");
+        }
+    }
+
+    pub fn paste_ocr(&mut self, id: i64) {
+        let ocr_load = match self.db.get_by_id(id) {
+            Ok(Some(item)) => {
+                let rich = RichData::from_json(&item.rich_data);
+                match rich.ocr_text.filter(|text| !text.trim().is_empty()) {
+                    Some(cached) => Some((cached, true, String::new(), String::new())),
+                    None if item.image_path.is_empty() => None,
+                    None => Some((
+                        String::new(),
+                        false,
+                        item.image_path.clone(),
+                        item.rich_data.clone(),
+                    )),
+                }
+            }
+            Ok(None) => {
+                log::warn!("paste_ocr: item {id} not found");
+                None
+            }
+            Err(e) => {
+                log::error!("paste_ocr: db error for {id}: {e}");
+                None
+            }
+        };
+
+        let ocr_text = match ocr_load {
+            Some((cached, true, _, _)) => Some(cached),
+            Some((_, false, img_path, existing_rich)) => {
+                let engine = crate::core::ocr::create_ocr_engine();
+                match engine.recognize(std::path::Path::new(&img_path)) {
+                    Ok(text) if !text.trim().is_empty() => {
+                        let mut next_rich = RichData::from_json(&existing_rich);
+                        next_rich.ocr_text = Some(text.clone());
+                        if let Err(e) = self.db.update_rich_data(id, &next_rich.to_json()) {
+                            log::error!("paste_ocr: update rich_data failed for {id}: {e}");
+                        }
+                        self.reload_items();
+                        Some(text)
+                    }
+                    Ok(_) => None,
+                    Err(e) => {
+                        log::error!("OCR error for item {id}: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(text) = ocr_text {
+            // Use skip_next (not batch_pasting) — the OCR text written to
+            // clipboard is internal and should be "consumed" by the listener
+            // (skip one cycle + update baseline seq#) rather than recorded
+            // as a new history entry. This matches the Slint-era behaviour.
+            self.skip_next.store(true, Ordering::SeqCst);
+            if let Ok(ctx) = ClipboardContext::new() {
+                let _ = ctx.set_text(text);
+            }
+            crate::platform::paste::restore_paste_target();
+            crate::platform::paste::paste_after_delay();
+        } else {
+            self.show_toast("No OCR text detected");
+        }
+    }
+
+    fn handle_qr_text(&mut self, text: String) {
+        if text.starts_with("http://") || text.starts_with("https://") {
+            // Spawn on a background thread — open_releases_page calls
+            // ShellExecuteW which can pump Windows messages internally
+            // (DDE/COM) and deadlock if called from the GPUI main thread.
+            let url = text;
+            std::thread::spawn(move || {
+                crate::services::update::open_releases_page(&url);
+            });
+            return;
+        }
+        if let Ok(ctx) = ClipboardContext::new() {
+            let _ = ctx.set_text(text);
+            self.show_toast("QR code content copied to clipboard");
         }
     }
 
@@ -648,5 +935,73 @@ impl AppState {
         // Remove from in-memory items
         let ids: Vec<i64> = self.selected_ids.drain(..).collect();
         self.items.retain(|it| !ids.contains(&it.id));
+    }
+}
+
+fn open_system_target(target: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
+
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        let target_utf16: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target_utf16.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOW,
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(target).spawn();
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+    }
+}
+
+fn reveal_file_location(path: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
+
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
+        let arg = format!("/select,\"{}\"", path);
+        let arg_utf16: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                explorer.as_ptr(),
+                arg_utf16.as_ptr(),
+                std::ptr::null(),
+                SW_SHOW,
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::process::Command::new("open").arg(parent).spawn();
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+        }
     }
 }

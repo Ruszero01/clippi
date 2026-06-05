@@ -52,13 +52,20 @@ impl SettingsPanel {
                             s.settings.sort_by_created = !s.settings.sort_by_created;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        let _ = this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: true,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
+                        });
                     },
                 )
             })
             // ── Card height (4-option group) ──
             .child({
                 let state = state.clone();
+                let this = this.clone();
                 self.setting_row_with_options(
                     "Card height",
                     "Adjust card height",
@@ -73,6 +80,13 @@ impl SettingsPanel {
                         state.update(_cx, |s, _cx| {
                             s.settings.card_height_mode = key.to_string();
                             s.settings.save();
+                        });
+                        let _ = this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
                         });
                     },
                 )
@@ -97,7 +111,13 @@ impl SettingsPanel {
                             s.settings.show_source_app = !s.settings.show_source_app;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        let _ = this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
+                        });
                     },
                 )
             })
@@ -117,11 +137,18 @@ impl SettingsPanel {
                     window,
                     cx,
                     move |_window, _cx| {
-                        state.update(_cx, |s, _cx| {
+                        let scroll_to_top = state.update(_cx, |s, _cx| {
                             s.settings.auto_scroll_to_top = !s.settings.auto_scroll_to_top;
                             s.settings.save();
+                            s.settings.auto_scroll_to_top
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        let _ = this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top,
+                            });
+                            cx.notify();
+                        });
                     },
                 )
             })
@@ -145,7 +172,13 @@ impl SettingsPanel {
                             s.settings.copy_as_plain_text = !s.settings.copy_as_plain_text;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        let _ = this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
+                        });
                     },
                 )
             })
@@ -169,7 +202,13 @@ impl SettingsPanel {
                             s.settings.show_original_on_hover = !s.settings.show_original_on_hover;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        let _ = this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
+                        });
                     },
                 )
             })

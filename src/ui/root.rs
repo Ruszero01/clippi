@@ -6,11 +6,17 @@
 //! - Main panel offset 36px from left, 12px border-radius, 1px border
 //! - Titlebar + stacked views (clipboard / settings / edit)
 
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_transitions::WindowUseTransition;
 
 use crate::state::app::AppState;
 use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
+
+/// Toast enter / exit animation duration.
+const TOAST_ANIM_DURATION: Duration = Duration::from_millis(220);
 
 use super::clipboard_list::{ClipboardListView, ConfirmDialogState};
 use super::components::confirm_dialog::ConfirmDialog;
@@ -19,8 +25,10 @@ use super::search_bar::SearchBar;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
 use super::tag_filter::{render_edit_panel, TagFilterPanel};
+use super::tag_picker::TagPickerPanel;
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
+use super::components::toast::Toast;
 
 pub struct RootView {
     state: Entity<AppState>,
@@ -38,6 +46,14 @@ pub struct RootView {
     /// has access to `&mut App`) can resolve the "system" theme correctly.
     window_appearance: WindowAppearance,
     last_edit_tag_id: i64,
+    /// Timer that auto-dismisses the toast notification after a duration.
+    _toast_timer: Option<Task<()>>,
+    /// Timer that clears the toast after the exit animation completes.
+    _toast_cleanup: Option<Task<()>>,
+    /// Animation generation counter — bumps on show/dismiss for fresh transitions.
+    toast_generation: u64,
+    /// True while the exit animation is playing (toast still rendered but fading out).
+    toast_dismissing: bool,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
 }
@@ -59,10 +75,9 @@ impl RootView {
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
         let search_bar = cx
             .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
-        let settings_panel =
-            cx.new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), cx));
-        let sidebar = cx
-            .new(|_cx| Sidebar::new(state.clone(), list_view.clone(), &theme));
+        let settings_panel = cx
+            .new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), cx));
+        let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone(), &theme));
         let tag_filter_panel = cx.new(|cx| {
             TagFilterPanel::new(
                 state.clone(),
@@ -79,8 +94,11 @@ impl RootView {
             move |this, _wm, event: &WindowManagerEvent, cx| match event {
                 WindowManagerEvent::ClipboardChanged => {
                     let items = this.state.read(cx).items.clone();
-                    this.list_view
-                        .update(cx, |list, cx| list.set_items(items, cx));
+                    let scroll_to_top = this.state.read(cx).settings.auto_scroll_to_top;
+                    this.list_view.update(cx, |list, cx| {
+                        list.refresh_settings_from_state(scroll_to_top, cx);
+                        list.set_items(items, cx);
+                    });
                     cx.notify();
                 }
                 WindowManagerEvent::PinnedChanged(pinned) => {
@@ -176,6 +194,24 @@ impl RootView {
                         });
                         cx.notify();
                     }
+                    SettingsEvent::ClipboardSettingsChanged {
+                        reload_items,
+                        scroll_to_top,
+                    } => {
+                        if *reload_items {
+                            this.state.update(cx, |state, _cx| state.reload_items());
+                            let items = this.state.read(cx).items.clone();
+                            let _ = this.list_view.update(cx, |list_view, cx| {
+                                list_view.refresh_settings_from_state(*scroll_to_top, cx);
+                                list_view.set_items(items, cx);
+                            });
+                        } else {
+                            let _ = this.list_view.update(cx, |list_view, cx| {
+                                list_view.refresh_settings_from_state(*scroll_to_top, cx);
+                            });
+                        }
+                        cx.notify();
+                    }
                 },
             ),
         ];
@@ -193,6 +229,10 @@ impl RootView {
             theme,
             window_appearance,
             last_edit_tag_id: -1,
+            _toast_timer: None,
+            _toast_cleanup: None,
+            toast_generation: 0,
+            toast_dismissing: false,
             _wm_subscription,
             _subscriptions,
         }
@@ -225,6 +265,45 @@ impl Render for RootView {
         let viewport = window.viewport_size();
         let win_w = f32::from(viewport.width);
         let win_h = f32::from(viewport.height);
+
+        // ── Toast state machine ──
+        // Enter: bump generation → new transition (0 → 1 opacity, slide up).
+        // Display: hold ~2.8s.
+        // Exit: same generation, update target to 0 / slide-down → smooth reverse.
+        // Cleanup: after transition completes, clear the message.
+        {
+            let has_toast = self.state.read(cx).toast_message.is_some();
+            if has_toast && !self.toast_dismissing && self._toast_timer.is_none() {
+                // Bump generation so the enter animation replays for a new message.
+                self.toast_generation = self.toast_generation.wrapping_add(1);
+                let show_duration = super::components::toast::TOAST_DURATION
+                    .saturating_sub(TOAST_ANIM_DURATION);
+                self._toast_timer = Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
+                    Timer::after(show_duration).await;
+                    if let Some(this) = weak_self.upgrade() {
+                        let _ = this.update(cx, |root, root_cx| {
+                            // Start exit animation — same generation so the
+                            // transition smoothly reverses from its current value.
+                            root.toast_dismissing = true;
+                            root_cx.notify();
+                        });
+                        // Cleanup after the exit transition finishes, plus a
+                        // small grace period so the visual zero point is stable.
+                        Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
+                        if let Some(this) = weak_self.upgrade() {
+                            let _ = this.update(cx, |root, root_cx| {
+                                root.state.update(root_cx, |s, _cx| s.clear_toast());
+                                root.toast_dismissing = false;
+                            });
+                        }
+                    }
+                }));
+            } else if !has_toast {
+                self._toast_timer = None;
+                self._toast_cleanup = None;
+                self.toast_dismissing = false;
+            }
+        }
 
         div()
             .relative()
@@ -282,8 +361,7 @@ impl Render for RootView {
                     if editing_id >= 0 && editing_id != self.last_edit_tag_id {
                         self.last_edit_tag_id = editing_id;
                         let edit_name = app_state.editing_tag_name.clone();
-                        let edit_input =
-                            self.tag_filter_panel.read(cx).edit_name_input().clone();
+                        let edit_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
                         let _ = edit_input.update(cx, |input, cx| {
                             input.set_value(&edit_name, window, cx);
                         });
@@ -294,8 +372,7 @@ impl Render for RootView {
                     let app_state = self.state.read(cx);
                     let editing_tag_id = app_state.editing_tag_id;
                     let editing_tag_color = app_state.editing_tag_color.clone();
-                    let edit_name_input =
-                        self.tag_filter_panel.read(cx).edit_name_input().clone();
+                    let edit_name_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
                     let tag_filter = self.tag_filter_panel.clone();
 
                     root.child(
@@ -416,6 +493,65 @@ impl Render for RootView {
                 },
             )
             .when(
+                self.list_view.read(cx).tag_picker_visible() && is_clipboard,
+                |root| {
+                    let list = self.list_view.clone();
+                    let list_for_panel = self.list_view.clone();
+                    let (picker_x, picker_y) = list.read(cx).tag_picker_position();
+                    let is_batch = list.read(cx).tag_picker_is_batch();
+                    let rows = list.update(cx, |list, cx| list.tag_picker_rows(cx));
+                    let clamped_x = picker_x.clamp(4.0, (win_w - 304.0 - 4.0).max(4.0));
+                    let clamped_y = picker_y.clamp(4.0, (win_h - 300.0 - 4.0).max(4.0));
+
+                    root.child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .on_mouse_down(MouseButton::Left, {
+                                let l = list.clone();
+                                move |_ev, _window, cx| {
+                                    cx.stop_propagation();
+                                    let _ = l.update(cx, |lst, cx| lst.hide_tag_picker(cx));
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(clamped_x))
+                            .top(px(clamped_y))
+                            .occlude()
+                            .child(
+                                TagPickerPanel::new(rows, is_batch, self.theme.clone())
+                                    .on_toggle({
+                                        let l = list_for_panel.clone();
+                                        move |tag_id, state, _window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.toggle_picker_tag(tag_id, state, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_clear({
+                                        let l = list_for_panel.clone();
+                                        move |_window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.clear_picker_tags(cx);
+                                            });
+                                        }
+                                    })
+                                    .on_close({
+                                        let l = list_for_panel.clone();
+                                        move |_window, cx| {
+                                            let _ = l.update(cx, |lst, cx| {
+                                                lst.hide_tag_picker(cx);
+                                            });
+                                        }
+                                    }),
+                            ),
+                    )
+                },
+            )
+            .when(
                 self.list_view.read(cx).confirm_dialog_state().is_some() && is_clipboard,
                 |root| {
                     let list = self.list_view.clone();
@@ -482,5 +618,94 @@ impl Render for RootView {
                     )
                 },
             )
+            .when(
+                {
+                    let toast_visible = self.state.read(cx).toast_message.is_some();
+                    // Keep the toast rendered during the exit animation so it can fade out.
+                    (toast_visible || self.toast_dismissing) && is_clipboard
+                },
+                |root| {
+                    let state = self.state.clone();
+                    let message = self
+                        .state
+                        .read(cx)
+                        .toast_message
+                        .clone()
+                        .unwrap_or_default();
+                    let theme = self.theme.clone();
+                    let toast_visible = self.state.read(cx).toast_message.is_some();
+
+                    // ── Animated opacity & slide ──
+                    let toast_key = self.toast_generation;
+                    let opacity_target: f32 = if toast_visible && !self.toast_dismissing {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let slide_target: f32 = if toast_visible && !self.toast_dismissing {
+                        0.0
+                    } else {
+                        12.0
+                    };
+
+                    let opacity_transition = window
+                        .use_keyed_transition(
+                            ("toast-opacity", toast_key),
+                            cx,
+                            TOAST_ANIM_DURATION,
+                            move |_, _| 1.0 - opacity_target,
+                        )
+                        .with_easing(RootView::toast_ease_out);
+                    opacity_transition.update(cx, |value, _cx| {
+                        *value = opacity_target;
+                    });
+                    let opacity = *opacity_transition.evaluate(window, cx);
+
+                    let slide_transition = window
+                        .use_keyed_transition(
+                            ("toast-slide-y", toast_key),
+                            cx,
+                            TOAST_ANIM_DURATION,
+                            move |_, _| 12.0_f32,
+                        )
+                        .with_easing(RootView::toast_ease_out);
+                    slide_transition.update(cx, |value, _cx| {
+                        *value = slide_target;
+                    });
+                    let slide_y = *slide_transition.evaluate(window, cx);
+
+                    let dismiss_state = self.toast_dismissing;
+                    root.child(
+                        div()
+                            .absolute()
+                            .left(px(36.))
+                            .right(px(0.))
+                            .top(px(0.))
+                            .bottom(px(0.))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(px(20.))
+                                    .right(px(20.))
+                                    .bottom(px(50.0 + slide_y))
+                                    .opacity(opacity)
+                                    .cursor(CursorStyle::PointingHand)
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        let _ = state.update(cx, |s, _cx| s.clear_toast());
+                                    })
+                                    .when(dismiss_state, |el| {
+                                        el.cursor(CursorStyle::Arrow)
+                                    })
+                                    .child(Toast::new(message).theme(theme)),
+                            ),
+                    )
+                },
+            )
+    }
+}
+
+impl RootView {
+    fn toast_ease_out(_delta: f32) -> f32 {
+        1.0 - (1.0 - _delta).powi(3)
     }
 }

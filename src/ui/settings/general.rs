@@ -64,6 +64,7 @@ impl SettingsPanel {
             // ── Auto-start ──
             .child({
                 let state = state.clone();
+                let this = this.clone();
                 self.setting_row_with_toggle(
                     "Auto-start",
                     "Run on system startup",
@@ -71,14 +72,16 @@ impl SettingsPanel {
                     window,
                     cx,
                     move |_window, _cx| {
-                        let new_val = state.update(_cx, |s, _cx| {
-                            s.settings.auto_start = !s.settings.auto_start;
-                            s.settings.auto_start
-                        });
+                        let new_val = !state.read(_cx).settings.auto_start;
                         if let Err(e) = set_auto_start(new_val) {
                             log::error!("Failed to set auto-start: {e}");
+                            return;
                         }
-                        state.update(_cx, |s, _cx| s.settings.save());
+                        state.update(_cx, |s, _cx| {
+                            s.settings.auto_start = new_val;
+                            s.settings.save();
+                        });
+                        let _ = this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
@@ -107,6 +110,7 @@ impl SettingsPanel {
             // ── Silent start ──
             .child({
                 let state = state.clone();
+                let this = this.clone();
                 self.setting_row_with_toggle(
                     "Silent start",
                     "Start silently in tray",
@@ -118,6 +122,7 @@ impl SettingsPanel {
                             s.settings.silent_start = !s.settings.silent_start;
                             s.settings.save();
                         });
+                        let _ = this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
@@ -151,6 +156,7 @@ impl SettingsPanel {
             .child({
                 let state = state.clone();
                 let wm = wm.clone();
+                let this = this.clone();
                 self.setting_row_with_options(
                     "Position",
                     "Popup position",
@@ -171,6 +177,7 @@ impl SettingsPanel {
                             s.settings.save();
                         });
                         wm.update(_cx, |wm, _cx| wm.set_position_mode(mode));
+                        let _ = this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })

@@ -1,20 +1,13 @@
-//! Tag picker panel — assign or remove tags on clipboard items.
+//! Tag picker panel - assign or remove tags on clipboard items.
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use crate::core::types::TagInfo;
 
 use super::theme::ClippiTheme;
-
-#[derive(IntoElement)]
-pub struct TagPickerPanel {
-    tags: Vec<(TagInfo, TagState)>,
-    on_toggle: Option<Rc<dyn Fn(i64, &mut Window, &mut App)>>,
-    on_add: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-    theme: ClippiTheme,
-}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum TagState {
@@ -23,180 +16,253 @@ pub enum TagState {
     Partial,
 }
 
+#[derive(IntoElement)]
+pub struct TagPickerPanel {
+    tags: Vec<(TagInfo, TagState)>,
+    is_batch: bool,
+    on_toggle: Option<Rc<dyn Fn(i64, TagState, &mut Window, &mut App)>>,
+    on_clear: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    theme: ClippiTheme,
+}
+
 impl TagPickerPanel {
-    pub fn new(
-        tags: Vec<TagInfo>,
-        assigned_ids: &[i64],
-        is_batch: bool,
-        theme: ClippiTheme,
-    ) -> Self {
-        let tags_with_state = tags
-            .into_iter()
-            .map(|t| {
-                let state = if assigned_ids.contains(&t.id) {
-                    if is_batch {
-                        TagState::Partial
-                    } else {
-                        TagState::All
-                    }
-                } else {
-                    TagState::None
-                };
-                (t, state)
-            })
-            .collect();
+    pub fn new(tags: Vec<(TagInfo, TagState)>, is_batch: bool, theme: ClippiTheme) -> Self {
         Self {
-            tags: tags_with_state,
+            tags,
+            is_batch,
             on_toggle: None,
-            on_add: None,
+            on_clear: None,
+            on_close: None,
             theme,
         }
     }
 
-    pub fn on_toggle(mut self, handler: impl Fn(i64, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_toggle(
+        mut self,
+        handler: impl Fn(i64, TagState, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_toggle = Some(Rc::new(handler));
         self
     }
 
-    pub fn on_add(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        self.on_add = Some(Rc::new(handler));
+    pub fn on_clear(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_clear = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_close(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_close = Some(Rc::new(handler));
         self
     }
 }
 
 impl RenderOnce for TagPickerPanel {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let on_toggle = self.on_toggle;
-        let on_add = self.on_add;
-        let theme = &self.theme;
-        let is_dark = theme.bg == rgb(0x191a1b);
+        let Self {
+            tags,
+            is_batch,
+            on_toggle,
+            on_clear,
+            on_close,
+            theme,
+        } = self;
 
-        // Panel surface & border
+        let is_dark = theme.bg == rgb(0x191a1b);
         let surface = theme.panel_surface;
-        let border = if is_dark {
-            rgba(0xffffff18)
+        let input_bg = theme.panel_input_bg;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
+        let accent = theme.accent;
+        let btn_hover = theme.btn_hover;
+        let sep_line = theme.panel_sep_line;
+        let panel_border = if is_dark {
+            rgba(0xffffff14)
         } else {
             rgba(0x00000012)
         };
-        // Separator
-        let sep = if is_dark {
-            rgba(0xffffff0d)
-        } else {
-            rgba(0x0000000d)
-        };
-        // Section header text
-        let header_text = theme.text_3;
-        // Active/inactive row text
-        let row_text_active = theme.text_1;
-        let row_text_inactive = theme.text_2;
-        // Row hover
-        let row_hover = if is_dark {
-            rgba(0xffffff10)
-        } else {
-            rgba(0x00000008)
-        };
-        // Checkbox
-        let checkbox_checked = theme.accent;
-        let checkbox_unchecked = if is_dark {
-            rgb(0x3d3e42)
-        } else {
-            rgb(0xd0d2de)
-        };
-        // Checkbox text
-        let checkbox_text = if is_dark {
-            rgb(0xffffff)
-        } else {
-            rgb(0xffffff)
-        };
-        // Add button text (same as header)
-        let add_text = theme.text_2;
+        let active_bg = theme.accent_overlay();
+
+        let rows: Vec<Vec<(TagInfo, TagState)>> = tags.chunks(2).map(|row| row.to_vec()).collect();
+        let is_empty = rows.is_empty();
 
         div()
             .flex()
             .flex_col()
-            .min_w(px(160.))
+            .w(px(304.))
+            .max_h(px(300.))
             .bg(surface)
-            .border_color(border)
             .border(px(1.))
+            .border_color(panel_border)
             .rounded(px(8.))
-            .shadow_md()
-            .py(px(4.))
+            .shadow_lg()
+            .p(px(8.))
+            .gap(px(4.))
             .child(
                 div()
-                    .px(px(10.))
-                    .py(px(4.))
-                    .text_size(px(10.))
-                    .text_color(header_text)
-                    .child("ASSIGN TAGS"),
-            )
-            .children(self.tags.into_iter().map(|(tag, state)| {
-                let tag_id = tag.id;
-                let on_toggle = on_toggle.clone();
-                let check = match state {
-                    TagState::All => "✓",
-                    TagState::Partial => "-",
-                    TagState::None => " ",
-                };
-                let is_active = state != TagState::None;
-
-                let row = div()
+                    .h(px(24.))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(6.))
-                    .px(px(10.))
-                    .py(px(6.))
-                    .text_size(px(12.))
-                    .text_color(if is_active { row_text_active } else { row_text_inactive })
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(row_hover));
-
-                let row = if let Some(handler) = on_toggle {
-                    row.on_mouse_down(MouseButton::Left, move |_e, w, cx| {
-                        handler(tag_id, w, cx);
-                    })
-                } else {
-                    row
-                };
-
-                row.child(
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(text_1)
+                            .child(if is_batch { "Batch tag" } else { "Tag" }),
+                    )
+                    .child(div().flex_1())
+                    .child(icon_button("\u{e607}", text_2, btn_hover, on_clear))
+                    .child(icon_button("\u{e7b7}", text_2, btn_hover, on_close)),
+            )
+            .child(div().h(px(1.)).w_full().bg(sep_line))
+            .when(is_empty, |el| {
+                el.child(
                     div()
-                        .w(px(14.))
-                        .h(px(14.))
-                        .rounded(px(3.))
-                        .bg(if is_active {
-                            checkbox_checked
-                        } else {
-                            checkbox_unchecked
-                        })
-                        .text_size(px(10.))
-                        .text_color(checkbox_text)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(check),
+                        .px(px(6.))
+                        .py(px(12.))
+                        .text_size(px(11.))
+                        .text_color(text_3)
+                        .child("No tags. Create tags in the tag filter panel."),
                 )
-                .child(tag.name.clone())
-            }))
-            .child(div().h(px(1.)).bg(sep).mx(px(8.)))
-            .child({
-                let on_add = on_add;
-                let row = div()
-                    .px(px(10.))
-                    .py(px(6.))
-                    .text_size(px(12.))
-                    .text_color(add_text)
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(row_hover))
-                    .child("+ New tag");
-
-                if let Some(handler) = on_add {
-                    row.on_mouse_down(MouseButton::Left, move |_e, w, cx| {
-                        handler(w, cx);
-                    })
-                } else {
-                    row
-                }
+            })
+            .when(!is_empty, |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .max_h(px(230.))
+                        .overflow_hidden()
+                        .gap(px(4.))
+                        .children(rows.into_iter().map(|row| {
+                            let on_toggle = on_toggle.clone();
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(4.))
+                                .children(row.into_iter().map(move |(tag, state)| {
+                                    tag_cell(
+                                        tag,
+                                        state,
+                                        on_toggle.clone(),
+                                        active_bg,
+                                        input_bg,
+                                        btn_hover,
+                                        accent,
+                                        text_1,
+                                        text_2,
+                                    )
+                                }))
+                        })),
+                )
             })
     }
+}
+
+fn icon_button(
+    icon: &'static str,
+    color: Rgba,
+    hover_bg: Rgba,
+    handler: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+) -> Div {
+    let button = div()
+        .w(px(22.))
+        .h(px(22.))
+        .rounded(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |style| style.bg(hover_bg))
+        .child(
+            div()
+                .font_family("iconfont")
+                .text_size(px(11.))
+                .text_color(color)
+                .child(icon),
+        );
+
+    if let Some(handler) = handler {
+        button.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+            cx.stop_propagation();
+            handler(window, cx);
+        })
+    } else {
+        button
+    }
+}
+
+fn tag_cell(
+    tag: TagInfo,
+    state: TagState,
+    on_toggle: Option<Rc<dyn Fn(i64, TagState, &mut Window, &mut App)>>,
+    active_bg: Rgba,
+    input_bg: Rgba,
+    hover_bg: Rgba,
+    accent: Rgba,
+    text_1: Rgba,
+    text_2: Rgba,
+) -> Div {
+    let tag_id = tag.id;
+    let active = state != TagState::None;
+    let tag_color = color_from_hex(&tag.color, accent);
+    let state_mark = match state {
+        TagState::All => "*",
+        TagState::Partial => "-",
+        TagState::None => "",
+    };
+
+    let cell = div()
+        .w(px(140.))
+        .h(px(30.))
+        .rounded(px(5.))
+        .bg(if active { active_bg } else { input_bg })
+        .px(px(6.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(5.))
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |style| style.bg(if active { active_bg } else { hover_bg }))
+        .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tag_color))
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(11.))
+                .font_weight(if active {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if active { accent } else { text_1 })
+                .truncate()
+                .child(tag.name),
+        )
+        .child(
+            div()
+                .w(px(12.))
+                .text_size(px(11.))
+                .text_color(if active { accent } else { text_2 })
+                .child(state_mark),
+        );
+
+    if let Some(handler) = on_toggle {
+        cell.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+            cx.stop_propagation();
+            handler(tag_id, state, window, cx);
+        })
+    } else {
+        cell
+    }
+}
+
+fn color_from_hex(hex: &str, fallback: Rgba) -> Rgba {
+    let hex = hex.trim().trim_start_matches('#');
+    if hex.len() == 6 {
+        if let Ok(value) = u32::from_str_radix(hex, 16) {
+            return rgb(value);
+        }
+    }
+    fallback
 }

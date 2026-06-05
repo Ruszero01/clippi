@@ -30,6 +30,15 @@ impl GpuiClipboardService {
         self.shared.batch_pasting.clone()
     }
 
+    /// Access the `skip_next` flag shared with the clipboard listener.
+    /// Set to `true` before writing OCR/color-conversion text to clipboard.
+    /// The listener skips one detection cycle and updates the baseline
+    /// sequence number so the internal write is never treated as a new
+    /// history entry.
+    pub fn skip_next(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.shared.skip_next.clone()
+    }
+
     pub fn poll_state(&mut self, state: &mut AppState) -> bool {
         if self
             .shared

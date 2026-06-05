@@ -16,6 +16,7 @@ use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
+use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
 
 const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 16.0;
@@ -50,6 +51,11 @@ pub struct ClipboardListView {
     context_menu_y: f32,
     context_menu_item: Option<ClipboardItem>,
     context_menu_is_batch: bool,
+    tag_picker_visible: bool,
+    tag_picker_x: f32,
+    tag_picker_y: f32,
+    tag_picker_item_id: i64,
+    tag_picker_is_batch: bool,
     // ── Cached selected count ──
     pub(crate) selected_count: usize,
     // ── Note editing state ──
@@ -71,11 +77,12 @@ impl ClipboardListView {
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
-        let item_sizes = Rc::new(Self::compute_sizes(&items, "auto"));
+        let card_height_mode = state.read(cx).settings.card_height_mode.clone();
+        let item_sizes = Rc::new(Self::compute_sizes(&items, &card_height_mode));
         Self {
             items,
             item_sizes,
-            card_height_mode: "auto".into(),
+            card_height_mode,
             scroll_handle: VirtualListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             selected_ids: Vec::new(),
@@ -88,6 +95,11 @@ impl ClipboardListView {
             context_menu_y: 0.0,
             context_menu_item: None,
             context_menu_is_batch: false,
+            tag_picker_visible: false,
+            tag_picker_x: 0.0,
+            tag_picker_y: 0.0,
+            tag_picker_item_id: -1,
+            tag_picker_is_batch: false,
             selected_count: 0,
             editing_note_id: -1,
             note_input: cx.new(|cx| InputState::new(window, cx).placeholder("Add a note...")),
@@ -113,6 +125,22 @@ impl ClipboardListView {
         let app_items = self.state.read(cx).items.clone();
         self.item_sizes = Rc::new(Self::compute_sizes(&app_items, &self.card_height_mode));
         self.items = app_items;
+        cx.notify();
+    }
+
+    pub(crate) fn refresh_settings_from_state(
+        &mut self,
+        scroll_to_top: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let card_height_mode = self.state.read(cx).settings.card_height_mode.clone();
+        if self.card_height_mode != card_height_mode {
+            self.card_height_mode = card_height_mode;
+            self.item_sizes = Rc::new(Self::compute_sizes(&self.items, &self.card_height_mode));
+        }
+        if scroll_to_top && !self.items.is_empty() {
+            self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        }
         cx.notify();
     }
 
@@ -263,6 +291,102 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    pub fn tag_picker_visible(&self) -> bool {
+        self.tag_picker_visible
+    }
+
+    pub fn tag_picker_position(&self) -> (f32, f32) {
+        (self.tag_picker_x, self.tag_picker_y)
+    }
+
+    pub fn tag_picker_is_batch(&self) -> bool {
+        self.tag_picker_is_batch
+    }
+
+    pub fn hide_tag_picker(&mut self, cx: &mut Context<Self>) {
+        self.tag_picker_visible = false;
+        self.tag_picker_item_id = -1;
+        cx.notify();
+    }
+
+    fn show_tag_picker(&mut self, is_batch: bool, x: f32, y: f32, cx: &mut Context<Self>) {
+        self.tag_picker_visible = true;
+        self.tag_picker_x = x;
+        self.tag_picker_y = y;
+        self.tag_picker_is_batch = is_batch;
+        self.tag_picker_item_id = self.context_menu_item.as_ref().map_or(-1, |item| item.id);
+        cx.notify();
+    }
+
+    pub fn tag_picker_rows(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<(crate::core::types::TagInfo, TagState)> {
+        let app_state = self.state.read(cx);
+        app_state
+            .tags
+            .iter()
+            .map(|tag| {
+                let state = if self.tag_picker_is_batch {
+                    let selected_items: Vec<&ClipboardItem> = self
+                        .items
+                        .iter()
+                        .filter(|item| self.selected_ids.contains(&item.id))
+                        .collect();
+                    let selected_len = selected_items.len();
+                    let tagged_count = selected_items
+                        .iter()
+                        .filter(|item| item.tags.iter().any(|item_tag| item_tag.id == tag.id))
+                        .count();
+                    if selected_len > 0 && tagged_count == selected_len {
+                        TagState::All
+                    } else if tagged_count > 0 {
+                        TagState::Partial
+                    } else {
+                        TagState::None
+                    }
+                } else {
+                    self.items
+                        .iter()
+                        .find(|item| item.id == self.tag_picker_item_id)
+                        .filter(|item| item.tags.iter().any(|item_tag| item_tag.id == tag.id))
+                        .map_or(TagState::None, |_| TagState::All)
+                };
+                (tag.clone(), state)
+            })
+            .collect()
+    }
+
+    pub fn toggle_picker_tag(&mut self, tag_id: i64, state: TagState, cx: &mut Context<Self>) {
+        if self.tag_picker_is_batch {
+            let ids = self.selected_ids.clone();
+            if state == TagState::None {
+                self.state
+                    .update(cx, |s, _cx| s.batch_add_tag(&ids, tag_id));
+            } else {
+                self.state
+                    .update(cx, |s, _cx| s.batch_remove_tag(&ids, tag_id));
+            }
+        } else if self.tag_picker_item_id > 0 {
+            let item_id = self.tag_picker_item_id;
+            self.state
+                .update(cx, |s, _cx| s.toggle_item_tag(item_id, tag_id));
+        }
+        self.sync_items_from_state(cx);
+    }
+
+    pub fn clear_picker_tags(&mut self, cx: &mut Context<Self>) {
+        if self.tag_picker_is_batch {
+            let ids = self.selected_ids.clone();
+            self.state.update(cx, |s, _cx| s.clear_tags_for_items(&ids));
+            self.hide_tag_picker(cx);
+        } else if self.tag_picker_item_id > 0 {
+            let item_id = self.tag_picker_item_id;
+            self.state.update(cx, |s, _cx| s.clear_item_tags(item_id));
+        }
+        self.sync_items_from_state(cx);
+    }
+
     /// Start editing the note for an item.
     /// `initial_text` — from item.note (hover toolbar) or "" (context menu).
     fn start_note_edit(
@@ -363,8 +487,7 @@ impl ClipboardListView {
             }
             "edit_note" => {
                 if let Some(ref item) = self.context_menu_item {
-                    // Context menu: start with empty (no note context available)
-                    self.start_note_edit(item.id, "", _window, cx);
+                    self.start_note_edit(item.id, &item.note.clone(), _window, cx);
                 }
             }
             "toggle_favorite" => {
@@ -391,8 +514,37 @@ impl ClipboardListView {
                 self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
                 cx.notify();
             }
-            // Other actions still deferred to follow-up
-            "edit" | "open_image" | "paste_ocr" | "qr_detect" | "show_tag_picker" => {}
+            "open_image" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state
+                        .update(cx, |s, _cx| s.open_original_image(item_id));
+                }
+            }
+            "paste_ocr" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_ocr(item_id));
+                    self.sync_items_from_state(cx);
+                }
+            }
+            "qr_detect" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.qr_detect(item_id));
+                    self.sync_items_from_state(cx);
+                }
+            }
+            "show_tag_picker" => {
+                self.show_tag_picker(
+                    self.context_menu_is_batch,
+                    self.context_menu_x,
+                    self.context_menu_y,
+                    cx,
+                );
+            }
+            // Edit panel migration is tracked separately.
+            "edit" => {}
             _ => {}
         }
         self.hide_context_menu(cx);
@@ -455,8 +607,31 @@ impl ClipboardListView {
                 self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
                 cx.notify();
             }
-            // Other actions still deferred to follow-up
-            "open_image" | "qr_action" | "open_location" | "edit" => {}
+            "open_image" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        self.state
+                            .update(cx, |s, _cx| s.open_original_image(item.id));
+                    }
+                }
+            }
+            "qr_action" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        self.state.update(cx, |s, _cx| s.qr_action(item.id));
+                    }
+                }
+            }
+            "open_location" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        self.state
+                            .update(cx, |s, _cx| s.open_item_location(item.id));
+                    }
+                }
+            }
+            // Edit panel migration is tracked separately.
+            "edit" => {}
             _ => {}
         }
     }
@@ -609,6 +784,9 @@ impl Render for ClipboardListView {
                                 let hovered_index = this.hovered_index;
                                 let editing_note_id = this.editing_note_id;
                                 let note_input = this.note_input.clone();
+                                let settings = &this.state.read(_cx).settings;
+                                let show_source_app = settings.show_source_app;
+                                let show_original_on_hover = settings.show_original_on_hover;
                                 range
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
@@ -731,6 +909,8 @@ impl Render for ClipboardListView {
                                                     )
                                                     .theme(theme.clone())
                                                     .hovered(is_hovered)
+                                                    .show_source_app(show_source_app)
+                                                    .show_original_on_hover(show_original_on_hover)
                                                     .selected_count(selected_count)
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)

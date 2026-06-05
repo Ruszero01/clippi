@@ -139,8 +139,13 @@ impl WindowManager {
         // Share the batch_pasting flag with AppState so it can suppress
         // clipboard recording during batch paste operations.
         let batch_pasting = wm.clipboard_service.batch_pasting();
+        // Share the skip_next flag — used for one-shot internal clipboard
+        // writes (OCR paste, re-copy) that should be consumed by the
+        // listener without creating a new history entry.
+        let skip_next = wm.clipboard_service.skip_next();
         wm.state.update(cx, |s, _cx| {
             s.batch_pasting = batch_pasting;
+            s.skip_next = skip_next;
         });
 
         // Start the unified poll loop
@@ -257,7 +262,12 @@ impl WindowManager {
                 self.do_quit(cx);
             }
             Some(TrayAction::CheckUpdate) => {
-                update::open_releases_page(RELEASES_URL);
+                // Spawn on a background thread — ShellExecuteW can pump
+                // Windows messages internally (DDE/COM) and deadlock if
+                // called from the GPUI main thread event handler.
+                std::thread::spawn(|| {
+                    update::open_releases_page(RELEASES_URL);
+                });
             }
             None => {}
         }

@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use base64::Engine;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
@@ -30,6 +31,9 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
     if item.meta_type == "email" {
         return "\u{e604}";
     }
+    if has_qr_code(item) {
+        return "\u{e605}";
+    }
     match item.content_type {
         ContentType::PlainText => "\u{e60e}",
         ContentType::RichText => "\u{e6ae}",
@@ -49,9 +53,23 @@ fn type_label(item: &ClipboardItem) -> String {
     if item.meta_type == "phone" {
         return "Phone".into();
     }
+    if has_qr_code(item) {
+        return "QR".into();
+    }
     match item.content_type {
         ContentType::PlainText => "Text".into(),
-        ContentType::RichText => "RTF".into(),
+        ContentType::RichText => {
+            let rich = RichData::from_json(&item.rich_data);
+            if rich
+                .html
+                .as_deref()
+                .is_some_and(|html| !html.trim().is_empty())
+            {
+                "HTML".into()
+            } else {
+                "RTF".into()
+            }
+        }
         ContentType::Image => "Image".into(),
         ContentType::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
@@ -77,6 +95,11 @@ fn type_label(item: &ClipboardItem) -> String {
         ContentType::Path => "Path".into(),
         ContentType::Color => "Color".into(),
     }
+}
+
+fn has_qr_code(item: &ClipboardItem) -> bool {
+    item.content_type == ContentType::Image
+        && RichData::from_json(&item.rich_data).qr_text.is_some()
 }
 
 fn color_from_hex(hex: &str, fallback: Rgba) -> Rgba {
@@ -111,6 +134,36 @@ fn swatch_color(text: &str, fallback: Rgba) -> Rgba {
     detect_color(text)
         .map(|color| rgb(((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32))
         .unwrap_or(fallback)
+}
+
+fn cached_source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
+    if item.source_app_name.is_empty() || item.source_app_icon.is_empty() {
+        return None;
+    }
+    let icon_dir = crate::core::paths::images_dir().join("icons");
+    let _ = std::fs::create_dir_all(&icon_dir);
+    let safe_name: String = item
+        .source_app_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe_name.is_empty() {
+        return None;
+    }
+    let path = icon_dir.join(format!("{safe_name}.png"));
+    if !path.exists() {
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(&item.source_app_icon)
+            .ok()?;
+        std::fs::write(&path, png).ok()?;
+    }
+    Some(path)
 }
 
 enum RichPreview {
@@ -522,6 +575,8 @@ pub struct ClipboardCard {
     note_input: Option<Entity<InputState>>,
     /// Called when note editing is committed (Enter / confirm button).
     on_commit_note: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    show_source_app: bool,
+    show_original_on_hover: bool,
 }
 
 impl ClipboardCard {
@@ -541,6 +596,8 @@ impl ClipboardCard {
             editing: false,
             note_input: None,
             on_commit_note: None,
+            show_source_app: false,
+            show_original_on_hover: false,
         }
     }
 
@@ -609,6 +666,16 @@ impl ClipboardCard {
         self.on_commit_note = Some(Rc::new(handler));
         self
     }
+
+    pub fn show_source_app(mut self, value: bool) -> Self {
+        self.show_source_app = value;
+        self
+    }
+
+    pub fn show_original_on_hover(mut self, value: bool) -> Self {
+        self.show_original_on_hover = value;
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -628,6 +695,8 @@ impl RenderOnce for ClipboardCard {
             editing,
             note_input,
             on_commit_note,
+            show_source_app,
+            show_original_on_hover,
         } = self;
 
         let surface = theme.surface;
@@ -676,7 +745,14 @@ impl RenderOnce for ClipboardCard {
         let meta_type = item.meta_type.clone();
         let tags = item.tags.clone();
         let icon = type_icon(&item);
+        let has_qr = has_qr_code(&item);
+        let show_source = show_source_app && !item.source_app_name.is_empty();
         let label = type_label(&item);
+        let source_icon_path = if show_source {
+            cached_source_icon_path(&item)
+        } else {
+            None
+        };
         let color_swatch = swatch_color(&full_text, accent);
 
         let border_color = if selected { accent } else { divider };
@@ -744,17 +820,20 @@ impl RenderOnce for ClipboardCard {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(
+                        .child(if let Some(path) = source_icon_path.clone() {
+                            gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                        } else {
                             div()
                                 .w(px(20.))
                                 .h(px(20.))
                                 .rounded(px(4.))
                                 .bg(color_swatch)
                                 .border(px(1.))
-                                .border_color(color_border),
-                        ),
+                                .border_color(color_border)
+                                .into_any_element()
+                        }),
                 )
-                .child(
+                .child(if source_icon_path.is_some() {
                     div()
                         .w(px(36.))
                         .h(px(14.))
@@ -766,8 +845,27 @@ impl RenderOnce for ClipboardCard {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(div().w_full().h_full().rounded(px(1.)).bg(color_swatch)),
-                ),
+                        .child(div().w_full().h_full().rounded(px(1.)).bg(color_swatch))
+                        .into_any_element()
+                } else {
+                    div()
+                        .w(px(36.))
+                        .h(px(14.))
+                        .rounded(px(3.))
+                        .bg(tag_bg)
+                        .px(px(3.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(tag_text)
+                                .truncate()
+                                .child(label.to_string()),
+                        )
+                        .into_any_element()
+                }),
             ContentType::Image => div()
                 .w(px(36.))
                 .flex()
@@ -783,13 +881,16 @@ impl RenderOnce for ClipboardCard {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(
+                        .child(if let Some(path) = source_icon_path.clone() {
+                            gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                        } else {
                             div()
                                 .text_size(px(18.))
                                 .font_family("iconfont")
                                 .text_color(tag_text)
-                                .child(icon.to_string()),
-                        ),
+                                .child(icon.to_string())
+                                .into_any_element()
+                        }),
                 )
                 .child(
                     div()
@@ -824,13 +925,16 @@ impl RenderOnce for ClipboardCard {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(
+                        .child(if let Some(path) = source_icon_path.clone() {
+                            gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                        } else {
                             div()
                                 .text_size(px(18.))
                                 .font_family("iconfont")
                                 .text_color(tag_text)
-                                .child(icon.to_string()),
-                        ),
+                                .child(icon.to_string())
+                                .into_any_element()
+                        }),
                 )
                 .child(
                     div()
@@ -917,7 +1021,7 @@ impl RenderOnce for ClipboardCard {
                         }
                     }
                 })
-        } else if !note.is_empty() {
+        } else if !note.is_empty() && !(show_original_on_hover && is_hovered) {
             div().flex_1().flex().items_center().child(
                 div()
                     .w_full()
@@ -931,12 +1035,27 @@ impl RenderOnce for ClipboardCard {
                 ContentType::Image => {
                     // Show image preview if path is available, otherwise show dimensions
                     if !img_path.is_empty() {
-                        div().flex_1().flex().items_center().justify_center().child(
-                            gpui::img(std::path::Path::new(&img_path))
-                                .w_full()
-                                .h(px(48.))
-                                .object_fit(ObjectFit::Cover),
-                        )
+                        let object_fit = if has_qr {
+                            ObjectFit::Contain
+                        } else {
+                            ObjectFit::Cover
+                        };
+                        div()
+                            .flex_1()
+                            .w_full()
+                            .h_full()
+                            .rounded(px(6.))
+                            .overflow_hidden()
+                            .bg(tag_bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                gpui::img(std::path::Path::new(&img_path))
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(object_fit),
+                            )
                     } else {
                         div()
                             .flex_1()
@@ -988,14 +1107,24 @@ impl RenderOnce for ClipboardCard {
                                 .selectable(false),
                             ),
                             RichPreview::Markdown(markdown) => content_box.child(
-                                TextView::markdown(
-                                    ("clipboard-card-markdown", item.content_hash),
-                                    markdown,
-                                    window,
-                                    cx,
-                                )
-                                .style(style)
-                                .selectable(false),
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .h_full()
+                                    .overflow_hidden()
+                                    .capture_any_mouse_up(|_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                    })
+                                    .child(
+                                        TextView::markdown(
+                                            ("clipboard-card-markdown", item.content_hash),
+                                            markdown,
+                                            window,
+                                            cx,
+                                        )
+                                        .style(style)
+                                        .selectable(false),
+                                    ),
                             ),
                             RichPreview::StyledHtml(lines) => {
                                 content_box.child(div().flex().flex_col().gap(px(1.)).children(

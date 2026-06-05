@@ -19,8 +19,8 @@ mod clipboard;
 mod general;
 
 use crate::state::app::AppState;
-use crate::ui::theme::ClippiTheme;
 use crate::ui::components::toggle::{render_toggle, ToggleTransitionState};
+use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
@@ -29,6 +29,10 @@ pub enum SettingsEvent {
     Back,
     /// Theme setting changed — RootView should rebuild its ClippiTheme.
     ThemeChanged(String),
+    ClipboardSettingsChanged {
+        reload_items: bool,
+        scroll_to_top: bool,
+    },
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}

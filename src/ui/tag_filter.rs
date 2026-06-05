@@ -65,7 +65,8 @@ impl TagFilterPanel {
     }
 
     pub(crate) fn update_tag(&self, tag_id: i64, name: &str, color: &str, cx: &mut App) {
-        self.state.update(cx, |s, _cx| s.update_tag(tag_id, name, color));
+        self.state
+            .update(cx, |s, _cx| s.update_tag(tag_id, name, color));
         self.refresh_list(cx);
     }
 
