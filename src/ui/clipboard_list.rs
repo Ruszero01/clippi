@@ -462,17 +462,21 @@ impl ClipboardListView {
     }
 
     fn compute_sizes(items: &[ClipboardItem], mode: &str) -> Vec<Size<Pixels>> {
-        let sizes: Vec<_> = items
+        let mut sizes: Vec<_> = items
             .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let mut h = estimate_card_height(item, mode) + CLIPBOARD_ROW_VERTICAL_SPACE;
-                if index + 1 == items.len() {
-                    h += CLIPBOARD_BOTTOM_SCROLL_INSET;
-                }
+            .map(|item| {
+                let h = estimate_card_height(item, mode) + CLIPBOARD_ROW_VERTICAL_SPACE;
                 size(px(308.), px(h))
             })
             .collect();
+        // Append a sentinel spacer so the last real item can scroll fully into view.
+        // The render callback's `filter_map` (via `this.items.get(i)`) returns None
+        // for this out-of-bounds index, so nothing visible is painted — just empty
+        // scrollable space. This avoids inflating the last card's visual height
+        // when there are only a few items in the list.
+        if !sizes.is_empty() {
+            sizes.push(size(px(308.), px(CLIPBOARD_BOTTOM_SCROLL_INSET)));
+        }
         sizes
     }
 }
