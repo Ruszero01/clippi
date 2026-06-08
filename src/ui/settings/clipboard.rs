@@ -4,6 +4,7 @@
 
 use gpui::*;
 
+use crate::core::i18n_keys::I18nKey;
 use super::SettingsPanel;
 
 impl SettingsPanel {
@@ -37,12 +38,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if sort_by_created {
-                    "First created"
+                    I18nKey::DescSortFirst.text()
                 } else {
-                    "Last modified"
+                    I18nKey::DescSortLast.text()
                 };
                 self.setting_row_with_toggle(
-                    "Sort by created",
+                    I18nKey::SettingSortCreated.text(),
                     desc,
                     sort_by_created,
                     window,
@@ -67,13 +68,13 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 self.setting_row_with_options(
-                    "Card height",
-                    "Adjust card height",
+                    I18nKey::SettingCardHeight.text(),
+                    I18nKey::DescCardHeight.text(),
                     &[
-                        ("high", "Tall"),
-                        ("medium", "Med"),
-                        ("low", "Short"),
-                        ("auto", "Auto"),
+                        ("high", I18nKey::CardHeightTall.text()),
+                        ("medium", I18nKey::CardHeightMed.text()),
+                        ("low", I18nKey::CardHeightShort.text()),
+                        ("auto", I18nKey::CardHeightAuto.text()),
                     ],
                     &card_height_mode,
                     move |key, _window, _cx| {
@@ -96,12 +97,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if show_source_app {
-                    "Show source app icon"
+                    I18nKey::DescShowSourceOn.text()
                 } else {
-                    "Show content type only"
+                    I18nKey::DescShowSourceOff.text()
                 };
                 self.setting_row_with_toggle(
-                    "Show source app",
+                    I18nKey::SettingShowSource.text(),
                     desc,
                     show_source_app,
                     window,
@@ -126,12 +127,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if auto_scroll_to_top {
-                    "Scroll to top on open"
+                    I18nKey::DescScrollTopOn.text()
                 } else {
-                    "Keep last scroll position"
+                    I18nKey::DescScrollTopOff.text()
                 };
                 self.setting_row_with_toggle(
-                    "Scroll to top",
+                    I18nKey::SettingScrollTop.text(),
                     desc,
                     auto_scroll_to_top,
                     window,
@@ -157,12 +158,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if copy_as_plain_text {
-                    "Save as plain text only"
+                    I18nKey::DescCopyPlainOn.text()
                 } else {
-                    "Keep rich formatting"
+                    I18nKey::DescCopyPlainOff.text()
                 };
                 self.setting_row_with_toggle(
-                    "Copy as plain text",
+                    I18nKey::SettingCopyPlain.text(),
                     desc,
                     copy_as_plain_text,
                     window,
@@ -187,12 +188,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if show_original_on_hover {
-                    "Show original on hover"
+                    I18nKey::DescShowOriginalOn.text()
                 } else {
-                    "Cards with notes show note"
+                    I18nKey::DescShowOriginalOff.text()
                 };
                 self.setting_row_with_toggle(
-                    "Show original on hover",
+                    I18nKey::SettingShowOriginal.text(),
                     desc,
                     show_original_on_hover,
                     window,
@@ -217,12 +218,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if ocr_enabled {
-                    "Auto OCR for images"
+                    I18nKey::DescOcrOn.text()
                 } else {
-                    "OCR disabled"
+                    I18nKey::DescOcrOff.text()
                 };
                 self.setting_row_with_toggle(
-                    "Auto Image OCR",
+                    I18nKey::SettingOcr.text(),
                     desc,
                     ocr_enabled,
                     window,
@@ -241,12 +242,12 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 let desc = if qr_enabled {
-                    "Auto detect QR in images"
+                    I18nKey::DescQrOn.text()
                 } else {
-                    "QR detection disabled"
+                    I18nKey::DescQrOff.text()
                 };
                 self.setting_row_with_toggle(
-                    "Auto QR Detection",
+                    I18nKey::SettingQr.text(),
                     desc,
                     qr_enabled,
                     window,

@@ -81,15 +81,3 @@ macro_rules! define_i18n {
     };
 }
 
-// ─── Backward-compatible tr() — remove after all call sites migrated ───
-
-/// Simple static translation: `tr("中文", "English")` returns the right string.
-/// DEPRECATED: use `I18nKey::KeyName.text()` instead.
-#[inline]
-pub fn tr<'a>(zh: &'a str, en: &'a str) -> &'a str {
-    if is_en() {
-        en
-    } else {
-        zh
-    }
-}

@@ -6,7 +6,7 @@
 use gpui::*;
 use gpui_component::input::Input;
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::migrate_database;
 use crate::ui::settings::SettingsEvent;
 
@@ -110,7 +110,7 @@ impl SettingsPanel {
                             .text_size(px(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
-                            .child(i18n::tr("数据库路径", "Database path")),
+                            .child(I18nKey::SettingDbPath.text()),
                     )
                     // --- Path display + buttons row ---
                     .child(
@@ -196,7 +196,7 @@ impl SettingsPanel {
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(rgb(0xffffff))
-                                            .child(i18n::tr("更改", "Change")),
+                                            .child(I18nKey::BtnChange.text()),
                                     )
                             })
                             // --- Reset button ---
@@ -257,7 +257,7 @@ impl SettingsPanel {
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(text_3)
-                                            .child(i18n::tr("重置", "Reset")),
+                                            .child(I18nKey::BtnReset.text()),
                                     )
                             }),
                     )
@@ -296,12 +296,9 @@ impl SettingsPanel {
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
-                                    .child(i18n::tr("最大保存条目数", "Max items")),
+                                    .child(I18nKey::SettingMaxItems.text()),
                             )
-                            .child(div().text_size(px(10.)).text_color(text_3).child(i18n::tr(
-                                "设为 0 不限制条目数",
-                                "Set to 0 for unlimited items",
-                            ))),
+                            .child(div().text_size(px(10.)).text_color(text_3).child(I18nKey::DescMaxItems.text())),
                     )
                     // --- Right: max-items value (button or Input) ---
                     .child({
@@ -344,7 +341,7 @@ impl SettingsPanel {
                             // --- ── Normal: clickable value button ── ---
                             let val = self.state.read(cx).settings.max_items;
                             let label = if val == 0 {
-                                i18n::tr("不限制", "Unlimited").to_string()
+                                I18nKey::Unlimited.text().to_string()
                             } else {
                                 val.to_string()
                             };
@@ -514,13 +511,10 @@ impl SettingsPanel {
                             .text_size(px(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
-                            .child(i18n::tr("重置数据目录", "Reset Data Directory")),
+                            .child(I18nKey::BtnResetDataDir.text()),
                     )
                     // --- Description ---
-                    .child(div().text_size(px(12.)).text_color(text_3).child(i18n::tr(
-                        "选择数据库和缓存文件的存储位置：",
-                        "Choose where to store the database and cache files:",
-                    )))
+                    .child(div().text_size(px(12.)).text_color(text_3).child(I18nKey::DescStorageChoose.text()))
                     // --- Option: Portable ---
                     .child({
                         let selected = dialog.selected == StorageMode::Portable;
@@ -553,10 +547,7 @@ impl SettingsPanel {
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
-                                    .child(i18n::tr(
-                                        "便携（安装目录）",
-                                        "Portable (install directory)",
-                                    )),
+                                    .child(I18nKey::StoragePortable.text()),
                             )
                             .child(
                                 div()
@@ -597,7 +588,7 @@ impl SettingsPanel {
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
-                                    .child(i18n::tr("系统默认", "System default")),
+                                    .child(I18nKey::SystemDefault.text()),
                             )
                             .child(
                                 div()
@@ -634,7 +625,7 @@ impl SettingsPanel {
                                             panel.dismiss_reset_dialog(cx);
                                         });
                                     })
-                                    .child(i18n::tr("取消", "Cancel"))
+                                    .child(I18nKey::BtnCancel.text())
                             })
                             // --- Apply ---
                             .child({
@@ -657,7 +648,7 @@ impl SettingsPanel {
                                             panel.apply_reset_data_dir(cx);
                                         });
                                     })
-                                    .child(i18n::tr("应用", "Apply"))
+                                    .child(I18nKey::BtnApply.text())
                             }),
                     ),
             )

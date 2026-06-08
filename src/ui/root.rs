@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_transitions::WindowUseTransition;
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
@@ -288,7 +288,7 @@ impl RootView {
                         this.state.update(cx, |s, _cx| {
                             s.toast_message = Some(format!(
                                 "{}: {msg}",
-                                i18n::tr("数据操作失败", "Data operation failed")
+                                I18nKey::ErrDataOp.text()
                             ));
                         });
                         cx.notify();
