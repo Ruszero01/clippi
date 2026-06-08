@@ -34,9 +34,22 @@ pub struct ResetDataDirState {
 
 impl SettingsPanel {
     /// Render the Data settings tab content.
+    /// Commit the current max-items input value to settings.
+    fn commit_max_items(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref input) = self.max_items_input {
+            let text = input.read(cx).value().to_string();
+            let n: u32 = text.trim().parse().unwrap_or(0);
+            self.state.update(cx, |s, _cx| {
+                s.settings.max_items = n;
+                s.settings.save();
+            });
+        }
+        cx.notify();
+    }
+
     pub fn render_data_tab(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.clone();
@@ -48,11 +61,18 @@ impl SettingsPanel {
         let db_path_str = db_path_display.to_string_lossy().to_string();
         // borrow released
 
+        let this2 = this.clone();
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
+            // Click on background (outside input) → commit max items value.
+            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                let _ = this2.update(cx, |panel, cx| {
+                    panel.commit_max_items(cx);
+                });
+            })
             // ── Database path row (76px, sub-row layout) ──
             .child({
                 let state = state.clone();
@@ -289,7 +309,6 @@ impl SettingsPanel {
                     )
                     // Right: editable number input (80x28)
                     .child({
-                        let state = state.clone();
                         let this = this.clone();
 
                         // Lazy-create the InputState entity on first render.
@@ -300,12 +319,13 @@ impl SettingsPanel {
                             } else {
                                 current.to_string()
                             };
+                            let placeholder = i18n::tr("不限制", "Unlimited");
                             let input = cx.new(|cx| {
-                                let mut s = gpui_component::input::InputState::new(
-                                    _window, cx,
-                                );
-                                s.set_value(&display, _window, cx);
-                                s
+                                gpui_component::input::InputState::new(window, cx)
+                                    .placeholder(placeholder)
+                            });
+                            input.update(cx, |s, cx| {
+                                s.set_value(&display, window, cx);
                             });
                             self.max_items_input = Some(input);
                         }
@@ -322,24 +342,18 @@ impl SettingsPanel {
                             .items_center()
                             .justify_center()
                             .px(px(4.))
+                            // Stop propagation so clicks inside the input
+                            // don't trigger the background save handler.
+                            .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
+                                cx.stop_propagation();
+                            })
                             // Handle Enter key to save the value.
                             .on_key_down({
-                                let state = state.clone();
                                 move |ev: &KeyDownEvent, _window, cx| {
                                     if ev.keystroke.key.as_str() == "enter" {
                                         cx.stop_propagation();
                                         let _ = this2.update(cx, |panel, cx| {
-                                            if let Some(ref input) = panel.max_items_input {
-                                                let text =
-                                                    input.read(cx).value().to_string();
-                                                let n: u32 =
-                                                    text.trim().parse().unwrap_or(0);
-                                                state.update(cx, |s, _cx| {
-                                                    s.settings.max_items = n;
-                                                    s.settings.save();
-                                                });
-                                            }
-                                            cx.notify();
+                                            panel.commit_max_items(cx);
                                         });
                                     }
                                 }
