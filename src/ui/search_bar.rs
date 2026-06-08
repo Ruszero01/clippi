@@ -1,10 +1,10 @@
-﻿//! Search bar - keyword input + content type filter buttons.
+//! Search bar - keyword input + content type filter buttons.
 //!
-//! Matches the original Slint ClipboardList.slint design:
-//! - 28px search box, 10px border-radius, surface bg, divider border
-//! - Filter buttons: 22px height, 5px border-radius, icon+label layout
-//! - Active state: accent text + 22% accent bg overlay
-//! - Type/tag toolbar switches to icon-only when the window is narrow
+//! --- Matches the original Slint ClipboardList.slint design: ---
+//! --- - 28px search box, 10px border-radius, surface bg, divider border ---
+//! --- - Filter buttons: 22px height, 5px border-radius, icon+label layout ---
+//! --- - Active state: accent text + 22% accent bg overlay ---
+//! --- - Type/tag toolbar switches to icon-only when the window is narrow ---
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;

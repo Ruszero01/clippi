@@ -1,7 +1,7 @@
-﻿//! Theme system for Clippi 鈥?color tokens matching the original Slint design.
+//! Theme system for Clippi — color tokens matching the original Slint design.
 //!
-//! All colors are sourced from `ui/app.slint` and sub-components.
-//! Tokens adapt between dark and light mode.
+//! --- All colors are sourced from `ui/app.slint` and sub-components. ---
+//! --- Tokens adapt between dark and light mode. ---
 
 use gpui::{rgb, rgba, Rgba, WindowAppearance};
 
@@ -9,37 +9,37 @@ use gpui::{rgb, rgba, Rgba, WindowAppearance};
 /// Colors match the original Slint design pixel-for-pixel.
 #[derive(Debug, Clone)]
 pub struct ClippiTheme {
-    // 鈹€鈹€ Window chrome 鈹€鈹€
+    // --- Window chrome ---
     pub bg: Rgba,
     pub surface: Rgba,
     pub surface_press: Rgba,
     pub titlebar_bg: Rgba,
 
-    // 鈹€鈹€ Text 鈹€鈹€
+    // --- Text ---
     pub text_1: Rgba,
     pub text_2: Rgba,
     pub text_3: Rgba,
 
-    // 鈹€鈹€ Accent 鈹€鈹€
+    // --- Accent ---
     pub accent: Rgba,
     pub accent_soft: Rgba,
 
-    // 鈹€鈹€ Semantic 鈹€鈹€
+    // --- Semantic ---
     pub fav_color: Rgba,
     pub danger: Rgba,
     pub divider: Rgba,
     pub btn_hover: Rgba,
 
-    // 鈹€鈹€ Tags 鈹€鈹€
+    // --- Tags ---
     pub tag_bg: Rgba,
     pub tag_text: Rgba,
 
-    // 鈹€鈹€ Panels (floating) 鈹€鈹€
+    // --- Panels (floating) ---
     pub panel_surface: Rgba,
     pub panel_input_bg: Rgba,
     pub panel_sep_line: Rgba,
 
-    // 鈹€鈹€ Toast 鈹€鈹€
+    // --- Toast ---
     pub toast_bg: Rgba,
     pub toast_text: Rgba,
 }

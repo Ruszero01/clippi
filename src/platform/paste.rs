@@ -58,7 +58,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     // Initial delay for SetForegroundWindow to take effect
     std::thread::sleep(std::time::Duration::from_millis(BASE_DELAY_MS));
 
-    // Verify target window is actually foreground before pasting
+    // --- Verify target window is actually foreground before pasting ---
     if let Some(hwnd) = target_hwnd {
         let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
         if unsafe { IsWindow(hwnd) } != 0 {
@@ -76,11 +76,11 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
         }
     }
 
-    // Send Ctrl+V atomically via SendInput
+    // --- Send Ctrl+V atomically via SendInput ---
     unsafe {
         let mut inputs: [INPUT; 4] = std::mem::zeroed();
 
-        // Ctrl down
+        // --- Ctrl down ---
         inputs[0].r#type = INPUT_KEYBOARD;
         inputs[0].Anonymous.ki = KEYBDINPUT {
             wVk: VK_CONTROL,
@@ -90,7 +90,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
             dwExtraInfo: 0,
         };
 
-        // V down
+        // --- V down ---
         inputs[1].r#type = INPUT_KEYBOARD;
         inputs[1].Anonymous.ki = KEYBDINPUT {
             wVk: VK_V,
@@ -110,7 +110,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
             dwExtraInfo: 0,
         };
 
-        // Ctrl up
+        // --- Ctrl up ---
         inputs[3].r#type = INPUT_KEYBOARD;
         inputs[3].Anonymous.ki = KEYBDINPUT {
             wVk: VK_CONTROL,
@@ -137,7 +137,7 @@ pub fn restore_paste_target() {
             if app.processIdentifier() == pid {
                 // Use raw value to avoid deprecated NSApplicationActivateIgnoringOtherApps.
                 // This flag is a no-op on macOS 14+ but still required for correct
-                // activation behavior on macOS 12–13 (our minimum is 12.0).
+                // --- activation behavior on macOS 12–13 (our minimum is 12.0). ---
                 let options: u64 = 1 << 1; // NSApplicationActivateIgnoringOtherApps
                 unsafe {
                     let _: bool = objc2::msg_send![&app, activateWithOptions: options];
@@ -169,7 +169,7 @@ pub fn paste_sync() {
 fn send_cmd_v() {
     std::thread::sleep(std::time::Duration::from_millis(SLEEP_MS));
 
-    // Get the target PID — must be a valid non-Clippi process
+    // --- Get the target PID — must be a valid non-Clippi process ---
     let target_pid = crate::platform::focus::get_last_non_clippi_pid();
     let Some(pid) = target_pid else { return };
 
@@ -180,25 +180,25 @@ fn send_cmd_v() {
 
     let cmd_flag = core_graphics::event::CGEventFlags::CGEventFlagCommand;
 
-    // Cmd down — modifiers were NOT active before pressing Cmd
+    // --- Cmd down — modifiers were NOT active before pressing Cmd ---
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true)
     {
         event.post_to_pid(pid);
     }
-    // V down — Cmd IS held
+    // --- V down — Cmd IS held ---
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true)
     {
         event.set_flags(cmd_flag);
         event.post_to_pid(pid);
     }
-    // V up — Cmd IS held
+    // --- V up — Cmd IS held ---
     if let Ok(event) =
         core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false)
     {
         event.set_flags(cmd_flag);
         event.post_to_pid(pid);
     }
-    // Cmd up — Cmd WAS held before releasing
+    // --- Cmd up — Cmd WAS held before releasing ---
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source, 0x37, false) {
         event.set_flags(cmd_flag);
         event.post_to_pid(pid);

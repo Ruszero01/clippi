@@ -1,4 +1,4 @@
-//! Clipboard card 鈥?renders a single clipboard entry.
+//! Clipboard card — renders a single clipboard entry.
 //!
 //! Matches the original Slint ClipboardList.slint card design:
 //! - 10px border-radius, surface bg, 1px border, drop shadow
@@ -86,7 +86,7 @@ fn type_label(item: &ClipboardItem) -> String {
         ContentType::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
             if fd.files.len() <= 1 {
-                // Single file: show extension label
+                // --- Single file: show extension label ---
                 let label = fd
                     .files
                     .first()
@@ -119,7 +119,7 @@ fn color_from_hex(hex: &str, fallback: Rgba) -> Rgba {
 }
 
 /// Split a filename into stem and extension using OS path parsing.
-/// Handles multi-dot names correctly: "archive.tar.gz" 鈫?("archive.tar", ".gz")
+/// Handles multi-dot names correctly: "archive.tar.gz" → ("archive.tar", ".gz")
 fn split_name_ext(filename: &str) -> (String, String) {
     use std::path::Path;
     let path = Path::new(filename);
@@ -758,19 +758,19 @@ impl RenderOnce for ClipboardCard {
             .p(px(10.))
             .gap(px(10.));
 
-        // Wire click handler
+        // --- Wire click handler ---
         let base = if let Some(handler) = on_click {
             let double_click_handler = on_double_click.clone();
             base.cursor(CursorStyle::PointingHand).on_mouse_down(
                 MouseButton::Left,
                 move |ev, window, cx| {
                     if ev.click_count == 2 {
-                        // Double-click 鈫?paste
+                        // --- Double-click → paste ---
                         if let Some(ref dbl_handler) = double_click_handler {
                             dbl_handler(index, window, cx);
                         }
                     } else {
-                        // Single click 鈫?select
+                        // --- Single click → select ---
                         handler(index, ev.modifiers, window, cx);
                     }
                 },
@@ -779,7 +779,7 @@ impl RenderOnce for ClipboardCard {
             base
         };
 
-        // 鈹€鈹€ Left: icon area (top-aligned with content) 鈹€鈹€
+        // --- Left: icon area (top-aligned with content) ---
         let icon_area = match content_type {
             ContentType::Color => div()
                 .w(px(36.))
@@ -932,9 +932,9 @@ impl RenderOnce for ClipboardCard {
                 ),
         };
 
-        // 鈹€鈹€ Right: content area 鈹€鈹€
+        // --- Right: content area ---
         let content = if editing {
-            // 鈹€鈹€ Inline note editor 鈹€鈹€
+            // --- Inline note editor ---
             let commit = on_commit_note.clone();
             let note_input_ref = note_input.clone();
 
@@ -944,7 +944,7 @@ impl RenderOnce for ClipboardCard {
                 .flex_col()
                 .gap(px(2.))
                 .child(
-                    // Single-line text input
+                    // --- Single-line text input ---
                     div().w_full().h(px(24.)).child({
                         let input_entity =
                             note_input_ref.expect("note_input must be set when editing");
@@ -958,7 +958,7 @@ impl RenderOnce for ClipboardCard {
                     }),
                 )
                 .child(
-                    // Confirm button (checkmark icon \u{e611})
+                    // --- Confirm button (checkmark icon \u{e611}) ---
                     div().flex().flex_row().justify_end().child(
                         div()
                             .w(px(20.))
@@ -983,7 +983,7 @@ impl RenderOnce for ClipboardCard {
                                     .font_family("iconfont")
                                     .text_size(px(12.))
                                     .text_color(accent)
-                                    .child("\u{e611}"), // 鉁?checkmark
+                                    .child("\u{e611}"), // checkmark icon
                             ),
                     ),
                 )
@@ -1051,7 +1051,7 @@ impl RenderOnce for ClipboardCard {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(text_3)
-                                    .child(format!("{} 脳 {}", img_w, img_h)),
+                                    .child(format!("{} × {}", img_w, img_h)),
                             )
                     }
                 }
@@ -1217,7 +1217,7 @@ impl RenderOnce for ClipboardCard {
             }
         };
 
-        // 鈹€鈹€ Bottom info row 鈹€鈹€
+        // --- Bottom info row ---
         let bottom_info = div()
             .absolute()
             .right(px(10.))
@@ -1258,16 +1258,16 @@ impl RenderOnce for ClipboardCard {
                     .child(div().text_size(px(9.)).text_color(text_2).child(time_str)),
             );
 
-        // 鈹€鈹€ Assemble card 鈹€鈹€
+        // --- Assemble card ---
         let card = base.child(icon_area).child(content);
-        // Hide bottom tags/time row during note editing
+        // --- Hide bottom tags/time row during note editing ---
         let card = if !editing {
             card.child(bottom_info)
         } else {
             card
         };
 
-        // Fav indicator bar (left edge, scales with card height)
+        // --- Fav indicator bar (left edge, scales with card height) ---
         let card = if is_fav {
             card.child(
                 div()
@@ -1283,8 +1283,8 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // Selection badge 鈥?small circle centered at card top-left corner (0,0).
-        // Only shown when multi-selecting (>1).
+        // Selection badge — small circle centered at card top-left corner (0,0).
+        // --- Only shown when multi-selecting (>1). ---
         let card = if selected && selected_count > 1 {
             card.child(
                 div()
@@ -1310,7 +1310,7 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // 鈹€鈹€ Hover toolbar (hidden during note editing) 鈹€鈹€
+        // --- Hover toolbar (hidden during note editing) ---
         if is_hovered && !editing {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected);
             card.child(

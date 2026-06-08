@@ -1,6 +1,6 @@
 //! Lightweight i18n helpers for Rust-side user-visible strings.
 //! Uses a global atomic flag so any code path can check the current language
-//! without threading a settings reference through every call chain.
+//! --- without threading a settings reference through every call chain. ---
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

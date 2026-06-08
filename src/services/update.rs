@@ -1,5 +1,5 @@
 //! Update checker — queries GitHub Releases API, compares versions via semver,
-//! caches results, and opens the releases page in the browser.
+//! --- caches results, and opens the releases page in the browser. ---
 
 use std::sync::Mutex;
 use std::time::Instant;
@@ -53,7 +53,7 @@ impl UpdateChecker {
             }
         }
 
-        // Perform live check
+        // --- Perform live check ---
         let result = self.fetch_latest_release();
         if let Ok(mut cache) = self.cache.lock() {
             *cache = Some(CachedResult {

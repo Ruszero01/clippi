@@ -1,6 +1,6 @@
-//! Data settings tab — database path + max items.
+//! --- Data settings tab — database path + max items. ---
 //!
-//! Mirrors the original Slint `SettingsTabData.slint` layout.
+//! --- Mirrors the original Slint `SettingsTabData.slint` layout. ---
 //! Includes the reset-data-directory dialog for portable mode.
 
 use gpui::*;
@@ -69,18 +69,18 @@ impl SettingsPanel {
         let state = self.state.clone();
         let this = cx.entity().clone();
 
-        // Snapshot current values.
+        // --- Snapshot current values. ---
         let app = self.state.read(cx);
         let db_path_display = app.settings.resolve_db_path();
         let db_path_str = db_path_display.to_string_lossy().to_string();
-        // borrow released
+        // --- borrow released ---
 
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // ── Database path row (76px, sub-row layout) ──
+            // --- ── Database path row (76px, sub-row layout) ── ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -104,7 +104,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    // Title
+                    // --- Title ---
                     .child(
                         div()
                             .text_size(px(12.))
@@ -112,13 +112,13 @@ impl SettingsPanel {
                             .text_color(text_1)
                             .child(i18n::tr("数据库路径", "Database path")),
                     )
-                    // Path display + buttons row
+                    // --- Path display + buttons row ---
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .gap(px(6.))
-                            // Path display (flex_1, left-elided via overflow)
+                            // --- Path display (flex_1, left-elided via overflow) ---
                             .child({
                                 div()
                                     .flex_1()
@@ -141,7 +141,7 @@ impl SettingsPanel {
                                             .child(db_path_str.clone()),
                                     )
                             })
-                            // Change button
+                            // --- Change button ---
                             .child({
                                 let state = state.clone();
                                 let this = this.clone();
@@ -165,7 +165,7 @@ impl SettingsPanel {
                                             if old == new_path {
                                                 return;
                                             }
-                                            // Checkpoint DB before migration
+                                            // --- Checkpoint DB before migration ---
                                             {
                                                 let s = state.read(_cx);
                                                 if let Err(e) = s.db.checkpoint() {
@@ -199,7 +199,7 @@ impl SettingsPanel {
                                             .child(i18n::tr("更改", "Change")),
                                     )
                             })
-                            // Reset button
+                            // --- Reset button ---
                             .child({
                                 let state = state.clone();
                                 let this = this.clone();
@@ -262,7 +262,7 @@ impl SettingsPanel {
                             }),
                     )
             })
-            // ── Max items row (66px, standard row) ──
+            // --- ── Max items row (66px, standard row) ── ---
             .child({
                 let surface = self.theme.surface;
                 let divider = self.theme.divider;
@@ -285,7 +285,7 @@ impl SettingsPanel {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    // Left: label + description
+                    // --- Left: label + description ---
                     .child(
                         div()
                             .flex()
@@ -303,12 +303,12 @@ impl SettingsPanel {
                                 "Set to 0 for unlimited items",
                             ))),
                     )
-                    // Right: max-items value (button or Input)
+                    // --- Right: max-items value (button or Input) ---
                     .child({
                         let this = this.clone();
 
                         if self.editing_max_items {
-                            // ── Editing: Input with Enter to save, blur auto-saves ──
+                            // --- ── Editing: Input with Enter to save, blur auto-saves ── ---
                             div()
                                 .w(px(80.))
                                 .h(px(28.))
@@ -329,7 +329,7 @@ impl SettingsPanel {
                                         .text_size(px(12.))
                                         .text_color(text_1),
                                 )
-                                // Enter key saves (same pattern as tag_filter)
+                                // --- Enter key saves (same pattern as tag_filter) ---
                                 .on_key_down({
                                     move |ev: &KeyDownEvent, _window, cx| {
                                         if ev.keystroke.key.as_str() == "enter" {
@@ -341,7 +341,7 @@ impl SettingsPanel {
                                     }
                                 })
                         } else {
-                            // ── Normal: clickable value button ──
+                            // --- ── Normal: clickable value button ── ---
                             let val = self.state.read(cx).settings.max_items;
                             let label = if val == 0 {
                                 i18n::tr("不限制", "Unlimited").to_string()
@@ -508,7 +508,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    // Title
+                    // --- Title ---
                     .child(
                         div()
                             .text_size(px(14.))
@@ -516,12 +516,12 @@ impl SettingsPanel {
                             .text_color(text_1)
                             .child(i18n::tr("重置数据目录", "Reset Data Directory")),
                     )
-                    // Description
+                    // --- Description ---
                     .child(div().text_size(px(12.)).text_color(text_3).child(i18n::tr(
                         "选择数据库和缓存文件的存储位置：",
                         "Choose where to store the database and cache files:",
                     )))
-                    // Option: Portable
+                    // --- Option: Portable ---
                     .child({
                         let selected = dialog.selected == StorageMode::Portable;
                         let this = this.clone();
@@ -565,7 +565,7 @@ impl SettingsPanel {
                                     .child(dialog.portable_path.clone()),
                             )
                     })
-                    // Option: System
+                    // --- Option: System ---
                     .child({
                         let selected = dialog.selected == StorageMode::System;
                         let this = this.clone();
@@ -606,7 +606,7 @@ impl SettingsPanel {
                                     .child(dialog.system_path.clone()),
                             )
                     })
-                    // Button row
+                    // --- Button row ---
                     .child(
                         div()
                             .flex()
@@ -614,7 +614,7 @@ impl SettingsPanel {
                             .justify_end()
                             .gap(px(8.))
                             .mt(px(4.))
-                            // Cancel
+                            // --- Cancel ---
                             .child({
                                 let this = this.clone();
                                 div()
@@ -636,7 +636,7 @@ impl SettingsPanel {
                                     })
                                     .child(i18n::tr("取消", "Cancel"))
                             })
-                            // Apply
+                            // --- Apply ---
                             .child({
                                 let this = this.clone();
                                 div()

@@ -1,4 +1,4 @@
-//! Tag picker panel - assign or remove tags on clipboard items.
+//! --- Tag picker panel - assign or remove tags on clipboard items. ---
 
 use std::rc::Rc;
 

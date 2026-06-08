@@ -1,8 +1,8 @@
-//! WebDAV sync backend.
+//! --- WebDAV sync backend. ---
 //!
-//! Reads/writes `clippi_sync.json` to a WebDAV server via HTTP.
+//! --- Reads/writes `clippi_sync.json` to a WebDAV server via HTTP. ---
 //! Uses ETag/If-None-Match for cache-aware pulls (analogous to
-//! mtime-based caching in local_folder).
+//! --- mtime-based caching in local_folder). ---
 
 use crate::core::i18n;
 use crate::core::settings::BackendConfig;
@@ -82,8 +82,8 @@ impl SyncBackend for WebDAVBackend {
                 if code == 401 || code == 403 {
                     BackendStatus::Error(i18n::tr("认证失败", "Authentication failed").into())
                 } else if code == 404 {
-                    // File doesn't exist yet — treat as online (will create on first push)
-                    // Check parent collection instead
+                    // --- File doesn't exist yet — treat as online (will create on first push) ---
+                    // --- Check parent collection instead ---
                     let base = self.config.webdav_url.trim_end_matches('/');
                     match self.agent.head(base).set("Authorization", &auth).call() {
                         Ok(_) => BackendStatus::Online,
@@ -115,7 +115,7 @@ impl SyncBackend for WebDAVBackend {
 
         match req.call() {
             Ok(resp) => {
-                // Cache the new ETag
+                // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
                     *self.last_etag.lock().unwrap() = Some(etag.to_string());
                 }
@@ -133,7 +133,7 @@ impl SyncBackend for WebDAVBackend {
                 })
             }
             Err(ureq::Error::Status(304, _)) => {
-                // Not Modified — no changes
+                // --- Not Modified — no changes ---
                 Err("@@unchanged".into())
             }
             Err(ureq::Error::Status(404, _)) => {
@@ -160,7 +160,7 @@ impl SyncBackend for WebDAVBackend {
             .send_bytes(json.as_bytes())
         {
             Ok(resp) => {
-                // Cache the new ETag
+                // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
                     *self.last_etag.lock().unwrap() = Some(etag.to_string());
                 }

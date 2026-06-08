@@ -1,4 +1,4 @@
-//! Services module — business logic used by the GPUI application.
+//! --- Services module — business logic used by the GPUI application. ---
 
 pub mod backends;
 pub mod clipboard_ops;

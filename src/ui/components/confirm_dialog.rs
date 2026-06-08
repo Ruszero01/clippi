@@ -1,17 +1,17 @@
-﻿//! Confirm dialog 鈥?modal overlay for destructive action confirmation.
+//! Confirm dialog — modal overlay for destructive action confirmation.
 //!
 //! Reusable confirmation dialog with full-window backdrop, centered card,
 //! and cancel/confirm buttons. Supports danger styling for destructive actions.
 //! Used for delete confirmations (single/batch) and hotkey blacklist removal.
 //!
-//! # Usage
+//! --- # Usage ---
 //!
-//! ```ignore
-//! ConfirmDialog::delete_single("example text")
-//!     .on_confirm(|_window, cx| { /* delete logic */ })
-//!     .on_cancel(|_window, cx| { /* dismiss */ })
-//!     .into_any_element()
-//! ```
+//! --- ```ignore ---
+//! --- ConfirmDialog::delete_single("example text") ---
+//! --- .on_confirm(|_window, cx| { /* delete logic */ }) ---
+//! --- .on_cancel(|_window, cx| { /* dismiss */ }) ---
+//! --- .into_any_element() ---
+//! --- ``` ---
 
 use std::rc::Rc;
 
@@ -21,7 +21,7 @@ use crate::ui::theme::ClippiTheme;
 
 type DialogHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
-// 鈹€鈹€ Component 鈹€鈹€
+// --- Component ---
 
 #[derive(IntoElement)]
 pub struct ConfirmDialog {
@@ -49,7 +49,7 @@ impl ConfirmDialog {
         }
     }
 
-    // 鈹€鈹€ Builder methods 鈹€鈹€
+    // --- Builder methods ---
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
@@ -86,9 +86,9 @@ impl ConfirmDialog {
         self
     }
 
-    // 鈹€鈹€ Preset factory methods 鈹€鈹€
+    // --- Preset factory methods ---
 
-    /// Single item delete confirmation 鈥?simple yes/no.
+    /// Single item delete confirmation — simple yes/no.
     pub fn delete_single() -> Self {
         Self::new()
             .title("Confirm Delete")
@@ -150,9 +150,9 @@ impl RenderOnce for ConfirmDialog {
             theme.accent
         };
 
-        // Transparent overlay (covers parent) + centered modal card.
-        // Backdrop is fully transparent 鈥?the user sees through to the
-        // panel content below. Clicking the backdrop cancels the dialog.
+        // --- Transparent overlay (covers parent) + centered modal card. ---
+        // --- Backdrop is fully transparent — the user sees through to the ---
+        // --- panel content below. Clicking the backdrop cancels the dialog. ---
         div()
             .absolute()
             .size_full()
@@ -178,7 +178,7 @@ impl RenderOnce for ConfirmDialog {
                     _ => {}
                 }
             })
-            // Backdrop click 鈫?cancel
+            // --- Backdrop click → cancel ---
             .on_mouse_down(MouseButton::Left, {
                 let on_cancel = on_cancel.clone();
                 move |_ev, _window, cx| {
@@ -189,7 +189,7 @@ impl RenderOnce for ConfirmDialog {
                 }
             })
             .child(
-                // Modal card 鈥?occluded to prevent click-through to backdrop
+                // --- Modal card — occluded to prevent click-through to backdrop ---
                 div()
                     .w(px(280.))
                     .bg(theme.panel_surface)
@@ -198,7 +198,7 @@ impl RenderOnce for ConfirmDialog {
                     .border_color(theme.panel_sep_line)
                     .p(px(16.))
                     .occlude()
-                    // Title 鈥?14px bold, text_1
+                    // --- Title — 14px bold, text_1 ---
                     .child(
                         div()
                             .text_size(px(14.))
@@ -206,7 +206,7 @@ impl RenderOnce for ConfirmDialog {
                             .text_color(theme.text_1)
                             .child(title),
                     )
-                    // Message 鈥?12px, text_2, 8px top margin
+                    // --- Message — 12px, text_2, 8px top margin ---
                     .child(
                         div()
                             .text_size(px(12.))
@@ -214,7 +214,7 @@ impl RenderOnce for ConfirmDialog {
                             .mt(px(8.))
                             .child(message),
                     )
-                    // Button row 鈥?flex row, justify_end, 8px gap, 16px top margin
+                    // --- Button row — flex row, justify_end, 8px gap, 16px top margin ---
                     .child(
                         div()
                             .flex()
@@ -222,7 +222,7 @@ impl RenderOnce for ConfirmDialog {
                             .justify_end()
                             .gap(px(8.))
                             .mt(px(16.))
-                            // Cancel button
+                            // --- Cancel button ---
                             .child({
                                 let label = cancel_label.clone();
                                 let on_cancel = on_cancel.clone();
@@ -251,7 +251,7 @@ impl RenderOnce for ConfirmDialog {
                                     })
                                     .child(label)
                             })
-                            // Confirm button
+                            // --- Confirm button ---
                             .child({
                                 let label = confirm_label.clone();
                                 let on_confirm = on_confirm.clone();

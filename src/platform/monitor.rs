@@ -1,4 +1,4 @@
-//! Platform monitor APIs - cursor position and multi-monitor work areas
+//! --- Platform monitor APIs - cursor position and multi-monitor work areas ---
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Graphics::Gdi::{
@@ -92,7 +92,7 @@ pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
     let visible = screen.visibleFrame();
     // macOS coordinate system: Y starts from bottom, need to convert to top-left.
     // Use the matched screen's own frame height (not mainScreen), in case
-    // multiple monitors have different resolutions.
+    // --- multiple monitors have different resolutions. ---
     let screen_height = screen.frame().size.height as i32;
     Some(MonitorRect {
         x: visible.origin.x as i32,

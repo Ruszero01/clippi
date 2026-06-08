@@ -1,13 +1,13 @@
-//! Settings panel 鈥?scrollable settings UI with tabs.
+//! --- Settings panel — scrollable settings UI with tabs. ---
 //!
-//! Matches the original Slint `SettingsPanel.slint` layout:
-//! - Top navigation bar: back button (鈫?icon) + "Settings" title (36px)
-//! - Tab bar: 5 equal-width tabs (General/Clipboard/Hotkey/Data/Sync)
+//! --- Matches the original Slint `SettingsPanel.slint` layout: ---
+//! --- - Top navigation bar: back button (→ icon) + "Settings" title (36px) ---
+//! --- - Tab bar: 5 equal-width tabs (General/Clipboard/Hotkey/Data/Sync) ---
 //!   with accent-green underline for active tab
-//! - Scrollable content area routed by active tab index
+//! --- - Scrollable content area routed by active tab index ---
 //!
-//! Individual settings controls will be added in follow-up work.
-//! Tab rendering methods (`render_*_tab`) serve as extension points.
+//! --- Individual settings controls will be added in follow-up work. ---
+//! --- Tab rendering methods (`render_*_tab`) serve as extension points. ---
 
 use std::collections::HashMap;
 
@@ -33,17 +33,17 @@ use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
 pub enum SettingsEvent {
-    /// User clicked the back button 鈥?return to clipboard view.
+    /// User clicked the back button — return to clipboard view.
     Back,
-    /// Theme setting changed 鈥?RootView should rebuild its ClippiTheme.
+    /// Theme setting changed — RootView should rebuild its ClippiTheme.
     ThemeChanged(String),
     ClipboardSettingsChanged {
         reload_items: bool,
         scroll_to_top: bool,
     },
-    /// User clicked add/remove blacklist 鈥?RootView should show a ConfirmDialog.
+    /// User clicked add/remove blacklist — RootView should show a ConfirmDialog.
     ShowHotkeyConfirm(HotkeyConfirmAction),
-    /// Data settings error 鈥?RootView should show a toast.
+    /// Data settings error — RootView should show a toast.
     DataError(String),
 }
 
@@ -92,8 +92,8 @@ impl SettingsPanel {
         let backend_panel =
             cx.new(|cx| AddBackendPanel::new(window_manager.clone(), theme.clone(), window, cx));
 
-        // Subscribe to focus-out on the max-items InputState.
-        // When the input loses focus, save and exit editing.
+        // --- Subscribe to focus-out on the max-items InputState. ---
+        // --- When the input loses focus, save and exit editing. ---
         let state_sub = state.clone();
         let input_sub = max_items_input.clone();
         let handle = max_items_input.read(cx).focus_handle(cx);
@@ -155,7 +155,7 @@ impl Render for SettingsPanel {
             .overflow_hidden()
             .rounded_b(px(12.))
             .bg(theme.bg)
-            // 鈹€鈹€ Navigation bar (height 36px, mt 8px matching Slint y=8px) 鈹€鈹€
+            //  Navigation bar (height 36px, mt 8px matching Slint y=8px)
             .child(
                 div()
                     .flex()
@@ -165,7 +165,7 @@ impl Render for SettingsPanel {
                     .h(px(36.))
                     .px(px(8.))
                     .mt(px(8.))
-                    // Back button (28x28, iconfont 鈫?
+                    // --- Back button (28x28, iconfont → ---
                     .child(
                         div()
                             .w(px(28.))
@@ -190,7 +190,7 @@ impl Render for SettingsPanel {
                                     .child("\u{e62b}"),
                             ),
                     )
-                    // Title "Settings" (14px, 700 weight, text_1)
+                    // --- Title "Settings" (14px, 700 weight, text_1) ---
                     .child(
                         div()
                             .text_size(px(14.))
@@ -199,7 +199,7 @@ impl Render for SettingsPanel {
                             .child("Settings"),
                     ),
             )
-            // 鈹€鈹€ Tab bar (height 36px, mt 8px matching Slint spacing) 鈹€鈹€
+            //  Tab bar (height 36px, mt 8px matching Slint spacing)
             .child(
                 div()
                     .flex()
@@ -237,7 +237,7 @@ impl Render for SettingsPanel {
                                     cx.notify();
                                 });
                             })
-                            // Tab label
+                            // --- Tab label ---
                             .child(
                                 div()
                                     .text_size(px(12.))
@@ -249,11 +249,11 @@ impl Render for SettingsPanel {
                                     .text_color(tab_color)
                                     .child(*name),
                             )
-                            // Active underline indicator (2px)
+                            // --- Active underline indicator (2px) ---
                             .child(div().w_full().h(px(2.)).mt(px(4.)).bg(underline_bg))
                     })),
             )
-            // 鈹€鈹€ Tab content (fills remaining space, scrollable) 鈹€鈹€
+            // --- Tab content (fills remaining space, scrollable) ---
             .child(
                 div()
                     .flex_1()
@@ -316,13 +316,13 @@ impl Render for SettingsPanel {
                                     ),
                             ),
                     )
-                    // 鈹€鈹€ Reset data directory dialog (overlay) 鈹€鈹€
+                    // --- Reset data directory dialog (overlay) ---
                     .child(self.render_reset_data_dialog(window, cx).into_any_element()),
             )
     }
 }
 
-// 鈹€鈹€ Reusable control helpers 鈹€鈹€
+// --- Reusable control helpers ---
 
 impl SettingsPanel {
     /// Render a settings row with an animated toggle switch on the right.
@@ -415,7 +415,7 @@ impl SettingsPanel {
             .flex_row()
             .items_center()
             .justify_between()
-            // Left: label + description
+            // --- Left: label + description ---
             .child(
                 div()
                     .flex()
@@ -435,7 +435,7 @@ impl SettingsPanel {
                             .child(desc.to_string()),
                     ),
             )
-            // Right: option buttons
+            // --- Right: option buttons ---
             .child(
                 div()
                     .flex()

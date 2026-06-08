@@ -1,8 +1,8 @@
-﻿//! Custom titlebar 鈥?matches original Slint design (app.slint).
+//! Custom titlebar — matches original Slint design (app.slint).
 //!
-//! 38px height, logo + "Clippi" app name on the left (12px, 700 weight),
-//! three icon buttons on the right (fav filter, pin, settings).
-//! The drag area covers the left portion (width - 92px).
+//! --- 38px height, logo + "Clippi" app name on the left (12px, 700 weight), ---
+//! --- three icon buttons on the right (fav filter, pin, settings). ---
+//! --- The drag area covers the left portion (width - 92px). ---
 
 use gpui::*;
 
@@ -76,7 +76,7 @@ impl Render for Titlebar {
             .flex_shrink_0()
             .rounded_t(px(12.))
             .bg(theme.titlebar_bg)
-            // Left: logo + app name (also serves as drag area)
+            // --- Left: logo + app name (also serves as drag area) ---
             .child(
                 div()
                     .flex()
@@ -86,13 +86,13 @@ impl Render for Titlebar {
                     .pr(px(4.))
                     .gap(px(7.))
                     .window_control_area(WindowControlArea::Drag)
-                    // Logo (20x20, loaded from assets)
+                    // --- Logo (20x20, loaded from assets) ---
                     .child(
                         gpui::img(std::path::Path::new("assets/LOGO_notext.ico"))
                             .w(px(20.))
                             .h(px(20.)),
                     )
-                    // App name
+                    // --- App name ---
                     .child(
                         div()
                             .text_size(px(12.))
@@ -101,14 +101,14 @@ impl Render for Titlebar {
                             .child("Clippi"),
                     ),
             )
-            // Spacer
+            // --- Spacer ---
             .child(
                 div()
                     .flex_1()
                     .h_full()
                     .window_control_area(WindowControlArea::Drag),
             )
-            // Right: icon buttons
+            // --- Right: icon buttons ---
             .child(
                 div()
                     .flex()
@@ -116,7 +116,7 @@ impl Render for Titlebar {
                     .items_center()
                     .gap(px(2.))
                     .pr(px(4.))
-                    // Fav filter button (28x28)
+                    // --- Fav filter button (28x28) ---
                     .child(
                         div()
                             .w(px(28.))
@@ -141,7 +141,7 @@ impl Render for Titlebar {
                                     .child("\u{e630}"),
                             ),
                     )
-                    // Pin button (28x28)
+                    // --- Pin button (28x28) ---
                     .child(
                         div()
                             .w(px(28.))
@@ -163,7 +163,7 @@ impl Render for Titlebar {
                                     .child("\u{e633}"),
                             ),
                     )
-                    // Settings button (28x28)
+                    // --- Settings button (28x28) ---
                     .child(
                         div()
                             .w(px(28.))

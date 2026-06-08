@@ -15,7 +15,7 @@ static IS_PORTABLE: AtomicBool = AtomicBool::new(false);
 /// Initialise portable mode detection. Call once at startup.
 pub fn init_portable_mode() {
     let exe = exe_dir();
-    // Try to create + delete a temp file to test writability.
+    // --- Try to create + delete a temp file to test writability. ---
     let probe = exe.join(".clippi_writable_test");
     let writable = std::fs::write(&probe, b"1").is_ok();
     if writable {
@@ -142,7 +142,7 @@ fn ensure_app_data_dir() -> std::io::Result<()> {
 /// One-time migration from legacy CWD/exe-relative paths to platform data dir.
 /// Non-fatal: logs warnings on failure.
 pub fn migrate_legacy_files() {
-    // Portable mode — data lives in exe dir, no legacy migration needed.
+    // --- Portable mode — data lives in exe dir, no legacy migration needed. ---
     if is_portable_mode() {
         log::info!("Portable mode: skipping legacy migration");
         return;
@@ -162,7 +162,7 @@ pub fn migrate_legacy_files() {
         return;
     }
 
-    // Find legacy files in exe's parent directory
+    // --- Find legacy files in exe's parent directory ---
     let Some(legacy_dir) = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
@@ -223,7 +223,7 @@ pub fn migrate_portable_data() {
         exe_dir().display()
     );
 
-    // Copy database
+    // --- Copy database ---
     if let Err(e) = fs::copy(&system_db, &portable_db) {
         log::error!(
             "Portable: failed to migrate database from {} to {}: {e}",
@@ -251,7 +251,7 @@ pub fn migrate_portable_data() {
         }
     }
 
-    // Copy images directory (recursive)
+    // --- Copy images directory (recursive) ---
     let system_images = app_data_dir().join("images");
     let portable_images = exe_dir().join("images");
     if system_images.exists() && system_images.is_dir() {

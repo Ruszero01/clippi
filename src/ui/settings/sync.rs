@@ -1,4 +1,4 @@
-//! Sync settings tab.
+//! --- Sync settings tab. ---
 
 use std::time::Duration;
 
@@ -261,7 +261,7 @@ impl SettingsPanel {
             }
         });
         let stats = format!(
-            "{} 路 {} items 路 {} tags",
+            "{} · {} items · {} tags",
             format_last_sync(&backend.config.last_sync_at),
             backend.config.last_item_count,
             backend.config.last_tag_count

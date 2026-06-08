@@ -7,15 +7,15 @@ use gpui::*;
 #[cfg(target_os = "windows")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-// Core modules are UI-framework independent — keep them
+// --- Core modules are UI-framework independent — keep them ---
 mod core;
-// Platform modules are UI-framework independent — keep them
+// --- Platform modules are UI-framework independent — keep them ---
 mod platform;
-// GPUI state layer (new)
+// --- GPUI state layer (new) ---
 mod state;
-// GPUI UI components (new)
+// --- GPUI UI components (new) ---
 mod ui;
-// GPUI polling and services
+// --- GPUI polling and services ---
 mod services;
 
 // Root view lives in ui::root — use that instead of inline ClippiApp
@@ -54,13 +54,13 @@ fn main() {
         return;
     }
 
-    // Detect portable mode before loading any settings (so config/log paths
-    // are resolved correctly). Must run before init_logging() and
-    // AppSettings::load().
+    // --- Detect portable mode before loading any settings (so config/log paths ---
+    // --- are resolved correctly). Must run before init_logging() and ---
+    // --- AppSettings::load(). ---
     core::paths::init_portable_mode();
     core::paths::migrate_legacy_files();
     // If running in portable mode for the first time after upgrading from
-    // a non-portable install, migrate existing data from the system dir.
+    // --- a non-portable install, migrate existing data from the system dir. ---
     core::paths::migrate_portable_data();
     init_logging();
 
@@ -85,7 +85,7 @@ fn main() {
         // Initialize images cache directory — follows db_path if set.
         core::paths::init_images_dir(&settings.db_path);
 
-        // Set gpui_component theme based on user settings (not hardcoded Dark).
+        // --- Set gpui_component theme based on user settings (not hardcoded Dark). ---
         let is_dark = match settings.theme.as_str() {
             "dark" => true,
             "light" => false,
@@ -137,7 +137,7 @@ fn main() {
                 let state = cx.new(|_cx| AppState::new(settings));
                 let window_manager = cx.new(|cx| WindowManager::new(state.clone(), cx));
 
-                // ── Store raw window handle + set initial position/size ──
+                // --- ── Store raw window handle + set initial position/size ── ---
                 #[cfg(target_os = "windows")]
                 {
                     if let Ok(handle) = window.window_handle() {
@@ -145,8 +145,8 @@ fn main() {
                             let hwnd = wh.hwnd.get();
                             window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
 
-                            // Set initial position and size via platform API.
-                            // calculate_initial_position returns physical pixels
+                            // --- Set initial position and size via platform API. ---
+                            // --- calculate_initial_position returns physical pixels ---
                             // (matching SetWindowPos convention on Windows).
                             use windows_sys::Win32::UI::WindowsAndMessaging::{
                                 SetWindowPos, HWND_TOP, SWP_NOACTIVATE,
@@ -174,17 +174,17 @@ fn main() {
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
 
-                // Intercept window close — hide to background instead of
-                // destroying the window. Returns false to prevent GPUI
-                // from closing the window and exiting the process.
+                // --- Intercept window close — hide to background instead of ---
+                // --- destroying the window. Returns false to prevent GPUI ---
+                // --- from closing the window and exiting the process. ---
                 let wm_close = window_manager.clone();
                 window.on_window_should_close(cx, move |_window, cx| {
                     wm_close.update(cx, |wm, cx| wm.hide(cx));
                     false
                 });
 
-                // Silent start: defer hide until after window is fully initialized,
-                // so GPUI doesn't override the hidden state with its own show.
+                // --- Silent start: defer hide until after window is fully initialized, ---
+                // --- so GPUI doesn't override the hidden state with its own show. ---
                 if silent_start {
                     let wm_hide = window_manager.clone();
                     cx.defer(move |cx| {

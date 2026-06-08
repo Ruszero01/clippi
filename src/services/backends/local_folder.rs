@@ -1,4 +1,4 @@
-//! Local-folder sync backend.
+//! --- Local-folder sync backend. ---
 //!
 //! Reads/writes `clippi_sync.json` in a cloud-synced folder (OneDrive, iCloud,
 //! Dropbox, etc.). The OS/cloud-provider handles the actual network sync.
@@ -45,7 +45,7 @@ impl LocalFolderBackend {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if name.starts_with("clippi_sync-") && name.ends_with(".json") {
-                    // Skip files modified within the last 5 seconds
+                    // --- Skip files modified within the last 5 seconds ---
                     if let Ok(meta) = path.metadata() {
                         if let Ok(mtime) = meta.modified() {
                             if now
@@ -94,9 +94,9 @@ impl SyncBackend for LocalFolderBackend {
         }
 
         // Check if remote file has changed since last pull.
-        // Only applies to the main file; conflict files always need processing.
-        // When bypass_cache is true (local dirty, need to compare hashes),
-        // force mtime_changed so we always read the file.
+        // --- Only applies to the main file; conflict files always need processing. ---
+        // --- When bypass_cache is true (local dirty, need to compare hashes), ---
+        // --- force mtime_changed so we always read the file. ---
         let mut mtime_changed = bypass_cache;
         if !bypass_cache {
             if let Ok(meta) = std::fs::metadata(&path) {
@@ -119,7 +119,7 @@ impl SyncBackend for LocalFolderBackend {
             }
         }
 
-        // Read main payload
+        // --- Read main payload ---
         let mut payload = if mtime_changed {
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 format!(
@@ -139,7 +139,7 @@ impl SyncBackend for LocalFolderBackend {
             if conflicts.is_empty() {
                 return Err("@@unchanged".into());
             }
-            // Re-read main payload to merge with conflicts
+            // --- Re-read main payload to merge with conflicts ---
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 format!(
                     "{}: {e}",
@@ -154,7 +154,7 @@ impl SyncBackend for LocalFolderBackend {
             })?
         };
 
-        // Merge conflict files
+        // --- Merge conflict files ---
         let conflicts = self.find_conflicts();
         for conflict_path in &conflicts {
             match std::fs::read_to_string(conflict_path) {
@@ -188,7 +188,7 @@ impl SyncBackend for LocalFolderBackend {
         let json = serde_json::to_string_pretty(payload)
             .map_err(|e| format!("{}: {e}", i18n::tr("序列化失败", "Serialization failed")))?;
 
-        // Atomic write: temp file + rename
+        // --- Atomic write: temp file + rename ---
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
         std::fs::write(&tmp_path, &json).map_err(|e| {
             format!(
@@ -203,8 +203,8 @@ impl SyncBackend for LocalFolderBackend {
                 i18n::tr("替换同步文件失败", "Failed to replace sync file")
             )
         })?;
-        // Cache new mtime so our own push doesn't trigger a changed-file
-        // detection on the next pull.
+        // --- Cache new mtime so our own push doesn't trigger a changed-file ---
+        // --- detection on the next pull. ---
         if let Ok(meta) = std::fs::metadata(&file_path) {
             if let Ok(mtime) = meta.modified() {
                 *self.last_remote_mtime.lock().unwrap() = Some(mtime);
@@ -223,7 +223,7 @@ impl SyncBackend for LocalFolderBackend {
     }
 }
 
-// ── Platform detection helpers ──
+// --- ── Platform detection helpers ── ---
 
 /// Get a human-readable device name for conflict identification.
 #[allow(clippy::bind_instead_of_map)]
@@ -251,7 +251,7 @@ pub fn hostname() -> String {
 /// Try to detect the OneDrive folder path on Windows.
 #[cfg(target_os = "windows")]
 pub fn detect_onedrive_path() -> Option<PathBuf> {
-    // Method 1: Environment variables
+    // --- Method 1: Environment variables ---
     for var in &["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
         if let Ok(val) = std::env::var(var) {
             let p = PathBuf::from(&val);
@@ -261,7 +261,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
         }
     }
 
-    // Method 2: Registry
+    // --- Method 2: Registry ---
     if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .open_subkey_with_flags(r"Software\Microsoft\OneDrive", winreg::enums::KEY_READ)
     {
@@ -273,7 +273,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
         }
     }
 
-    // Method 3: Default location
+    // --- Method 3: Default location ---
     let home = dirs::home_dir()?;
     let candidate = home.join("OneDrive");
     if candidate.exists() {
@@ -314,7 +314,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
         }
     }
 
-    // Method 2: Standalone client default path
+    // --- Method 2: Standalone client default path ---
     let candidate = home.join("OneDrive");
     if candidate.exists() {
         return Some(candidate);
@@ -340,7 +340,7 @@ pub fn detect_icloud_path() -> Option<PathBuf> {
 pub fn detect_presets() -> Vec<(&'static str, String)> {
     let mut presets = Vec::new();
 
-    // OneDrive — available on both Windows and macOS
+    // --- OneDrive — available on both Windows and macOS ---
     if let Some(p) = detect_onedrive_path() {
         presets.push(("OneDrive", p.join("Clippi").to_string_lossy().to_string()));
     }

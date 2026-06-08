@@ -1,7 +1,7 @@
-//! Clipboard source application detection and icon extraction
+//! --- Clipboard source application detection and icon extraction ---
 //!
-//! Uses GetClipboardOwner() on Windows to identify the process that
-//! placed data on the clipboard (not the foreground window).
+//! --- Uses GetClipboardOwner() on Windows to identify the process that ---
+//! --- placed data on the clipboard (not the foreground window). ---
 
 use crate::core::types::SourceAppInfo;
 
@@ -104,12 +104,12 @@ mod macos_impl {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace.frontmostApplication()?;
 
-        // Don't record Clippi itself as the source
+        // --- Don't record Clippi itself as the source ---
         if app.processIdentifier() == std::process::id() as i32 {
             return None;
         }
 
-        // Use generated methods (nil-safe via Option)
+        // --- Use generated methods (nil-safe via Option) ---
         let app_name = app
             .localizedName()
             .map(|n| n.to_string())

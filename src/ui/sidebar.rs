@@ -1,11 +1,11 @@
-﻿//! Sidebar - tag navigation sidebar matching Slint `SideTagBar.slint`.
+//! Sidebar - tag navigation sidebar matching Slint `SideTagBar.slint`.
 //!
-//! Slint behavior:
-//! - width 56px, rows placed every 24px;
-//! - checked tags slide to x=0 and are fully opaque;
-//! - unchecked pinned tags remain visible with dimmed text;
-//! - unchecked, unpinned tags slide slightly right and fade out;
-//! - left click toggles a visible tag filter, right click toggles pin.
+//! --- Slint behavior: ---
+//! --- - width 56px, rows placed every 24px; ---
+//! --- - checked tags slide to x=0 and are fully opaque; ---
+//! --- - unchecked pinned tags remain visible with dimmed text; ---
+//! --- - unchecked, unpinned tags slide slightly right and fade out; ---
+//! --- - left click toggles a visible tag filter, right click toggles pin. ---
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

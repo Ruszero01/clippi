@@ -1,7 +1,7 @@
-//! Color detection, parsing, normalization, and conversion.
+//! --- Color detection, parsing, normalization, and conversion. ---
 //!
-//! Recognizes HEX (#RGB, #RRGGBB, #RRGGBBAA, raw RRGGBB) and RGB
-//! (rgb/rgba function, comma/space separated) formats. Normalizes
+//! --- Recognizes HEX (#RGB, #RRGGBB, #RRGGBBAA, raw RRGGBB) and RGB ---
+//! --- (rgb/rgba function, comma/space separated) formats. Normalizes ---
 //! to a canonical 6-digit uppercase hex for deduplication.
 
 /// Normalized RGB color value used for hashing and conversion.
@@ -36,15 +36,15 @@ pub fn detect_color(text: &str) -> Option<ColorValue> {
     if text.is_empty() {
         return None;
     }
-    // Multi-line text is never a color
+    // --- Multi-line text is never a color ---
     if text.contains('\n') {
         return None;
     }
-    // Try HEX patterns first (more specific)
+    // --- Try HEX patterns first (more specific) ---
     if let Some(c) = parse_hex(text) {
         return Some(c);
     }
-    // Try RGB patterns
+    // --- Try RGB patterns ---
     if let Some(c) = parse_rgb(text) {
         return Some(c);
     }
@@ -58,17 +58,17 @@ pub fn is_hex_format(text: &str) -> bool {
     parse_hex(text).is_some()
 }
 
-// ── HEX parsing ──
+// --- ── HEX parsing ── ---
 
 fn parse_hex(text: &str) -> Option<ColorValue> {
     let text = text.trim();
 
-    // #RGB or #RRGGBB or #RRGGBBAA
+    // --- #RGB or #RRGGBB or #RRGGBBAA ---
     if let Some(hex_part) = text.strip_prefix('#') {
         return parse_hex_digits(hex_part);
     }
 
-    // Bare hex: exactly 6 hex digits (e.g., FF8000)
+    // --- Bare hex: exactly 6 hex digits (e.g., FF8000) ---
     if text.len() == 6
         && text.chars().all(|c| c.is_ascii_hexdigit())
         && !text.chars().all(|c| c.is_ascii_digit())
@@ -113,12 +113,12 @@ fn parse_hex_digits(hex: &str) -> Option<ColorValue> {
     }
 }
 
-// ── RGB parsing ──
+// --- ── RGB parsing ── ---
 
 fn parse_rgb(text: &str) -> Option<ColorValue> {
     let text = text.trim();
 
-    // rgb(R, G, B) or rgba(R, G, B, A)
+    // --- rgb(R, G, B) or rgba(R, G, B, A) ---
     if let Some(inner) = text
         .strip_prefix("rgb(")
         .or_else(|| text.strip_prefix("RGB("))
@@ -134,7 +134,7 @@ fn parse_rgb(text: &str) -> Option<ColorValue> {
         return parse_rgb_tuple(inner);
     }
 
-    // Plain comma-separated: "255, 128, 0"
+    // --- Plain comma-separated: "255, 128, 0" ---
     if text.contains(',') && !text.contains('(') {
         let parts: Vec<&str> = text.split(',').collect();
         if parts.len() == 3 || parts.len() == 4 {
@@ -145,7 +145,7 @@ fn parse_rgb(text: &str) -> Option<ColorValue> {
         }
     }
 
-    // Space-separated: "255 128 0"
+    // --- Space-separated: "255 128 0" ---
     if text.contains(' ') && !text.contains(',') && !text.contains('(') {
         let parts: Vec<&str> = text.split_whitespace().collect();
         if parts.len() == 3 || parts.len() == 4 {
@@ -160,7 +160,7 @@ fn parse_rgb(text: &str) -> Option<ColorValue> {
 }
 
 fn parse_rgb_tuple(inner: &str) -> Option<ColorValue> {
-    // Split by comma or whitespace
+    // --- Split by comma or whitespace ---
     let parts: Vec<&str> = if inner.contains(',') {
         inner.split(',').collect()
     } else {
@@ -177,12 +177,12 @@ fn parse_rgb_tuple(inner: &str) -> Option<ColorValue> {
 
 fn parse_u8_channel(s: &str) -> Option<u8> {
     let s = s.trim();
-    // Handle percentage: "50%"
+    // --- Handle percentage: "50%" ---
     if let Some(pct) = s.strip_suffix('%') {
         let v: f32 = pct.trim().parse().ok()?;
         return Some((v / 100.0 * 255.0).round().clamp(0.0, 255.0) as u8);
     }
-    // Handle float: "0.5"
+    // --- Handle float: "0.5" ---
     if s.contains('.') {
         let v: f32 = s.parse().ok()?;
         return Some((v * 255.0).round().clamp(0.0, 255.0) as u8);

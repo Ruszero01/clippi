@@ -1,4 +1,4 @@
-//! Core types - platform-agnostic
+//! --- Core types - platform-agnostic ---
 
 use chrono::{DateTime, Utc};
 use std::collections::hash_map::DefaultHasher;
@@ -402,12 +402,12 @@ pub fn is_email(text: &str) -> bool {
     if text.is_empty() || text.contains('\n') || text.contains(' ') {
         return false;
     }
-    // Must contain exactly one @ not at start or end
+    // --- Must contain exactly one @ not at start or end ---
     let at_pos = match text.find('@') {
         Some(p) if p > 0 && p < text.len() - 1 => p,
         _ => return false,
     };
-    // Local part: alphanumeric + limited special chars, no consecutive dots
+    // --- Local part: alphanumeric + limited special chars, no consecutive dots ---
     let local = &text[..at_pos];
     if local.is_empty() || local.len() > 64 || local.contains("..") {
         return false;
@@ -418,7 +418,7 @@ pub fn is_email(text: &str) -> bool {
     {
         return false;
     }
-    // Domain part: must have a dot, no consecutive dots, valid chars
+    // --- Domain part: must have a dot, no consecutive dots, valid chars ---
     let domain = &text[at_pos + 1..];
     if domain.is_empty() || domain.len() > 255 || domain.contains("..") {
         return false;
@@ -432,7 +432,7 @@ pub fn is_email(text: &str) -> bool {
     {
         return false;
     }
-    // TLD must start with a letter and be at least 2 chars
+    // --- TLD must start with a letter and be at least 2 chars ---
     let tld = match domain.rfind('.') {
         Some(p) => &domain[p + 1..],
         None => return false,
@@ -446,12 +446,12 @@ pub fn is_phone(text: &str) -> bool {
     if text.is_empty() || text.contains('\n') {
         return false;
     }
-    // Strip common separators
+    // --- Strip common separators ---
     let cleaned: String = text
         .chars()
         .filter(|c| !matches!(c, ' ' | '-' | '(' | ')' | '\t'))
         .collect();
-    // Chinese mobile: 1[3-9]xxxxxxxxx (11 digits, starts with 1)
+    // --- Chinese mobile: 1[3-9]xxxxxxxxx (11 digits, starts with 1) ---
     if cleaned.len() == 11
         && cleaned.starts_with('1')
         && cleaned.chars().all(|c| c.is_ascii_digit())
@@ -460,7 +460,7 @@ pub fn is_phone(text: &str) -> bool {
     {
         return true;
     }
-    // International: +country region number (7-15 digit phone body)
+    // --- International: +country region number (7-15 digit phone body) ---
     if cleaned.starts_with('+')
         && cleaned.len() >= 10
         && cleaned.len() <= 17
@@ -514,7 +514,7 @@ pub fn is_path(text: &str) -> bool {
             }
         }
     }
-    // Windows absolute path: C:\..., D:/...
+    // --- Windows absolute path: C:\..., D:/... ---
     if text.len() >= 3
         && text.as_bytes()[0].is_ascii_alphabetic()
         && text.as_bytes()[1] == b':'
@@ -522,13 +522,13 @@ pub fn is_path(text: &str) -> bool {
     {
         return true;
     }
-    // UNC network path: \\server\share\... or \\192.168.1.1\...
+    // --- UNC network path: \\server\share\... or \\192.168.1.1\... ---
     if text.starts_with("\\\\") && text.len() > 2 {
         return true;
     }
-    // Unix absolute path: /Users/..., /etc/..., /tmp/...
+    // --- Unix absolute path: /Users/..., /etc/..., /tmp/... ---
     // Require at least one "/" after the first char to avoid matching
-    // slash commands like /clear, /help, etc.
+    // --- slash commands like /clear, /help, etc. ---
     if text.starts_with('/')
         && text.len() >= 3
         && text.as_bytes()[1] != b'/'

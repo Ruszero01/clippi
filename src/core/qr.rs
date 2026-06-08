@@ -10,7 +10,7 @@ pub fn detect_qr(image_path: &Path) -> Result<Option<String>, String> {
         .map_err(|e| format!("Failed to open image for QR detection: {e}"))?;
     let gray = img.to_luma8();
 
-    // Normal pass: dark modules on light background
+    // --- Normal pass: dark modules on light background ---
     if let Some(text) = try_decode(&gray) {
         return Ok(Some(text));
     }

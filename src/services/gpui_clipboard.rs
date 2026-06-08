@@ -1,11 +1,11 @@
-//! GPUI clipboard capture service.
+//! --- GPUI clipboard capture service. ---
 //!
 //! Reuses the platform clipboard watcher and drains captured items into the
-//! framework-independent database/state layer.
+//! --- framework-independent database/state layer. ---
 //!
 //! Also handles automatic post-processing for image items:
-//! - QR code detection (synchronous — rqrr is fast)
-//! - OCR text recognition (asynchronous — spawned on background thread)
+//! --- - QR code detection (synchronous — rqrr is fast) ---
+//! --- - OCR text recognition (asynchronous — spawned on background thread) ---
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -54,7 +54,7 @@ impl GpuiClipboardService {
     }
 
     pub fn poll_state(&mut self, state: &mut AppState) -> bool {
-        // ── Handle async OCR completion ──
+        // --- ── Handle async OCR completion ── ---
         let needs_reload = self.needs_refresh.swap(false, Ordering::SeqCst);
 
         if self
@@ -95,9 +95,9 @@ impl GpuiClipboardService {
 
             item.size = compute_size(&item);
 
-            // ── Pre-upsert: carry over cached OCR/QR from existing DB record ──
-            // When an image is re-copied, the existing DB record may already have
-            // OCR/QR results. Carry them into the new item so they aren't lost.
+            // --- ── Pre-upsert: carry over cached OCR/QR from existing DB record ── ---
+            // --- When an image is re-copied, the existing DB record may already have ---
+            // --- OCR/QR results. Carry them into the new item so they aren't lost. ---
             let mut need_ocr = false;
             let mut need_qr = false;
             if item.content_type == ContentType::Image && !item.image_path.is_empty() {

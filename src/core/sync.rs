@@ -1,4 +1,4 @@
-//! Cloud sync data types and merge logic.
+//! --- Cloud sync data types and merge logic. ---
 //!
 //! The sync format is a single JSON file (`clippi_sync.json`) placed in a
 //! cloud-synced folder (OneDrive, iCloud, Dropbox, etc.). The same format
@@ -142,7 +142,7 @@ impl MergeStats {
     }
 }
 
-// ── Snapshot building ──
+// --- ── Snapshot building ── ---
 
 /// Build a full `SyncPayload` from the local database.
 /// Excludes image and file type items.
@@ -155,14 +155,14 @@ pub fn build_snapshot(
 ) -> Result<SyncPayload, String> {
     let db = db.lock().map_err(|e| format!("db lock: {e}"))?;
 
-    // Collect all live synced items
+    // --- Collect all live synced items ---
     let items = db
         .get_all_sync_items_with_tags()
         .map_err(|e| format!("query items: {e}"))?;
 
-    // Collect unfavorited hashes up front. Items that are unfavorited
+    // --- Collect unfavorited hashes up front. Items that are unfavorited ---
     // (is_favorite=false) AND have a tombstone should be excluded from sync_items
-    // — the tombstone in unfavorited_items is the authoritative signal.
+    // --- — the tombstone in unfavorited_items is the authoritative signal. ---
     let unfav_hashes: std::collections::HashSet<u64> = db
         .get_unfavorited_recent(30)
         .map_err(|e| format!("query unfavorite markers: {e}"))?
@@ -177,9 +177,9 @@ pub fn build_snapshot(
         if favorites_only && !item.is_favorite {
             continue;
         }
-        // If this item is unfavorited and has a tombstone, the tombstone
-        // communicates the unfavorite — exclude from items[] to avoid
-        // the confusing "both lists" cloud state.
+        // --- If this item is unfavorited and has a tombstone, the tombstone ---
+        // --- communicates the unfavorite — exclude from items[] to avoid ---
+        // --- the confusing "both lists" cloud state. ---
         if !item.is_favorite && unfav_hashes.contains(&item.content_hash) {
             continue;
         }
@@ -211,7 +211,7 @@ pub fn build_snapshot(
         });
     }
 
-    // Only include tags that are referenced by the synced items
+    // --- Only include tags that are referenced by the synced items ---
     let mut all_tags: Vec<SyncTag> = if used_tag_names.is_empty() {
         Vec::new()
     } else {
@@ -227,7 +227,7 @@ pub fn build_snapshot(
             .collect()
     };
 
-    // Collect recent tombstones (30-day window)
+    // --- Collect recent tombstones (30-day window) ---
     let mut deleted_items: Vec<SyncDeletedItem> = db
         .get_deleted_items_recent(30)
         .map_err(|e| format!("query item tombstones: {e}"))?
@@ -262,9 +262,9 @@ pub fn build_snapshot(
         .collect();
 
     // Sort all arrays deterministically so semantic hashes match across devices.
-    // SQL queries return rows in undefined order, and HashMap iteration is
+    // --- SQL queries return rows in undefined order, and HashMap iteration is ---
     // non-deterministic — without sorting, two devices with identical logical
-    // state produce different hashes and endlessly overwrite each other.
+    // --- state produce different hashes and endlessly overwrite each other. ---
     for item in &mut sync_items {
         item.tags.sort_by(|a, b| a.name.cmp(&b.name));
     }
@@ -286,7 +286,7 @@ pub fn build_snapshot(
     })
 }
 
-// ── Merge logic ──
+// --- ── Merge logic ── ---
 
 /// Merge remote sync payload into the local database (v1, 4-phase).
 ///
@@ -305,10 +305,10 @@ pub fn merge_remote_into_local(
     let mut db = db.lock().map_err(|e| format!("db lock: {e}"))?;
     let mut stats = MergeStats::default();
 
-    // Phase 0: Clean expired local tombstones
+    // --- Phase 0: Clean expired local tombstones ---
     let _ = db.cleanup_old_tombstones(30);
 
-    // Phase 1: Process remote item tombstones
+    // --- Phase 1: Process remote item tombstones ---
     for tombstone in &remote.deleted_items {
         if tombstone.device_name == local_device_name {
             continue; // own deletion, already handled
@@ -317,9 +317,9 @@ pub fn merge_remote_into_local(
             .is_item_tombstoned(tombstone.content_hash)
             .unwrap_or(false)
         {
-            // Already tombstoned — but the remote tombstone may have a newer
+            // --- Already tombstoned — but the remote tombstone may have a newer ---
             // deleted_at. Replace the local tombstone if remote is newer so
-            // stale timestamps don't propagate to other devices.
+            // --- stale timestamps don't propagate to other devices. ---
             if let Ok(Some(local_at)) = db.get_item_tombstone_deleted_at(tombstone.content_hash) {
                 if rfc3339_newer(&tombstone.deleted_at, &local_at) {
                     let _ = db.remove_item_tombstone(tombstone.content_hash);
@@ -332,9 +332,9 @@ pub fn merge_remote_into_local(
             }
             continue;
         }
-        // Check local item age before recording the tombstone.
-        // If the local item is newer, the user recreated it after deletion —
-        // skip the tombstone and keep the item.
+        // --- Check local item age before recording the tombstone. ---
+        // --- If the local item is newer, the user recreated it after deletion — ---
+        // --- skip the tombstone and keep the item. ---
         if let Ok(Some(local_item)) = db.get_by_hash(tombstone.content_hash) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
             if remote_ts.is_some_and(|r| r > local_item.updated_at) {
@@ -351,7 +351,7 @@ pub fn merge_remote_into_local(
                     &tombstone.device_name,
                 );
             }
-            // else: local item is newer, do nothing (don't record tombstone)
+            // else: local item is newer, do nothing (don't record tombstone) ---
         } else {
             // No local item — record tombstone for propagation to other devices.
             let _ = db.record_item_deletion(
@@ -362,7 +362,7 @@ pub fn merge_remote_into_local(
         }
     }
 
-    // Phase 2.5: Process remote unfavorite markers
+    // --- Phase 2.5: Process remote unfavorite markers ---
     for uf in &remote.unfavorited_items {
         if uf.device_name == local_device_name {
             continue; // own unfavorite, already handled
@@ -378,8 +378,8 @@ pub fn merge_remote_into_local(
             }
             continue;
         }
-        // Check local item age before recording the marker.
-        // If the local item is newer, the user re-favorited it — skip.
+        // --- Check local item age before recording the marker. ---
+        // --- If the local item is newer, the user re-favorited it — skip. ---
         if let Ok(Some(local_item)) = db.get_by_hash(uf.content_hash) {
             if local_item.is_favorite {
                 let remote_ts = parse_rfc3339(&uf.unfavorited_at);
@@ -403,13 +403,13 @@ pub fn merge_remote_into_local(
     let remote_tag_names: std::collections::HashSet<&str> =
         remote.tags.iter().map(|t| t.name.as_str()).collect();
 
-    // Phase 2: Process remote tag tombstones
+    // --- Phase 2: Process remote tag tombstones ---
     for tombstone in &remote.deleted_tags {
         if tombstone.device_name == local_device_name {
             continue; // own deletion
         }
         // Skip tombstone if the remote payload also includes a tag with the same
-        // name — the sender recreated this tag after deleting it.
+        // --- name — the sender recreated this tag after deleting it. ---
         if remote_tag_names.contains(tombstone.name.as_str()) {
             continue;
         }
@@ -427,8 +427,8 @@ pub fn merge_remote_into_local(
             }
             continue;
         }
-        // Check local tag age before recording the tombstone.
-        // If the local tag is newer, the user recreated it — skip.
+        // --- Check local tag age before recording the tombstone. ---
+        // --- If the local tag is newer, the user recreated it — skip. ---
         if let Ok(Some(local_tag)) = db.get_tag_by_name(&tombstone.name) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
             let local_ts = parse_rfc3339(&local_tag.updated_at);
@@ -444,7 +444,7 @@ pub fn merge_remote_into_local(
                     &tombstone.device_name,
                 );
             }
-            // else: local tag is newer, do nothing (don't record tombstone)
+            // else: local tag is newer, do nothing (don't record tombstone) ---
         } else {
             // No local tag — record tombstone for propagation.
             let _ = db.record_tag_deletion(
@@ -455,13 +455,13 @@ pub fn merge_remote_into_local(
         }
     }
 
-    // Phase 3: Merge tags — create or update with color conflict resolution
+    // --- Phase 3: Merge tags — create or update with color conflict resolution ---
     for remote_tag in &remote.tags {
-        // If this tag is locally tombstoned, compare timestamps. The remote
-        // tag may be newer (recreated after deletion) — in that case accept it.
+        // --- If this tag is locally tombstoned, compare timestamps. The remote ---
+        // --- tag may be newer (recreated after deletion) — in that case accept it. ---
         if db.is_tag_tombstoned(&remote_tag.name).unwrap_or(false) {
             if remote_tag.updated_at.is_empty() {
-                // v1 tag without timestamp — fall back to device-based check.
+                // --- v1 tag without timestamp — fall back to device-based check. ---
                 if db
                     .is_tag_tombstoned_by_other_device(&remote_tag.name, &remote.device_name)
                     .unwrap_or(false)
@@ -474,17 +474,17 @@ pub fn merge_remote_into_local(
                 if remote_ts.is_some_and(|r| del_ts.is_some_and(|d| d >= r)) {
                     continue; // tombstone is newer or same age, skip
                 }
-                // Remote tag is newer — fall through to clear tombstone and import.
+                // --- Remote tag is newer — fall through to clear tombstone and import. ---
             }
         }
-        // Clear any tombstone so the tag can be recreated.
+        // --- Clear any tombstone so the tag can be recreated. ---
         let _ = db.remove_tag_tombstone(&remote_tag.name);
         match db
             .get_tag_by_name(&remote_tag.name)
             .map_err(|e| format!("tag lookup: {e}"))?
         {
             None => {
-                // New tag from remote
+                // --- New tag from remote ---
                 if remote_tag.updated_at.is_empty() {
                     db.create_tag(&remote_tag.name, &remote_tag.color)
                 } else {
@@ -516,14 +516,14 @@ pub fn merge_remote_into_local(
         }
     }
 
-    // Phase 4: Merge items by content_hash (last-writer-wins)
+    // --- Phase 4: Merge items by content_hash (last-writer-wins) ---
     for remote_item in &remote.items {
         if db
             .is_item_tombstoned(remote_item.content_hash)
             .unwrap_or(false)
         {
-            // Locally tombstoned, but the remote version may be newer —
-            // the item could have been recreated after deletion.
+            // --- Locally tombstoned, but the remote version may be newer — ---
+            // --- the item could have been recreated after deletion. ---
             let should_import = if let Ok(Some(deleted_at)) =
                 db.get_item_tombstone_deleted_at(remote_item.content_hash)
             {
@@ -536,7 +536,7 @@ pub fn merge_remote_into_local(
             if should_import {
                 let _ = db.remove_item_tombstone(remote_item.content_hash);
                 let _ = db.remove_unfavorite(remote_item.content_hash);
-                // fall through to import below
+                // --- fall through to import below ---
             } else {
                 continue; // tombstone is newer or same age, skip
             }
@@ -547,7 +547,7 @@ pub fn merge_remote_into_local(
 
         match local {
             None => {
-                // New item from remote — insert
+                // --- New item from remote — insert ---
                 let item_id = db
                     .insert_sync_item_raw(remote_item)
                     .map_err(|e| format!("insert item: {e}"))?;
@@ -559,7 +559,7 @@ pub fn merge_remote_into_local(
                     }
                 }
 
-                // Restore remote timestamp: add_item_tag may have bumped it.
+                // --- Restore remote timestamp: add_item_tag may have bumped it. ---
                 let _ = db.set_item_updated_at(item_id, &remote_item.updated_at);
             }
             Some(local_item) => {
@@ -578,9 +578,9 @@ pub fn merge_remote_into_local(
                         }
                     }
 
-                    // Restore remote timestamp: tag operations above may have
-                    // bumped updated_at via touch_item, but the item data is
-                    // semantically identical to what we just pulled from remote.
+                    // --- Restore remote timestamp: tag operations above may have ---
+                    // --- bumped updated_at via touch_item, but the item data is ---
+                    // --- semantically identical to what we just pulled from remote. ---
                     let _ = db.set_item_updated_at(local_item.id, &remote_item.updated_at);
 
                     stats.items_updated += 1;
@@ -740,8 +740,8 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
         base.unfavorited_items = seen.into_values().collect();
     }
 
-    // Use the newer synced_at, comparing as DateTime to handle
-    // variable-length RFC3339 representations correctly.
+    // --- Use the newer synced_at, comparing as DateTime to handle ---
+    // --- variable-length RFC3339 representations correctly. ---
     if rfc3339_newer(&other.synced_at, &base.synced_at) {
         base.synced_at = other.synced_at;
     }
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_v1_backward_compat() {
-        // v1 JSON (no deleted_items, deleted_tags, or tag updated_at)
+        // --- v1 JSON (no deleted_items, deleted_tags, or tag updated_at) ---
         let v1_json = r##"{
             "version": 1,
             "device_name": "old-pc",
@@ -905,7 +905,7 @@ mod tests {
         );
         let merged = merge_payloads(base, other);
         assert_eq!(merged.items.len(), 1);
-        // Base is newer, should be kept
+        // --- Base is newer, should be kept ---
         assert_eq!(merged.items[0].full_text, "hello");
     }
 
@@ -955,13 +955,13 @@ mod tests {
             },
         ];
         let merged = merge_payloads(base, other);
-        // Hash 1 should be deduplicated, hash 2 is new
+        // --- Hash 1 should be deduplicated, hash 2 is new ---
         assert_eq!(merged.deleted_items.len(), 2);
         assert!(merged.deleted_items.iter().any(|d| d.content_hash == 1));
         assert!(merged.deleted_items.iter().any(|d| d.content_hash == 2));
     }
 
-    // ── build_snapshot: unfavorite filtering ──
+    // --- ── build_snapshot: unfavorite filtering ── ---
 
     /// Helper: create an in-memory Database with schema and a single item.
     fn setup_db() -> (std::sync::Mutex<Database>, i64, u64) {
@@ -1013,18 +1013,18 @@ mod tests {
         let (db_mutex, _id, hash) = setup_db();
         {
             let db = db_mutex.lock().unwrap();
-            // Simulate: item was favorited, then unfavorited
+            // --- Simulate: item was favorited, then unfavorited ---
             db.set_favorite(_id, true).unwrap(); // was favorited
             db.record_unfavorite(hash, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
-            // Now unfavorite it (simulating toggle_favorite was_fav=true branch)
+            // --- Now unfavorite it (simulating toggle_favorite was_fav=true branch) ---
             db.set_favorite(_id, false).unwrap();
         }
 
-        // Build snapshot with favorites_only=false
+        // --- Build snapshot with favorites_only=false ---
         let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
 
-        // Item should NOT be in items[] (tombstone communicates unfavorite)
+        // --- Item should NOT be in items[] (tombstone communicates unfavorite) ---
         assert!(
             payload
                 .items
@@ -1033,7 +1033,7 @@ mod tests {
                 .is_none(),
             "unfavorited item with tombstone should be excluded from items[]"
         );
-        // Tombstone SHOULD be in unfavorited_items[]
+        // --- Tombstone SHOULD be in unfavorited_items[] ---
         assert_eq!(payload.unfavorited_items.len(), 1);
         assert_eq!(payload.unfavorited_items[0].content_hash, hash);
     }
@@ -1041,18 +1041,18 @@ mod tests {
     #[test]
     fn test_snapshot_unfav_no_tombstone_stays_in_items() {
         let (db_mutex, _id, hash) = setup_db();
-        // Item has is_favorite=false, no tombstone (never favorited)
+        // --- Item has is_favorite=false, no tombstone (never favorited) ---
 
         let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
 
-        // Item SHOULD be in items[] — it's just a normal unfavorited item
+        // --- Item SHOULD be in items[] — it's just a normal unfavorited item ---
         let found = payload.items.iter().find(|i| i.content_hash == hash);
         assert!(
             found.is_some(),
             "unfavorited item without tombstone should be in items[]"
         );
         assert!(!found.unwrap().is_favorite);
-        // No tombstone
+        // --- No tombstone ---
         assert!(payload.unfavorited_items.is_empty());
     }
 
@@ -1077,11 +1077,11 @@ mod tests {
     #[test]
     fn test_snapshot_favorites_only_excludes_unfavorited() {
         let (db_mutex, _id, hash) = setup_db();
-        // Item is_favorite=false, no tombstone
+        // --- Item is_favorite=false, no tombstone ---
 
         let payload = build_snapshot(&db_mutex, "test-device", true).unwrap();
 
-        // With favorites_only=true, unfavorited items should be excluded
+        // --- With favorites_only=true, unfavorited items should be excluded ---
         assert!(payload
             .items
             .iter()
@@ -1094,23 +1094,23 @@ mod tests {
         let (db_mutex, _id, hash) = setup_db();
         {
             let db = db_mutex.lock().unwrap();
-            // Simulate: favorite → unfavorite → refavorite
+            // --- Simulate: favorite → unfavorite → refavorite ---
             db.set_favorite(_id, true).unwrap();
             db.record_unfavorite(hash, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
             db.set_favorite(_id, false).unwrap();
-            // Now refavorite: remove tombstone
+            // --- Now refavorite: remove tombstone ---
             db.remove_unfavorite(hash).unwrap();
             db.set_favorite(_id, true).unwrap();
         }
 
         let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
 
-        // Item should be back in items[] as favorited
+        // --- Item should be back in items[] as favorited ---
         let found = payload.items.iter().find(|i| i.content_hash == hash);
         assert!(found.is_some(), "re-favorited item should be in items[]");
         assert!(found.unwrap().is_favorite);
-        // No tombstone
+        // --- No tombstone ---
         assert!(payload.unfavorited_items.is_empty());
     }
 
@@ -1119,7 +1119,7 @@ mod tests {
         let db = Database::open(":memory:").expect("open :memory:");
         let db = std::sync::Mutex::new(db);
 
-        // Item A: favorited (hash=1)
+        // --- Item A: favorited (hash=1) ---
         insert_item(
             &db.lock().unwrap(),
             "item a",
@@ -1127,7 +1127,7 @@ mod tests {
             true,
             "2026-06-06T10:00:00Z",
         );
-        // Item B: unfavorited with tombstone (hash=2)
+        // --- Item B: unfavorited with tombstone (hash=2) ---
         insert_item(
             &db.lock().unwrap(),
             "item b",
@@ -1135,7 +1135,7 @@ mod tests {
             false,
             "2026-06-06T10:00:00Z",
         );
-        // Item C: unfavorited without tombstone (hash=3)
+        // --- Item C: unfavorited without tombstone (hash=3) ---
         insert_item(
             &db.lock().unwrap(),
             "item c",
@@ -1152,15 +1152,15 @@ mod tests {
 
         let payload = build_snapshot(&db, "test-device", false).unwrap();
 
-        // Item A: in items[]
+        // --- Item A: in items[] ---
         assert!(payload.items.iter().any(|i| i.content_hash == 1));
-        // Item B: NOT in items[], in tombstone
+        // --- Item B: NOT in items[], in tombstone ---
         assert!(payload.items.iter().find(|i| i.content_hash == 2).is_none());
         assert!(payload
             .unfavorited_items
             .iter()
             .any(|u| u.content_hash == 2));
-        // Item C: in items[]
+        // --- Item C: in items[] ---
         assert!(payload.items.iter().any(|i| i.content_hash == 3));
         assert_eq!(payload.items.len(), 2); // A + C
         assert_eq!(payload.unfavorited_items.len(), 1); // B
@@ -1168,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_tombstone_without_item_still_present() {
-        // Edge case: tombstone exists but item doesn't (item was deleted)
+        // --- Edge case: tombstone exists but item doesn't (item was deleted) ---
         let db = Database::open(":memory:").expect("open :memory:");
         {
             let db = &db;
@@ -1179,7 +1179,7 @@ mod tests {
 
         let payload = build_snapshot(&db, "test-device", false).unwrap();
 
-        // Tombstone still propagates even without the item
+        // --- Tombstone still propagates even without the item ---
         assert_eq!(payload.unfavorited_items.len(), 1);
         assert_eq!(payload.unfavorited_items[0].content_hash, 0xDEAD);
         assert!(payload.items.is_empty());
@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_favorited_with_tombstone_included() {
-        // Edge case: item is favorited but also has a tombstone
+        // --- Edge case: item is favorited but also has a tombstone ---
         // (shouldn't happen normally, but if it does, is_favorite wins)
         let (db_mutex, _id, hash) = setup_db();
         {
@@ -1208,7 +1208,7 @@ mod tests {
         assert!(found.unwrap().is_favorite);
     }
 
-    // ── merge_remote_into_local tests ──
+    // --- ── merge_remote_into_local tests ── ---
 
     fn make_remote_payload(
         items: Vec<SyncItem>,
@@ -1229,11 +1229,11 @@ mod tests {
     #[test]
     fn test_merge_unfavorite_applied_to_favorited_item() {
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: favorited item with hash=100, updated_at T1 (older)
+        // --- Local: favorited item with hash=100, updated_at T1 (older) ---
         insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
-        // Remote: unfavorite marker at T2 (newer than local item)
+        // --- Remote: unfavorite marker at T2 (newer than local item) ---
         let mut remote = make_remote_payload(
             vec![],
             vec![SyncUnfavoritedItem {
@@ -1246,18 +1246,18 @@ mod tests {
         let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
 
         assert_eq!(stats.items_updated, 1);
-        // Local item should now be unfavorited
+        // --- Local item should now be unfavorited ---
         let db = db.lock().unwrap();
         let item = db.get_by_hash(100).unwrap().unwrap();
         assert!(!item.is_favorite, "item should be unfavorited after merge");
-        // Tombstone should be recorded locally
+        // --- Tombstone should be recorded locally ---
         assert!(db.is_item_unfavorited(100).unwrap());
     }
 
     #[test]
     fn test_merge_unfavorite_ignored_when_already_unfavorited() {
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: already unfavorited item
+        // --- Local: already unfavorited item ---
         insert_item(&db, "unfavorited", 100, false, "2026-06-06T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
@@ -1272,18 +1272,18 @@ mod tests {
 
         let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
 
-        // No update needed — already unfavorited
+        // --- No update needed — already unfavorited ---
         assert_eq!(stats.items_updated, 0);
     }
 
     #[test]
     fn test_merge_unfavorite_older_timestamp_ignored() {
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: favorited item at T2 (newer than remote — user re-favorited)
+        // --- Local: favorited item at T2 (newer than remote — user re-favorited) ---
         insert_item(&db, "favorited", 100, true, "2026-06-06T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
-        // Remote: unfavorite marker at T1 (older than local item)
+        // --- Remote: unfavorite marker at T1 (older than local item) ---
         let mut remote = make_remote_payload(
             vec![],
             vec![SyncUnfavoritedItem {
@@ -1295,7 +1295,7 @@ mod tests {
 
         let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
 
-        // Should NOT unfavorite — local is newer (user re-favorited)
+        // --- Should NOT unfavorite — local is newer (user re-favorited) ---
         assert_eq!(stats.items_updated, 0);
         let db = db.lock().unwrap();
         let item = db.get_by_hash(100).unwrap().unwrap();
@@ -1308,7 +1308,7 @@ mod tests {
         insert_item(&db, "favorited", 100, true, "2026-06-06T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
-        // Remote tombstone from the SAME device
+        // --- Remote tombstone from the SAME device ---
         let mut remote = make_remote_payload(
             vec![],
             vec![SyncUnfavoritedItem {
@@ -1320,7 +1320,7 @@ mod tests {
 
         let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
 
-        // Should ignore own tombstone
+        // --- Should ignore own tombstone ---
         assert_eq!(stats.items_updated, 0);
     }
 
@@ -1352,7 +1352,7 @@ mod tests {
         // Simulates the "both lists" scenario: remote has item with is_favorite=false
         // AND a tombstone. Phase 2.5 should apply the unfavorite, Phase 4 should update.
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: favorited item at T1 (older)
+        // --- Local: favorited item at T1 (older) ---
         insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
@@ -1379,7 +1379,7 @@ mod tests {
 
         let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
 
-        // Phase 2.5 unfavorites, Phase 4 updates — both count
+        // --- Phase 2.5 unfavorites, Phase 4 updates — both count ---
         assert!(stats.items_updated >= 1);
         let db = db.lock().unwrap();
         let item = db.get_by_hash(100).unwrap().unwrap();

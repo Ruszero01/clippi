@@ -1,5 +1,5 @@
-//! Cache cleanup — removes orphaned image files and expired icon caches.
-//! Runs once at startup in a background thread.
+//! --- Cache cleanup — removes orphaned image files and expired icon caches. ---
+//! --- Runs once at startup in a background thread. ---
 
 use crate::core::db::Database;
 use std::collections::HashSet;
@@ -18,7 +18,7 @@ pub fn cleanup_unused_cache(db: &Database) {
         return;
     }
 
-    // Collect referenced image hashes from the database.
+    // --- Collect referenced image hashes from the database. ---
     let referenced: HashSet<String> = match db.get_all_image_hashes() {
         Ok(hashes) => hashes.into_iter().collect(),
         Err(e) => {
@@ -35,7 +35,7 @@ pub fn cleanup_unused_cache(db: &Database) {
                 continue;
             };
 
-            // Only process *.png files at the top level (not in icons/).
+            // --- Only process *.png files at the top level (not in icons/). ---
             if !name.ends_with(".png") || path.is_dir() {
                 continue;
             }
@@ -56,7 +56,7 @@ pub fn cleanup_unused_cache(db: &Database) {
         }
     }
 
-    // Clean expired icon cache files.
+    // --- Clean expired icon cache files. ---
     if icons_dir.exists() {
         let cutoff = SystemTime::now()
             .checked_sub(Duration::from_secs(ICON_EXPIRY_DAYS * 86400))

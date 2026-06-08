@@ -1,9 +1,9 @@
-﻿//! Toast notification 鈥?brief overlay message that auto-dismisses.
+//! Toast notification — brief overlay message that auto-dismisses.
 //!
 //! The toast is a lightweight, reusable component for showing transient
 //! feedback messages (e.g. "No OCR text detected", "Copied to clipboard").
 //! Auto-dismiss is handled by the parent view via a timer; this component
-//! only renders the visual element.
+//! --- only renders the visual element. ---
 
 use gpui::*;
 

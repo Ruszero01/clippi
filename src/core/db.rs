@@ -13,7 +13,7 @@ impl Database {
         let conn = Connection::open(path)?;
         // Wait up to 5s if the database is locked (e.g. previous process still exiting).
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        // WAL mode improves concurrency and reduces memory pressure.
+        // --- WAL mode improves concurrency and reduces memory pressure. ---
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA cache_size = -2000;")?;
         let db = Self { conn };
         db.init_schema()?;
@@ -48,7 +48,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
             CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
         )?;
-        // Tags tables
+        // --- Tags tables ---
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,12 +234,12 @@ impl Database {
         Ok(())
     }
 
-    // ── Tag CRUD ──
+    // --- ── Tag CRUD ── ---
 
     pub fn create_tag(&self, name: &str, color: &str) -> SqlResult<i64> {
         let now = chrono::Utc::now().to_rfc3339();
-        // Clear any existing tombstone — the user is recreating a tag
-        // that was previously deleted.
+        // --- Clear any existing tombstone — the user is recreating a tag ---
+        // --- that was previously deleted. ---
         let _ = self
             .conn
             .execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);
@@ -252,7 +252,7 @@ impl Database {
 
     pub fn delete_tag(&mut self, tag_id: i64) -> SqlResult<()> {
         let tx = self.conn.transaction()?;
-        // Touch affected items before removing the associations
+        // --- Touch affected items before removing the associations ---
         tx.execute(
             "UPDATE clipboard_items SET updated_at = ?1
              WHERE id IN (SELECT item_id FROM item_tags WHERE tag_id = ?2)",
@@ -270,8 +270,8 @@ impl Database {
             "UPDATE tags SET name = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
             params![name, color, now, tag_id],
         )?;
-        // Touch all associated items so the tag change propagates via sync.
-        // Without this, items keep their old updated_at and the merge on other
+        // --- Touch all associated items so the tag change propagates via sync. ---
+        // --- Without this, items keep their old updated_at and the merge on other ---
         // devices skips them because the timestamps are equal.
         self.conn.execute(
             "UPDATE clipboard_items SET updated_at = ?1
@@ -430,7 +430,7 @@ impl Database {
         }
     }
 
-    // ── Sync helpers ──
+    // --- ── Sync helpers ── ---
 
     /// Get all items (excluding image and file types) with tags for sync snapshot.
     pub fn get_all_sync_items_with_tags(&self) -> SqlResult<Vec<ClipboardItem>> {
@@ -527,7 +527,7 @@ impl Database {
         Ok(())
     }
 
-    // ── Tombstone operations ──
+    // --- ── Tombstone operations ── ---
 
     /// Record a deleted item tombstone for sync propagation.
     pub fn record_item_deletion(
@@ -811,7 +811,7 @@ impl Database {
     /// Also cleans up item_tags associations and touches affected items.
     pub fn delete_tag_by_name(&mut self, name: &str) -> SqlResult<bool> {
         let tx = self.conn.transaction()?;
-        // Touch affected items
+        // --- Touch affected items ---
         tx.execute(
             "UPDATE clipboard_items SET updated_at = ?1
              WHERE id IN (SELECT it.item_id FROM item_tags it
@@ -819,12 +819,12 @@ impl Database {
                           WHERE t.name = ?2)",
             rusqlite::params![chrono::Utc::now().to_rfc3339(), name],
         )?;
-        // Delete item_tags associations
+        // --- Delete item_tags associations ---
         tx.execute(
             "DELETE FROM item_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?1)",
             params![name],
         )?;
-        // Delete the tag
+        // --- Delete the tag ---
         let affected = tx.execute("DELETE FROM tags WHERE name = ?1", params![name])?;
         tx.commit()?;
         Ok(affected > 0)
@@ -853,7 +853,7 @@ impl Database {
         color: &str,
         updated_at: &str,
     ) -> SqlResult<i64> {
-        // Clear any existing tombstone — a remote device recreated this tag.
+        // --- Clear any existing tombstone — a remote device recreated this tag. ---
         let _ = self
             .conn
             .execute("DELETE FROM deleted_tags WHERE name = ?1", params![name]);

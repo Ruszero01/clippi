@@ -1,4 +1,4 @@
-﻿//! GPUI edit panel for clipboard text and rich-text items.
+//! GPUI edit panel for clipboard text and rich-text items.
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;

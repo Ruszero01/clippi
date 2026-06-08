@@ -1,4 +1,4 @@
-//! GPUI-facing sync state.
+//! --- GPUI-facing sync state. ---
 
 use crate::core::settings::{AppSettings, BackendConfig};
 

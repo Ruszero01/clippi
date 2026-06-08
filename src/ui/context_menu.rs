@@ -1,12 +1,12 @@
-﻿//! Context menu 鈥?right-click menu for clipboard items.
+//! Context menu — right-click menu for clipboard items.
 //!
-//! Matches the original Slint ContextMenu.slint design:
-//! - 164px width, 8px border-radius, 4px padding
-//! - 30px item height, 5px border-radius per item
-//! - Icon (13px iconfont) + label (13px) per row
-//! - Separators: 3px gap + 1px line + 3px gap
-//! - Single and batch mode variants with conditional items
-//! - Position clamping to container bounds
+//! --- Matches the original Slint ContextMenu.slint design: ---
+//! --- - 164px width, 8px border-radius, 4px padding ---
+//! --- - 30px item height, 5px border-radius per item ---
+//! --- - Icon (13px iconfont) + label (13px) per row ---
+//! --- - Separators: 3px gap + 1px line + 3px gap ---
+//! --- - Single and batch mode variants with conditional items ---
+//! --- - Position clamping to container bounds ---
 
 use std::rc::Rc;
 
@@ -23,7 +23,7 @@ pub struct MenuItemContext {
     pub is_image: bool,
     pub is_file: bool,
     pub is_color: bool,
-    /// true = current format is HEX 鈫?show "Paste as RGB"
+    /// true = current format is HEX → show "Paste as RGB"
     pub is_hex: bool,
     pub is_favorite: bool,
 }
@@ -32,7 +32,7 @@ impl MenuItemContext {
     pub fn from_item(item: &crate::core::types::ClipboardItem) -> Self {
         use crate::core::types::ContentType;
         let is_color = item.content_type == ContentType::Color;
-        // is_hex = true 鈫?show "Paste as RGB" (convert FROM hex)
+        // --- is_hex = true → show "Paste as RGB" (convert FROM hex) ---
         let is_hex = is_color && crate::core::color::is_hex_format(&item.full_text);
         Self {
             is_image: item.content_type == ContentType::Image,
@@ -100,7 +100,7 @@ impl ContextMenu {
             danger: false,
             fav: false,
         });
-        // Paste
+        // --- Paste ---
         items.push(RawMenuItem {
             label: "Paste".into(),
             action: "paste".into(),
@@ -125,7 +125,7 @@ impl ContextMenu {
             });
         }
 
-        // Separator
+        // --- Separator ---
         items.push(RawMenuItem {
             label: SEPARATOR_LABEL.into(),
             action: String::new(),
@@ -154,7 +154,7 @@ impl ContextMenu {
             fav: false,
         });
 
-        // Open original image (image only)
+        // --- Open original image (image only) ---
         if ctx.is_image {
             items.push(RawMenuItem {
                 label: "Open image".into(),
@@ -188,7 +188,7 @@ impl ContextMenu {
             fav: false,
         });
 
-        // Separator
+        // --- Separator ---
         items.push(RawMenuItem {
             label: SEPARATOR_LABEL.into(),
             action: String::new(),
@@ -197,7 +197,7 @@ impl ContextMenu {
             fav: false,
         });
 
-        // Favorite
+        // --- Favorite ---
         let (fav_label, fav_icon) = if ctx.is_favorite {
             ("Unfav", "\u{e630}")
         } else {
@@ -211,7 +211,7 @@ impl ContextMenu {
             fav: true,
         });
 
-        // Delete
+        // --- Delete ---
         items.push(RawMenuItem {
             label: "Delete".into(),
             action: "delete".into(),
@@ -322,7 +322,7 @@ impl ContextMenu {
 
 impl RenderOnce for ContextMenu {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        // Compute menu height BEFORE destructuring self
+        // --- Compute menu height BEFORE destructuring self ---
         let menu_h = self.estimated_height();
 
         let Self {
@@ -345,16 +345,16 @@ impl RenderOnce for ContextMenu {
         let danger = theme.danger;
         let fav_color = theme.fav_color;
 
-        // Clamp position to container bounds with height awareness.
+        // --- Clamp position to container bounds with height awareness. ---
         // Flips the menu above the cursor if it would overflow the bottom edge.
         let menu_w = MENU_WIDTH;
         let clamped_x = x.clamp(4.0, (container_width - menu_w - 4.0).max(4.0));
         // Prefer below cursor; flip above if it overflows the bottom.
         let clamped_y = if y + menu_h + 4.0 <= container_height {
-            // Fits below cursor 鈥?small 2px gap from click point
+            // --- Fits below cursor — small 2px gap from click point ---
             y.clamp(4.0, container_height - menu_h - 4.0)
         } else {
-            // Flip above cursor 鈥?8px gap from click point
+            // --- Flip above cursor — 8px gap from click point ---
             (y - menu_h - 8.0).clamp(4.0, container_height - menu_h - 4.0)
         };
 
@@ -386,7 +386,7 @@ impl RenderOnce for ContextMenu {
                 let on_action = on_action.clone();
                 let on_dismiss = on_dismiss.clone();
 
-                // Render separator
+                // --- Render separator ---
                 if item.label == SEPARATOR_LABEL {
                     return div()
                         .w(px(156.))
@@ -418,7 +418,7 @@ impl RenderOnce for ContextMenu {
                     text_1
                 };
 
-                // Hover colors: fav stays fav, danger stays danger, otherwise accent
+                // --- Hover colors: fav stays fav, danger stays danger, otherwise accent ---
                 let hover_icon = if is_fav {
                     fav_color
                 } else if is_danger {

@@ -1,7 +1,7 @@
 //! Extensible filter system for clipboard items
 //!
 //! Each filter dimension (type, keyword, favorites, etc.) is a separate field.
-//! Multiple filters combine with AND logic.
+//! --- Multiple filters combine with AND logic. ---
 
 /// Unified filter state for clipboard queries.
 ///
@@ -84,7 +84,7 @@ impl ClipboardFilters {
         let mut conditions = Vec::new();
         let mut params = Vec::new();
 
-        // Favorites filter
+        // --- Favorites filter ---
         if self.favorites_only {
             conditions.push("is_favorite = 1".to_string());
         }
@@ -109,7 +109,7 @@ impl ClipboardFilters {
             }
         }
 
-        // Type filter — expand "link" to also include "path"
+        // --- Type filter — expand "link" to also include "path" ---
         if !self.type_filters.is_empty() {
             let expanded: Vec<String> = self
                 .type_filters

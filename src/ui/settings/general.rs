@@ -1,4 +1,4 @@
-﻿//! General settings tab 鈥?language, startup, theme, position.
+//! General settings tab — language, startup, theme, position.
 //!
 
 use gpui::*;
@@ -19,16 +19,16 @@ impl SettingsPanel {
         let wm = self.window_manager.clone();
         let this = cx.entity().clone();
 
-        // Snapshot current values from AppState
+        // --- Snapshot current values from AppState ---
         let app = self.state.read(cx);
         let auto_start = app.settings.auto_start;
         let auto_hide = app.settings.auto_hide;
         let silent_start = app.settings.silent_start;
         let theme_str = app.settings.theme.clone();
         let position_mode = app.settings.window_position_mode.clone();
-        // borrow released here 鈥?`app` is a &AppState reference
+        // --- borrow released here — `app` is a &AppState reference ---
 
-        // Derive display indices from string settings
+        // --- Derive display indices from string settings ---
         let theme_idx = match theme_str.as_str() {
             "dark" => 1,
             "light" => 2,
@@ -44,7 +44,7 @@ impl SettingsPanel {
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // 鈹€鈹€ Auto-start 鈹€鈹€
+            // --- Auto-start ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -68,7 +68,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Auto-hide 鈹€鈹€
+            // --- Auto-hide ---
             .child({
                 let state = state.clone();
                 let wm = wm.clone();
@@ -90,7 +90,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Silent start 鈹€鈹€
+            // --- Silent start ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -109,7 +109,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Theme 鈹€鈹€
+            // --- Theme ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -135,7 +135,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Window position 鈹€鈹€
+            // --- Window position ---
             .child({
                 let state = state.clone();
                 let wm = wm.clone();

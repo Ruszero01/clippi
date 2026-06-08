@@ -1,8 +1,8 @@
-//! Application-wide state entity.
+//! --- Application-wide state entity. ---
 //!
-//! `AppState` is the root entity that holds all shared application data.
+//! --- `AppState` is the root entity that holds all shared application data. ---
 //! It is created once at startup and passed to all UI components via GPUI's
-//! entity subscription/observation mechanism.
+//! --- entity subscription/observation mechanism. ---
 
 use crate::core::db::Database;
 use crate::core::filters::ClipboardFilters;
@@ -451,9 +451,9 @@ impl AppState {
         };
         if !item.image_path.is_empty() {
             let path = item.image_path.clone();
-            // Spawn on a background thread — ShellExecuteW can pump Windows
+            // --- Spawn on a background thread — ShellExecuteW can pump Windows ---
             // messages internally (DDE/COM) and deadlock if called from the
-            // GPUI main thread event handler.
+            // --- GPUI main thread event handler. ---
             std::thread::spawn(move || {
                 open_system_target(&path);
             });
@@ -476,8 +476,8 @@ impl AppState {
         match item.content_type {
             ContentType::Link | ContentType::Path if !item.full_text.is_empty() => {
                 let text = item.full_text.clone();
-                // Spawn on a background thread to avoid ShellExecuteW
-                // deadlock on the GPUI main thread (DDE/COM message pumping).
+                // --- Spawn on a background thread to avoid ShellExecuteW ---
+                // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
                 std::thread::spawn(move || {
                     open_system_target(&text);
                 });
@@ -486,8 +486,8 @@ impl AppState {
                 let file_data = FileData::from_json(&item.file_data);
                 if let Some(first) = file_data.files.first() {
                     let path = first.path.clone();
-                    // Spawn on a background thread to avoid ShellExecuteW
-                    // deadlock on the GPUI main thread (DDE/COM message pumping).
+                    // --- Spawn on a background thread to avoid ShellExecuteW ---
+                    // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
                     std::thread::spawn(move || {
                         reveal_file_location(&path);
                     });
@@ -611,9 +611,9 @@ impl AppState {
         };
 
         if let Some(text) = ocr_text {
-            // Use skip_next (not batch_pasting) — the OCR text written to
-            // clipboard is internal and should be "consumed" by the listener
-            // (skip one cycle + update baseline seq#) rather than recorded
+            // --- Use skip_next (not batch_pasting) — the OCR text written to ---
+            // --- clipboard is internal and should be "consumed" by the listener ---
+            // --- (skip one cycle + update baseline seq#) rather than recorded ---
             // as a new history entry. This matches the Slint-era behaviour.
             self.skip_next.store(true, Ordering::SeqCst);
             if let Ok(ctx) = ClipboardContext::new() {
@@ -628,8 +628,8 @@ impl AppState {
 
     fn handle_qr_text(&mut self, text: String) {
         if text.starts_with("http://") || text.starts_with("https://") {
-            // Spawn on a background thread — open_releases_page calls
-            // ShellExecuteW which can pump Windows messages internally
+            // --- Spawn on a background thread — open_releases_page calls ---
+            // --- ShellExecuteW which can pump Windows messages internally ---
             // (DDE/COM) and deadlock if called from the GPUI main thread.
             let url = text;
             std::thread::spawn(move || {
@@ -744,8 +744,8 @@ impl AppState {
         use crate::core::types::ContentType;
         use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
 
-        // Suppress clipboard recording during batch paste to prevent
-        // intermediate writes (newline separators) from being captured.
+        // --- Suppress clipboard recording during batch paste to prevent ---
+        // --- intermediate writes (newline separators) from being captured. ---
         self.batch_pasting
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -756,7 +756,7 @@ impl AppState {
 
         let n = items.len();
         for (i, item) in items.iter().enumerate() {
-            // Newline separator between items (not before first)
+            // --- Newline separator between items (not before first) ---
             if i > 0 {
                 if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
                     let _ = clipboard_rs::Clipboard::set_text(&ctx, "\n".to_string());
@@ -770,7 +770,7 @@ impl AppState {
             let expected = item.full_text.clone();
             crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
 
-            // Verify clipboard before pasting
+            // --- Verify clipboard before pasting ---
             if item.content_type == ContentType::Image {
                 if let Ok(meta) = std::fs::metadata(&item.image_path) {
                     let size = meta.len();
@@ -813,7 +813,7 @@ impl AppState {
                 paste_after_delay();
             }
         }
-        // Restore clipboard recording — batch paste is complete.
+        // --- Restore clipboard recording — batch paste is complete. ---
         self.batch_pasting
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
@@ -865,16 +865,16 @@ impl AppState {
             return;
         }
 
-        // Tombstone management
+        // --- Tombstone management ---
         if was_fav {
-            // Was favorited, now unfavorited — record tombstone
+            // --- Was favorited, now unfavorited — record tombstone ---
             let now = chrono::Utc::now().to_rfc3339();
             let device = crate::services::backends::local_folder::hostname();
             if let Err(e) = self.db.record_unfavorite(hash, &now, &device) {
                 log::error!("record_unfavorite({hash}): {e}");
             }
         } else {
-            // Was unfavorited, now favorited — remove tombstone
+            // --- Was unfavorited, now favorited — remove tombstone ---
             if let Err(e) = self.db.remove_unfavorite(hash) {
                 log::error!("remove_unfavorite({hash}): {e}");
             }
@@ -886,7 +886,7 @@ impl AppState {
             self.reload_items();
             self.clear_selection();
         } else {
-            // Incremental update: flip is_favorite + bump updated_at
+            // --- Incremental update: flip is_favorite + bump updated_at ---
             if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
                 item.is_favorite = !item.is_favorite;
                 item.updated_at = chrono::Utc::now();
@@ -926,7 +926,7 @@ impl AppState {
 
         self.sync_dirty.store(true, Ordering::SeqCst);
 
-        // Remove from in-memory items and selection
+        // --- Remove from in-memory items and selection ---
         self.items.retain(|it| it.id != id);
         self.selected_ids.retain(|&sid| sid != id);
     }
@@ -991,7 +991,7 @@ impl AppState {
         let now = chrono::Utc::now().to_rfc3339();
         let device = crate::services::backends::local_folder::hostname();
 
-        // Collect hashes only after the corresponding DB deletion succeeds.
+        // --- Collect hashes only after the corresponding DB deletion succeeds. ---
         let mut hashes: Vec<u64> = Vec::with_capacity(self.selected_ids.len());
         for &id in &self.selected_ids {
             if let Ok(Some(item)) = self.db.get_by_id(id) {
@@ -1011,7 +1011,7 @@ impl AppState {
 
         self.sync_dirty.store(true, Ordering::SeqCst);
 
-        // Remove from in-memory items
+        // --- Remove from in-memory items ---
         let ids: Vec<i64> = self.selected_ids.drain(..).collect();
         self.items.retain(|it| !ids.contains(&it.id));
     }

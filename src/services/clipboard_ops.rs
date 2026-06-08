@@ -1,7 +1,7 @@
-//! Platform-agnostic clipboard write and verification utilities.
+//! --- Platform-agnostic clipboard write and verification utilities. ---
 //!
 //! Extracted from the Slint `app.rs` callback layer so both the Slint and
-//! GPUI frontends can share clipboard write logic.
+//! --- GPUI frontends can share clipboard write logic. ---
 
 use crate::core::types::{ClipboardItem, ContentType, RichData};
 use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
@@ -62,7 +62,7 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
                 }
             }
         } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
-            // Write file paths to clipboard (CF_HDROP on Windows)
+            // --- Write file paths to clipboard (CF_HDROP on Windows) ---
             let file_data = crate::core::types::FileData::from_json(&item.file_data);
             let paths: Vec<String> = file_data.files.iter().map(|f| f.path.clone()).collect();
             let contents = vec![ClipboardContent::Files(paths)];

@@ -32,12 +32,12 @@ fn cache_path(domain: &str) -> PathBuf {
 pub fn ensure_favicon_cached(domain: &str) -> Option<String> {
     let path = cache_path(domain);
 
-    // Already cached
+    // --- Already cached ---
     if path.exists() {
         return Some(path.to_string_lossy().to_string());
     }
 
-    // Ensure icons directory exists
+    // --- Ensure icons directory exists ---
     let _ = std::fs::create_dir_all(path.parent()?);
 
     let url = format!("https://www.google.com/s2/favicons?domain={}&sz=32", domain);
@@ -48,7 +48,7 @@ pub fn ensure_favicon_cached(domain: &str) -> Option<String> {
             if response.into_reader().read_to_end(&mut body).is_err() {
                 return None;
             }
-            // Quick PNG validation: check magic bytes
+            // --- Quick PNG validation: check magic bytes ---
             if body.len() < 8 || &body[..4] != b"\x89PNG" {
                 return None;
             }

@@ -164,7 +164,7 @@ mod windows {
                 .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
             let hotkey = parse_hotkey(hotkey_str)?;
 
-            // Try to register
+            // --- Try to register ---
             manager.register(hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
@@ -187,11 +187,11 @@ mod windows {
         }
 
         fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-            // Unregister old
+            // --- Unregister old ---
             let _ = self.manager.unregister(self.hotkey);
             std::thread::sleep(Duration::from_millis(50));
 
-            // Parse and register new
+            // --- Parse and register new ---
             let new_hotkey = parse_hotkey(hotkey_str)?;
             self.manager.register(new_hotkey).map_err(|e| {
                 format!(
@@ -411,7 +411,7 @@ mod macos {
     const KVK_COMMAND: u16 = 0x37;
 
     // FFI binding for CGEventSourceKeyState.
-    // This function is part of the public CoreGraphics C API but is not yet
+    // --- This function is part of the public CoreGraphics C API but is not yet ---
     // wrapped by the core-graphics crate (checked v0.25). Using a raw extern
     // binding avoids pulling in a second CG bindings crate just for one function.
     extern "C" {
@@ -437,7 +437,7 @@ mod macos {
                 .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
             let hotkey = parse_hotkey(hotkey_str)?;
 
-            // Try to register
+            // --- Try to register ---
             manager.register(hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
@@ -460,11 +460,11 @@ mod macos {
         }
 
         fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-            // Unregister old
+            // --- Unregister old ---
             let _ = self.manager.unregister(self.hotkey);
             std::thread::sleep(Duration::from_millis(50));
 
-            // Parse and register new
+            // --- Parse and register new ---
             let new_hotkey = parse_hotkey(hotkey_str)?;
             self.manager.register(new_hotkey).map_err(|e| {
                 format!(
@@ -559,9 +559,9 @@ mod macos {
     }
 
     fn detect_pressed_key() -> Option<Code> {
-        // macOS virtual key code to Code mapping
+        // --- macOS virtual key code to Code mapping ---
         let vk_map: &[(u16, Code)] = &[
-            // Letters
+            // --- Letters ---
             (0x00, Code::KeyA),
             (0x01, Code::KeyS),
             (0x02, Code::KeyD),
@@ -608,14 +608,14 @@ mod macos {
             (0x2D, Code::KeyN),
             (0x2E, Code::KeyM),
             (0x2F, Code::Period),
-            // Special keys
+            // --- Special keys ---
             (0x24, Code::Enter),     // kVK_Return
             (0x30, Code::Tab),       // kVK_Tab
             (0x31, Code::Space),     // kVK_Space
             (0x33, Code::Backspace), // kVK_Delete (Backspace)
             (0x35, Code::Escape),    // kVK_Escape
             (0x32, Code::Backquote), // kVK_ANSI_Grave
-            // Function keys
+            // --- Function keys ---
             (0x7A, Code::F1),
             (0x78, Code::F2),
             (0x63, Code::F3),

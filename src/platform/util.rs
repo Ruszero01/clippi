@@ -1,4 +1,4 @@
-//! Shared platform utilities.
+//! --- Shared platform utilities. ---
 
 /// Encode raw RGBA pixel data as a PNG byte vector.
 #[allow(dead_code)]
@@ -26,7 +26,7 @@ pub fn trim_process_working_set() {
 
 #[cfg(not(target_os = "windows"))]
 pub fn trim_process_working_set() {
-    // no-op on non-Windows
+    // --- no-op on non-Windows ---
 }
 
 /// Render an HICON to a 32x32 BGRA DIB, convert to RGBA PNG, and base64-encode.
@@ -124,7 +124,7 @@ pub fn hicon_to_base64_png(
         DeleteDC(mem_dc);
         DestroyIcon(hicon);
 
-        // BGRA → RGBA
+        // --- BGRA → RGBA ---
         let mut rgba = Vec::with_capacity(pixel_count * 4);
         for chunk in bgra_data.chunks_exact(4) {
             rgba.push(chunk[2]); // R
@@ -184,7 +184,7 @@ mod macos_geometry {
         }
     }
 
-    // f64 = CGFloat on 64-bit macOS → encoding "d"
+    // --- f64 = CGFloat on 64-bit macOS → encoding "d" ---
     unsafe impl Encode for CGPoint {
         const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
     }
@@ -236,11 +236,11 @@ pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Optio
         let src_size: CGSize = msg_send![image, size];
         let dest_rect = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(size_f, size_f));
         let src_rect = CGRect::new(CGPoint::new(0.0, 0.0), src_size);
-        // NSCompositingOperationCopy = 2
+        // --- NSCompositingOperationCopy = 2 ---
         let _: () = msg_send![image, drawInRect: dest_rect, fromRect: src_rect, operation: 2usize, fraction: 1.0f64];
         let _: () = msg_send![&target, unlockFocus];
 
-        // 2. TIFF → NSBitmapImageRep → PNG
+        // --- 2. TIFF → NSBitmapImageRep → PNG ---
         let tiff: Retained<objc2::runtime::NSObject> = msg_send![&target, TIFFRepresentation];
         let rep: Retained<objc2::runtime::NSObject> = msg_send![
             msg_send![class!(NSBitmapImageRep), alloc],
@@ -253,7 +253,7 @@ pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Optio
         ];
         let png_data = png_data?;
 
-        // 3. Base64 encode PNG bytes directly (no image crate round-trip)
+        // --- 3. Base64 encode PNG bytes directly (no image crate round-trip) ---
         let bytes: *const std::ffi::c_void = msg_send![&png_data, bytes];
         let len: usize = msg_send![&png_data, length];
         if bytes.is_null() || len == 0 {

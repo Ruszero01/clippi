@@ -1,4 +1,4 @@
-//! Frontend management — window position modes and size constants.
+//! --- Frontend management — window position modes and size constants. ---
 //!
 //! Framework-agnostic types and helpers used by the GPUI window implementation.
 

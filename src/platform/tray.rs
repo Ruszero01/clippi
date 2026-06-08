@@ -1,4 +1,4 @@
-//! System tray - platform implementation using tray-icon
+//! --- System tray - platform implementation using tray-icon ---
 
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -44,11 +44,11 @@ impl TrayManager {
 
         let menu = Menu::new();
 
-        // Version label (disabled, gray)
+        // --- Version label (disabled, gray) ---
         let version_text = format!("Clippi v{}", env!("CARGO_PKG_VERSION"));
         let version_item = MenuItem::new(&version_text, false, None);
 
-        // Separator between version and functional items
+        // --- Separator between version and functional items ---
         let sep = PredefinedMenuItem::separator();
 
         // Check for updates button
@@ -56,7 +56,7 @@ impl TrayManager {
             MenuItem::new(i18n::tr("检查更新", "Check for Updates"), true, None);
         let check_update_id = check_update_item.id().clone();
 
-        // Existing functional menu items
+        // --- Existing functional menu items ---
         let show_item = MenuItem::new(i18n::tr("显示窗口", "Show Window"), true, None);
         let settings_item = MenuItem::new(i18n::tr("设置", "Settings"), true, None);
         let restart_item = MenuItem::new(i18n::tr("重启应用", "Restart"), true, None);
@@ -101,14 +101,14 @@ impl TrayManager {
 
     /// Poll for tray events - call this from main thread
     pub fn poll(&self) -> Option<TrayAction> {
-        // Check double-click
+        // --- Check double-click ---
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             if let TrayIconEvent::DoubleClick { .. } = event {
                 return Some(TrayAction::Show);
             }
         }
 
-        // Check menu events
+        // --- Check menu events ---
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.show_id {
                 return Some(TrayAction::Show);

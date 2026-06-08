@@ -1,9 +1,9 @@
-﻿//! Animated toggle switch 鈥?reusable component for settings UI.
+//! Animated toggle switch — reusable component for settings UI.
 //!
 //! Uses `gpui_transitions::use_keyed_transition` for a smooth 200ms
-//! knob slide between OFF (left, 2px) and ON (right, 20px) positions.
+//! --- knob slide between OFF (left, 2px) and ON (right, 20px) positions. ---
 //!
-//! The `key` distinguishes toggles so transitions are independent;
+//! --- The `key` distinguishes toggles so transitions are independent; ---
 //! pass a unique label for each instance.
 
 use std::collections::HashMap;

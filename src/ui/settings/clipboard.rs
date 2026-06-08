@@ -1,6 +1,6 @@
-﻿//! Clipboard settings tab 鈥?sort, card height, source app, scroll, copy, hover, OCR, QR.
+//! Clipboard settings tab — sort, card height, source app, scroll, copy, hover, OCR, QR.
 //!
-//! Matches the original Slint `SettingsTabClipboard.slint` layout.
+//! --- Matches the original Slint `SettingsTabClipboard.slint` layout. ---
 
 use gpui::*;
 
@@ -15,7 +15,7 @@ impl SettingsPanel {
         let state = self.state.clone();
         let this = cx.entity().clone();
 
-        // Snapshot current values from AppState
+        // --- Snapshot current values from AppState ---
         let app = self.state.read(cx);
         let sort_by_created = app.settings.sort_by_created;
         let card_height_mode = app.settings.card_height_mode.clone();
@@ -25,14 +25,14 @@ impl SettingsPanel {
         let show_original_on_hover = app.settings.show_original_on_hover;
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
-        // borrow released here 鈥?`app` is a &AppState reference
+        // --- borrow released here — `app` is a &AppState reference ---
 
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // 鈹€鈹€ Sort by created (dynamic desc) 鈹€鈹€
+            // --- Sort by created (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -62,7 +62,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Card height (4-option group) 鈹€鈹€
+            // --- Card height (4-option group) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -91,7 +91,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Show source app (dynamic desc) 鈹€鈹€
+            // --- Show source app (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -121,7 +121,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Scroll to top (dynamic desc) 鈹€鈹€
+            // --- Scroll to top (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -152,7 +152,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Copy as plain text (dynamic desc) 鈹€鈹€
+            // --- Copy as plain text (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -182,7 +182,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Show original on hover (dynamic desc) 鈹€鈹€
+            // --- Show original on hover (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -212,7 +212,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Auto Image OCR (dynamic desc) 鈹€鈹€
+            // --- Auto Image OCR (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -236,7 +236,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 鈹€鈹€ Auto QR Detection (dynamic desc) 鈹€鈹€
+            // --- Auto QR Detection (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();

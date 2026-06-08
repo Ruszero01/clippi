@@ -1,4 +1,4 @@
-//! Platform adaptation layer
+//! --- Platform adaptation layer ---
 
 pub mod blacklist;
 pub mod clipboard;

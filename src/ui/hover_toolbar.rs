@@ -1,10 +1,10 @@
-﻿//! Hover toolbar 鈥?appears on card hover, top-right corner.
+//! Hover toolbar — appears on card hover, top-right corner.
 //!
-//! Matches the original Slint ClipboardList.slint hover toolbar:
-//! - 22px height pill, 6px border-radius
-//! - Semi-transparent background, 1px border
-//! - 18x18 iconfont buttons with 2px spacing
-//! - Conditional buttons based on content type and selection count
+//! --- Matches the original Slint ClipboardList.slint hover toolbar: ---
+//! --- - 22px height pill, 6px border-radius ---
+//! --- - Semi-transparent background, 1px border ---
+//! --- - 18x18 iconfont buttons with 2px spacing ---
+//! --- - Conditional buttons based on content type and selection count ---
 
 use std::rc::Rc;
 
@@ -80,7 +80,7 @@ impl RenderOnce for HoverToolbar {
             on_action,
         } = self;
 
-        // Theme colors (dark mode 鈥?matching Slint original)
+        // Theme colors (dark mode — matching Slint original)
         let accent = theme.accent;
         let text_2 = theme.text_2;
         let danger = theme.danger;
@@ -105,7 +105,7 @@ impl RenderOnce for HoverToolbar {
         let is_single = props.selected_count <= 1;
         let is_batch = props.selected_count > 1 && props.is_selected;
 
-        // Build button list: (icon_glyph, action_name, hover_color)
+        // --- Build button list: (icon_glyph, action_name, hover_color) ---
         // Using type alias for the color function
         type ColorFn = Box<dyn Fn(bool) -> Rgba>;
         let mut buttons: Vec<(&str, &str, ColorFn)> = Vec::new();
@@ -118,7 +118,7 @@ impl RenderOnce for HoverToolbar {
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
-            // Open image (image only)
+            // --- Open image (image only) ---
             if props.content_type == ContentType::Image {
                 buttons.push((
                     "\u{e626}",
@@ -127,7 +127,7 @@ impl RenderOnce for HoverToolbar {
                 ));
             }
 
-            // QR code (image with QR code)
+            // --- QR code (image with QR code) ---
             if props.content_type == ContentType::Image && props.has_qr_code {
                 buttons.push((
                     "\u{e605}",
@@ -136,7 +136,7 @@ impl RenderOnce for HoverToolbar {
                 ));
             }
 
-            // Open location (link / path / file)
+            // --- Open location (link / path / file) ---
             if props.content_type == ContentType::Link
                 || props.content_type == ContentType::Path
                 || props.content_type == ContentType::File
@@ -148,7 +148,7 @@ impl RenderOnce for HoverToolbar {
                 ));
             }
 
-            // Edit (not image or file)
+            // --- Edit (not image or file) ---
             if props.content_type != ContentType::Image && props.content_type != ContentType::File {
                 buttons.push((
                     "\u{e648}",
@@ -164,7 +164,7 @@ impl RenderOnce for HoverToolbar {
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
-            // Favorite (icon changes based on state)
+            // --- Favorite (icon changes based on state) ---
             let fav_icon = if props.is_favorite {
                 "\u{e630}"
             } else {
@@ -176,26 +176,26 @@ impl RenderOnce for HoverToolbar {
                 Box::new(move |_hovered: bool| fav_color),
             ));
 
-            // Delete
+            // --- Delete ---
             buttons.push((
                 "\u{e8b6}",
                 "delete",
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
         } else if is_batch {
-            // Batch paste
+            // --- Batch paste ---
             buttons.push((
                 "\u{e600}",
                 "batch_paste",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
-            // Batch favorite
+            // --- Batch favorite ---
             buttons.push((
                 "\u{e630}",
                 "batch_favorite",
                 Box::new(move |_hovered: bool| fav_color),
             ));
-            // Batch delete
+            // --- Batch delete ---
             buttons.push((
                 "\u{e8b6}",
                 "batch_delete",
@@ -207,7 +207,7 @@ impl RenderOnce for HoverToolbar {
             return div();
         }
 
-        // Compute width: N buttons x 18px + (N-1) x 2px spacing + 10px padding
+        // --- Compute width: N buttons x 18px + (N-1) x 2px spacing + 10px padding ---
         let n = buttons.len();
         let content_w = (n * 18 + (n.saturating_sub(1)) * 2) as f32;
         let toolbar_w = content_w + 10.0;

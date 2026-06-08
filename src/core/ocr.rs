@@ -1,4 +1,4 @@
-//! OCR (Optical Character Recognition) module
+//! --- OCR (Optical Character Recognition) module ---
 //!
 //! Platform-agnostic trait with native implementations for Windows and macOS.
 
@@ -13,7 +13,7 @@ pub trait OcrEngine: Send {
     fn recognize(&self, image_path: &Path) -> OcrResult;
 }
 
-// ── Windows: Windows.Media.Ocr ──
+// --- ── Windows: Windows.Media.Ocr ── ---
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -84,11 +84,11 @@ mod win {
                 .get()
                 .map_err(|e| format!("OCR GetSoftwareBitmap get: {e}"))?;
 
-            // Use the original bitmap directly — Gray8 conversion loses detail
-            // on small images, hurting recognition accuracy.
+            // --- Use the original bitmap directly — Gray8 conversion loses detail ---
+            // --- on small images, hurting recognition accuracy. ---
 
-            // Language priority mirrors macOS behavior:
-            // ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"]
+            // --- Language priority mirrors macOS behavior: ---
+            // --- ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"] ---
             // Try zh-Hans first for Chinese accuracy, then user languages, then en-US
             let language_tags: &[(bool, &str)] = &[
                 (false, "zh-Hans"), // Simplified Chinese (primary)
@@ -131,7 +131,7 @@ mod win {
 #[cfg(target_os = "windows")]
 pub use win::WindowsOcrEngine;
 
-// ── macOS: Apple Vision Framework via native ObjC helper ──
+// --- ── macOS: Apple Vision Framework via native ObjC helper ── ---
 ///
 /// Uses a small Objective-C helper (ocr_helper.m) compiled into the binary
 /// to avoid objc2 msg_send! type-encoding issues with CGImageRef etc.
@@ -172,7 +172,7 @@ mod mac {
 #[cfg(target_os = "macos")]
 pub use mac::AppleVisionOcrEngine;
 
-// ── Stub (Linux / unsupported) ──
+// --- ── Stub (Linux / unsupported) ── ---
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod stub {

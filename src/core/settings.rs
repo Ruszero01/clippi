@@ -1,4 +1,4 @@
-//! Settings persistence - loads and saves app settings
+//! --- Settings persistence - loads and saves app settings ---
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -36,7 +36,7 @@ pub struct BackendConfig {
     pub last_tag_count: u32,
     #[serde(default)]
     pub sync_interval_secs: Option<u64>, // None = use global default
-    // WebDAV fields
+    // --- WebDAV fields ---
     #[serde(default)]
     pub webdav_url: String,
     #[serde(default)]
@@ -52,7 +52,7 @@ pub struct AppSettings {
     pub auto_start: bool,
     pub auto_hide: bool,
     pub db_path: String,
-    pub sort_by_created: bool, // true=按创建时间排序, false=按更新时间排序
+    pub sort_by_created: bool, // true=sort by creation time, false=sort by update time
     pub window_position_mode: String, // "center" | "follow" | "remember"
     pub saved_window_x: i32,
     pub saved_window_y: i32,
@@ -62,44 +62,44 @@ pub struct AppSettings {
     #[serde(default)]
     pub show_source_app: bool,
     #[serde(default)]
-    pub auto_scroll_to_top: bool, // 每次开启窗口时自动回到列表顶部
+    pub auto_scroll_to_top: bool, // auto-scroll to top when the window opens
     #[serde(default)]
-    pub copy_as_plain_text: bool, // 复制为纯文本: 开启后丢弃格式标签
+    pub copy_as_plain_text: bool, // copy as plain text: strip formatting tags when enabled
     #[serde(default)]
-    pub show_original_on_hover: bool, // 悬停时显示原内容: 有备注时鼠标悬停显示原始内容
+    pub show_original_on_hover: bool, // show original content on hover when a note is set
     #[serde(default)]
-    pub saved_window_width: f32, // 用户调整后的窗口宽度 (0=使用默认值)
+    pub saved_window_width: f32, // user-adjusted window width (0=use default)
     #[serde(default)]
-    pub saved_window_height: f32, // 用户调整后的窗口高度 (0=使用默认值)
-    // ── Cloud sync ──
+    pub saved_window_height: f32, // user-adjusted window height (0=use default)
+    // --- ── Cloud sync ── ---
     #[serde(default)]
     pub sync_enabled: bool,
     #[serde(default)]
-    pub sync_data_dir: String, // 云同步目录路径 (OneDrive/iCloud) — deprecated, use sync_backends
+    pub sync_data_dir: String, // cloud sync directory path (OneDrive/iCloud) — deprecated, use sync_backends
     #[serde(default)]
-    pub sync_device_name: String, // 设备名 — deprecated, use sync_backends
+    pub sync_device_name: String, // device name — deprecated, use sync_backends
     #[serde(default)]
-    pub sync_last_at: String, // 上次同步时间 RFC3339 — deprecated
+    pub sync_last_at: String, // last sync time RFC3339 — deprecated
     #[serde(default = "default_sync_interval")]
-    pub sync_interval_secs: u64, // 同步间隔秒数 (默认60)
+    pub sync_interval_secs: u64, // sync interval in seconds (default 60)
     #[serde(default)]
-    pub sync_backends: Vec<BackendConfig>, // 多后端配置列表 (new)
+    pub sync_backends: Vec<BackendConfig>, // multi-backend config list (new)
     #[serde(default)]
-    pub sync_auto_enabled: bool, // 自动同步开关 (dirty + interval)
+    pub sync_auto_enabled: bool, // auto-sync toggle (dirty flag + interval)
     #[serde(default)]
-    pub sync_favorites_only: bool, // 仅同步收藏的条目
+    pub sync_favorites_only: bool, // only sync favorited items
     #[serde(default)]
-    pub max_items: u32, // 最大保存条目数 (0=不限制, 默认0)
+    pub max_items: u32, // max saved items (0=unlimited, default 0)
     #[serde(default)]
-    pub hotkey_blacklist: Vec<String>, // 快捷键黑名单应用名列表
+    pub hotkey_blacklist: Vec<String>, // hotkey blacklist app name list
     #[serde(default)]
     pub language: String, // "zh_CN" or "en", empty = follow system
     #[serde(default)]
-    pub pinned_tag_ids: Vec<i64>, // 固定在侧边栏的标签 ID
+    pub pinned_tag_ids: Vec<i64>, // tag IDs pinned to sidebar
     #[serde(default = "default_ocr_enabled")]
-    pub ocr_enabled: bool, // 图片OCR自动识别开关
+    pub ocr_enabled: bool, // image OCR auto-detection toggle
     #[serde(default = "default_qr_enabled")]
-    pub qr_enabled: bool, // 图片QR自动识别开关
+    pub qr_enabled: bool, // image QR auto-detection toggle
 }
 
 fn default_qr_enabled() -> bool {
@@ -176,7 +176,7 @@ impl AppSettings {
         } else {
             Self::default()
         };
-        // Migrate old flat sync fields → BackendConfig list
+        // --- Migrate old flat sync fields → BackendConfig list ---
         settings.migrate_sync_fields();
         settings
     }
@@ -206,12 +206,12 @@ impl AppSettings {
                 webdav_username: String::new(),
                 webdav_password: String::new(),
             });
-            // Clear old fields
+            // --- Clear old fields ---
             self.sync_enabled = false;
             self.sync_data_dir.clear();
             self.sync_device_name.clear();
             self.sync_last_at.clear();
-            // Save migrated state
+            // --- Save migrated state ---
             self.save();
         }
     }
@@ -281,7 +281,7 @@ pub fn detect_system_language() -> String {
     }
     #[cfg(target_os = "macos")]
     {
-        // Safety: ensure we're on the main thread before calling currentLocale
+        // --- Safety: ensure we're on the main thread before calling currentLocale ---
         if objc2::MainThreadMarker::new().is_none() {
             return "en".to_string();
         }

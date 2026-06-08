@@ -1,7 +1,7 @@
-//! GPUI sync service.
+//! --- GPUI sync service. ---
 //!
-//! Keeps blocking backend work off the GPUI thread and publishes compact
-//! snapshots into `AppState` from the unified WindowManager poll loop.
+//! --- Keeps blocking backend work off the GPUI thread and publishes compact ---
+//! --- snapshots into `AppState` from the unified WindowManager poll loop. ---
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

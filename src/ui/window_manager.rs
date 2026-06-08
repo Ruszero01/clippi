@@ -1,7 +1,7 @@
-﻿//! Window manager 鈥?unified window state, positioning, and poll loop.
+//! Window manager — unified window state, positioning, and poll loop.
 //!
-//! Owns the window lifecycle: show/hide, activate, position calculation,
-//! auto-hide on focus loss, and hotkey-triggered show. Replaces the
+//! --- Owns the window lifecycle: show/hide, activate, position calculation, ---
+//! --- auto-hide on focus loss, and hotkey-triggered show. Replaces the ---
 //! Slint-era `Frontend` + `FocusService` + `HotkeyService` + `Looper` combo.
 
 use std::sync::{Arc, Mutex};
@@ -34,10 +34,10 @@ pub enum WindowManagerEvent {
     ClipboardChanged,
     /// Pin state changed (unpinned on hotkey show, or toggled by titlebar).
     PinnedChanged(bool),
-    /// Tray menu "Settings" clicked 鈥?switch to settings view.
+    /// Tray menu "Settings" clicked — switch to settings view.
     /// TODO: Implement when settings panel GPUI migration is complete.
     OpenSettings,
-    /// Hotkey recording completed (success or error) 鈥?RootView should
+    /// Hotkey recording completed (success or error) — RootView should
     /// notify SettingsPanel to re-render with updated hotkey / recording state.
     HotkeyRecordingComplete,
     /// Sync backend status or settings changed.
@@ -50,39 +50,39 @@ pub enum WindowManagerEvent {
 /// in `main.rs` and stored as an `Entity<WindowManager>`. RootView
 /// subscribes to clipboard and pin events.
 pub struct WindowManager {
-    // 鈹€鈹€ Window state 鈹€鈹€
+    // --- Window state ---
     position_mode: PositionMode,
     pinned: bool,
     auto_hide: bool,
     visible: bool,
     suppress_until: Option<Instant>,
 
-    // 鈹€鈹€ Platform resources 鈹€鈹€
+    // --- Platform resources ---
     hotkey: Option<Box<dyn HotkeyListener>>,
     focus_watcher: Option<FocusWatcher>,
     foreground_app_name: ForegroundAppName,
 
-    // 鈹€鈹€ Geometry cache (physical pixels on Windows, logical on macOS) 鈹€鈹€
+    // --- Geometry cache (physical pixels on Windows, logical on macOS) ---
     saved_x: i32,
     saved_y: i32,
     saved_w: f32,
     saved_h: f32,
 
-    // 鈹€鈹€ Hotkey blacklist 鈹€鈹€
+    // --- Hotkey blacklist ---
     blacklist: Vec<String>,
 
-    // 鈹€鈹€ Dependencies 鈹€鈹€
+    // --- Dependencies ---
     state: Entity<AppState>,
     clipboard_service: GpuiClipboardService,
     sync_service: GpuiSyncService,
 
-    // 鈹€鈹€ Raw window handle (HWND on Windows) 鈹€鈹€
+    // --- Raw window handle (HWND on Windows) ---
     #[allow(dead_code)]
     hwnd: isize,
-    // 鈹€鈹€ 绯荤粺鎵樼洏 鈹€鈹€
+    // --- System tray ---
     tray: Option<TrayManager>,
 
-    // 鈹€鈹€ Poll task 鈹€鈹€
+    // --- Poll task ---
     _poll_task: Option<Task<()>>,
 }
 
@@ -93,7 +93,7 @@ impl WindowManager {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let settings = state.read(cx).settings.clone();
 
-        // 鈹€鈹€ Initialize hotkey listener 鈹€鈹€
+        // --- Initialize hotkey listener ---
         let hotkey = match create_hotkey_listener(&settings.hotkey) {
             Ok(hk) => Some(hk),
             Err(e) => {
@@ -102,7 +102,7 @@ impl WindowManager {
             }
         };
 
-        // 鈹€鈹€ Initialize focus watcher 鈹€鈹€
+        // --- Initialize focus watcher ---
         let focus_watcher = match start_focus_watcher() {
             Ok(fw) => Some(fw),
             Err(e) => {
@@ -116,7 +116,7 @@ impl WindowManager {
         let clipboard_service = GpuiClipboardService::new();
         let sync_service = GpuiSyncService::new(&settings, state.read(cx).sync_dirty.clone());
 
-        // 鈹€鈹€ Initialize tray 鈹€鈹€
+        // --- Initialize tray ---
         let tray = Some(TrayManager::new());
 
         let mut wm = Self {
@@ -141,25 +141,25 @@ impl WindowManager {
             _poll_task: None,
         };
 
-        // Share the batch_pasting flag with AppState so it can suppress
-        // clipboard recording during batch paste operations.
+        // --- Share the batch_pasting flag with AppState so it can suppress ---
+        // --- clipboard recording during batch paste operations. ---
         let batch_pasting = wm.clipboard_service.batch_pasting();
-        // Share the skip_next flag 鈥?used for one-shot internal clipboard
-        // writes (OCR paste, re-copy) that should be consumed by the
-        // listener without creating a new history entry.
+        // Share the skip_next flag — used for one-shot internal clipboard
+        // --- writes (OCR paste, re-copy) that should be consumed by the ---
+        // --- listener without creating a new history entry. ---
         let skip_next = wm.clipboard_service.skip_next();
         wm.state.update(cx, |s, _cx| {
             s.batch_pasting = batch_pasting;
             s.skip_next = skip_next;
         });
 
-        // Start the unified poll loop
+        // --- Start the unified poll loop ---
         wm.start_poll_loop(cx);
 
         wm
     }
 
-    // 鈹€鈹€ Poll loop 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Poll loop ---
 
     fn start_poll_loop(&mut self, cx: &mut Context<Self>) {
         self._poll_task = Some(cx.spawn(async move |weak_self, cx| loop {
@@ -177,28 +177,28 @@ impl WindowManager {
     }
 
     fn poll(&mut self, cx: &mut Context<Self>) {
-        // 1. Hotkey press -> show window
+        // --- 1. Hotkey press -> show window ---
         self.poll_hotkey(cx);
 
-        // 2. Hotkey recording 鈥?check for completion
+        // 2. Hotkey recording — check for completion
         self.poll_recording(cx);
 
-        // 3. Hotkey blacklist 鈥?dynamic register/unregister
+        // --- 3. Hotkey blacklist — dynamic register/unregister ---
         self.poll_blacklist();
 
-        // 4. Clipboard changes -> update state + notify
+        // --- 4. Clipboard changes -> update state + notify ---
         self.poll_clipboard(cx);
 
         // 5. Focus / auto-hide logic (also updates foreground app info in AppState)
         self.poll_focus(cx);
 
-        // 6. Tray events
+        // --- 6. Tray events ---
         self.poll_tray(cx);
 
         // 7. Capture window geometry for persistence
         self.capture_window_geometry(cx);
 
-        // 8. Cloud sync
+        // --- 8. Cloud sync ---
         self.poll_sync(cx);
     }
 
@@ -221,13 +221,13 @@ impl WindowManager {
     /// re-registered.
     fn poll_recording(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut hk) = self.hotkey {
-            // poll_recording_pressed() returns None when not recording 鈥?            // it checks the hotkey's internal is_recording flag directly,
-            // avoiding any AppState synchronization gap.
+            // poll_recording_pressed() returns None when not recording —            // it checks the hotkey's internal is_recording flag directly,
+            // --- avoiding any AppState synchronization gap. ---
             if let Some(new_hotkey) = hk.poll_recording_pressed() {
                 if !new_hotkey.is_empty() {
                     match hk.update_hotkey(&new_hotkey) {
                         Ok(()) => {
-                            // update_hotkey already registered the new hotkey.
+                            // --- update_hotkey already registered the new hotkey. ---
                             hk.finish_recording();
                             self.state.update(cx, |state, _cx| {
                                 state.settings.hotkey = new_hotkey.clone();
@@ -237,9 +237,9 @@ impl WindowManager {
                             cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
                         }
                         Err(e) => {
-                            // update_hotkey failed 鈥?the hotkey is still the
-                            // old one and unregistered. Re-register it and
-                            // show the error.
+                            // --- update_hotkey failed — the hotkey is still the ---
+                            // --- old one and unregistered. Re-register it and ---
+                            // --- show the error. ---
                             hk.finish_recording();
                             hk.register();
                             self.state.update(cx, |state, _cx| {
@@ -297,8 +297,8 @@ impl WindowManager {
 
         let is_self_fg = self.is_self_foreground();
 
-        // 鈹€鈹€ Auto-hide logic 鈹€鈹€
-        // Guard conditions: any true 鈫?skip auto-hide
+        // --- Auto-hide logic ---
+        // --- Guard conditions: any true → skip auto-hide ---
         if !self.auto_hide || self.pinned || !self.visible || self.is_suppressed() || is_self_fg {
             return;
         }
@@ -306,7 +306,7 @@ impl WindowManager {
         self.hide(cx);
     }
 
-    // 鈹€鈹€ Tray event polling 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Tray event polling ---
 
     fn poll_tray(&mut self, cx: &mut Context<Self>) {
         let action = match self.tray.as_ref() {
@@ -328,9 +328,9 @@ impl WindowManager {
                 self.do_quit(cx);
             }
             Some(TrayAction::CheckUpdate) => {
-                // Spawn on a background thread 鈥?ShellExecuteW can pump
-                // Windows messages internally (DDE/COM) and deadlock if
-                // called from the GPUI main thread event handler.
+                // --- Spawn on a background thread — ShellExecuteW can pump ---
+                // --- Windows messages internally (DDE/COM) and deadlock if ---
+                // --- called from the GPUI main thread event handler. ---
                 std::thread::spawn(|| {
                     let checker = update::UpdateChecker::new(
                         env!("CARGO_PKG_VERSION"),
@@ -386,12 +386,12 @@ impl WindowManager {
                 return;
             }
 
-            // Convert physical 鈫?logical pixels
+            // --- Convert physical → logical pixels ---
             let scale = crate::platform::monitor::get_scale_factor(rect.left, rect.top);
             let logical_w = phys_w as f32 / scale;
             let logical_h = phys_h as f32 / scale;
 
-            // Also capture the position (in physical pixels 鈥?save_geometry expects logical)
+            // Also capture the position (in physical pixels — save_geometry expects logical)
             let phys_x = rect.left;
             let phys_y = rect.top;
 
@@ -406,7 +406,7 @@ impl WindowManager {
                 self.saved_x = phys_x;
                 self.saved_y = phys_y;
 
-                // Persist to settings
+                // --- Persist to settings ---
                 self.state.update(cx, |state, _cx| {
                     let settings = &mut state.settings;
                     if self.saved_x >= 0 && self.saved_y >= 0 {
@@ -461,7 +461,7 @@ impl WindowManager {
         cx.shutdown();
     }
 
-    // 鈹€鈹€ Foreground detection 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Foreground detection ---
 
     /// Check if our own window is the current foreground window.
     /// Uses direct HWND comparison to avoid dependence on window title.
@@ -477,7 +477,7 @@ impl WindowManager {
         }
     }
 
-    // 鈹€鈹€ Foreground tracking 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Foreground tracking ---
 
     fn update_foreground_app_name(&mut self, cx: &mut Context<Self>) {
         use crate::platform::focus::get_foreground_app_info;
@@ -486,7 +486,7 @@ impl WindowManager {
             if let Ok(mut fg) = self.foreground_app_name.lock() {
                 fg.clear();
             }
-            // Keep the UI showing the last foreground app (don't clear AppState).
+            // --- Keep the UI showing the last foreground app (don't clear AppState). ---
             return;
         }
 
@@ -506,13 +506,13 @@ impl WindowManager {
         }
     }
 
-    // 鈹€鈹€ Position calculation 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Position calculation ---
 
     fn calculate_position(&self) -> Option<(i32, i32)> {
         let (win_w, win_h) = self.effective_window_size();
-        // Convert logical 鈫?physical pixels for Windows SetWindowPos.
-        // monitor::get_cursor_pos() returns physical pixels; window dimensions
-        // and sidebar offset are in logical pixels and must be scaled.
+        // Convert logical → physical pixels for Windows SetWindowPos.
+        // --- monitor::get_cursor_pos() returns physical pixels; window dimensions ---
+        // --- and sidebar offset are in logical pixels and must be scaled. ---
         let scale = monitor::get_scale_factor(0, 0);
         let win_w_phys = (win_w * scale) as i32;
         let win_h_phys = (win_h * scale) as i32;
@@ -540,7 +540,7 @@ impl WindowManager {
     fn calc_follow_mouse(&self, win_w: i32, win_h: i32, sidebar_offset: i32) -> Option<(i32, i32)> {
         let (cx, cy) = monitor::get_cursor_pos()?;
         let area = monitor::get_monitor_work_area(cx, cy)?;
-        // Offset by sidebar width so the main panel aligns with the cursor
+        // --- Offset by sidebar width so the main panel aligns with the cursor ---
         Some(clamp_to_work_area(
             cx - sidebar_offset,
             cy,
@@ -582,12 +582,12 @@ impl WindowManager {
             .unwrap_or(false)
     }
 
-    // 鈹€鈹€ Window operations (platform-specific) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Window operations (platform-specific) ---
 
     /// Show the window, calculate position, and bring it to foreground.
     ///
     /// When the window is already visible this only extends the suppress
-    /// period and brings the window to foreground 鈥?it skips repositioning
+    /// period and brings the window to foreground — it skips repositioning
     /// and item reload to avoid disrupting the current view.
     pub fn show_and_focus(&mut self, cx: &mut Context<Self>) {
         self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
@@ -596,8 +596,8 @@ impl WindowManager {
         self.visible = true;
 
         if was_already_visible {
-            // Window is already open (e.g. user is in settings recording a
-            // hotkey). Just bring to foreground without repositioning.
+            // --- Window is already open (e.g. user is in settings recording a ---
+            // --- hotkey). Just bring to foreground without repositioning. ---
             #[cfg(target_os = "windows")]
             {
                 use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
@@ -613,7 +613,7 @@ impl WindowManager {
         self.pinned = false;
         cx.emit(WindowManagerEvent::PinnedChanged(false));
 
-        // 鈹€鈹€ Reload items from DB (they were cleared on hide) 鈹€鈹€
+        // --- Reload items from DB (they were cleared on hide) ---
         self.state.update(cx, |state, _cx| state.reload_items());
         cx.emit(WindowManagerEvent::ClipboardChanged);
 
@@ -649,15 +649,15 @@ impl WindowManager {
         cx.notify();
     }
 
-    /// Hide the window to background 鈥?does NOT exit the process.
+    /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
         self.dismiss_ui(cx);
 
-        // 鈹€鈹€ Release memory: clear items list (mirrors Slint release_model_resources) 鈹€鈹€
+        //  Release memory: clear items list (mirrors Slint release_model_resources)
         self.state.update(cx, |state, _cx| state.clear_items());
         cx.emit(WindowManagerEvent::ClipboardChanged);
 
-        // 鈹€鈹€ Flush WAL and trim working set (mirrors Slint periodic maintenance) 鈹€鈹€
+        // --- Flush WAL and trim working set (mirrors Slint periodic maintenance) ---
         self.state.update(cx, |state, _cx| {
             let _ = state.db.checkpoint();
         });
@@ -669,7 +669,7 @@ impl WindowManager {
 
             let hwnd = self.hwnd as *mut std::ffi::c_void;
 
-            // Save position in Remember mode
+            // --- Save position in Remember mode ---
             if self.position_mode == PositionMode::Remember && !hwnd.is_null() {
                 use windows_sys::Win32::Foundation::POINT;
                 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
@@ -688,7 +688,7 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            // macOS: hide is handled via NSApplication
+            // --- macOS: hide is handled via NSApplication ---
         }
 
         self.visible = false;
@@ -699,11 +699,11 @@ impl WindowManager {
         self.state.update(cx, |state, _cx| {
             state.clear_selection();
         });
-        // Note: context_menu, tag_picker etc. will be handled by RootView
-        // observing WindowManager events and clearing its own state.
+        // --- Note: context_menu, tag_picker etc. will be handled by RootView ---
+        // --- observing WindowManager events and clearing its own state. ---
     }
 
-    // 鈹€鈹€ Public setters 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // --- Public setters ---
 
     /// Store the raw window handle (HWND on Windows) for platform operations.
     #[cfg(target_os = "windows")]
@@ -730,9 +730,9 @@ impl WindowManager {
 
     pub fn start_hotkey_recording(&mut self) {
         if let Some(ref mut hk) = self.hotkey {
-            // Unregister the current hotkey before recording so the old
-            // hotkey doesn't fire poll_pressed() during the recording
-            // session (which would trigger show_and_focus / reposition).
+            // --- Unregister the current hotkey before recording so the old ---
+            // --- hotkey doesn't fire poll_pressed() during the recording ---
+            // --- session (which would trigger show_and_focus / reposition). ---
             hk.unregister();
             hk.start_recording();
         }

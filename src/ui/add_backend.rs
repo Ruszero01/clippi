@@ -1,4 +1,4 @@
-﻿//! Add/edit sync backend dialog.
+//! Add/edit sync backend dialog.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;

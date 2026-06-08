@@ -1,4 +1,4 @@
-//! Core layer - pure Rust, no platform code
+//! --- Core layer - pure Rust, no platform code ---
 
 pub mod cache_cleanup;
 pub mod color;

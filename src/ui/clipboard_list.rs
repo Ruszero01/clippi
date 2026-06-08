@@ -1,7 +1,7 @@
-//! Clipboard list 鈥?variable-height virtual scrolling list.
+//! --- Clipboard list — variable-height virtual scrolling list. ---
 //!
-//! Uses `gpui_component::v_virtual_list` to efficiently render thousands
-//! of clipboard items with dynamic card heights (68鈥?28px).
+//! --- Uses `gpui_component::v_virtual_list` to efficiently render thousands ---
+//! --- of clipboard items with dynamic card heights (68— 28px). ---
 
 use std::rc::Rc;
 
@@ -49,9 +49,9 @@ pub struct ClipboardListView {
     selected_index: Option<usize>,
     anchor_index: Option<usize>,
     state: Entity<AppState>,
-    // 鈹€鈹€ Hover tracking 鈹€鈹€
+    // --- Hover tracking ---
     hovered_index: Option<usize>,
-    // 鈹€鈹€ Context menu state 鈹€鈹€
+    // --- Context menu state ---
     context_menu_visible: bool,
     context_menu_x: f32,
     context_menu_y: f32,
@@ -62,9 +62,9 @@ pub struct ClipboardListView {
     tag_picker_y: f32,
     tag_picker_item_id: i64,
     tag_picker_is_batch: bool,
-    // 鈹€鈹€ Cached selected count 鈹€鈹€
+    // --- Cached selected count ---
     pub(crate) selected_count: usize,
-    // 鈹€鈹€ Note editing state 鈹€鈹€
+    // --- Note editing state ---
     /// Which item is currently in note-edit mode (-1 = none).
     editing_note_id: i64,
     /// Shared InputState entity for the inline note editor.
@@ -220,21 +220,21 @@ impl ClipboardListView {
         let anchor = match self.anchor_index {
             Some(a) => a,
             None => {
-                // No anchor 鈥?fall back to single select
+                // --- No anchor — fall back to single select ---
                 self.select_index_without_scroll(index, cx);
                 return;
             }
         };
         self.selected_ids.clear();
         if anchor <= index {
-            // Selecting downward: anchor (top) gets #1, count goes down
+            // --- Selecting downward: anchor (top) gets #1, count goes down ---
             for i in anchor..=index {
                 if let Some(item) = self.items.get(i) {
                     self.selected_ids.push(item.id);
                 }
             }
         } else {
-            // Selecting upward: anchor (bottom) gets #1, count goes up
+            // --- Selecting upward: anchor (bottom) gets #1, count goes up ---
             for i in (index..=anchor).rev() {
                 if let Some(item) = self.items.get(i) {
                     self.selected_ids.push(item.id);
@@ -272,7 +272,7 @@ impl ClipboardListView {
         self.select_index(previous_index, scroll_strategy, cx);
     }
 
-    // 鈹€鈹€ Context menu state accessors 鈹€鈹€
+    // --- Context menu state accessors ---
 
     pub fn context_menu_visible(&self) -> bool {
         self.context_menu_visible
@@ -394,7 +394,7 @@ impl ClipboardListView {
     }
 
     /// Start editing the note for an item.
-    /// `initial_text` 鈥?from item.note (hover toolbar) or "" (context menu).
+    /// `initial_text` — from item.note (hover toolbar) or "" (context menu).
     fn start_note_edit(
         &mut self,
         id: i64,
@@ -406,7 +406,7 @@ impl ClipboardListView {
         let text = SharedString::from(initial_text.to_string());
         self.note_input.update(cx, move |input, cx| {
             input.set_value(text, window, cx);
-            // Auto-focus so user can type immediately
+            // --- Auto-focus so user can type immediately ---
             input.focus_handle(cx).focus(window);
         });
         cx.notify();
@@ -417,12 +417,12 @@ impl ClipboardListView {
         if self.editing_note_id > 0 {
             let id = self.editing_note_id;
             let text = self.note_input.read(cx).value().to_string();
-            // Persist to DB + update AppState.items (single source of truth)
+            // --- Persist to DB + update AppState.items (single source of truth) ---
             let note_text = text.clone();
             self.state.update(cx, move |state, _cx| {
                 state.update_note(id, &note_text);
             });
-            // Sync local item from AppState (avoids dual-copy drift)
+            // --- Sync local item from AppState (avoids dual-copy drift) ---
             if let Some(updated) = self.state.read(cx).items.iter().find(|it| it.id == id) {
                 if let Some(local) = self.items.iter_mut().find(|it| it.id == id) {
                     local.note = updated.note.clone();
@@ -549,7 +549,7 @@ impl ClipboardListView {
                     cx,
                 );
             }
-            // Edit panel migration is tracked separately.
+            // --- Edit panel migration is tracked separately. ---
             "edit" => {
                 if let Some(ref item) = self.context_menu_item {
                     cx.emit(ClipboardListEvent::OpenEdit(item.id));
@@ -576,7 +576,7 @@ impl ClipboardListView {
                     }
                 }
             }
-            // Batch toolbar actions
+            // --- Batch toolbar actions ---
             "batch_paste" => {
                 let ids = self.selected_ids.clone();
                 self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
@@ -587,7 +587,7 @@ impl ClipboardListView {
                         Some(item) => (item.id, item.note.clone()),
                         None => return,
                     };
-                    // Hover toolbar: pre-fill existing note
+                    // --- Hover toolbar: pre-fill existing note ---
                     self.start_note_edit(note_id, &note_text, _window, cx);
                 }
             }
@@ -640,7 +640,7 @@ impl ClipboardListView {
                     }
                 }
             }
-            // Edit panel migration is tracked separately.
+            // --- Edit panel migration is tracked separately. ---
             "edit" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
@@ -662,9 +662,9 @@ impl ClipboardListView {
             .collect();
         // Append a sentinel spacer so the last real item can scroll fully into view.
         // The render callback's `filter_map` (via `this.items.get(i)`) returns None
-        // for this out-of-bounds index, so nothing visible is painted 鈥?just empty
-        // scrollable space. This avoids inflating the last card's visual height
-        // when there are only a few items in the list.
+        // for this out-of-bounds index, so nothing visible is painted — just empty
+        // --- scrollable space. This avoids inflating the last card's visual height ---
+        // --- when there are only a few items in the list. ---
         if !sizes.is_empty() {
             sizes.push(size(px(308.), px(CLIPBOARD_BOTTOM_SCROLL_INSET)));
         }
@@ -686,8 +686,8 @@ impl Render for ClipboardListView {
 
         let empty_state = items_count == 0;
 
-        // Empty state 鈥?render a lightweight static placeholder, completely
-        // avoiding the virtual list subtree so GPUI releases its element cache.
+        // --- Empty state — render a lightweight static placeholder, completely ---
+        // --- avoiding the virtual list subtree so GPUI releases its element cache. ---
         if empty_state {
             return div()
                 .flex_1()
@@ -718,7 +718,7 @@ impl Render for ClipboardListView {
                 .into_any_element();
         }
 
-        // Normal state 鈥?virtual scrolling list
+        // --- Normal state — virtual scrolling list ---
         let list_entity = view.clone();
 
         div()
@@ -820,7 +820,7 @@ impl Render for ClipboardListView {
                                                   cx: &mut App| {
                                             focus_handle.focus(window);
                                             list_view.update(cx, move |this, cx| {
-                                                // Clicking another card while editing 鈫?commit first
+                                                // --- Clicking another card while editing → commit first ---
                                                 if this.editing_note_id > 0 {
                                                     this.commit_note_edit(cx);
                                                 }
@@ -875,8 +875,8 @@ impl Render for ClipboardListView {
                                                                     this.selected_ids.len() > 1
                                                                         && already_selected;
                                                                 if !already_selected {
-                                                                    // Right-click on
-                                                                    // unselected item 鈫?                                                                        // select it first
+                                                                    // --- Right-click on ---
+                                                                    // unselected item →                                                                        // select it first
                                                                     this.selected_ids.clear();
                                                                     this.selected_ids.push(item.id);
                                                                     this.selected_index = Some(i);
@@ -975,8 +975,8 @@ impl Render for ClipboardListView {
                                                         })
                                                     });
 
-                                                    // Editing card: no click handler 鈫?Input receives clicks directly
-                                                    // Normal card: full click handler + edit-commit check
+                                                    // --- Editing card: no click handler → Input receives clicks directly ---
+                                                    // --- Normal card: full click handler + edit-commit check ---
                                                     if editing_note_id == item_id {
                                                         card.note_input(note_input.clone())
                                                     } else {

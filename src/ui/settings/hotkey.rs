@@ -1,8 +1,8 @@
-﻿//! Hotkey settings tab 鈥?recording + blacklist management.
+//! Hotkey settings tab — recording + blacklist management.
 //!
-//! Matches the original Slint `SettingsTabHotkey.slint` layout:
-//! - Hotkey recording card (66px): label + current hotkey button
-//! - Blacklist section: foreground app info bar + scrollable blacklist
+//! --- Matches the original Slint `SettingsTabHotkey.slint` layout: ---
+//! --- - Hotkey recording card (66px): label + current hotkey button ---
+//! --- - Blacklist section: foreground app info bar + scrollable blacklist ---
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -28,7 +28,7 @@ impl SettingsPanel {
         let wm = self.window_manager.clone();
         let this = cx.entity().clone();
 
-        // Snapshot current values from AppState
+        // --- Snapshot current values from AppState ---
         let app = self.state.read(cx);
         let hotkey_display = app.settings.hotkey.clone();
         let recording = app.hotkey_recording;
@@ -36,11 +36,11 @@ impl SettingsPanel {
         let fg_window_title = app.foreground_window_title.clone();
         let _fg_icon_base64 = app.foreground_app_icon_base64.clone();
         let blacklist = app.settings.hotkey_blacklist.clone();
-        // borrow released 鈥?`app` goes out of scope here
+        // --- borrow released — `app` goes out of scope here ---
 
         let theme = &self.theme;
 
-        // Recording state colours
+        // --- Recording state colours ---
         let recording_border = if recording {
             theme.accent
         } else {
@@ -62,7 +62,7 @@ impl SettingsPanel {
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // 鈹€鈹€ 1. Hotkey recording card (66px) 鈹€鈹€
+            // --- 1. Hotkey recording card (66px) ---
             .child(
                 div()
                     .h(px(66.))
@@ -75,7 +75,7 @@ impl SettingsPanel {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    // Left: label + description
+                    // --- Left: label + description ---
                     .child(
                         div()
                             .flex()
@@ -105,7 +105,7 @@ impl SettingsPanel {
                                     .child(desc_text.to_string())
                             }),
                     )
-                    // Right: hotkey button (80脳28)
+                    // --- Right: hotkey button (80×28) ---
                     .child({
                         let state = state.clone();
                         let wm = wm.clone();
@@ -126,7 +126,7 @@ impl SettingsPanel {
                                 if recording {
                                     return;
                                 }
-                                // Start recording via WindowManager
+                                // --- Start recording via WindowManager ---
                                 wm.update(cx, |wm, _cx| {
                                     wm.start_hotkey_recording();
                                 });
@@ -144,7 +144,7 @@ impl SettingsPanel {
                             )
                     }),
             )
-            // 鈹€鈹€ 2. Blacklist section 鈹€鈹€
+            // --- 2. Blacklist section ---
             .child(
                 div()
                     .rounded(px(10.))
@@ -154,7 +154,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(0.))
-                    // 鈹€鈹€ 2a. Foreground app info bar (44px) 鈹€鈹€
+                    // --- 2a. Foreground app info bar (44px) ---
                     .child({
                         let has_app = !fg_app_name.is_empty();
                         let icon_path = if has_app {
@@ -173,7 +173,7 @@ impl SettingsPanel {
                             .flex_row()
                             .items_center()
                             .justify_between()
-                            // Left: icon + app name + window title
+                            // --- Left: icon + app name + window title ---
                             .child(
                                 div()
                                     .flex()
@@ -182,7 +182,7 @@ impl SettingsPanel {
                                     .items_center()
                                     .flex_1()
                                     .overflow_hidden()
-                                    // App icon (20脳20)
+                                    // --- App icon (20×20) ---
                                     .when(has_app, |d| {
                                         if let Some(ref path) = icon_path {
                                             d.child(
@@ -194,7 +194,7 @@ impl SettingsPanel {
                                             d
                                         }
                                     })
-                                    // App name + window title
+                                    // --- App name + window title ---
                                     .when(has_app, |d| {
                                         d.child(
                                             div()
@@ -227,7 +227,7 @@ impl SettingsPanel {
                                                 }),
                                         )
                                     })
-                                    // No foreground app
+                                    // --- No foreground app ---
                                     .when(!has_app, |d| {
                                         d.child(
                                             div()
@@ -237,7 +237,7 @@ impl SettingsPanel {
                                         )
                                     }),
                             )
-                            // Right: block button (26脳26)
+                            // --- Right: block button (26×26) ---
                             .when(has_app, |d| {
                                 let app_name = fg_app_name.clone();
                                 let this = this.clone();
@@ -270,7 +270,7 @@ impl SettingsPanel {
                                 )
                             })
                     })
-                    // 鈹€鈹€ Divider (only when blacklist is non-empty) 鈹€鈹€
+                    // --- Divider (only when blacklist is non-empty) ---
                     .when(!blacklist.is_empty(), |d| {
                         d.child(
                             div()
@@ -279,7 +279,7 @@ impl SettingsPanel {
                                 .bg(theme.divider),
                         )
                     })
-                    // 鈹€鈹€ 2b. Blacklist entries (scrollable, 160px max) 鈹€鈹€
+                    // --- 2b. Blacklist entries (scrollable, 160px max) ---
                     .when(!blacklist.is_empty(), |d| {
                         d.child(
                             div()
@@ -308,7 +308,7 @@ impl SettingsPanel {
                                         .flex_row()
                                         .items_center()
                                         .justify_between()
-                                        // Left: icon + app name
+                                        // --- Left: icon + app name ---
                                         .child(
                                             div()
                                                 .flex()
@@ -334,7 +334,7 @@ impl SettingsPanel {
                                                         .child(name.clone()),
                                                 ),
                                         )
-                                        // Right: delete button (24脳24)
+                                        // --- Right: delete button (24×24) ---
                                         .child(
                                             div()
                                                 .w(px(24.))
@@ -378,7 +378,7 @@ impl SettingsPanel {
                                 })),
                         )
                     })
-                    // 鈹€鈹€ 2c. Empty state 鈹€鈹€
+                    // --- 2c. Empty state ---
                     .when(blacklist.is_empty(), |d| {
                         d.child(
                             div()

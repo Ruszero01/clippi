@@ -1,10 +1,10 @@
-﻿//! Root view 鈥?the main window's top-level component.
+//! Root view — the main window's top-level component.
 //!
-//! Matches the original Slint `app.slint` layout:
-//! - Transparent window background
-//! - Sidebar at x=0, y=84px in the transparent margin
-//! - Main panel offset 36px from left, 12px border-radius, 1px border
-//! - Titlebar + stacked views (clipboard / settings / edit)
+//! --- Matches the original Slint `app.slint` layout: ---
+//! --- - Transparent window background ---
+//! --- - Sidebar at x=0, y=84px in the transparent margin ---
+//! --- - Main panel offset 36px from left, 12px border-radius, 1px border ---
+//! --- - Titlebar + stacked views (clipboard / settings / edit) ---
 
 use std::time::Duration;
 
@@ -54,7 +54,7 @@ pub struct RootView {
     _toast_timer: Option<Task<()>>,
     /// Timer that clears the toast after the exit animation completes.
     _toast_cleanup: Option<Task<()>>,
-    /// Animation generation counter 鈥?bumps on show/dismiss for fresh transitions.
+    /// Animation generation counter — bumps on show/dismiss for fresh transitions.
     toast_generation: u64,
     /// True while the exit animation is playing (toast still rendered but fading out).
     toast_dismissing: bool,
@@ -126,8 +126,8 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::HotkeyRecordingComplete => {
-                    // Notify SettingsPanel so it re-renders with the updated
-                    // hotkey display and recording state from AppState.
+                    // --- Notify SettingsPanel so it re-renders with the updated ---
+                    // --- hotkey display and recording state from AppState. ---
                     this.settings_panel.update(cx, |_panel, cx| {
                         cx.notify();
                     });
@@ -216,15 +216,15 @@ impl RootView {
                         cx.notify();
                     }
                     SettingsEvent::ThemeChanged(theme_str) => {
-                        // Use cached window_appearance from creation time so
-                        // "system" theme resolves correctly even though we
-                        // only have &mut App here (not WindowContext).
+                        // --- Use cached window_appearance from creation time so ---
+                        // --- "system" theme resolves correctly even though we ---
+                        // --- only have &mut App here (not WindowContext). ---
                         this.theme =
                             ClippiTheme::from_setting(theme_str, Some(this.window_appearance));
                         let theme = this.theme.clone();
 
-                        // Sync gpui_component theme so that Input, Scrollbar
-                        // and other gpui_component widgets follow our theme.
+                        // --- Sync gpui_component theme so that Input, Scrollbar ---
+                        // --- and other gpui_component widgets follow our theme. ---
                         let is_dark = theme.bg == rgb(0x191a1b);
                         gpui_component::Theme::change(
                             if is_dark {
@@ -235,8 +235,8 @@ impl RootView {
                             None,
                             cx,
                         );
-                        // Must restore transparent background after Theme::change
-                        // resets it 鈥?otherwise the window loses transparency.
+                        // --- Must restore transparent background after Theme::change ---
+                        // --- resets it — otherwise the window loses transparency. ---
                         gpui_component::Theme::global_mut(cx).background =
                             Hsla::transparent_black();
 
@@ -288,7 +288,7 @@ impl RootView {
                         this.state.update(cx, |s, _cx| {
                             s.toast_message = Some(format!(
                                 "{}: {msg}",
-                                i18n::tr("鏁版嵁鎿嶄綔澶辫触", "Data operation failed")
+                                i18n::tr("数据操作失败", "Data operation failed")
                             ));
                         });
                         cx.notify();
@@ -348,11 +348,11 @@ impl Render for RootView {
         let win_w = f32::from(viewport.width);
         let win_h = f32::from(viewport.height);
 
-        // 鈹€鈹€ Toast state machine 鈹€鈹€
-        // Enter: bump generation 鈫?new transition (0 鈫?1 opacity, slide up).
-        // Display: hold ~2.8s.
-        // Exit: same generation, update target to 0 / slide-down 鈫?smooth reverse.
-        // Cleanup: after transition completes, clear the message.
+        // --- Toast state machine ---
+        // --- Enter: bump generation → new transition (0 → 1 opacity, slide up). ---
+        // --- Display: hold ~2.8s. ---
+        // Exit: same generation, update target to 0 / slide-down → smooth reverse.
+        // --- Cleanup: after transition completes, clear the message. ---
         {
             let has_toast = self.state.read(cx).toast_message.is_some();
             if has_toast && !self.toast_dismissing && self._toast_timer.is_none() {
@@ -365,13 +365,13 @@ impl Render for RootView {
                         Timer::after(show_duration).await;
                         if let Some(this) = weak_self.upgrade() {
                             let _ = this.update(cx, |root, root_cx| {
-                                // Start exit animation 鈥?same generation so the
-                                // transition smoothly reverses from its current value.
+                                // --- Start exit animation — same generation so the ---
+                                // --- transition smoothly reverses from its current value. ---
                                 root.toast_dismissing = true;
                                 root_cx.notify();
                             });
-                            // Cleanup after the exit transition finishes, plus a
-                            // small grace period so the visual zero point is stable.
+                            // --- Cleanup after the exit transition finishes, plus a ---
+                            // --- small grace period so the visual zero point is stable. ---
                             Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
                             if let Some(this) = weak_self.upgrade() {
                                 let _ = this.update(cx, |root, root_cx| {
@@ -414,9 +414,9 @@ impl Render for RootView {
                     .when(is_settings, |panel| panel.child(settings_panel))
                     .when(is_edit, |panel| panel.child(edit_panel)),
             )
-            // Tag filter panel 鈥?ConfirmDialog pattern:
-            // full-screen backdrop that closes on click outside,
-            // panel positioned top-right, occlude prevents click-through.
+            // --- Tag filter panel — ConfirmDialog pattern: ---
+            // --- full-screen backdrop that closes on click outside, ---
+            // --- panel positioned top-right, occlude prevents click-through. ---
             .when(tag_panel_open && is_clipboard, |root| {
                 let search_for_backdrop = search_bar.clone();
                 root.child(
@@ -437,7 +437,7 @@ impl Render for RootView {
                         ),
                 )
             })
-            // Tag edit overlay 鈥?centered in main panel area (left:36px)
+            // --- Tag edit overlay — centered in main panel area (left:36px) ---
             .when(
                 {
                     let app_state = self.state.read(cx);
@@ -513,7 +513,7 @@ impl Render for RootView {
                     let is_batch = list.read(cx).context_menu_is_batch();
                     let item = list.read(cx).context_menu_item().cloned();
 
-                    // Backdrop 鈥?click to dismiss
+                    // --- Backdrop — click to dismiss ---
                     root.child(
                         div()
                             .absolute()
@@ -643,7 +643,7 @@ impl Render for RootView {
                     let list = self.list_view.clone();
                     let app_state = self.state.clone();
 
-                    // Read dialog state and clone what we need before closures
+                    // --- Read dialog state and clone what we need before closures ---
                     let dialog = list.read(cx).confirm_dialog_state().cloned();
                     let dialog_element: AnyElement = match dialog {
                         Some(ConfirmDialogState::DeleteSingle { id }) => {
@@ -706,7 +706,7 @@ impl Render for RootView {
                     )
                 },
             )
-            // 鈹€鈹€ Settings hotkey blacklist ConfirmDialog 鈹€鈹€
+            // --- Settings hotkey blacklist ConfirmDialog ---
             .when(
                 is_settings && self.settings_panel.read(cx).hotkey_confirm.is_some(),
                 |root| {
@@ -732,7 +732,7 @@ impl Render for RootView {
                                                 s.settings.save();
                                             }
                                         });
-                                        // Sync WindowManager's blacklist from settings
+                                        // --- Sync WindowManager's blacklist from settings ---
                                         let updated =
                                             app_state.read(cx).settings.hotkey_blacklist.clone();
                                         wm.update(cx, |wm, _cx| {
@@ -766,7 +766,7 @@ impl Render for RootView {
                                             s.settings.hotkey_blacklist.retain(|a| a != &app_name);
                                             s.settings.save();
                                         });
-                                        // Sync WindowManager's blacklist from settings
+                                        // --- Sync WindowManager's blacklist from settings ---
                                         let updated =
                                             app_state.read(cx).settings.hotkey_blacklist.clone();
                                         wm.update(cx, |wm, _cx| {
@@ -815,7 +815,7 @@ impl Render for RootView {
             .when(
                 {
                     let toast_visible = self.state.read(cx).toast_message.is_some();
-                    // Keep the toast rendered during the exit animation so it can fade out.
+                    // --- Keep the toast rendered during the exit animation so it can fade out. ---
                     (toast_visible || self.toast_dismissing) && is_clipboard
                 },
                 |root| {
@@ -829,7 +829,7 @@ impl Render for RootView {
                     let theme = self.theme.clone();
                     let toast_visible = self.state.read(cx).toast_message.is_some();
 
-                    // 鈹€鈹€ Animated opacity & slide 鈹€鈹€
+                    // --- Animated opacity & slide ---
                     let toast_key = self.toast_generation;
                     let opacity_target: f32 = if toast_visible && !self.toast_dismissing {
                         1.0

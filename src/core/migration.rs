@@ -14,9 +14,9 @@
 //!
 //! ## Adding a new sync protocol version
 //!
-//! 1. Bump `SYNC_VERSION`
-//! 2. Add a `SyncPayload` migration step in `migrate_sync_payload` that
-//!    transforms from the old format to the current one
+//! --- 1. Bump `SYNC_VERSION` ---
+//! --- 2. Add a `SyncPayload` migration step in `migrate_sync_payload` that ---
+//! --- transforms from the old format to the current one ---
 
 use rusqlite::Connection;
 
@@ -100,7 +100,7 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
 /// payloads from older versions.
 pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
     if payload.version < 2 {
-        // v1 → v2: SyncItem.meta_type added with #[serde(default)] — no data
+        // --- v1 → v2: SyncItem.meta_type added with #[serde(default)] — no data ---
         // transform needed since missing field defaults to "" on deserialization.
         payload.version = 2;
     }
