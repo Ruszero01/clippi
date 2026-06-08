@@ -255,6 +255,15 @@ pub fn migrate_portable_data() {
         }
     }
 
+    // Copy log file (if exists)
+    let system_log = app_data_dir().join("clippi.log");
+    let portable_log = exe_dir().join("clippi.log");
+    if system_log.exists() && !portable_log.exists() {
+        if let Err(e) = fs::copy(&system_log, &portable_log) {
+            log::warn!("Portable: failed to migrate log: {e}");
+        }
+    }
+
     // Copy images directory (recursive)
     let system_images = app_data_dir().join("images");
     let portable_images = exe_dir().join("images");
