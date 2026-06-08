@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
-use gpui_component::input::InputState;
 
 mod clipboard;
 mod general;
@@ -62,10 +61,12 @@ pub struct SettingsPanel {
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
     /// Reset-data-directory dialog state (portable mode only).
     pub reset_data_dialog: Option<ResetDataDirState>,
-    /// Input state for the max-items number input.
-    max_items_input: Option<Entity<InputState>>,
-    /// Subscription that commits max_items when the input loses focus.
-    _max_items_focus_sub: Option<gpui::Subscription>,
+    /// Whether the max-items field is in editing mode.
+    editing_max_items: bool,
+    /// Current text in the max-items editor.
+    max_items_edit_text: String,
+    /// Focus handle for detecting blur on the max-items editor.
+    max_items_focus: FocusHandle,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -75,41 +76,9 @@ impl SettingsPanel {
         state: Entity<AppState>,
         window_manager: Entity<WindowManager>,
         theme: ClippiTheme,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Create the max-items input with initial value from settings.
-        let current = state.read(cx).settings.max_items;
-        let display = if current == 0 {
-            String::new()
-        } else {
-            current.to_string()
-        };
-        let placeholder = crate::core::i18n::tr("不限制", "Unlimited");
-        let max_items_input = cx.new(|cx| {
-            gpui_component::input::InputState::new(window, cx).placeholder(placeholder)
-        });
-        max_items_input.update(cx, |input, cx| {
-            input.set_value(&display, window, cx);
-        });
-
-        // Subscribe to focus-out on the max-items input — when the user
-        // clicks away or tabs out, commit the value to settings.
-        let state_for_sub = state.clone();
-        let max_items_for_sub = max_items_input.clone();
-        let _max_items_focus_sub = {
-            let handle = max_items_input.read(cx).focus_handle(cx);
-            cx.on_focus_out(&handle, window, move |_this, _ev, _window, cx| {
-                let text = max_items_for_sub.read(cx).value().to_string();
-                let n: u32 = text.trim().parse().unwrap_or(0);
-                state_for_sub.update(cx, |s, _cx| {
-                    s.settings.max_items = n;
-                    s.settings.save();
-                });
-                cx.notify();
-            })
-        };
-
         Self {
             active_tab: 0,
             state,
@@ -119,8 +88,9 @@ impl SettingsPanel {
             toggle_states: HashMap::new(),
             hotkey_confirm: None,
             reset_data_dialog: None,
-            max_items_input: Some(max_items_input),
-            _max_items_focus_sub: Some(_max_items_focus_sub),
+            editing_max_items: false,
+            max_items_edit_text: String::new(),
+            max_items_focus: cx.focus_handle(),
         }
     }
 

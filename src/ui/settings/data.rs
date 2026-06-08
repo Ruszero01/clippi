@@ -4,7 +4,6 @@
 //! Includes the reset-data-directory dialog for portable mode.
 
 use gpui::*;
-use gpui_component::input::Input;
 
 use crate::core::i18n;
 use crate::core::settings::migrate_database;
@@ -33,16 +32,34 @@ pub struct ResetDataDirState {
 }
 
 impl SettingsPanel {
-    /// Commit the current max-items input value to settings.
-    fn commit_max_items(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref input) = self.max_items_input {
-            let text = input.read(cx).value().to_string();
-            let n: u32 = text.trim().parse().unwrap_or(0);
-            self.state.update(cx, |s, _cx| {
-                s.settings.max_items = n;
-                s.settings.save();
-            });
-        }
+    /// Enter editing mode for the max-items field.
+    fn start_edit_max_items(&mut self, cx: &mut Context<Self>) {
+        let current = self.state.read(cx).settings.max_items;
+        self.max_items_edit_text = if current == 0 {
+            String::new()
+        } else {
+            current.to_string()
+        };
+        self.editing_max_items = true;
+        cx.notify();
+    }
+
+    /// Save the max-items value and exit editing mode.
+    fn save_max_items(&mut self, cx: &mut Context<Self>) {
+        let n: u32 = self.max_items_edit_text.trim().parse().unwrap_or(0);
+        self.state.update(cx, |s, _cx| {
+            s.settings.max_items = n;
+            s.settings.save();
+        });
+        self.editing_max_items = false;
+        self.max_items_edit_text.clear();
+        cx.notify();
+    }
+
+    /// Cancel editing without saving.
+    fn cancel_edit_max_items(&mut self, cx: &mut Context<Self>) {
+        self.editing_max_items = false;
+        self.max_items_edit_text.clear();
         cx.notify();
     }
 
@@ -299,45 +316,105 @@ impl SettingsPanel {
                                     )),
                             ),
                     )
-                    // Right: editable number input (80x28)
+                    // Right: max-items value (button / editor)
                     .child({
-                        let this2 = this.clone();
-                        div()
-                            .w(px(80.))
-                            .h(px(28.))
-                            .rounded(px(7.))
-                            .bg(input_bg)
-                            .border(px(1.))
-                            .border_color(divider)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .px(px(4.))
-                            // Handle Enter key to save the value.
-                            .on_key_down({
-                                move |ev: &KeyDownEvent, _window, cx| {
-                                    if ev.keystroke.key.as_str() == "enter" {
+                        let this = this.clone();
+                        let editing = self.editing_max_items;
+
+                        if editing {
+                            // ── Editing state: keyboard-capturing text display ──
+                            let focus_handle = self.max_items_focus.clone();
+                            let edit_text = self.max_items_edit_text.clone();
+                            let display = if edit_text.is_empty() {
+                                "0".to_string()
+                            } else {
+                                edit_text.clone()
+                            };
+
+                            div()
+                                .w(px(80.))
+                                .h(px(28.))
+                                .rounded(px(7.))
+                                .bg(input_bg)
+                                .border(px(1.))
+                                .border_color(self.theme.accent)
+                                .px(px(6.))
+                                .flex()
+                                .items_center()
+                                .track_focus(&focus_handle)
+                                .on_key_down({
+                                    let this = this.clone();
+                                    move |ev: &KeyDownEvent, _window, cx| {
+                                        match ev.keystroke.key.as_str() {
+                                            "enter" => {
+                                                cx.stop_propagation();
+                                                let _ = this.update(cx, |panel, cx| {
+                                                    panel.save_max_items(cx);
+                                                });
+                                            }
+                                            "escape" => {
+                                                cx.stop_propagation();
+                                                let _ = this.update(cx, |panel, cx| {
+                                                    panel.cancel_edit_max_items(cx);
+                                                });
+                                            }
+                                            "backspace" => {
+                                                let _ = this.update(cx, |panel, cx| {
+                                                    panel.max_items_edit_text.pop();
+                                                    cx.notify();
+                                                });
+                                            }
+                                            key if key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) => {
+                                                let _ = this.update(cx, |panel, cx| {
+                                                    panel.max_items_edit_text.push_str(key);
+                                                    cx.notify();
+                                                });
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(text_1)
+                                        .child(display),
+                                )
+                        } else {
+                            // ── Normal state: clickable button ──
+                            let val = self.state.read(cx).settings.max_items;
+                            let label = if val == 0 {
+                                i18n::tr("不限制", "Unlimited").to_string()
+                            } else {
+                                val.to_string()
+                            };
+                            div()
+                                .w(px(80.))
+                                .h(px(28.))
+                                .rounded(px(7.))
+                                .bg(input_bg)
+                                .border(px(1.))
+                                .border_color(divider)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, {
+                                    let this = this.clone();
+                                    move |_ev, _window, cx| {
                                         cx.stop_propagation();
-                                        let _ = this2.update(cx, |panel, cx| {
-                                            panel.commit_max_items(cx);
+                                        let _ = this.update(cx, |panel, cx| {
+                                            panel.start_edit_max_items(cx);
                                         });
                                     }
-                                }
-                            })
-                            .child(
-                                Input::new(
-                                    self.max_items_input
-                                        .as_ref()
-                                        .expect("max_items_input created in constructor"),
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(if val == 0 { text_3 } else { text_1 })
+                                        .child(label),
                                 )
-                                .appearance(false)
-                                .bordered(false)
-                                .focus_bordered(false)
-                                .w_full()
-                                .h(px(20.))
-                                .text_size(px(12.))
-                                .text_color(text_1),
-                            )
+                        }
                     })
             })
     }
