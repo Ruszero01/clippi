@@ -62,8 +62,10 @@ pub struct SettingsPanel {
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
     /// Reset-data-directory dialog state (portable mode only).
     pub reset_data_dialog: Option<ResetDataDirState>,
-    /// Input state for the max-items number input (lazy-created).
+    /// Input state for the max-items number input.
     max_items_input: Option<Entity<InputState>>,
+    /// Subscription that commits max_items when the input loses focus.
+    _max_items_focus_sub: Option<gpui::Subscription>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -91,6 +93,23 @@ impl SettingsPanel {
             input.set_value(&display, window, cx);
         });
 
+        // Subscribe to focus-out on the max-items input — when the user
+        // clicks away or tabs out, commit the value to settings.
+        let state_for_sub = state.clone();
+        let max_items_for_sub = max_items_input.clone();
+        let _max_items_focus_sub = {
+            let handle = max_items_input.read(cx).focus_handle(cx);
+            cx.on_focus_out(&handle, window, move |_this, _ev, _window, cx| {
+                let text = max_items_for_sub.read(cx).value().to_string();
+                let n: u32 = text.trim().parse().unwrap_or(0);
+                state_for_sub.update(cx, |s, _cx| {
+                    s.settings.max_items = n;
+                    s.settings.save();
+                });
+                cx.notify();
+            })
+        };
+
         Self {
             active_tab: 0,
             state,
@@ -101,6 +120,7 @@ impl SettingsPanel {
             hotkey_confirm: None,
             reset_data_dialog: None,
             max_items_input: Some(max_items_input),
+            _max_items_focus_sub: Some(_max_items_focus_sub),
         }
     }
 

@@ -61,18 +61,11 @@ impl SettingsPanel {
         let db_path_str = db_path_display.to_string_lossy().to_string();
         // borrow released
 
-        let this2 = this.clone();
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // Click on background (outside input) → commit max items value.
-            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                let _ = this2.update(cx, |panel, cx| {
-                    panel.commit_max_items(cx);
-                });
-            })
             // ── Database path row (76px, sub-row layout) ──
             .child({
                 let state = state.clone();
@@ -320,11 +313,6 @@ impl SettingsPanel {
                             .items_center()
                             .justify_center()
                             .px(px(4.))
-                            // Stop propagation so clicks inside the input
-                            // don't trigger the background save handler.
-                            .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
-                                cx.stop_propagation();
-                            })
                             // Handle Enter key to save the value.
                             .on_key_down({
                                 move |ev: &KeyDownEvent, _window, cx| {
