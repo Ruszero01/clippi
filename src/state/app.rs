@@ -35,8 +35,6 @@ pub struct AppState {
     pub filters: ClipboardFilters,
     /// Currently selected item IDs (for batch operations)
     pub selected_ids: Vec<i64>,
-    /// Whether the main window is visible
-    pub window_visible: bool,
     /// Tag editing state for TagFilterPanel overlay
     pub editing_tag_id: i64,
     pub editing_tag_name: String,
@@ -89,6 +87,7 @@ impl AppState {
         };
         let db = Database::open(&db_path.to_string_lossy())
             .unwrap_or_else(|e| panic!("Failed to open database at {db_path:?}: {e}"));
+        crate::core::cache_cleanup::cleanup_unused_cache(&db);
 
         let items = db
             .load_filtered_with_tags(&ClipboardFilters::default(), query_limit, order_by)
@@ -111,7 +110,6 @@ impl AppState {
             tags,
             filters: ClipboardFilters::default(),
             selected_ids: Vec::new(),
-            window_visible: false,
             editing_tag_id: -1,
             editing_tag_name: String::new(),
             editing_tag_color: "#3B82F6".into(),
@@ -221,15 +219,6 @@ impl AppState {
         match self.db.get_all_tags() {
             Ok(tags) => self.tags = tags,
             Err(e) => log::error!("Failed to reload tags: {e}"),
-        }
-    }
-
-    /// Toggle selection of an item by ID (Ctrl+click).
-    pub fn toggle_selection(&mut self, id: i64) {
-        if let Some(pos) = self.selected_ids.iter().position(|&x| x == id) {
-            self.selected_ids.remove(pos);
-        } else {
-            self.selected_ids.push(id);
         }
     }
 
@@ -485,15 +474,13 @@ impl AppState {
         };
 
         match item.content_type {
-            ContentType::Link | ContentType::Path => {
-                if !item.full_text.is_empty() {
-                    let text = item.full_text.clone();
-                    // Spawn on a background thread to avoid ShellExecuteW
-                    // deadlock on the GPUI main thread (DDE/COM message pumping).
-                    std::thread::spawn(move || {
-                        open_system_target(&text);
-                    });
-                }
+            ContentType::Link | ContentType::Path if !item.full_text.is_empty() => {
+                let text = item.full_text.clone();
+                // Spawn on a background thread to avoid ShellExecuteW
+                // deadlock on the GPUI main thread (DDE/COM message pumping).
+                std::thread::spawn(move || {
+                    open_system_target(&text);
+                });
             }
             ContentType::File => {
                 let file_data = FileData::from_json(&item.file_data);
@@ -859,12 +846,19 @@ impl AppState {
         let needs_full_refresh = self.filters.is_favorites_active();
 
         // Read current state before toggling (needed for tombstone direction)
-        let was_fav = self
-            .db
-            .get_by_id(id)
-            .ok()
-            .flatten()
-            .is_some_and(|item| item.is_favorite);
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("toggle_favorite({id}): item not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("toggle_favorite({id}): {e}");
+                return;
+            }
+        };
+        let was_fav = item.is_favorite;
+        let hash = item.content_hash;
 
         if let Err(e) = self.db.toggle_favorite(id) {
             log::error!("toggle_favorite({id}): {e}");
@@ -874,19 +868,15 @@ impl AppState {
         // Tombstone management
         if was_fav {
             // Was favorited, now unfavorited — record tombstone
-            if let Ok(Some(item)) = self.db.get_by_id(id) {
-                let now = chrono::Utc::now().to_rfc3339();
-                let device = crate::services::backends::local_folder::hostname();
-                if let Err(e) = self.db.record_unfavorite(item.content_hash, &now, &device) {
-                    log::error!("record_unfavorite({}): {e}", item.content_hash);
-                }
+            let now = chrono::Utc::now().to_rfc3339();
+            let device = crate::services::backends::local_folder::hostname();
+            if let Err(e) = self.db.record_unfavorite(hash, &now, &device) {
+                log::error!("record_unfavorite({hash}): {e}");
             }
         } else {
             // Was unfavorited, now favorited — remove tombstone
-            if let Ok(Some(item)) = self.db.get_by_id(id) {
-                if let Err(e) = self.db.remove_unfavorite(item.content_hash) {
-                    log::error!("remove_unfavorite({}): {e}", item.content_hash);
-                }
+            if let Err(e) = self.db.remove_unfavorite(hash) {
+                log::error!("remove_unfavorite({hash}): {e}");
             }
         }
 
@@ -947,15 +937,23 @@ impl AppState {
         let needs_full_refresh = self.filters.is_favorites_active();
         let now = chrono::Utc::now().to_rfc3339();
         let device = crate::services::backends::local_folder::hostname();
+        let updated_at = chrono::Utc::now();
 
         let ids: Vec<i64> = self.selected_ids.clone();
         for &id in &ids {
-            let was_fav = self
-                .db
-                .get_by_id(id)
-                .ok()
-                .flatten()
-                .is_some_and(|item| item.is_favorite);
+            let item = match self.db.get_by_id(id) {
+                Ok(Some(item)) => item,
+                Ok(None) => {
+                    log::warn!("batch toggle_favorite({id}): item not found");
+                    continue;
+                }
+                Err(e) => {
+                    log::error!("batch get_by_id({id}): {e}");
+                    continue;
+                }
+            };
+            let was_fav = item.is_favorite;
+            let hash = item.content_hash;
 
             if let Err(e) = self.db.toggle_favorite(id) {
                 log::error!("batch toggle_favorite({id}): {e}");
@@ -963,21 +961,13 @@ impl AppState {
             }
 
             if was_fav {
-                if let Ok(Some(item)) = self.db.get_by_id(id) {
-                    if let Err(e) = self.db.record_unfavorite(item.content_hash, &now, &device) {
-                        log::error!("batch record_unfavorite({}): {e}", item.content_hash);
-                    }
+                if let Err(e) = self.db.record_unfavorite(hash, &now, &device) {
+                    log::error!("batch record_unfavorite({hash}): {e}");
                 }
-            } else {
-                if let Ok(Some(item)) = self.db.get_by_id(id) {
-                    if let Err(e) = self.db.remove_unfavorite(item.content_hash) {
-                        log::error!("batch remove_unfavorite({}): {e}", item.content_hash);
-                    }
-                }
+            } else if let Err(e) = self.db.remove_unfavorite(hash) {
+                log::error!("batch remove_unfavorite({hash}): {e}");
             }
         }
-
-        self.sync_dirty.store(true, Ordering::SeqCst);
 
         if needs_full_refresh {
             self.reload_items();
@@ -987,10 +977,12 @@ impl AppState {
             for id in &ids {
                 if let Some(item) = self.items.iter_mut().find(|it| &it.id == id) {
                     item.is_favorite = !item.is_favorite;
-                    item.updated_at = chrono::Utc::now();
+                    item.updated_at = updated_at;
                 }
             }
         }
+
+        self.sync_dirty.store(true, Ordering::SeqCst);
     }
 
     /// Batch delete all selected items.
@@ -999,14 +991,14 @@ impl AppState {
         let now = chrono::Utc::now().to_rfc3339();
         let device = crate::services::backends::local_folder::hostname();
 
-        // Collect hashes before deleting
+        // Collect hashes only after the corresponding DB deletion succeeds.
         let mut hashes: Vec<u64> = Vec::with_capacity(self.selected_ids.len());
         for &id in &self.selected_ids {
             if let Ok(Some(item)) = self.db.get_by_id(id) {
-                hashes.push(item.content_hash);
-            }
-            if let Err(e) = self.db.delete_item(id) {
-                log::error!("batch delete_item({id}): {e}");
+                match self.db.delete_item(id) {
+                    Ok(_) => hashes.push(item.content_hash),
+                    Err(e) => log::error!("batch delete_item({id}): {e}"),
+                }
             }
         }
 

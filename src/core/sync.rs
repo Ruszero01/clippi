@@ -8,13 +8,6 @@ use crate::core::db::Database;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
-/// Backend transport type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum BackendType {
-    LocalFolder,
-    WebDAV,
-}
-
 /// Connection / health status of a backend.
 #[derive(Debug, Clone)]
 pub enum BackendStatus {
@@ -29,9 +22,7 @@ pub enum BackendStatus {
 /// (local folder, WebDAV, etc.). The merge logic lives outside the trait
 /// and is shared across all backends.
 pub trait SyncBackend: Send + Sync {
-    fn id(&self) -> &str;
     fn name(&self) -> &str;
-    fn backend_type(&self) -> BackendType;
     fn check_status(&self) -> BackendStatus;
     /// Pull the remote payload. When `bypass_cache` is true, the backend
     /// should skip any mtime/etag optimization and always read the file.
@@ -1024,7 +1015,7 @@ mod tests {
             let db = db_mutex.lock().unwrap();
             // Simulate: item was favorited, then unfavorited
             db.set_favorite(_id, true).unwrap(); // was favorited
-            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device")
+            db.record_unfavorite(hash, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
             // Now unfavorite it (simulating toggle_favorite was_fav=true branch)
             db.set_favorite(_id, false).unwrap();
@@ -1105,7 +1096,7 @@ mod tests {
             let db = db_mutex.lock().unwrap();
             // Simulate: favorite → unfavorite → refavorite
             db.set_favorite(_id, true).unwrap();
-            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device")
+            db.record_unfavorite(hash, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
             db.set_favorite(_id, false).unwrap();
             // Now refavorite: remove tombstone
@@ -1134,7 +1125,7 @@ mod tests {
             "item a",
             1,
             true,
-            "2026-05-01T10:00:00Z",
+            "2026-06-06T10:00:00Z",
         );
         // Item B: unfavorited with tombstone (hash=2)
         insert_item(
@@ -1142,7 +1133,7 @@ mod tests {
             "item b",
             2,
             false,
-            "2026-05-01T10:00:00Z",
+            "2026-06-06T10:00:00Z",
         );
         // Item C: unfavorited without tombstone (hash=3)
         insert_item(
@@ -1150,12 +1141,12 @@ mod tests {
             "item c",
             3,
             false,
-            "2026-05-01T10:00:00Z",
+            "2026-06-06T10:00:00Z",
         );
 
         {
             let db = db.lock().unwrap();
-            db.record_unfavorite(2, "2026-05-01T10:00:00Z", "test-device")
+            db.record_unfavorite(2, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
         }
 
@@ -1181,7 +1172,7 @@ mod tests {
         let db = Database::open(":memory:").expect("open :memory:");
         {
             let db = &db;
-            db.record_unfavorite(0xDEAD, "2026-05-01T10:00:00Z", "test-device")
+            db.record_unfavorite(0xDEAD, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
         }
         let db = std::sync::Mutex::new(db);
@@ -1202,7 +1193,7 @@ mod tests {
         {
             let db = db_mutex.lock().unwrap();
             db.set_favorite(_id, true).unwrap();
-            db.record_unfavorite(hash, "2026-05-01T10:00:00Z", "test-device")
+            db.record_unfavorite(hash, "2026-06-06T10:00:00Z", "test-device")
                 .unwrap();
         }
 
@@ -1238,16 +1229,16 @@ mod tests {
     #[test]
     fn test_merge_unfavorite_applied_to_favorited_item() {
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: favorited item with hash=100, updated_at T1
+        // Local: favorited item with hash=100, updated_at T1 (older)
         insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
-        // Remote: unfavorite marker at T2 (newer)
+        // Remote: unfavorite marker at T2 (newer than local item)
         let mut remote = make_remote_payload(
             vec![],
             vec![SyncUnfavoritedItem {
                 content_hash: 100,
-                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                unfavorited_at: "2026-06-06T10:00:00Z".into(),
                 device_name: "remote-device".into(),
             }],
         );
@@ -1267,7 +1258,7 @@ mod tests {
     fn test_merge_unfavorite_ignored_when_already_unfavorited() {
         let db = Database::open(":memory:").expect("open :memory:");
         // Local: already unfavorited item
-        insert_item(&db, "unfavorited", 100, false, "2026-05-01T10:00:00Z");
+        insert_item(&db, "unfavorited", 100, false, "2026-06-06T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
         let mut remote = make_remote_payload(
@@ -1288,11 +1279,11 @@ mod tests {
     #[test]
     fn test_merge_unfavorite_older_timestamp_ignored() {
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: favorited item at T2 (newer than remote)
-        insert_item(&db, "favorited", 100, true, "2026-05-03T10:00:00Z");
+        // Local: favorited item at T2 (newer than remote — user re-favorited)
+        insert_item(&db, "favorited", 100, true, "2026-06-06T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
-        // Remote: unfavorite marker at T1 (older)
+        // Remote: unfavorite marker at T1 (older than local item)
         let mut remote = make_remote_payload(
             vec![],
             vec![SyncUnfavoritedItem {
@@ -1314,7 +1305,7 @@ mod tests {
     #[test]
     fn test_merge_own_unfavorite_ignored() {
         let db = Database::open(":memory:").expect("open :memory:");
-        insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
+        insert_item(&db, "favorited", 100, true, "2026-06-06T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
         // Remote tombstone from the SAME device
@@ -1361,7 +1352,7 @@ mod tests {
         // Simulates the "both lists" scenario: remote has item with is_favorite=false
         // AND a tombstone. Phase 2.5 should apply the unfavorite, Phase 4 should update.
         let db = Database::open(":memory:").expect("open :memory:");
-        // Local: favorited item at T1
+        // Local: favorited item at T1 (older)
         insert_item(&db, "favorited", 100, true, "2026-05-01T10:00:00Z");
         let db = std::sync::Mutex::new(db);
 
@@ -1371,7 +1362,7 @@ mod tests {
                 full_text: "favorited".into(),
                 content_hash: 100,
                 created_at: "2026-05-01T08:00:00Z".into(),
-                updated_at: "2026-05-02T10:00:00Z".into(), // T2 > T1
+                updated_at: "2026-06-06T10:00:00Z".into(), // T2 > T1 (newer)
                 rich_data: String::new(),
                 is_favorite: false,
                 note: String::new(),
@@ -1381,7 +1372,7 @@ mod tests {
             }],
             vec![SyncUnfavoritedItem {
                 content_hash: 100,
-                unfavorited_at: "2026-05-02T10:00:00Z".into(),
+                unfavorited_at: "2026-06-06T10:00:00Z".into(),
                 device_name: "remote-device".into(),
             }],
         );

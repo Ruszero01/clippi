@@ -5,7 +5,7 @@
 
 use crate::core::i18n;
 use crate::core::settings::BackendConfig;
-use crate::core::sync::{self, BackendStatus, BackendType, SyncBackend, SyncPayload};
+use crate::core::sync::{self, BackendStatus, SyncBackend, SyncPayload};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -66,16 +66,8 @@ impl LocalFolderBackend {
 }
 
 impl SyncBackend for LocalFolderBackend {
-    fn id(&self) -> &str {
-        &self.config.id
-    }
-
     fn name(&self) -> &str {
         &self.config.name
-    }
-
-    fn backend_type(&self) -> BackendType {
-        BackendType::LocalFolder
     }
 
     fn sync_interval(&self) -> u64 {

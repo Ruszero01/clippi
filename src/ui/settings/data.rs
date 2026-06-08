@@ -160,11 +160,8 @@ impl SettingsPanel {
                                             .set_file_name("clippi.db")
                                             .save_file();
                                         if let Some(new_path) = result {
-                                            let path_str =
-                                                new_path.to_string_lossy().to_string();
-                                            let old = state.read(_cx)
-                                                .settings
-                                                .resolve_db_path();
+                                            let path_str = new_path.to_string_lossy().to_string();
+                                            let old = state.read(_cx).settings.resolve_db_path();
                                             if old == new_path {
                                                 return;
                                             }
@@ -187,7 +184,7 @@ impl SettingsPanel {
                                                     _cx.shutdown();
                                                 }
                                                 Err(e) => {
-                                                    let _ = this.update(_cx, |_panel, cx| {
+                                                    this.update(_cx, |_panel, cx| {
                                                         cx.emit(SettingsEvent::DataError(e));
                                                     });
                                                 }
@@ -220,13 +217,11 @@ impl SettingsPanel {
                                     .hover(move |s| s.bg(rgba(0xffffff10)))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
                                         if crate::core::paths::is_portable_mode() {
-                                            let _ = this.update(_cx, |panel, cx| {
+                                            this.update(_cx, |panel, cx| {
                                                 panel.show_reset_data_dialog(cx);
                                             });
                                         } else {
-                                            let old = state.read(_cx)
-                                                .settings
-                                                .resolve_db_path();
+                                            let old = state.read(_cx).settings.resolve_db_path();
                                             let default_db =
                                                 crate::core::paths::resolve_db_path("");
                                             if old == default_db {
@@ -250,7 +245,7 @@ impl SettingsPanel {
                                                     _cx.shutdown();
                                                 }
                                                 Err(e) => {
-                                                    let _ = this.update(_cx, |_panel, cx| {
+                                                    this.update(_cx, |_panel, cx| {
                                                         cx.emit(SettingsEvent::DataError(e));
                                                     });
                                                 }
@@ -264,7 +259,7 @@ impl SettingsPanel {
                                             .text_color(text_3)
                                             .child(i18n::tr("重置", "Reset")),
                                     )
-                            })
+                            }),
                     )
             })
             // ── Max items row (66px, standard row) ──
@@ -303,15 +298,10 @@ impl SettingsPanel {
                                     .text_color(text_1)
                                     .child(i18n::tr("最大保存条目数", "Max items")),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(text_3)
-                                    .child(i18n::tr(
-                                        "设为 0 不限制条目数",
-                                        "Set to 0 for unlimited items",
-                                    )),
-                            ),
+                            .child(div().text_size(px(10.)).text_color(text_3).child(i18n::tr(
+                                "设为 0 不限制条目数",
+                                "Set to 0 for unlimited items",
+                            ))),
                     )
                     // Right: max-items value (button or Input)
                     .child({
@@ -344,7 +334,7 @@ impl SettingsPanel {
                                     move |ev: &KeyDownEvent, _window, cx| {
                                         if ev.keystroke.key.as_str() == "enter" {
                                             cx.stop_propagation();
-                                            let _ = this.update(cx, |panel, cx| {
+                                            this.update(cx, |panel, cx| {
                                                 panel.save_max_items(cx);
                                             });
                                         }
@@ -373,7 +363,7 @@ impl SettingsPanel {
                                     let this = this.clone();
                                     move |_ev, _window, cx| {
                                         cx.stop_propagation();
-                                        let _ = this.update(cx, |panel, cx| {
+                                        this.update(cx, |panel, cx| {
                                             panel.start_edit_max_items(_window, cx);
                                         });
                                     }
@@ -501,7 +491,7 @@ impl SettingsPanel {
                 let this = this.clone();
                 move |_ev, _window, cx| {
                     cx.stop_propagation();
-                    let _ = this.update(cx, |panel, cx| {
+                    this.update(cx, |panel, cx| {
                         panel.dismiss_reset_dialog(cx);
                     });
                 }
@@ -527,15 +517,10 @@ impl SettingsPanel {
                             .child(i18n::tr("重置数据目录", "Reset Data Directory")),
                     )
                     // Description
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(text_3)
-                            .child(i18n::tr(
-                                "选择数据库和缓存文件的存储位置：",
-                                "Choose where to store the database and cache files:",
-                            )),
-                    )
+                    .child(div().text_size(px(12.)).text_color(text_3).child(i18n::tr(
+                        "选择数据库和缓存文件的存储位置：",
+                        "Choose where to store the database and cache files:",
+                    )))
                     // Option: Portable
                     .child({
                         let selected = dialog.selected == StorageMode::Portable;
@@ -556,7 +541,7 @@ impl SettingsPanel {
                             .cursor(CursorStyle::PointingHand)
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 cx.stop_propagation();
-                                let _ = this.update(cx, |panel, cx| {
+                                this.update(cx, |panel, cx| {
                                     if let Some(ref mut d) = panel.reset_data_dialog {
                                         d.selected = StorageMode::Portable;
                                     }
@@ -600,7 +585,7 @@ impl SettingsPanel {
                             .cursor(CursorStyle::PointingHand)
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 cx.stop_propagation();
-                                let _ = this.update(cx, |panel, cx| {
+                                this.update(cx, |panel, cx| {
                                     if let Some(ref mut d) = panel.reset_data_dialog {
                                         d.selected = StorageMode::System;
                                     }
@@ -645,7 +630,7 @@ impl SettingsPanel {
                                     .hover(|s| s.bg(rgba(0xffffff10)))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         cx.stop_propagation();
-                                        let _ = this.update(cx, |panel, cx| {
+                                        this.update(cx, |panel, cx| {
                                             panel.dismiss_reset_dialog(cx);
                                         });
                                     })
@@ -668,7 +653,7 @@ impl SettingsPanel {
                                     .hover(|s| s.opacity(0.85))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         cx.stop_propagation();
-                                        let _ = this.update(cx, |panel, cx| {
+                                        this.update(cx, |panel, cx| {
                                             panel.apply_reset_data_dir(cx);
                                         });
                                     })

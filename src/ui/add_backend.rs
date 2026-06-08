@@ -1,4 +1,4 @@
-//! Add/edit sync backend dialog.
+﻿//! Add/edit sync backend dialog.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -217,7 +217,7 @@ impl AddBackendPanel {
                         {
                             let this = this.clone();
                             move |_window, cx| {
-                                let _ = this.update(cx, |panel, cx| {
+                                this.update(cx, |panel, cx| {
                                     panel.step = EditorStep::LocalFolder;
                                     cx.notify();
                                 });
@@ -233,7 +233,7 @@ impl AddBackendPanel {
                         text_1,
                         text_3,
                         move |window, cx| {
-                            let _ = this.update(cx, |panel, cx| {
+                            this.update(cx, |panel, cx| {
                                 panel.step = EditorStep::WebDav;
                                 if panel.name_input.read(cx).value().is_empty() {
                                     panel.name_input.update(cx, |input, cx| {
@@ -375,7 +375,7 @@ impl AddBackendPanel {
                                 wm.add_local_folder_backend(name, folder, cx);
                             }
                         });
-                        let _ = this.update(cx, |panel, cx| panel.close(cx));
+                        this.update(cx, |panel, cx| panel.close(cx));
                     }
                 },
             ))
@@ -422,7 +422,7 @@ impl AddBackendPanel {
                     {
                         let this = this.clone();
                         move |_window, cx| {
-                            let _ = this.update(cx, |panel, cx| {
+                            this.update(cx, |panel, cx| {
                                 panel.start_webdav_test(cx);
                             });
                         }
@@ -456,7 +456,7 @@ impl AddBackendPanel {
                                     wm.add_webdav_backend(name, url, username, password, cx);
                                 }
                             });
-                            let _ = this.update(cx, |panel, cx| panel.close(cx));
+                            this.update(cx, |panel, cx| panel.close(cx));
                         }
                     },
                 ))
@@ -489,7 +489,7 @@ impl Render for AddBackendPanel {
                 let this = this.clone();
                 move |_ev, _window, cx| {
                     cx.stop_propagation();
-                    let _ = this.update(cx, |panel, cx| panel.close(cx));
+                    this.update(cx, |panel, cx| panel.close(cx));
                 }
             })
             .child(
@@ -539,7 +539,7 @@ impl Render for AddBackendPanel {
                                                     let this = this.clone();
                                                     move |_ev, _window, cx| {
                                                         cx.stop_propagation();
-                                                        let _ = this.update(cx, |panel, cx| {
+                                                        this.update(cx, |panel, cx| {
                                                             panel.step = EditorStep::SelectType;
                                                             panel.reset_test();
                                                             cx.notify();
@@ -574,7 +574,7 @@ impl Render for AddBackendPanel {
                                         let this = this.clone();
                                         move |_ev, _window, cx| {
                                             cx.stop_propagation();
-                                            let _ = this.update(cx, |panel, cx| panel.close(cx));
+                                            this.update(cx, |panel, cx| panel.close(cx));
                                         }
                                     })
                                     .child("\u{e7b7}"),

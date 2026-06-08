@@ -6,7 +6,7 @@
 
 use crate::core::i18n;
 use crate::core::settings::BackendConfig;
-use crate::core::sync::{BackendStatus, BackendType, SyncBackend, SyncPayload};
+use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
 use base64::Engine;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -53,16 +53,8 @@ impl WebDAVBackend {
 }
 
 impl SyncBackend for WebDAVBackend {
-    fn id(&self) -> &str {
-        &self.config.id
-    }
-
     fn name(&self) -> &str {
         &self.config.name
-    }
-
-    fn backend_type(&self) -> BackendType {
-        BackendType::WebDAV
     }
 
     fn sync_interval(&self) -> u64 {

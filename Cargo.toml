@@ -55,7 +55,6 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSBundle", "NSDictionary", "NSArray", "NSThread", "NSLocale"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow", "NSEvent"] }
 core-graphics = { version = "0.25", features = ["elcapitan"] }
-# i-slint-backend-winit replaced by gpui
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"

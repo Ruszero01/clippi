@@ -1,7 +1,6 @@
 //! Frontend management — window position modes and size constants.
 //!
-//! Framework-agnostic types and helpers used by both Slint (legacy) and
-//! GPUI (current) window implementations.
+//! Framework-agnostic types and helpers used by the GPUI window implementation.
 
 use crate::platform::monitor;
 
@@ -16,7 +15,7 @@ pub const MAX_WINDOW_WIDTH: f32 = 1200.0;
 pub const MAX_WINDOW_HEIGHT: f32 = 1200.0;
 
 /// Content panel X offset from the window left edge (logical pixels).
-/// Matches the `x: 36px` panel offset in app.slint / root.rs.
+/// Matches the panel offset in `root.rs`.
 pub const PANEL_OFFSET_X: f32 = 36.0;
 
 /// Duration in milliseconds that the auto-hide suppression window lasts
@@ -39,22 +38,6 @@ impl PositionMode {
         match s {
             "follow" => Self::FollowMouse,
             "remember" => Self::Remember,
-            _ => Self::Center,
-        }
-    }
-
-    pub fn to_int(self) -> i32 {
-        match self {
-            Self::Center => 0,
-            Self::FollowMouse => 1,
-            Self::Remember => 2,
-        }
-    }
-
-    pub fn from_int(v: i32) -> Self {
-        match v {
-            1 => Self::FollowMouse,
-            2 => Self::Remember,
             _ => Self::Center,
         }
     }
@@ -85,12 +68,16 @@ pub fn clamp_to_work_area(
 /// the DEFAULT dimensions. Returns `(width, height)` in logical pixels.
 pub fn effective_window_size(settings: &crate::core::settings::AppSettings) -> (f32, f32) {
     let w = if settings.saved_window_width > 0.0 {
-        settings.saved_window_width.max(DEFAULT_WINDOW_WIDTH)
+        settings
+            .saved_window_width
+            .clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH)
     } else {
         DEFAULT_WINDOW_WIDTH
     };
     let h = if settings.saved_window_height > 0.0 {
-        settings.saved_window_height.max(DEFAULT_WINDOW_HEIGHT)
+        settings
+            .saved_window_height
+            .clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT)
     } else {
         DEFAULT_WINDOW_HEIGHT
     };

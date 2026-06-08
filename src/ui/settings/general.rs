@@ -1,8 +1,5 @@
-//! General settings tab — language, startup, theme, position.
+﻿//! General settings tab 鈥?language, startup, theme, position.
 //!
-//! Matches the original Slint `SettingsTabGeneral.slint` layout.
-//! Language selector is rendered as UI but wired as a no-op pending
-//! GPUI i18n implementation.
 
 use gpui::*;
 
@@ -29,8 +26,7 @@ impl SettingsPanel {
         let silent_start = app.settings.silent_start;
         let theme_str = app.settings.theme.clone();
         let position_mode = app.settings.window_position_mode.clone();
-        let language = app.settings.language.clone();
-        // borrow released here — `app` is a &AppState reference
+        // borrow released here 鈥?`app` is a &AppState reference
 
         // Derive display indices from string settings
         let theme_idx = match theme_str.as_str() {
@@ -43,25 +39,12 @@ impl SettingsPanel {
             "remember" => 2,
             _ => 0,
         };
-        let lang_idx: i32 = if language == "en" { 1 } else { 0 };
-
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // ── Language (placeholder — no-op callback) ──
-            .child(self.setting_row_with_options(
-                "Language",
-                "Interface language",
-                &[("zh", "\u{4e2d}\u{6587}"), ("en", "English")],
-                if lang_idx == 1 { "en" } else { "zh" },
-                {
-                    // TODO: Wire up when GPUI i18n is implemented.
-                    move |_key, _window, _cx| {}
-                },
-            ))
-            // ── Auto-start ──
+            // 鈹€鈹€ Auto-start 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -81,11 +64,11 @@ impl SettingsPanel {
                             s.settings.auto_start = new_val;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
-            // ── Auto-hide ──
+            // 鈹€鈹€ Auto-hide 鈹€鈹€
             .child({
                 let state = state.clone();
                 let wm = wm.clone();
@@ -103,11 +86,11 @@ impl SettingsPanel {
                             s.settings.auto_hide
                         });
                         wm.update(_cx, |wm, _cx| wm.set_auto_hide(new_val));
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
-            // ── Silent start ──
+            // 鈹€鈹€ Silent start 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -122,11 +105,11 @@ impl SettingsPanel {
                             s.settings.silent_start = !s.settings.silent_start;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
-            // ── Theme ──
+            // 鈹€鈹€ Theme 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -145,14 +128,14 @@ impl SettingsPanel {
                             s.settings.theme = theme_str.clone();
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(SettingsEvent::ThemeChanged(theme_str));
                             cx.notify();
                         });
                     },
                 )
             })
-            // ── Window position ──
+            // 鈹€鈹€ Window position 鈹€鈹€
             .child({
                 let state = state.clone();
                 let wm = wm.clone();
@@ -177,7 +160,7 @@ impl SettingsPanel {
                             s.settings.save();
                         });
                         wm.update(_cx, |wm, _cx| wm.set_position_mode(mode));
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })

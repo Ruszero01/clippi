@@ -1,4 +1,4 @@
-//! Hotkey settings tab — recording + blacklist management.
+﻿//! Hotkey settings tab 鈥?recording + blacklist management.
 //!
 //! Matches the original Slint `SettingsTabHotkey.slint` layout:
 //! - Hotkey recording card (66px): label + current hotkey button
@@ -36,7 +36,7 @@ impl SettingsPanel {
         let fg_window_title = app.foreground_window_title.clone();
         let _fg_icon_base64 = app.foreground_app_icon_base64.clone();
         let blacklist = app.settings.hotkey_blacklist.clone();
-        // borrow released — `app` goes out of scope here
+        // borrow released 鈥?`app` goes out of scope here
 
         let theme = &self.theme;
 
@@ -62,7 +62,7 @@ impl SettingsPanel {
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // ── 1. Hotkey recording card (66px) ──
+            // 鈹€鈹€ 1. Hotkey recording card (66px) 鈹€鈹€
             .child(
                 div()
                     .h(px(66.))
@@ -105,7 +105,7 @@ impl SettingsPanel {
                                     .child(desc_text.to_string())
                             }),
                     )
-                    // Right: hotkey button (80×28)
+                    // Right: hotkey button (80脳28)
                     .child({
                         let state = state.clone();
                         let wm = wm.clone();
@@ -133,7 +133,7 @@ impl SettingsPanel {
                                 state.update(cx, |s, _cx| {
                                     s.hotkey_recording = true;
                                 });
-                                let _ = this.update(cx, |_panel, cx| cx.notify());
+                                this.update(cx, |_panel, cx| cx.notify());
                             })
                             .child(
                                 div()
@@ -144,7 +144,7 @@ impl SettingsPanel {
                             )
                     }),
             )
-            // ── 2. Blacklist section ──
+            // 鈹€鈹€ 2. Blacklist section 鈹€鈹€
             .child(
                 div()
                     .rounded(px(10.))
@@ -154,7 +154,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(0.))
-                    // ── 2a. Foreground app info bar (44px) ──
+                    // 鈹€鈹€ 2a. Foreground app info bar (44px) 鈹€鈹€
                     .child({
                         let has_app = !fg_app_name.is_empty();
                         let icon_path = if has_app {
@@ -182,7 +182,7 @@ impl SettingsPanel {
                                     .items_center()
                                     .flex_1()
                                     .overflow_hidden()
-                                    // App icon (20×20)
+                                    // App icon (20脳20)
                                     .when(has_app, |d| {
                                         if let Some(ref path) = icon_path {
                                             d.child(
@@ -237,7 +237,7 @@ impl SettingsPanel {
                                         )
                                     }),
                             )
-                            // Right: block button (26×26)
+                            // Right: block button (26脳26)
                             .when(has_app, |d| {
                                 let app_name = fg_app_name.clone();
                                 let this = this.clone();
@@ -252,7 +252,7 @@ impl SettingsPanel {
                                         .cursor(CursorStyle::PointingHand)
                                         .hover(|style| style.bg(theme.danger).opacity(0.12))
                                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                            let _ = this.update(cx, |_panel, cx| {
+                                            this.update(cx, |_panel, cx| {
                                                 cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
                                                     HotkeyConfirmAction::Add {
                                                         app_name: app_name.clone(),
@@ -270,7 +270,7 @@ impl SettingsPanel {
                                 )
                             })
                     })
-                    // ── Divider (only when blacklist is non-empty) ──
+                    // 鈹€鈹€ Divider (only when blacklist is non-empty) 鈹€鈹€
                     .when(!blacklist.is_empty(), |d| {
                         d.child(
                             div()
@@ -279,7 +279,7 @@ impl SettingsPanel {
                                 .bg(theme.divider),
                         )
                     })
-                    // ── 2b. Blacklist entries (scrollable, 160px max) ──
+                    // 鈹€鈹€ 2b. Blacklist entries (scrollable, 160px max) 鈹€鈹€
                     .when(!blacklist.is_empty(), |d| {
                         d.child(
                             div()
@@ -334,7 +334,7 @@ impl SettingsPanel {
                                                         .child(name.clone()),
                                                 ),
                                         )
-                                        // Right: delete button (24×24)
+                                        // Right: delete button (24脳24)
                                         .child(
                                             div()
                                                 .w(px(24.))
@@ -353,7 +353,7 @@ impl SettingsPanel {
                                                         let name = name.clone();
                                                         let this = this.clone();
                                                         move |_ev, _window, cx| {
-                                                            let _ = this.update(
+                                                            this.update(
                                                                 cx,
                                                                 |_panel, cx| {
                                                                     cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
@@ -378,7 +378,7 @@ impl SettingsPanel {
                                 })),
                         )
                     })
-                    // ── 2c. Empty state ──
+                    // 鈹€鈹€ 2c. Empty state 鈹€鈹€
                     .when(blacklist.is_empty(), |d| {
                         d.child(
                             div()

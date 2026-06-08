@@ -1,4 +1,4 @@
-//! Custom titlebar — matches original Slint design (app.slint).
+﻿//! Custom titlebar 鈥?matches original Slint design (app.slint).
 //!
 //! 38px height, logo + "Clippi" app name on the left (12px, 700 weight),
 //! three icon buttons on the right (fav filter, pin, settings).
@@ -38,11 +38,6 @@ impl Titlebar {
             pinned: false,
             theme,
         }
-    }
-
-    pub fn pinned(mut self, pinned: bool) -> Self {
-        self.pinned = pinned;
-        self
     }
 
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
@@ -136,7 +131,7 @@ impl Render for Titlebar {
                                     state.items.clone()
                                 });
                                 list_view.update(cx, |list, cx| list.set_items(items, cx));
-                                let _ = fav_titlebar.update(cx, |_titlebar, cx| cx.notify());
+                                fav_titlebar.update(cx, |_titlebar, cx| cx.notify());
                             })
                             .child(
                                 div()

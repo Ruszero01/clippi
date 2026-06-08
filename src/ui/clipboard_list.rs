@@ -1,7 +1,7 @@
-//! Clipboard list — variable-height virtual scrolling list.
+//! Clipboard list 鈥?variable-height virtual scrolling list.
 //!
 //! Uses `gpui_component::v_virtual_list` to efficiently render thousands
-//! of clipboard items with dynamic card heights (68–128px).
+//! of clipboard items with dynamic card heights (68鈥?28px).
 
 use std::rc::Rc;
 
@@ -49,9 +49,9 @@ pub struct ClipboardListView {
     selected_index: Option<usize>,
     anchor_index: Option<usize>,
     state: Entity<AppState>,
-    // ── Hover tracking ──
+    // 鈹€鈹€ Hover tracking 鈹€鈹€
     hovered_index: Option<usize>,
-    // ── Context menu state ──
+    // 鈹€鈹€ Context menu state 鈹€鈹€
     context_menu_visible: bool,
     context_menu_x: f32,
     context_menu_y: f32,
@@ -62,9 +62,9 @@ pub struct ClipboardListView {
     tag_picker_y: f32,
     tag_picker_item_id: i64,
     tag_picker_is_batch: bool,
-    // ── Cached selected count ──
+    // 鈹€鈹€ Cached selected count 鈹€鈹€
     pub(crate) selected_count: usize,
-    // ── Note editing state ──
+    // 鈹€鈹€ Note editing state 鈹€鈹€
     /// Which item is currently in note-edit mode (-1 = none).
     editing_note_id: i64,
     /// Shared InputState entity for the inline note editor.
@@ -168,7 +168,7 @@ impl ClipboardListView {
         self.selected_ids.push(item_id);
         self.selected_index = Some(index);
         self.scroll_handle.scroll_to_item(index, scroll_strategy);
-        let _ = self.state.update(cx, move |state, _cx| {
+        self.state.update(cx, move |state, _cx| {
             state.select_single(item_id);
         });
         cx.notify();
@@ -184,7 +184,7 @@ impl ClipboardListView {
         self.selected_index = Some(index);
         self.anchor_index = Some(index);
         self.selected_count = 1;
-        let _ = self.state.update(cx, move |state, _cx| {
+        self.state.update(cx, move |state, _cx| {
             state.select_single(item_id);
         });
         cx.notify();
@@ -209,7 +209,7 @@ impl ClipboardListView {
         }
         self.selected_count = self.selected_ids.len();
         let selected = self.selected_ids.clone();
-        let _ = self.state.update(cx, move |state, _cx| {
+        self.state.update(cx, move |state, _cx| {
             state.range_select(&selected);
         });
         cx.notify();
@@ -220,7 +220,7 @@ impl ClipboardListView {
         let anchor = match self.anchor_index {
             Some(a) => a,
             None => {
-                // No anchor — fall back to single select
+                // No anchor 鈥?fall back to single select
                 self.select_index_without_scroll(index, cx);
                 return;
             }
@@ -244,7 +244,7 @@ impl ClipboardListView {
         self.selected_index = Some(index);
         self.selected_count = self.selected_ids.len();
         let selected = self.selected_ids.clone();
-        let _ = self.state.update(cx, move |state, _cx| {
+        self.state.update(cx, move |state, _cx| {
             state.range_select(&selected);
         });
         cx.notify();
@@ -272,7 +272,7 @@ impl ClipboardListView {
         self.select_index(previous_index, scroll_strategy, cx);
     }
 
-    // ── Context menu state accessors ──
+    // 鈹€鈹€ Context menu state accessors 鈹€鈹€
 
     pub fn context_menu_visible(&self) -> bool {
         self.context_menu_visible
@@ -394,7 +394,7 @@ impl ClipboardListView {
     }
 
     /// Start editing the note for an item.
-    /// `initial_text` — from item.note (hover toolbar) or "" (context menu).
+    /// `initial_text` 鈥?from item.note (hover toolbar) or "" (context menu).
     fn start_note_edit(
         &mut self,
         id: i64,
@@ -662,7 +662,7 @@ impl ClipboardListView {
             .collect();
         // Append a sentinel spacer so the last real item can scroll fully into view.
         // The render callback's `filter_map` (via `this.items.get(i)`) returns None
-        // for this out-of-bounds index, so nothing visible is painted — just empty
+        // for this out-of-bounds index, so nothing visible is painted 鈥?just empty
         // scrollable space. This avoids inflating the last card's visual height
         // when there are only a few items in the list.
         if !sizes.is_empty() {
@@ -686,7 +686,7 @@ impl Render for ClipboardListView {
 
         let empty_state = items_count == 0;
 
-        // Empty state — render a lightweight static placeholder, completely
+        // Empty state 鈥?render a lightweight static placeholder, completely
         // avoiding the virtual list subtree so GPUI releases its element cache.
         if empty_state {
             return div()
@@ -718,7 +718,7 @@ impl Render for ClipboardListView {
                 .into_any_element();
         }
 
-        // Normal state — virtual scrolling list
+        // Normal state 鈥?virtual scrolling list
         let list_entity = view.clone();
 
         div()
@@ -751,7 +751,7 @@ impl Render for ClipboardListView {
             .on_mouse_move({
                 let list_for_clear = list_entity.clone();
                 move |_ev, _window, cx| {
-                    let _ = list_for_clear.update(cx, |this, cx| {
+                    list_for_clear.update(cx, |this, cx| {
                         if this.hovered_index.is_some() {
                             this.hovered_index = None;
                             cx.notify();
@@ -813,12 +813,14 @@ impl Render for ClipboardListView {
                                         let focus_handle = this.focus_handle.clone();
                                         let item_clone = item.clone();
 
-                                        let click_handler: Rc<
-                                            dyn Fn(usize, Modifiers, &mut Window, &mut App),
-                                        > = Rc::new(move |idx, modifiers, window, cx| {
+                                        let click_handler = Rc::new(
+                                            move |idx: usize,
+                                                  modifiers: Modifiers,
+                                                  window: &mut Window,
+                                                  cx: &mut App| {
                                             focus_handle.focus(window);
-                                            let _ = list_view.update(cx, move |this, cx| {
-                                                // Clicking another card while editing → commit first
+                                            list_view.update(cx, move |this, cx| {
+                                                // Clicking another card while editing 鈫?commit first
                                                 if this.editing_note_id > 0 {
                                                     this.commit_note_edit(cx);
                                                 }
@@ -853,68 +855,55 @@ impl Render for ClipboardListView {
                                                 .on_mouse_move({
                                                     move |_ev, _window, cx| {
                                                         cx.stop_propagation();
-                                                        let _ = list_for_hover.update(
-                                                            cx,
-                                                            |this, cx| {
-                                                                if this.hovered_index != Some(i) {
-                                                                    this.hovered_index = Some(i);
-                                                                    cx.notify();
-                                                                }
-                                                            },
-                                                        );
+                                                        list_for_hover.update(cx, |this, cx| {
+                                                            if this.hovered_index != Some(i) {
+                                                                this.hovered_index = Some(i);
+                                                                cx.notify();
+                                                            }
+                                                        });
                                                     }
                                                 })
                                                 .on_mouse_down(
                                                     MouseButton::Right,
                                                     move |ev: &MouseDownEvent, _window, cx| {
-                                                        let _ = list_for_right.update(
-                                                            cx,
-                                                            |this, cx| {
-                                                                if let Some(item) =
-                                                                    this.items.get(i)
-                                                                {
-                                                                    let already_selected = this
-                                                                        .selected_ids
-                                                                        .contains(&item.id);
-                                                                    let is_batch =
-                                                                        this.selected_ids.len() > 1
-                                                                            && already_selected;
-                                                                    if !already_selected {
-                                                                        // Right-click on
-                                                                        // unselected item →
-                                                                        // select it first
-                                                                        this.selected_ids.clear();
-                                                                        this.selected_ids
-                                                                            .push(item.id);
-                                                                        this.selected_index =
-                                                                            Some(i);
-                                                                        this.anchor_index = Some(i);
-                                                                        this.selected_count = 1;
-                                                                        let item_id = item.id;
-                                                                        let _ = this.state.update(
-                                                                            cx,
-                                                                            move |state, _cx| {
-                                                                                state
-                                                                                    .select_single(
-                                                                                        item_id,
-                                                                                    );
-                                                                            },
-                                                                        );
-                                                                    }
-                                                                    this.context_menu_visible =
-                                                                        true;
-                                                                    this.context_menu_x =
-                                                                        f32::from(ev.position.x);
-                                                                    this.context_menu_y =
-                                                                        f32::from(ev.position.y);
-                                                                    this.context_menu_item =
-                                                                        Some(item.clone());
-                                                                    this.context_menu_is_batch =
-                                                                        is_batch;
-                                                                    cx.notify();
+                                                        list_for_right.update(cx, |this, cx| {
+                                                            if let Some(item) = this.items.get(i) {
+                                                                let already_selected = this
+                                                                    .selected_ids
+                                                                    .contains(&item.id);
+                                                                let is_batch =
+                                                                    this.selected_ids.len() > 1
+                                                                        && already_selected;
+                                                                if !already_selected {
+                                                                    // Right-click on
+                                                                    // unselected item 鈫?                                                                        // select it first
+                                                                    this.selected_ids.clear();
+                                                                    this.selected_ids.push(item.id);
+                                                                    this.selected_index = Some(i);
+                                                                    this.anchor_index = Some(i);
+                                                                    this.selected_count = 1;
+                                                                    let item_id = item.id;
+                                                                    this.state.update(
+                                                                        cx,
+                                                                        move |state, _cx| {
+                                                                            state.select_single(
+                                                                                item_id,
+                                                                            );
+                                                                        },
+                                                                    );
                                                                 }
-                                                            },
-                                                        );
+                                                                this.context_menu_visible = true;
+                                                                this.context_menu_x =
+                                                                    f32::from(ev.position.x);
+                                                                this.context_menu_y =
+                                                                    f32::from(ev.position.y);
+                                                                this.context_menu_item =
+                                                                    Some(item.clone());
+                                                                this.context_menu_is_batch =
+                                                                    is_batch;
+                                                                cx.notify();
+                                                            }
+                                                        });
                                                     },
                                                 )
                                                 .child({
@@ -934,7 +923,7 @@ impl Render for ClipboardListView {
                                                         let list_for_commit =
                                                             list_for_note_commit.clone();
                                                         move |_window, cx| {
-                                                            let _ = list_for_commit.update(
+                                                            list_for_commit.update(
                                                                 cx,
                                                                 |this, cx| {
                                                                     this.commit_note_edit(cx);
@@ -943,65 +932,56 @@ impl Render for ClipboardListView {
                                                         }
                                                     })
                                                     .on_toolbar_action(move |action, window, cx| {
-                                                        let _ = list_for_toolbar.update(
-                                                            cx,
-                                                            |this, cx| {
-                                                                this.handle_toolbar_action(
-                                                                    action, window, cx,
-                                                                );
-                                                            },
-                                                        );
+                                                        list_for_toolbar.update(cx, |this, cx| {
+                                                            this.handle_toolbar_action(
+                                                                action, window, cx,
+                                                            );
+                                                        });
                                                     })
                                                     .on_double_click({
                                                         let list_for_dbl = list_entity.clone();
                                                         Rc::new(move |idx, _window, cx| {
-                                                            let _ = list_for_dbl.update(
-                                                                cx,
-                                                                |this, cx| {
-                                                                    let plain = this
-                                                                        .state
-                                                                        .read(cx)
-                                                                        .settings
-                                                                        .copy_as_plain_text;
-                                                                    if this.selected_count > 1 {
-                                                                        let ids = this
-                                                                            .selected_ids
-                                                                            .clone();
-                                                                        this.state.update(
-                                                                            cx,
-                                                                            |s, _cx| {
-                                                                                s.batch_paste(
-                                                                                    &ids, plain,
-                                                                                );
-                                                                            },
-                                                                        );
-                                                                    } else if let Some(item) =
-                                                                        this.items.get(idx)
-                                                                    {
-                                                                        let item_id = item.id;
-                                                                        this.state.update(
-                                                                            cx,
-                                                                            |s, _cx| {
-                                                                                s.paste_item(
-                                                                                    item_id, plain,
-                                                                                );
-                                                                            },
-                                                                        );
-                                                                    }
-                                                                },
-                                                            );
+                                                            list_for_dbl.update(cx, |this, cx| {
+                                                                let plain = this
+                                                                    .state
+                                                                    .read(cx)
+                                                                    .settings
+                                                                    .copy_as_plain_text;
+                                                                if this.selected_count > 1 {
+                                                                    let ids =
+                                                                        this.selected_ids.clone();
+                                                                    this.state.update(
+                                                                        cx,
+                                                                        |s, _cx| {
+                                                                            s.batch_paste(
+                                                                                &ids, plain,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                } else if let Some(item) =
+                                                                    this.items.get(idx)
+                                                                {
+                                                                    let item_id = item.id;
+                                                                    this.state.update(
+                                                                        cx,
+                                                                        |s, _cx| {
+                                                                            s.paste_item(
+                                                                                item_id, plain,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                }
+                                                            });
                                                         })
                                                     });
 
-                                                    // Editing card: no click handler → Input receives clicks directly
+                                                    // Editing card: no click handler 鈫?Input receives clicks directly
                                                     // Normal card: full click handler + edit-commit check
-                                                    let card = if editing_note_id == item_id {
+                                                    if editing_note_id == item_id {
                                                         card.note_input(note_input.clone())
                                                     } else {
                                                         card.on_click(click_handler)
-                                                    };
-
-                                                    card
+                                                    }
                                                 })
                                                 .into_any_element(),
                                         )

@@ -1,4 +1,4 @@
-//! Tag filter panel — floating panel for filtering clipboard items by tag.
+﻿//! Tag filter panel 鈥?floating panel for filtering clipboard items by tag.
 //!
 //! Matches the original Slint TagFilterPanel.slint design:
 //! - Title row with AND/OR mode toggle, clear, close buttons
@@ -173,7 +173,7 @@ impl Render for TagFilterPanel {
             .shadow_lg()
             .p(px(8.))
             .gap(px(4.))
-            // ── Title row ──
+            // 鈹€鈹€ Title row 鈹€鈹€
             .child({
                 let this = this_entity.clone();
                 div()
@@ -210,7 +210,7 @@ impl Render for TagFilterPanel {
                     }))
             })
             .child(div().h(px(1.)).w_full().bg(sep_line))
-            // ── Create tag row (real Input) ──
+            // 鈹€鈹€ Create tag row (real Input) 鈹€鈹€
             .child({
                 let this = this_entity.clone();
                 div()
@@ -237,7 +237,7 @@ impl Render for TagFilterPanel {
                                     .text_size(px(11.))
                                     .text_color(text_1),
                             )
-                            // Handle Enter key on the parent div — uses the raw
+                            // Handle Enter key on the parent div 鈥?uses the raw
                             // KeyDownEvent (like the clipboard note editor does),
                             // bypassing InputEvent::PressEnter subscriptions
                             // which cause stack corruption during action dispatch.
@@ -286,7 +286,7 @@ impl Render for TagFilterPanel {
                     })
             })
             .child(div().h(px(1.)).w_full().bg(sep_line))
-            // ── Tag list ──
+            // 鈹€鈹€ Tag list 鈹€鈹€
             .child(
                 div()
                     .flex()
@@ -407,7 +407,7 @@ impl Render for TagFilterPanel {
     }
 }
 
-// ── TagEditPanel render helper ──
+// 鈹€鈹€ TagEditPanel render helper 鈹€鈹€
 
 pub fn render_edit_panel(
     name_input: &Entity<InputState>,
@@ -580,7 +580,7 @@ pub fn render_edit_panel(
         })
 }
 
-// ── Helpers ──
+// 鈹€鈹€ Helpers 鈹€鈹€
 
 fn icon_btn(
     icon: &'static str,

@@ -1,4 +1,4 @@
-//! Hover toolbar — appears on card hover, top-right corner.
+﻿//! Hover toolbar 鈥?appears on card hover, top-right corner.
 //!
 //! Matches the original Slint ClipboardList.slint hover toolbar:
 //! - 22px height pill, 6px border-radius
@@ -7,6 +7,8 @@
 //! - Conditional buttons based on content type and selection count
 
 use std::rc::Rc;
+
+type ToolbarActionHandler = Rc<dyn Fn(&str, &mut gpui::Window, &mut gpui::App)>;
 
 use gpui::*;
 
@@ -47,7 +49,7 @@ impl HoverToolbarProps {
 pub struct HoverToolbar {
     props: HoverToolbarProps,
     theme: ClippiTheme,
-    on_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
+    on_action: Option<ToolbarActionHandler>,
 }
 
 impl HoverToolbar {
@@ -78,7 +80,7 @@ impl RenderOnce for HoverToolbar {
             on_action,
         } = self;
 
-        // Theme colors (dark mode — matching Slint original)
+        // Theme colors (dark mode 鈥?matching Slint original)
         let accent = theme.accent;
         let text_2 = theme.text_2;
         let danger = theme.danger;

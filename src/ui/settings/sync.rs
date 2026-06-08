@@ -9,7 +9,7 @@ use gpui_transitions::WindowUseTransition;
 
 use crate::services::gpui_sync::format_last_sync;
 use crate::state::sync::BackendStatus;
-use crate::ui::components::toggle::render_toggle;
+use crate::ui::components::toggle::{render_toggle, ToggleColors};
 
 use super::{BackendCollapseState, SettingsPanel};
 
@@ -69,8 +69,10 @@ impl SettingsPanel {
                             .child(render_toggle(
                                 sync.auto_enabled,
                                 "sync-auto-enabled",
-                                accent,
-                                divider,
+                                ToggleColors {
+                                    accent,
+                                    track_off: divider,
+                                },
                                 &mut self.toggle_states,
                                 window,
                                 cx,
@@ -102,8 +104,10 @@ impl SettingsPanel {
                                 .child(render_toggle(
                                     sync.favorites_only,
                                     "sync-favorites-only",
-                                    accent,
-                                    divider,
+                                    ToggleColors {
+                                        accent,
+                                        track_off: divider,
+                                    },
                                     &mut self.toggle_states,
                                     window,
                                     cx,
@@ -136,7 +140,7 @@ impl SettingsPanel {
                             .cursor(CursorStyle::PointingHand)
                             .hover(move |style| style.bg(accent_soft))
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                let _ = backend_panel.update(cx, |panel, cx| {
+                                backend_panel.update(cx, |panel, cx| {
                                     panel.open_add(_window, cx);
                                 });
                             })
@@ -257,7 +261,7 @@ impl SettingsPanel {
             }
         });
         let stats = format!(
-            "{} · {} items · {} tags",
+            "{} 路 {} items 路 {} tags",
             format_last_sync(&backend.config.last_sync_at),
             backend.config.last_item_count,
             backend.config.last_tag_count
@@ -359,7 +363,7 @@ impl SettingsPanel {
                                         let config = backend.config.clone();
                                         let backend_panel = backend_panel.clone();
                                         move |window, cx| {
-                                            let _ = backend_panel.update(cx, |panel, cx| {
+                                            backend_panel.update(cx, |panel, cx| {
                                                 panel.open_edit(&config, window, cx);
                                             });
                                         }
@@ -377,8 +381,10 @@ impl SettingsPanel {
                             .child(render_toggle(
                                 enabled,
                                 &format!("sync-backend-{id}"),
-                                accent,
-                                divider,
+                                ToggleColors {
+                                    accent,
+                                    track_off: divider,
+                                },
                                 &mut self.toggle_states,
                                 window,
                                 cx,

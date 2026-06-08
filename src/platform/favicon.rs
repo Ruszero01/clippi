@@ -26,11 +26,6 @@ fn cache_path(domain: &str) -> PathBuf {
         .join(format!("favicon_{}.png", sanitize_domain(domain)))
 }
 
-/// Get the expected cache path for a domain (does not guarantee file exists).
-pub fn favicon_cache_path(domain: &str) -> String {
-    cache_path(domain).to_string_lossy().to_string()
-}
-
 /// Try to fetch a favicon from Google's service and cache it to disk.
 /// Returns the disk path if already cached or successfully fetched.
 /// Returns `None` on any failure (network, non-200, disk write).

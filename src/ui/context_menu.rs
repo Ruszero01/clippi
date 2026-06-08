@@ -1,4 +1,4 @@
-//! Context menu — right-click menu for clipboard items.
+﻿//! Context menu 鈥?right-click menu for clipboard items.
 //!
 //! Matches the original Slint ContextMenu.slint design:
 //! - 164px width, 8px border-radius, 4px padding
@@ -12,13 +12,18 @@ use std::rc::Rc;
 
 use gpui::*;
 
+use crate::ui::theme::ClippiTheme;
+
+type MenuActionHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+type MenuDismissHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// Context describing which menu items to show.
 #[derive(Default)]
 pub struct MenuItemContext {
     pub is_image: bool,
     pub is_file: bool,
     pub is_color: bool,
-    /// true = current format is HEX → show "Paste as RGB"
+    /// true = current format is HEX 鈫?show "Paste as RGB"
     pub is_hex: bool,
     pub is_favorite: bool,
 }
@@ -27,12 +32,8 @@ impl MenuItemContext {
     pub fn from_item(item: &crate::core::types::ClipboardItem) -> Self {
         use crate::core::types::ContentType;
         let is_color = item.content_type == ContentType::Color;
-        // is_hex = true → show "Paste as RGB" (convert FROM hex)
-        let is_hex = if is_color {
-            item.full_text.trim_start().to_lowercase().starts_with('#')
-        } else {
-            false
-        };
+        // is_hex = true 鈫?show "Paste as RGB" (convert FROM hex)
+        let is_hex = is_color && crate::core::color::is_hex_format(&item.full_text);
         Self {
             is_image: item.content_type == ContentType::Image,
             is_file: item.content_type == ContentType::File,
@@ -50,8 +51,9 @@ pub struct ContextMenu {
     y: f32,
     container_width: f32,
     container_height: f32,
-    on_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
-    on_dismiss: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    theme: ClippiTheme,
+    on_action: Option<MenuActionHandler>,
+    on_dismiss: Option<MenuDismissHandler>,
 }
 
 /// Internal menu item descriptor.
@@ -80,6 +82,7 @@ impl ContextMenu {
             y: 0.0,
             container_width: f32::MAX,
             container_height: f32::MAX,
+            theme: ClippiTheme::dark(),
             on_action: None,
             on_dismiss: None,
         }
@@ -298,6 +301,11 @@ impl ContextMenu {
         self
     }
 
+    pub fn theme(mut self, theme: ClippiTheme) -> Self {
+        self.theme = theme;
+        self
+    }
+
     /// Estimate the rendered height of this menu based on its items.
     pub fn estimated_height(&self) -> f32 {
         let mut h: f32 = MENU_V_PADDING;
@@ -323,19 +331,19 @@ impl RenderOnce for ContextMenu {
             y,
             container_width,
             container_height,
+            theme,
             on_action,
             on_dismiss,
         } = self;
 
-        // Dark theme colors (matching Slint original)
-        let surface = rgb(0x2c2d2e);
-        let sep_line = rgba(0xffffff0d);
-        let btn_hover = rgb(0x2b2c2d);
-        let accent = rgb(0x7ecba3);
-        let text_1 = rgb(0xeaebec);
-        let text_2 = rgb(0x919496);
-        let danger = rgb(0xff5f57);
-        let fav_color = rgb(0xd8a155);
+        let surface = theme.panel_surface;
+        let sep_line = theme.panel_sep_line;
+        let btn_hover = theme.btn_hover;
+        let accent = theme.accent;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let danger = theme.danger;
+        let fav_color = theme.fav_color;
 
         // Clamp position to container bounds with height awareness.
         // Flips the menu above the cursor if it would overflow the bottom edge.
@@ -343,10 +351,10 @@ impl RenderOnce for ContextMenu {
         let clamped_x = x.clamp(4.0, (container_width - menu_w - 4.0).max(4.0));
         // Prefer below cursor; flip above if it overflows the bottom.
         let clamped_y = if y + menu_h + 4.0 <= container_height {
-            // Fits below cursor — small 2px gap from click point
+            // Fits below cursor 鈥?small 2px gap from click point
             y.clamp(4.0, container_height - menu_h - 4.0)
         } else {
-            // Flip above cursor — 8px gap from click point
+            // Flip above cursor 鈥?8px gap from click point
             (y - menu_h - 8.0).clamp(4.0, container_height - menu_h - 4.0)
         };
 
@@ -358,11 +366,22 @@ impl RenderOnce for ContextMenu {
             .rounded(px(8.))
             .bg(surface)
             .border(px(1.))
-            .border_color(rgba(0xffffff14))
+            .border_color(sep_line)
             .shadow_lg()
             .p(px(4.))
             .flex()
             .flex_col()
+            .on_key_down({
+                let on_dismiss = on_dismiss.clone();
+                move |ev: &KeyDownEvent, window, cx| {
+                    if ev.keystroke.key.as_str() == "escape" {
+                        cx.stop_propagation();
+                        if let Some(ref dismiss) = on_dismiss {
+                            dismiss(window, cx);
+                        }
+                    }
+                }
+            })
             .children(items.into_iter().map(|item| {
                 let on_action = on_action.clone();
                 let on_dismiss = on_dismiss.clone();

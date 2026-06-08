@@ -1,4 +1,4 @@
-//! Toast notification — brief overlay message that auto-dismisses.
+﻿//! Toast notification 鈥?brief overlay message that auto-dismisses.
 //!
 //! The toast is a lightweight, reusable component for showing transient
 //! feedback messages (e.g. "No OCR text detected", "Copied to clipboard").
@@ -42,12 +42,6 @@ impl Toast {
     /// Apply a theme colour palette.
     pub fn theme(mut self, theme: ClippiTheme) -> Self {
         self.theme = theme;
-        self
-    }
-
-    /// Set an optional leading icon (iconfont glyph, 12px).
-    pub fn icon(mut self, glyph: impl Into<String>) -> Self {
-        self.icon = Some(glyph.into());
         self
     }
 }

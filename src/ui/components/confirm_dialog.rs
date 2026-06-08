@@ -1,4 +1,4 @@
-//! Confirm dialog — modal overlay for destructive action confirmation.
+﻿//! Confirm dialog 鈥?modal overlay for destructive action confirmation.
 //!
 //! Reusable confirmation dialog with full-window backdrop, centered card,
 //! and cancel/confirm buttons. Supports danger styling for destructive actions.
@@ -17,35 +17,11 @@ use std::rc::Rc;
 
 use gpui::*;
 
-// ── Color helpers (matching existing ClippiTheme / ContextMenu) ──
-// NOTE: gpui::rgb/rgba are not const fn, so we use regular functions.
+use crate::ui::theme::ClippiTheme;
 
-fn surface() -> Rgba {
-    rgb(0x2c2d2e)
-}
-fn text_1() -> Rgba {
-    rgb(0xeaebec)
-}
-fn text_2() -> Rgba {
-    rgb(0x919496)
-}
-fn danger() -> Rgba {
-    rgb(0xff5f57)
-}
-fn accent() -> Rgba {
-    rgb(0x7ecba3)
-}
-fn border() -> Rgba {
-    rgba(0xffffff14)
-}
-fn overlay() -> Rgba {
-    rgba(0x00000066)
-}
-fn hover_bg() -> Rgba {
-    rgba(0xffffff10)
-}
+type DialogHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
-// ── Component ──
+// 鈹€鈹€ Component 鈹€鈹€
 
 #[derive(IntoElement)]
 pub struct ConfirmDialog {
@@ -54,8 +30,9 @@ pub struct ConfirmDialog {
     confirm_label: String,
     cancel_label: String,
     danger: bool,
-    on_confirm: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-    on_cancel: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    theme: ClippiTheme,
+    on_confirm: Option<DialogHandler>,
+    on_cancel: Option<DialogHandler>,
 }
 
 impl ConfirmDialog {
@@ -66,12 +43,13 @@ impl ConfirmDialog {
             confirm_label: "Confirm".into(),
             cancel_label: "Cancel".into(),
             danger: false,
+            theme: ClippiTheme::dark(),
             on_confirm: None,
             on_cancel: None,
         }
     }
 
-    // ── Builder methods ──
+    // 鈹€鈹€ Builder methods 鈹€鈹€
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
@@ -88,13 +66,13 @@ impl ConfirmDialog {
         self
     }
 
-    pub fn cancel_label(mut self, label: impl Into<String>) -> Self {
-        self.cancel_label = label.into();
+    pub fn danger(mut self, danger: bool) -> Self {
+        self.danger = danger;
         self
     }
 
-    pub fn danger(mut self, danger: bool) -> Self {
-        self.danger = danger;
+    pub fn theme(mut self, theme: ClippiTheme) -> Self {
+        self.theme = theme;
         self
     }
 
@@ -108,9 +86,9 @@ impl ConfirmDialog {
         self
     }
 
-    // ── Preset factory methods ──
+    // 鈹€鈹€ Preset factory methods 鈹€鈹€
 
-    /// Single item delete confirmation — simple yes/no.
+    /// Single item delete confirmation 鈥?simple yes/no.
     pub fn delete_single() -> Self {
         Self::new()
             .title("Confirm Delete")
@@ -135,10 +113,7 @@ impl ConfirmDialog {
     pub fn remove_blacklist(app_name: &str) -> Self {
         Self::new()
             .title("Remove from Blacklist")
-            .message(format!(
-                "Stop ignoring clipboard from \"{}\"?",
-                app_name
-            ))
+            .message(format!("Stop ignoring clipboard from \"{}\"?", app_name))
             .confirm_label("Remove")
             .danger(false)
     }
@@ -164,14 +139,19 @@ impl RenderOnce for ConfirmDialog {
             confirm_label,
             cancel_label,
             danger: is_danger,
+            theme,
             on_confirm,
             on_cancel,
         } = self;
 
-        let confirm_color = if is_danger { danger() } else { accent() };
+        let confirm_color = if is_danger {
+            theme.danger
+        } else {
+            theme.accent
+        };
 
         // Transparent overlay (covers parent) + centered modal card.
-        // Backdrop is fully transparent — the user sees through to the
+        // Backdrop is fully transparent 鈥?the user sees through to the
         // panel content below. Clicking the backdrop cancels the dialog.
         div()
             .absolute()
@@ -179,7 +159,26 @@ impl RenderOnce for ConfirmDialog {
             .flex()
             .items_center()
             .justify_center()
-            // Backdrop click → cancel
+            .on_key_down({
+                let on_confirm = on_confirm.clone();
+                let on_cancel = on_cancel.clone();
+                move |ev: &KeyDownEvent, window, cx| match ev.keystroke.key.as_str() {
+                    "escape" => {
+                        cx.stop_propagation();
+                        if let Some(ref handler) = on_cancel {
+                            handler(window, cx);
+                        }
+                    }
+                    "enter" => {
+                        cx.stop_propagation();
+                        if let Some(ref handler) = on_confirm {
+                            handler(window, cx);
+                        }
+                    }
+                    _ => {}
+                }
+            })
+            // Backdrop click 鈫?cancel
             .on_mouse_down(MouseButton::Left, {
                 let on_cancel = on_cancel.clone();
                 move |_ev, _window, cx| {
@@ -190,32 +189,32 @@ impl RenderOnce for ConfirmDialog {
                 }
             })
             .child(
-                // Modal card — occluded to prevent click-through to backdrop
+                // Modal card 鈥?occluded to prevent click-through to backdrop
                 div()
                     .w(px(280.))
-                    .bg(surface())
+                    .bg(theme.panel_surface)
                     .rounded(px(12.))
                     .border(px(1.))
-                    .border_color(border())
+                    .border_color(theme.panel_sep_line)
                     .p(px(16.))
                     .occlude()
-                    // Title — 14px bold, text_1
+                    // Title 鈥?14px bold, text_1
                     .child(
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(text_1())
+                            .text_color(theme.text_1)
                             .child(title),
                     )
-                    // Message — 12px, text_2, 8px top margin
+                    // Message 鈥?12px, text_2, 8px top margin
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(text_2())
+                            .text_color(theme.text_2)
                             .mt(px(8.))
                             .child(message),
                     )
-                    // Button row — flex row, justify_end, 8px gap, 16px top margin
+                    // Button row 鈥?flex row, justify_end, 8px gap, 16px top margin
                     .child(
                         div()
                             .flex()
@@ -232,12 +231,15 @@ impl RenderOnce for ConfirmDialog {
                                     .px(px(12.))
                                     .rounded(px(4.))
                                     .text_size(px(12.))
-                                    .text_color(text_2())
+                                    .text_color(theme.text_2)
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .cursor(CursorStyle::PointingHand)
-                                    .hover(move |style| style.bg(hover_bg()))
+                                    .hover({
+                                        let hover_bg = theme.btn_hover;
+                                        move |style| style.bg(hover_bg)
+                                    })
                                     .on_mouse_down(MouseButton::Left, {
                                         let on_cancel = on_cancel.clone();
                                         move |_ev, _window, cx| {
@@ -253,7 +255,6 @@ impl RenderOnce for ConfirmDialog {
                             .child({
                                 let label = confirm_label.clone();
                                 let on_confirm = on_confirm.clone();
-                                let confirm_color = confirm_color;
                                 div()
                                     .h(px(24.))
                                     .px(px(12.))

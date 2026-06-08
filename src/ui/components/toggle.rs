@@ -1,4 +1,4 @@
-//! Animated toggle switch — reusable component for settings UI.
+﻿//! Animated toggle switch 鈥?reusable component for settings UI.
 //!
 //! Uses `gpui_transitions::use_keyed_transition` for a smooth 200ms
 //! knob slide between OFF (left, 2px) and ON (right, 20px) positions.
@@ -18,11 +18,16 @@ pub(crate) struct ToggleTransitionState {
     generation: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ToggleColors {
+    pub accent: Rgba,
+    pub track_off: Rgba,
+}
+
 pub fn render_toggle(
     value: bool,
     key: &str,
-    accent: Rgba,
-    track_off: Rgba,
+    colors: ToggleColors,
     states: &mut HashMap<String, ToggleTransitionState>,
     window: &mut Window,
     cx: &mut App,
@@ -56,9 +61,9 @@ pub fn render_toggle(
     } else {
         target_x
     };
-    let target_bg = toggle_bg(value, accent, track_off);
+    let target_bg = toggle_bg(value, colors.accent, colors.track_off);
     let initial_bg = if changed {
-        toggle_bg(previous_value, accent, track_off)
+        toggle_bg(previous_value, colors.accent, colors.track_off)
     } else {
         target_bg
     };

@@ -212,16 +212,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_content(
-        &self,
-        id: i64,
-        text: &str,
-        content_type: &str,
-        meta_type: &str,
-    ) -> SqlResult<()> {
-        self.update_content_with_rich_data(id, text, content_type, meta_type, "")
-    }
-
     pub fn update_content_with_rich_data(
         &self,
         id: i64,

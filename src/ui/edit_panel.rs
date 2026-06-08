@@ -1,4 +1,4 @@
-//! GPUI edit panel for clipboard text and rich-text items.
+﻿//! GPUI edit panel for clipboard text and rich-text items.
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;
@@ -109,7 +109,7 @@ impl EditPanel {
         cx: &mut App,
         transform: impl FnOnce(&str) -> String,
     ) {
-        let _ = input.update(cx, |input, cx| {
+        input.update(cx, |input, cx| {
             let current = input.value().to_string();
             input.set_value(SharedString::from(transform(&current)), window, cx);
         });
@@ -178,7 +178,7 @@ impl Render for EditPanel {
                     .child(icon_button("\u{e62b}", text_2, accent, hover_bg, {
                         let this = this.clone();
                         move |_window, cx| {
-                            let _ = this.update(cx, |_panel, cx| {
+                            this.update(cx, |_panel, cx| {
                                 cx.emit(EditPanelEvent::Back);
                             });
                         }
@@ -212,7 +212,7 @@ impl Render for EditPanel {
                             .on_mouse_down(MouseButton::Left, {
                                 let this = this.clone();
                                 move |_ev, _window, cx| {
-                                    let _ = this.update(cx, |panel, cx| {
+                                    this.update(cx, |panel, cx| {
                                         panel.type_menu_open = !panel.type_menu_open;
                                         cx.notify();
                                     });
@@ -306,7 +306,7 @@ impl Render for EditPanel {
                     .child(text_button("Cancel", text_2, divider, rgba(0x00000000), {
                         let this = this.clone();
                         move |_window, cx| {
-                            let _ = this.update(cx, |_panel, cx| {
+                            this.update(cx, |_panel, cx| {
                                 cx.emit(EditPanelEvent::Back);
                             });
                         }
@@ -314,7 +314,7 @@ impl Render for EditPanel {
                     .child(text_button("Save", rgb(0xffffff), accent, accent, {
                         let this = this.clone();
                         move |window, cx| {
-                            let _ = this.update(cx, |panel, cx| panel.save(window, cx));
+                            this.update(cx, |panel, cx| panel.save(window, cx));
                         }
                     })),
             )
@@ -327,7 +327,7 @@ impl Render for EditPanel {
                             .on_mouse_down(MouseButton::Left, {
                                 let this = this.clone();
                                 move |_ev, _window, cx| {
-                                    let _ = this.update(cx, |panel, cx| {
+                                    this.update(cx, |panel, cx| {
                                         panel.type_menu_open = false;
                                         cx.notify();
                                     });
@@ -361,12 +361,12 @@ impl Render for EditPanel {
                                     .hover(move |style| style.bg(hover_bg))
                                     .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
                                         let key = key.clone();
-                                        let _ = this.update(cx, |panel, cx| {
+                                        this.update(cx, |panel, cx| {
                                             panel.selected_type = key;
                                             panel.type_menu_open = false;
                                             panel.preview_generation =
                                                 panel.preview_generation.wrapping_add(1);
-                                            let _ = panel.content_input.update(cx, |input, cx| {
+                                            panel.content_input.update(cx, |input, cx| {
                                                 input.focus_handle(cx).focus(window);
                                             });
                                             cx.notify();

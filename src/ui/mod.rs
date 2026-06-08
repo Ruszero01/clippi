@@ -1,4 +1,4 @@
-//! UI module declarations and re-exports for Clippi GPUI components.
+﻿//! UI module declarations and re-exports for Clippi GPUI components.
 
 pub mod add_backend;
 pub mod clipboard_card;

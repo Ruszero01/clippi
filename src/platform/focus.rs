@@ -207,13 +207,6 @@ pub fn set_clippi_hwnd(hwnd: isize) {
     CLIPPI_HWND.store(hwnd as usize, Ordering::SeqCst);
 }
 
-/// Check if the given HWND is our Clippi window.
-#[cfg(target_os = "windows")]
-pub fn is_our_window(hwnd: isize) -> bool {
-    let our = CLIPPI_HWND.load(Ordering::SeqCst);
-    our != 0 && hwnd as usize == our
-}
-
 /// Get the paste target PID
 #[cfg(target_os = "macos")]
 pub fn get_last_non_clippi_pid() -> Option<i32> {

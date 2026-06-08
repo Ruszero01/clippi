@@ -1,7 +1,7 @@
-//! Settings panel — scrollable settings UI with tabs.
+//! Settings panel 鈥?scrollable settings UI with tabs.
 //!
 //! Matches the original Slint `SettingsPanel.slint` layout:
-//! - Top navigation bar: back button (← icon) + "Settings" title (36px)
+//! - Top navigation bar: back button (鈫?icon) + "Settings" title (36px)
 //! - Tab bar: 5 equal-width tabs (General/Clipboard/Hotkey/Data/Sync)
 //!   with accent-green underline for active tab
 //! - Scrollable content area routed by active tab index
@@ -27,25 +27,23 @@ use hotkey::HotkeyConfirmAction;
 
 use crate::state::app::AppState;
 use crate::ui::add_backend::AddBackendPanel;
-use crate::ui::components::toggle::{render_toggle, ToggleTransitionState};
+use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};
 use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
 pub enum SettingsEvent {
-    /// User clicked the back button — return to clipboard view.
+    /// User clicked the back button 鈥?return to clipboard view.
     Back,
-    /// Theme setting changed — RootView should rebuild its ClippiTheme.
+    /// Theme setting changed 鈥?RootView should rebuild its ClippiTheme.
     ThemeChanged(String),
     ClipboardSettingsChanged {
         reload_items: bool,
         scroll_to_top: bool,
     },
-    /// Hotkey recording failed — RootView should show a toast with the error.
-    HotkeyError(String),
-    /// User clicked add/remove blacklist — RootView should show a ConfirmDialog.
+    /// User clicked add/remove blacklist 鈥?RootView should show a ConfirmDialog.
     ShowHotkeyConfirm(HotkeyConfirmAction),
-    /// Data settings error — RootView should show a toast.
+    /// Data settings error 鈥?RootView should show a toast.
     DataError(String),
 }
 
@@ -130,11 +128,6 @@ impl SettingsPanel {
         }
     }
 
-    pub fn set_tab(&mut self, tab: usize, cx: &mut Context<Self>) {
-        self.active_tab = tab;
-        cx.notify();
-    }
-
     /// Reload theme from the computed ClippiTheme (called by RootView after ThemeChanged).
     pub fn reload_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
         self.theme = theme.clone();
@@ -162,7 +155,7 @@ impl Render for SettingsPanel {
             .overflow_hidden()
             .rounded_b(px(12.))
             .bg(theme.bg)
-            // ── Navigation bar (height 36px, mt 8px matching Slint y=8px) ──
+            // 鈹€鈹€ Navigation bar (height 36px, mt 8px matching Slint y=8px) 鈹€鈹€
             .child(
                 div()
                     .flex()
@@ -172,7 +165,7 @@ impl Render for SettingsPanel {
                     .h(px(36.))
                     .px(px(8.))
                     .mt(px(8.))
-                    // Back button (28x28, iconfont ←)
+                    // Back button (28x28, iconfont 鈫?
                     .child(
                         div()
                             .w(px(28.))
@@ -184,7 +177,7 @@ impl Render for SettingsPanel {
                             .on_mouse_down(MouseButton::Left, {
                                 let this = this.clone();
                                 move |_ev, _window, cx| {
-                                    let _ = this.update(cx, |_panel, cx| {
+                                    this.update(cx, |_panel, cx| {
                                         cx.emit(SettingsEvent::Back);
                                     });
                                 }
@@ -206,7 +199,7 @@ impl Render for SettingsPanel {
                             .child("Settings"),
                     ),
             )
-            // ── Tab bar (height 36px, mt 8px matching Slint spacing) ──
+            // 鈹€鈹€ Tab bar (height 36px, mt 8px matching Slint spacing) 鈹€鈹€
             .child(
                 div()
                     .flex()
@@ -239,7 +232,7 @@ impl Render for SettingsPanel {
                             .justify_center()
                             .cursor(CursorStyle::PointingHand)
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                let _ = this.update(cx, |panel, cx| {
+                                this.update(cx, |panel, cx| {
                                     panel.active_tab = i;
                                     cx.notify();
                                 });
@@ -260,7 +253,7 @@ impl Render for SettingsPanel {
                             .child(div().w_full().h(px(2.)).mt(px(4.)).bg(underline_bg))
                     })),
             )
-            // ── Tab content (fills remaining space, scrollable) ──
+            // 鈹€鈹€ Tab content (fills remaining space, scrollable) 鈹€鈹€
             .child(
                 div()
                     .flex_1()
@@ -323,13 +316,13 @@ impl Render for SettingsPanel {
                                     ),
                             ),
                     )
-                    // ── Reset data directory dialog (overlay) ──
+                    // 鈹€鈹€ Reset data directory dialog (overlay) 鈹€鈹€
                     .child(self.render_reset_data_dialog(window, cx).into_any_element()),
             )
     }
 }
 
-// ── Reusable control helpers ──
+// 鈹€鈹€ Reusable control helpers 鈹€鈹€
 
 impl SettingsPanel {
     /// Render a settings row with an animated toggle switch on the right.
@@ -382,8 +375,10 @@ impl SettingsPanel {
             .child(render_toggle(
                 value,
                 label,
-                accent,
-                divider,
+                ToggleColors {
+                    accent,
+                    track_off: divider,
+                },
                 &mut self.toggle_states,
                 window,
                 cx,

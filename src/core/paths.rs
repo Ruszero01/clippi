@@ -22,11 +22,7 @@ pub fn init_portable_mode() {
         let _ = std::fs::remove_file(&probe);
     }
     IS_PORTABLE.store(writable, Ordering::Relaxed);
-    log::info!(
-        "Portable mode: {} (exe_dir: {})",
-        writable,
-        exe.display()
-    );
+    log::info!("Portable mode: {} (exe_dir: {})", writable, exe.display());
 }
 
 /// The directory containing the running executable.
@@ -133,15 +129,6 @@ pub fn images_dir() -> PathBuf {
         let _ = fs::create_dir_all(&dir);
     }
     dir
-}
-
-/// Directory containing config and log files (exe_dir or app_data_dir).
-pub fn config_dir() -> PathBuf {
-    if is_portable_mode() {
-        exe_dir()
-    } else {
-        app_data_dir()
-    }
 }
 
 fn ensure_app_data_dir() -> std::io::Result<()> {

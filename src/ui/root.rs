@@ -1,4 +1,4 @@
-//! Root view — the main window's top-level component.
+﻿//! Root view 鈥?the main window's top-level component.
 //!
 //! Matches the original Slint `app.slint` layout:
 //! - Transparent window background
@@ -54,7 +54,7 @@ pub struct RootView {
     _toast_timer: Option<Task<()>>,
     /// Timer that clears the toast after the exit animation completes.
     _toast_cleanup: Option<Task<()>>,
-    /// Animation generation counter — bumps on show/dismiss for fresh transitions.
+    /// Animation generation counter 鈥?bumps on show/dismiss for fresh transitions.
     toast_generation: u64,
     /// True while the exit animation is playing (toast still rendered but fading out).
     toast_dismissing: bool,
@@ -128,12 +128,12 @@ impl RootView {
                 WindowManagerEvent::HotkeyRecordingComplete => {
                     // Notify SettingsPanel so it re-renders with the updated
                     // hotkey display and recording state from AppState.
-                    let _ = this.settings_panel.update(cx, |_panel, cx| {
+                    this.settings_panel.update(cx, |_panel, cx| {
                         cx.notify();
                     });
                 }
                 WindowManagerEvent::SyncChanged => {
-                    let _ = this.settings_panel.update(cx, |_panel, cx| {
+                    this.settings_panel.update(cx, |_panel, cx| {
                         cx.notify();
                     });
                     cx.notify();
@@ -179,7 +179,7 @@ impl RootView {
                         }
                         EditPanelEvent::Saved => {
                             let items = this.state.read(cx).items.clone();
-                            let _ = this.list_view.update(cx, |list, cx| {
+                            this.list_view.update(cx, |list, cx| {
                                 list.set_items(items, cx);
                             });
                         }
@@ -236,26 +236,26 @@ impl RootView {
                             cx,
                         );
                         // Must restore transparent background after Theme::change
-                        // resets it — otherwise the window loses transparency.
+                        // resets it 鈥?otherwise the window loses transparency.
                         gpui_component::Theme::global_mut(cx).background =
                             Hsla::transparent_black();
 
-                        let _ = this.titlebar.update(cx, |titlebar, cx| {
+                        this.titlebar.update(cx, |titlebar, cx| {
                             titlebar.set_theme(theme.clone(), cx);
                         });
-                        let _ = this.search_bar.update(cx, |search_bar, cx| {
+                        this.search_bar.update(cx, |search_bar, cx| {
                             search_bar.set_theme(theme.clone(), cx);
                         });
-                        let _ = this.list_view.update(cx, |list_view, cx| {
+                        this.list_view.update(cx, |list_view, cx| {
                             list_view.set_theme(theme.clone(), cx);
                         });
-                        let _ = this.settings_panel.update(cx, |panel, cx| {
+                        this.settings_panel.update(cx, |panel, cx| {
                             panel.reload_theme(theme.clone(), cx);
                         });
-                        let _ = this.edit_panel.update(cx, |panel, cx| {
+                        this.edit_panel.update(cx, |panel, cx| {
                             panel.set_theme(theme.clone(), cx);
                         });
-                        let _ = this.sidebar.update(cx, |sidebar, cx| {
+                        this.sidebar.update(cx, |sidebar, cx| {
                             sidebar.set_theme(&theme, cx);
                         });
                         cx.notify();
@@ -267,25 +267,19 @@ impl RootView {
                         if *reload_items {
                             this.state.update(cx, |state, _cx| state.reload_items());
                             let items = this.state.read(cx).items.clone();
-                            let _ = this.list_view.update(cx, |list_view, cx| {
+                            this.list_view.update(cx, |list_view, cx| {
                                 list_view.refresh_settings_from_state(*scroll_to_top, cx);
                                 list_view.set_items(items, cx);
                             });
                         } else {
-                            let _ = this.list_view.update(cx, |list_view, cx| {
+                            this.list_view.update(cx, |list_view, cx| {
                                 list_view.refresh_settings_from_state(*scroll_to_top, cx);
                             });
                         }
                         cx.notify();
                     }
-                    SettingsEvent::HotkeyError(msg) => {
-                        this.state.update(cx, |s, _cx| {
-                            s.toast_message = Some(msg.clone());
-                        });
-                        cx.notify();
-                    }
                     SettingsEvent::ShowHotkeyConfirm(action) => {
-                        let _ = this.settings_panel.update(cx, |panel, _cx| {
+                        this.settings_panel.update(cx, |panel, _cx| {
                             panel.hotkey_confirm = Some(action.clone());
                         });
                         cx.notify();
@@ -294,7 +288,7 @@ impl RootView {
                         this.state.update(cx, |s, _cx| {
                             s.toast_message = Some(format!(
                                 "{}: {msg}",
-                                i18n::tr("数据操作失败", "Data operation failed")
+                                i18n::tr("鏁版嵁鎿嶄綔澶辫触", "Data operation failed")
                             ));
                         });
                         cx.notify();
@@ -325,11 +319,6 @@ impl RootView {
             _subscriptions,
         }
     }
-
-    pub fn set_view(&mut self, view: &str, cx: &mut Context<Self>) {
-        self.current_view = view.to_string();
-        cx.notify();
-    }
 }
 
 impl Render for RootView {
@@ -359,10 +348,10 @@ impl Render for RootView {
         let win_w = f32::from(viewport.width);
         let win_h = f32::from(viewport.height);
 
-        // ── Toast state machine ──
-        // Enter: bump generation → new transition (0 → 1 opacity, slide up).
+        // 鈹€鈹€ Toast state machine 鈹€鈹€
+        // Enter: bump generation 鈫?new transition (0 鈫?1 opacity, slide up).
         // Display: hold ~2.8s.
-        // Exit: same generation, update target to 0 / slide-down → smooth reverse.
+        // Exit: same generation, update target to 0 / slide-down 鈫?smooth reverse.
         // Cleanup: after transition completes, clear the message.
         {
             let has_toast = self.state.read(cx).toast_message.is_some();
@@ -376,7 +365,7 @@ impl Render for RootView {
                         Timer::after(show_duration).await;
                         if let Some(this) = weak_self.upgrade() {
                             let _ = this.update(cx, |root, root_cx| {
-                                // Start exit animation — same generation so the
+                                // Start exit animation 鈥?same generation so the
                                 // transition smoothly reverses from its current value.
                                 root.toast_dismissing = true;
                                 root_cx.notify();
@@ -425,7 +414,7 @@ impl Render for RootView {
                     .when(is_settings, |panel| panel.child(settings_panel))
                     .when(is_edit, |panel| panel.child(edit_panel)),
             )
-            // Tag filter panel — ConfirmDialog pattern:
+            // Tag filter panel 鈥?ConfirmDialog pattern:
             // full-screen backdrop that closes on click outside,
             // panel positioned top-right, occlude prevents click-through.
             .when(tag_panel_open && is_clipboard, |root| {
@@ -448,7 +437,7 @@ impl Render for RootView {
                         ),
                 )
             })
-            // Tag edit overlay — centered in main panel area (left:36px)
+            // Tag edit overlay 鈥?centered in main panel area (left:36px)
             .when(
                 {
                     let app_state = self.state.read(cx);
@@ -457,7 +446,7 @@ impl Render for RootView {
                         self.last_edit_tag_id = editing_id;
                         let edit_name = app_state.editing_tag_name.clone();
                         let edit_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
-                        let _ = edit_input.update(cx, |input, cx| {
+                        edit_input.update(cx, |input, cx| {
                             input.set_value(&edit_name, window, cx);
                         });
                     }
@@ -487,7 +476,7 @@ impl Render for RootView {
                                 {
                                     let tf = tag_filter.clone();
                                     move |_w, cx| {
-                                        let _ = tf.update(cx, |panel, cx| {
+                                        tf.update(cx, |panel, cx| {
                                             panel.cancel_edit_tag(cx);
                                             cx.notify();
                                         });
@@ -496,7 +485,7 @@ impl Render for RootView {
                                 {
                                     let tf = tag_filter.clone();
                                     move |_w, cx, color| {
-                                        let _ = tf.update(cx, |panel, cx| {
+                                        tf.update(cx, |panel, cx| {
                                             panel.set_edit_tag_color(&color, cx);
                                             cx.notify();
                                         });
@@ -505,7 +494,7 @@ impl Render for RootView {
                                 {
                                     let tf = tag_filter.clone();
                                     move |_w, cx, name, color| {
-                                        let _ = tf.update(cx, |panel, cx| {
+                                        tf.update(cx, |panel, cx| {
                                             panel.update_tag(editing_tag_id, &name, &color, cx);
                                             cx.notify();
                                         });
@@ -524,7 +513,7 @@ impl Render for RootView {
                     let is_batch = list.read(cx).context_menu_is_batch();
                     let item = list.read(cx).context_menu_item().cloned();
 
-                    // Backdrop — click to dismiss
+                    // Backdrop 鈥?click to dismiss
                     root.child(
                         div()
                             .absolute()
@@ -533,7 +522,7 @@ impl Render for RootView {
                                 let l = list.clone();
                                 move |_ev, _window, cx| {
                                     cx.stop_propagation();
-                                    let _ = l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
+                                    l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
                                 }
                             }),
                     )
@@ -543,10 +532,11 @@ impl Render for RootView {
                             let count = l.read(cx).selected_count;
                             ContextMenu::for_batch(count)
                                 .with_position(menu_x, menu_y, win_w, win_h)
+                                .theme(self.theme.clone())
                                 .on_action({
                                     let l = l.clone();
                                     move |action, window, cx| {
-                                        let _ = l.update(cx, |lst, cx| {
+                                        l.update(cx, |lst, cx| {
                                             lst.handle_menu_action(action, window, cx);
                                         });
                                     }
@@ -554,7 +544,7 @@ impl Render for RootView {
                                 .on_dismiss({
                                     let l = l.clone();
                                     move |_window, cx| {
-                                        let _ = l.update(cx, |lst, cx| {
+                                        l.update(cx, |lst, cx| {
                                             lst.hide_context_menu(cx);
                                         });
                                     }
@@ -564,10 +554,11 @@ impl Render for RootView {
                             let ctx = MenuItemContext::from_item(clip_item);
                             ContextMenu::for_item(&ctx)
                                 .with_position(menu_x, menu_y, win_w, win_h)
+                                .theme(self.theme.clone())
                                 .on_action({
                                     let l = l.clone();
                                     move |action, window, cx| {
-                                        let _ = l.update(cx, |lst, cx| {
+                                        l.update(cx, |lst, cx| {
                                             lst.handle_menu_action(action, window, cx);
                                         });
                                     }
@@ -575,7 +566,7 @@ impl Render for RootView {
                                 .on_dismiss({
                                     let l = l.clone();
                                     move |_window, cx| {
-                                        let _ = l.update(cx, |lst, cx| {
+                                        l.update(cx, |lst, cx| {
                                             lst.hide_context_menu(cx);
                                         });
                                     }
@@ -606,7 +597,7 @@ impl Render for RootView {
                                 let l = list.clone();
                                 move |_ev, _window, cx| {
                                     cx.stop_propagation();
-                                    let _ = l.update(cx, |lst, cx| lst.hide_tag_picker(cx));
+                                    l.update(cx, |lst, cx| lst.hide_tag_picker(cx));
                                 }
                             }),
                     )
@@ -621,7 +612,7 @@ impl Render for RootView {
                                     .on_toggle({
                                         let l = list_for_panel.clone();
                                         move |tag_id, state, _window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
+                                            l.update(cx, |lst, cx| {
                                                 lst.toggle_picker_tag(tag_id, state, cx);
                                             });
                                         }
@@ -629,7 +620,7 @@ impl Render for RootView {
                                     .on_clear({
                                         let l = list_for_panel.clone();
                                         move |_window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
+                                            l.update(cx, |lst, cx| {
                                                 lst.clear_picker_tags(cx);
                                             });
                                         }
@@ -637,7 +628,7 @@ impl Render for RootView {
                                     .on_close({
                                         let l = list_for_panel.clone();
                                         move |_window, cx| {
-                                            let _ = l.update(cx, |lst, cx| {
+                                            l.update(cx, |lst, cx| {
                                                 lst.hide_tag_picker(cx);
                                             });
                                         }
@@ -657,6 +648,7 @@ impl Render for RootView {
                     let dialog_element: AnyElement = match dialog {
                         Some(ConfirmDialogState::DeleteSingle { id }) => {
                             ConfirmDialog::delete_single()
+                                .theme(self.theme.clone())
                                 .on_confirm({
                                     let s = app_state.clone();
                                     let l = list.clone();
@@ -678,6 +670,7 @@ impl Render for RootView {
                         }
                         Some(ConfirmDialogState::DeleteBatch { count }) => {
                             ConfirmDialog::delete_batch(count)
+                                .theme(self.theme.clone())
                                 .on_confirm({
                                     let s = app_state.clone();
                                     let l = list.clone();
@@ -713,7 +706,7 @@ impl Render for RootView {
                     )
                 },
             )
-            // ── Settings hotkey blacklist ConfirmDialog ──
+            // 鈹€鈹€ Settings hotkey blacklist ConfirmDialog 鈹€鈹€
             .when(
                 is_settings && self.settings_panel.read(cx).hotkey_confirm.is_some(),
                 |root| {
@@ -725,6 +718,7 @@ impl Render for RootView {
                     let dialog_element: AnyElement = match action {
                         Some(hotkey::HotkeyConfirmAction::Add { app_name }) => {
                             ConfirmDialog::add_blacklist(&app_name)
+                                .theme(self.theme.clone())
                                 .on_confirm({
                                     let wm = wm.clone();
                                     let app_state = app_state.clone();
@@ -744,7 +738,7 @@ impl Render for RootView {
                                         wm.update(cx, |wm, _cx| {
                                             wm.set_blacklist(updated);
                                         });
-                                        let _ = settings.update(cx, |panel, cx| {
+                                        settings.update(cx, |panel, cx| {
                                             panel.clear_hotkey_confirm(cx);
                                         });
                                     }
@@ -752,7 +746,7 @@ impl Render for RootView {
                                 .on_cancel({
                                     let settings = settings.clone();
                                     move |_window, cx| {
-                                        let _ = settings.update(cx, |panel, cx| {
+                                        settings.update(cx, |panel, cx| {
                                             panel.clear_hotkey_confirm(cx);
                                         });
                                     }
@@ -761,6 +755,7 @@ impl Render for RootView {
                         }
                         Some(hotkey::HotkeyConfirmAction::Remove { app_name }) => {
                             ConfirmDialog::remove_blacklist(&app_name)
+                                .theme(self.theme.clone())
                                 .on_confirm({
                                     let wm = wm.clone();
                                     let app_state = app_state.clone();
@@ -777,7 +772,7 @@ impl Render for RootView {
                                         wm.update(cx, |wm, _cx| {
                                             wm.set_blacklist(updated);
                                         });
-                                        let _ = settings.update(cx, |panel, cx| {
+                                        settings.update(cx, |panel, cx| {
                                             panel.clear_hotkey_confirm(cx);
                                         });
                                     }
@@ -785,7 +780,7 @@ impl Render for RootView {
                                 .on_cancel({
                                     let settings = settings.clone();
                                     move |_window, cx| {
-                                        let _ = settings.update(cx, |panel, cx| {
+                                        settings.update(cx, |panel, cx| {
                                             panel.clear_hotkey_confirm(cx);
                                         });
                                     }
@@ -834,7 +829,7 @@ impl Render for RootView {
                     let theme = self.theme.clone();
                     let toast_visible = self.state.read(cx).toast_message.is_some();
 
-                    // ── Animated opacity & slide ──
+                    // 鈹€鈹€ Animated opacity & slide 鈹€鈹€
                     let toast_key = self.toast_generation;
                     let opacity_target: f32 = if toast_visible && !self.toast_dismissing {
                         1.0
@@ -890,7 +885,7 @@ impl Render for RootView {
                                     .opacity(opacity)
                                     .cursor(CursorStyle::PointingHand)
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        let _ = state.update(cx, |s, _cx| s.clear_toast());
+                                        state.update(cx, |s, _cx| s.clear_toast());
                                     })
                                     .when(dismiss_state, |el| el.cursor(CursorStyle::Arrow))
                                     .child(Toast::new(message).theme(theme)),

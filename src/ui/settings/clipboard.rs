@@ -1,4 +1,4 @@
-//! Clipboard settings tab — sort, card height, source app, scroll, copy, hover, OCR, QR.
+﻿//! Clipboard settings tab 鈥?sort, card height, source app, scroll, copy, hover, OCR, QR.
 //!
 //! Matches the original Slint `SettingsTabClipboard.slint` layout.
 
@@ -25,14 +25,14 @@ impl SettingsPanel {
         let show_original_on_hover = app.settings.show_original_on_hover;
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
-        // borrow released here — `app` is a &AppState reference
+        // borrow released here 鈥?`app` is a &AppState reference
 
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // ── Sort by created (dynamic desc) ──
+            // 鈹€鈹€ Sort by created (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -52,7 +52,7 @@ impl SettingsPanel {
                             s.settings.sort_by_created = !s.settings.sort_by_created;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                                 reload_items: true,
                                 scroll_to_top: false,
@@ -62,7 +62,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // ── Card height (4-option group) ──
+            // 鈹€鈹€ Card height (4-option group) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -81,7 +81,7 @@ impl SettingsPanel {
                             s.settings.card_height_mode = key.to_string();
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                                 reload_items: false,
                                 scroll_to_top: false,
@@ -91,7 +91,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // ── Show source app (dynamic desc) ──
+            // 鈹€鈹€ Show source app (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -111,7 +111,7 @@ impl SettingsPanel {
                             s.settings.show_source_app = !s.settings.show_source_app;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                                 reload_items: false,
                                 scroll_to_top: false,
@@ -121,7 +121,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // ── Scroll to top (dynamic desc) ──
+            // 鈹€鈹€ Scroll to top (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -142,7 +142,7 @@ impl SettingsPanel {
                             s.settings.save();
                             s.settings.auto_scroll_to_top
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                                 reload_items: false,
                                 scroll_to_top,
@@ -152,7 +152,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // ── Copy as plain text (dynamic desc) ──
+            // 鈹€鈹€ Copy as plain text (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -172,7 +172,7 @@ impl SettingsPanel {
                             s.settings.copy_as_plain_text = !s.settings.copy_as_plain_text;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                                 reload_items: false,
                                 scroll_to_top: false,
@@ -182,7 +182,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // ── Show original on hover (dynamic desc) ──
+            // 鈹€鈹€ Show original on hover (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -202,7 +202,7 @@ impl SettingsPanel {
                             s.settings.show_original_on_hover = !s.settings.show_original_on_hover;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| {
+                        this.update(_cx, |_panel, cx| {
                             cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                                 reload_items: false,
                                 scroll_to_top: false,
@@ -212,7 +212,7 @@ impl SettingsPanel {
                     },
                 )
             })
-            // ── Auto Image OCR (dynamic desc) ──
+            // 鈹€鈹€ Auto Image OCR (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -232,11 +232,11 @@ impl SettingsPanel {
                             s.settings.ocr_enabled = !s.settings.ocr_enabled;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
-            // ── Auto QR Detection (dynamic desc) ──
+            // 鈹€鈹€ Auto QR Detection (dynamic desc) 鈹€鈹€
             .child({
                 let state = state.clone();
                 let this = this.clone();
@@ -256,7 +256,7 @@ impl SettingsPanel {
                             s.settings.qr_enabled = !s.settings.qr_enabled;
                             s.settings.save();
                         });
-                        let _ = this.update(_cx, |_panel, cx| cx.notify());
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })

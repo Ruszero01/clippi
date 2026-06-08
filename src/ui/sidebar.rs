@@ -1,4 +1,4 @@
-//! Sidebar - tag navigation sidebar matching Slint `SideTagBar.slint`.
+﻿//! Sidebar - tag navigation sidebar matching Slint `SideTagBar.slint`.
 //!
 //! Slint behavior:
 //! - width 56px, rows placed every 24px;

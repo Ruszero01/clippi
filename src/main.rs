@@ -15,11 +15,8 @@ mod platform;
 mod state;
 // GPUI UI components (new)
 mod ui;
-// GPUI polling and services (migrating from Slint)
+// GPUI polling and services
 mod services;
-// Slint-era modules (disabled, being migrated)
-// mod app;
-// mod looper;
 
 // Root view lives in ui::root — use that instead of inline ClippiApp
 use core::settings::AppSettings;
@@ -78,6 +75,12 @@ fn main() {
         }
 
         let settings = AppSettings::load();
+        let effective_language = if settings.language.is_empty() {
+            core::settings::detect_system_language()
+        } else {
+            settings.language.clone()
+        };
+        core::i18n::set_language(&effective_language);
 
         // Initialize images cache directory — follows db_path if set.
         core::paths::init_images_dir(&settings.db_path);
@@ -139,7 +142,7 @@ fn main() {
                 {
                     if let Ok(handle) = window.window_handle() {
                         if let RawWindowHandle::Win32(wh) = handle.as_raw() {
-                            let hwnd = wh.hwnd.get() as isize;
+                            let hwnd = wh.hwnd.get();
                             window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
 
                             // Set initial position and size via platform API.

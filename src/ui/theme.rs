@@ -1,4 +1,4 @@
-//! Theme system for Clippi — color tokens matching the original Slint design.
+﻿//! Theme system for Clippi 鈥?color tokens matching the original Slint design.
 //!
 //! All colors are sourced from `ui/app.slint` and sub-components.
 //! Tokens adapt between dark and light mode.
@@ -9,38 +9,37 @@ use gpui::{rgb, rgba, Rgba, WindowAppearance};
 /// Colors match the original Slint design pixel-for-pixel.
 #[derive(Debug, Clone)]
 pub struct ClippiTheme {
-    // ── Window chrome ──
+    // 鈹€鈹€ Window chrome 鈹€鈹€
     pub bg: Rgba,
     pub surface: Rgba,
-    pub surface_hover: Rgba,
     pub surface_press: Rgba,
     pub titlebar_bg: Rgba,
 
-    // ── Text ──
+    // 鈹€鈹€ Text 鈹€鈹€
     pub text_1: Rgba,
     pub text_2: Rgba,
     pub text_3: Rgba,
 
-    // ── Accent ──
+    // 鈹€鈹€ Accent 鈹€鈹€
     pub accent: Rgba,
     pub accent_soft: Rgba,
 
-    // ── Semantic ──
+    // 鈹€鈹€ Semantic 鈹€鈹€
     pub fav_color: Rgba,
     pub danger: Rgba,
     pub divider: Rgba,
     pub btn_hover: Rgba,
 
-    // ── Tags ──
+    // 鈹€鈹€ Tags 鈹€鈹€
     pub tag_bg: Rgba,
     pub tag_text: Rgba,
 
-    // ── Panels (floating) ──
+    // 鈹€鈹€ Panels (floating) 鈹€鈹€
     pub panel_surface: Rgba,
     pub panel_input_bg: Rgba,
     pub panel_sep_line: Rgba,
 
-    // ── Toast ──
+    // 鈹€鈹€ Toast 鈹€鈹€
     pub toast_bg: Rgba,
     pub toast_text: Rgba,
 }
@@ -50,7 +49,6 @@ impl ClippiTheme {
         Self {
             bg: rgb(0x191a1b),
             surface: rgb(0x232425),
-            surface_hover: rgb(0x303132),
             surface_press: rgb(0x3a3b3c),
             titlebar_bg: rgb(0x191a1b),
 
@@ -82,7 +80,6 @@ impl ClippiTheme {
         Self {
             bg: rgb(0xf2f3f8),
             surface: rgb(0xffffff),
-            surface_hover: rgb(0xf4f5fb),
             surface_press: rgb(0xebedf5),
             titlebar_bg: rgb(0xf2f3f8),
 

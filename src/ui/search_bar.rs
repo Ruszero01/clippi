@@ -1,4 +1,4 @@
-//! Search bar - keyword input + content type filter buttons.
+﻿//! Search bar - keyword input + content type filter buttons.
 //!
 //! Matches the original Slint ClipboardList.slint design:
 //! - 28px search box, 10px border-radius, surface bg, divider border
@@ -282,7 +282,7 @@ impl Render for SearchBar {
                                     })
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         Self::apply_type_filter(&state, &list_view, key, cx);
-                                        let _ = this.update(cx, |_bar, cx| cx.notify());
+                                        this.update(cx, |_bar, cx| cx.notify());
                                     })
                                     .child(
                                         div()
@@ -336,7 +336,7 @@ impl Render for SearchBar {
                                     .on_mouse_down(MouseButton::Left, {
                                         let this = this.clone();
                                         move |_ev, _window, cx| {
-                                            let _ = this.update(cx, |bar, cx| {
+                                            this.update(cx, |bar, cx| {
                                                 bar.tag_panel_open = !bar.tag_panel_open;
                                                 cx.notify();
                                             });

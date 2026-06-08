@@ -2,6 +2,9 @@
 
 use std::rc::Rc;
 
+type TagToggleHandler = Rc<dyn Fn(i64, TagState, &mut gpui::Window, &mut gpui::App)>;
+type PanelHandler = Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -20,9 +23,9 @@ pub enum TagState {
 pub struct TagPickerPanel {
     tags: Vec<(TagInfo, TagState)>,
     is_batch: bool,
-    on_toggle: Option<Rc<dyn Fn(i64, TagState, &mut Window, &mut App)>>,
-    on_clear: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-    on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_toggle: Option<TagToggleHandler>,
+    on_clear: Option<PanelHandler>,
+    on_close: Option<PanelHandler>,
     theme: ClippiTheme,
 }
 
@@ -142,17 +145,15 @@ impl RenderOnce for TagPickerPanel {
                                 .flex_row()
                                 .gap(px(4.))
                                 .children(row.into_iter().map(move |(tag, state)| {
-                                    tag_cell(
-                                        tag,
-                                        state,
-                                        on_toggle.clone(),
+                                    let cell_colors = TagCellColors {
                                         active_bg,
                                         input_bg,
-                                        btn_hover,
+                                        hover_bg: btn_hover,
                                         accent,
                                         text_1,
                                         text_2,
-                                    )
+                                    };
+                                    tag_cell(tag, state, on_toggle.clone(), &cell_colors)
                                 }))
                         })),
                 )
@@ -164,7 +165,7 @@ fn icon_button(
     icon: &'static str,
     color: Rgba,
     hover_bg: Rgba,
-    handler: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    handler: Option<PanelHandler>,
 ) -> Div {
     let button = div()
         .w(px(22.))
@@ -193,20 +194,24 @@ fn icon_button(
     }
 }
 
-fn tag_cell(
-    tag: TagInfo,
-    state: TagState,
-    on_toggle: Option<Rc<dyn Fn(i64, TagState, &mut Window, &mut App)>>,
+struct TagCellColors {
     active_bg: Rgba,
     input_bg: Rgba,
     hover_bg: Rgba,
     accent: Rgba,
     text_1: Rgba,
     text_2: Rgba,
+}
+
+fn tag_cell(
+    tag: TagInfo,
+    state: TagState,
+    on_toggle: Option<TagToggleHandler>,
+    colors: &TagCellColors,
 ) -> Div {
     let tag_id = tag.id;
     let active = state != TagState::None;
-    let tag_color = color_from_hex(&tag.color, accent);
+    let tag_color = color_from_hex(&tag.color, colors.accent);
     let state_mark = match state {
         TagState::All => "*",
         TagState::Partial => "-",
@@ -217,14 +222,24 @@ fn tag_cell(
         .w(px(140.))
         .h(px(30.))
         .rounded(px(5.))
-        .bg(if active { active_bg } else { input_bg })
+        .bg(if active {
+            colors.active_bg
+        } else {
+            colors.input_bg
+        })
         .px(px(6.))
         .flex()
         .flex_row()
         .items_center()
         .gap(px(5.))
         .cursor(CursorStyle::PointingHand)
-        .hover(move |style| style.bg(if active { active_bg } else { hover_bg }))
+        .hover(move |style| {
+            style.bg(if active {
+                colors.active_bg
+            } else {
+                colors.hover_bg
+            })
+        })
         .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tag_color))
         .child(
             div()
@@ -235,7 +250,7 @@ fn tag_cell(
                 } else {
                     FontWeight::NORMAL
                 })
-                .text_color(if active { accent } else { text_1 })
+                .text_color(if active { colors.accent } else { colors.text_1 })
                 .truncate()
                 .child(tag.name),
         )
@@ -243,7 +258,7 @@ fn tag_cell(
             div()
                 .w(px(12.))
                 .text_size(px(11.))
-                .text_color(if active { accent } else { text_2 })
+                .text_color(if active { colors.accent } else { colors.text_2 })
                 .child(state_mark),
         );
 

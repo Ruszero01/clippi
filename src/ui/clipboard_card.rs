@@ -1,4 +1,4 @@
-//! Clipboard card — renders a single clipboard entry.
+//! Clipboard card 鈥?renders a single clipboard entry.
 //!
 //! Matches the original Slint ClipboardList.slint card design:
 //! - 10px border-radius, surface bg, 1px border, drop shadow
@@ -18,12 +18,18 @@ use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
 use crate::core::types::{
-    format_relative_time, is_email, is_markdown_like, is_phone, mask_sensitive_preview, url_domain,
-    url_path, ClipboardItem, ContentType, FileData, FileInfo, RichData,
+    format_relative_time, get_extension_label, is_email, is_markdown_like, is_phone,
+    mask_sensitive_preview, parse_hex_color, url_domain, url_path, ClipboardItem, ContentType,
+    FileData, FileInfo, RichData,
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
 use super::theme::ClippiTheme;
+
+type CardClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
+type CardIndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+type CardActionHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+type CardWindowHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Get a content type iconfont glyph for display.
 fn type_icon(item: &ClipboardItem) -> &'static str {
@@ -81,17 +87,15 @@ fn type_label(item: &ClipboardItem) -> String {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
             if fd.files.len() <= 1 {
                 // Single file: show extension label
-                let ext = std::path::Path::new(
-                    &fd.files.first().map(|f| f.name.clone()).unwrap_or_default(),
-                )
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_uppercase();
-                if ext.is_empty() {
+                let label = fd
+                    .files
+                    .first()
+                    .map(|f| get_extension_label(&f.name))
+                    .unwrap_or_default();
+                if label == "file" || label == "dir" {
                     "File".into()
                 } else {
-                    ext
+                    label.trim_start_matches('.').to_uppercase()
                 }
             } else {
                 format!("{} Files", fd.files.len())
@@ -109,17 +113,13 @@ fn has_qr_code(item: &ClipboardItem) -> bool {
 }
 
 fn color_from_hex(hex: &str, fallback: Rgba) -> Rgba {
-    let hex = hex.trim().trim_start_matches('#');
-    if hex.len() == 6 {
-        if let Ok(value) = u32::from_str_radix(hex, 16) {
-            return rgb(value);
-        }
-    }
-    fallback
+    parse_hex_color(hex)
+        .map(|(r, g, b)| rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32))
+        .unwrap_or(fallback)
 }
 
 /// Split a filename into stem and extension using OS path parsing.
-/// Handles multi-dot names correctly: "archive.tar.gz" → ("archive.tar", ".gz")
+/// Handles multi-dot names correctly: "archive.tar.gz" 鈫?("archive.tar", ".gz")
 fn split_name_ext(filename: &str) -> (String, String) {
     use std::path::Path;
     let path = Path::new(filename);
@@ -556,18 +556,17 @@ pub struct ClipboardCard {
     index: usize,
     theme: ClippiTheme,
     selection_order: usize,
-    on_click: Option<Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>>,
-    on_right_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    on_click: Option<CardClickHandler>,
     is_hovered: bool,
     selected_count: usize,
-    on_toolbar_action: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
-    on_double_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    on_toolbar_action: Option<CardActionHandler>,
+    on_double_click: Option<CardIndexHandler>,
     /// Whether this card is in note-editing mode (shows inline editor).
     editing: bool,
     /// Shared InputState from ClipboardListView (only Some when editing is true).
     note_input: Option<Entity<InputState>>,
     /// Called when note editing is committed (Enter / confirm button).
-    on_commit_note: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_commit_note: Option<CardWindowHandler>,
     show_source_app: bool,
     show_original_on_hover: bool,
 }
@@ -581,7 +580,6 @@ impl ClipboardCard {
             theme: ClippiTheme::dark(),
             selection_order: 0,
             on_click: None,
-            on_right_click: None,
             is_hovered: false,
             selected_count: 0,
             on_toolbar_action: None,
@@ -594,16 +592,8 @@ impl ClipboardCard {
         }
     }
 
-    pub fn on_click(
-        mut self,
-        handler: Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>,
-    ) -> Self {
+    pub fn on_click(mut self, handler: CardClickHandler) -> Self {
         self.on_click = Some(handler);
-        self
-    }
-
-    pub fn on_right_click(mut self, handler: Rc<dyn Fn(usize, &mut Window, &mut App)>) -> Self {
-        self.on_right_click = Some(handler);
         self
     }
 
@@ -637,7 +627,7 @@ impl ClipboardCard {
         self
     }
 
-    pub fn on_double_click(mut self, handler: Rc<dyn Fn(usize, &mut Window, &mut App)>) -> Self {
+    pub fn on_double_click(mut self, handler: CardIndexHandler) -> Self {
         self.on_double_click = Some(handler);
         self
     }
@@ -680,7 +670,6 @@ impl RenderOnce for ClipboardCard {
             theme,
             selection_order,
             on_click,
-            on_right_click,
             is_hovered,
             selected_count,
             on_toolbar_action,
@@ -776,12 +765,12 @@ impl RenderOnce for ClipboardCard {
                 MouseButton::Left,
                 move |ev, window, cx| {
                     if ev.click_count == 2 {
-                        // Double-click → paste
+                        // Double-click 鈫?paste
                         if let Some(ref dbl_handler) = double_click_handler {
                             dbl_handler(index, window, cx);
                         }
                     } else {
-                        // Single click → select
+                        // Single click 鈫?select
                         handler(index, ev.modifiers, window, cx);
                     }
                 },
@@ -790,16 +779,7 @@ impl RenderOnce for ClipboardCard {
             base
         };
 
-        // Wire right-click handler
-        let base = if let Some(handler) = on_right_click {
-            base.on_mouse_down(MouseButton::Right, move |_ev, window, cx| {
-                handler(index, window, cx);
-            })
-        } else {
-            base
-        };
-
-        // ── Left: icon area (top-aligned with content) ──
+        // 鈹€鈹€ Left: icon area (top-aligned with content) 鈹€鈹€
         let icon_area = match content_type {
             ContentType::Color => div()
                 .w(px(36.))
@@ -952,9 +932,9 @@ impl RenderOnce for ClipboardCard {
                 ),
         };
 
-        // ── Right: content area ──
+        // 鈹€鈹€ Right: content area 鈹€鈹€
         let content = if editing {
-            // ── Inline note editor ──
+            // 鈹€鈹€ Inline note editor 鈹€鈹€
             let commit = on_commit_note.clone();
             let note_input_ref = note_input.clone();
 
@@ -1003,7 +983,7 @@ impl RenderOnce for ClipboardCard {
                                     .font_family("iconfont")
                                     .text_size(px(12.))
                                     .text_color(accent)
-                                    .child("\u{e611}"), // ✓ checkmark
+                                    .child("\u{e611}"), // 鉁?checkmark
                             ),
                     ),
                 )
@@ -1017,7 +997,7 @@ impl RenderOnce for ClipboardCard {
                         }
                     }
                 })
-        } else if !note.is_empty() && !(show_original_on_hover && is_hovered) {
+        } else if !(note.is_empty() || show_original_on_hover && is_hovered) {
             div().flex_1().flex().items_center().child(
                 div()
                     .w_full()
@@ -1071,7 +1051,7 @@ impl RenderOnce for ClipboardCard {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(text_3)
-                                    .child(format!("{} × {}", img_w, img_h)),
+                                    .child(format!("{} 脳 {}", img_w, img_h)),
                             )
                     }
                 }
@@ -1237,7 +1217,7 @@ impl RenderOnce for ClipboardCard {
             }
         };
 
-        // ── Bottom info row ──
+        // 鈹€鈹€ Bottom info row 鈹€鈹€
         let bottom_info = div()
             .absolute()
             .right(px(10.))
@@ -1278,7 +1258,7 @@ impl RenderOnce for ClipboardCard {
                     .child(div().text_size(px(9.)).text_color(text_2).child(time_str)),
             );
 
-        // ── Assemble card ──
+        // 鈹€鈹€ Assemble card 鈹€鈹€
         let card = base.child(icon_area).child(content);
         // Hide bottom tags/time row during note editing
         let card = if !editing {
@@ -1303,7 +1283,7 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // Selection badge — small circle centered at card top-left corner (0,0).
+        // Selection badge 鈥?small circle centered at card top-left corner (0,0).
         // Only shown when multi-selecting (>1).
         let card = if selected && selected_count > 1 {
             card.child(
@@ -1330,7 +1310,7 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // ── Hover toolbar (hidden during note editing) ──
+        // 鈹€鈹€ Hover toolbar (hidden during note editing) 鈹€鈹€
         if is_hovered && !editing {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected);
             card.child(
