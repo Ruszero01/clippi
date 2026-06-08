@@ -62,6 +62,9 @@ fn main() {
     // AppSettings::load().
     core::paths::init_portable_mode();
     core::paths::migrate_legacy_files();
+    // If running in portable mode for the first time after upgrading from
+    // a non-portable install, migrate existing data from the system dir.
+    core::paths::migrate_portable_data();
     init_logging();
 
     log::info!("Starting Clippi (GPUI experiment)");

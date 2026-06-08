@@ -199,3 +199,92 @@ pub fn migrate_legacy_files() {
         }
     }
 }
+
+/// In portable mode, migrate existing data from the system data directory
+/// to the exe directory. This handles the case where a user previously ran
+/// Clippi as a non-portable install (data in %LOCALAPPDATA%/Clippi/) and
+/// then upgrades to a portable install (exe in a writable directory).
+///
+/// Only migrates if:
+/// - Portable mode is active (exe dir writable)
+/// - System data dir has an existing database
+/// - Exe dir does NOT already have a database (avoid overwriting)
+///
+/// Copies: clippi.db, clippi.toml (if exists), images/ directory (if exists).
+/// Non-fatal: logs warnings on failure, the app will start with a fresh DB.
+pub fn migrate_portable_data() {
+    if !is_portable_mode() {
+        return;
+    }
+
+    let system_db = app_data_dir().join(DB_FILE);
+    let portable_db = exe_dir().join(DB_FILE);
+
+    // Only migrate if system has data and portable doesn't
+    if !system_db.exists() {
+        log::info!("Portable: no system data to migrate");
+        return;
+    }
+    if portable_db.exists() {
+        log::info!("Portable: exe dir already has data, skipping migration");
+        return;
+    }
+
+    log::info!(
+        "Portable: migrating data from {} to {}",
+        app_data_dir().display(),
+        exe_dir().display()
+    );
+
+    // Copy database
+    if let Err(e) = fs::copy(&system_db, &portable_db) {
+        log::error!(
+            "Portable: failed to migrate database from {} to {}: {e}",
+            system_db.display(),
+            portable_db.display()
+        );
+        return;
+    }
+
+    // Copy config (if exists and not already present)
+    let system_config = app_data_dir().join(CONFIG_FILE);
+    let portable_config = exe_dir().join(CONFIG_FILE);
+    if system_config.exists() && !portable_config.exists() {
+        if let Err(e) = fs::copy(&system_config, &portable_config) {
+            log::warn!("Portable: failed to migrate config: {e}");
+        }
+    }
+
+    // Copy images directory (recursive)
+    let system_images = app_data_dir().join("images");
+    let portable_images = exe_dir().join("images");
+    if system_images.exists() && system_images.is_dir() {
+        copy_dir_recursive(&system_images, &portable_images);
+    }
+
+    log::info!("Portable: data migration complete");
+}
+
+/// Recursively copy a directory. Non-fatal — logs and skips on errors.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+    if let Err(e) = fs::create_dir_all(dst) {
+        log::warn!("Portable: failed to create dir {}: {e}", dst.display());
+        return;
+    }
+    let entries = match fs::read_dir(src) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("Portable: failed to read dir {}: {e}", src.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest);
+        } else if let Err(e) = fs::copy(&path, &dest) {
+            log::warn!("Portable: failed to copy {}: {e}", path.display());
+        }
+    }
+}
