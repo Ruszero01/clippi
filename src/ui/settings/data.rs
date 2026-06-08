@@ -4,6 +4,7 @@
 //! Includes the reset-data-directory dialog for portable mode.
 
 use gpui::*;
+use gpui_component::input::Input;
 
 use crate::core::i18n;
 use crate::core::settings::migrate_database;
@@ -286,15 +287,30 @@ impl SettingsPanel {
                                     )),
                             ),
                     )
-                    // Right: max items value (text display for now)
+                    // Right: editable number input (80x28)
                     .child({
                         let state = state.clone();
-                        let val = state.read(cx).settings.max_items;
-                        let display = if val == 0 {
-                            i18n::tr("不限制", "Unlimited").to_string()
-                        } else {
-                            val.to_string()
-                        };
+                        let this = this.clone();
+
+                        // Lazy-create the InputState entity on first render.
+                        if self.max_items_input.is_none() {
+                            let current = state.read(cx).settings.max_items;
+                            let display = if current == 0 {
+                                String::new()
+                            } else {
+                                current.to_string()
+                            };
+                            let input = cx.new(|cx| {
+                                let mut s = gpui_component::input::InputState::new(
+                                    _window, cx,
+                                );
+                                s.set_value(&display, _window, cx);
+                                s
+                            });
+                            self.max_items_input = Some(input);
+                        }
+
+                        let this2 = this.clone();
                         div()
                             .w(px(80.))
                             .h(px(28.))
@@ -305,11 +321,42 @@ impl SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_center()
+                            .px(px(4.))
+                            // Handle Enter key to save the value.
+                            .on_key_down({
+                                let state = state.clone();
+                                move |ev: &KeyDownEvent, _window, cx| {
+                                    if ev.keystroke.key.as_str() == "enter" {
+                                        cx.stop_propagation();
+                                        let _ = this2.update(cx, |panel, cx| {
+                                            if let Some(ref input) = panel.max_items_input {
+                                                let text =
+                                                    input.read(cx).value().to_string();
+                                                let n: u32 =
+                                                    text.trim().parse().unwrap_or(0);
+                                                state.update(cx, |s, _cx| {
+                                                    s.settings.max_items = n;
+                                                    s.settings.save();
+                                                });
+                                            }
+                                            cx.notify();
+                                        });
+                                    }
+                                }
+                            })
                             .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(if val == 0 { text_3 } else { text_1 })
-                                    .child(display),
+                                Input::new(
+                                    self.max_items_input
+                                        .as_ref()
+                                        .expect("max_items_input just created"),
+                                )
+                                .appearance(false)
+                                .bordered(false)
+                                .focus_bordered(false)
+                                .w_full()
+                                .h(px(20.))
+                                .text_size(px(12.))
+                                .text_color(text_1),
                             )
                     })
             })

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use gpui_component::input::InputState;
 
 mod clipboard;
 mod general;
@@ -61,6 +62,8 @@ pub struct SettingsPanel {
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
     /// Reset-data-directory dialog state (portable mode only).
     pub reset_data_dialog: Option<ResetDataDirState>,
+    /// Input state for the max-items number input (lazy-created).
+    max_items_input: Option<Entity<InputState>>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -81,6 +84,7 @@ impl SettingsPanel {
             toggle_states: HashMap::new(),
             hotkey_confirm: None,
             reset_data_dialog: None,
+            max_items_input: None,
         }
     }
 
