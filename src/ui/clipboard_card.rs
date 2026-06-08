@@ -755,6 +755,9 @@ impl RenderOnce for ClipboardCard {
             .w_full()
             .h_full()
             .overflow_hidden()
+            .capture_any_mouse_up(|_ev, _window, cx| {
+                cx.stop_propagation();
+            })
             .bg(surface)
             .border(px(1.))
             .border_color(border_color)
