@@ -136,6 +136,7 @@ impl GpuiClipboardService {
                 log::error!("Failed to upsert clipboard item: {err}");
                 continue;
             }
+            state.sync_dirty.store(true, Ordering::SeqCst);
             changed = true;
 
             // ── Post-upsert: run detection for items that need it ──
@@ -197,9 +198,7 @@ impl GpuiClipboardService {
             match engine.recognize(std::path::Path::new(&img_path)) {
                 Ok(text) if !text.trim().is_empty() => {
                     let resolved = crate::core::paths::resolve_db_path(&db_path);
-                    if let Ok(db) =
-                        crate::core::db::Database::open(&resolved.to_string_lossy())
-                    {
+                    if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
                         if let Ok(Some(existing)) = db.get_by_hash(content_hash) {
                             let mut rd = RichData::from_json(&existing.rich_data);
                             if rd.ocr_text.is_none() {

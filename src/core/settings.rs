@@ -20,7 +20,7 @@ const APP_NAME: &str = "Clippi";
 const LAUNCH_AGENT_ID: &str = "com.clippi.launcher";
 
 /// Configuration for a single sync backend (persisted in settings).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendConfig {
     pub id: String,
     pub enabled: bool,

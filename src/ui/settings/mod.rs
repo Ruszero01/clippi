@@ -13,18 +13,20 @@ use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::input::InputState;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 
 mod clipboard;
+mod data;
 mod general;
 pub mod hotkey;
-mod data;
+mod sync;
 
-use hotkey::HotkeyConfirmAction;
 use data::ResetDataDirState;
+use hotkey::HotkeyConfirmAction;
 
 use crate::state::app::AppState;
+use crate::ui::add_backend::AddBackendPanel;
 use crate::ui::components::toggle::{render_toggle, ToggleTransitionState};
 use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
@@ -58,6 +60,8 @@ pub struct SettingsPanel {
     scroll_handle: ScrollHandle,
     /// Track toggle values + generation counter for transition animation.
     toggle_states: HashMap<String, ToggleTransitionState>,
+    backend_collapse_states: HashMap<String, BackendCollapseState>,
+    backend_panel: Entity<AddBackendPanel>,
     /// Pending hotkey blacklist confirmation (consumed by RootView).
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
     /// Reset-data-directory dialog state (portable mode only).
@@ -72,6 +76,12 @@ pub struct SettingsPanel {
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
 
+#[derive(Clone, Copy)]
+pub(crate) struct BackendCollapseState {
+    pub enabled: bool,
+    pub generation: u64,
+}
+
 impl SettingsPanel {
     pub fn new(
         state: Entity<AppState>,
@@ -80,8 +90,9 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let max_items_input = cx
-            .new(|cx| gpui_component::input::InputState::new(window, cx));
+        let max_items_input = cx.new(|cx| gpui_component::input::InputState::new(window, cx));
+        let backend_panel =
+            cx.new(|cx| AddBackendPanel::new(window_manager.clone(), theme.clone(), window, cx));
 
         // Subscribe to focus-out on the max-items InputState.
         // When the input loses focus, save and exit editing.
@@ -109,6 +120,8 @@ impl SettingsPanel {
             theme,
             scroll_handle: ScrollHandle::default(),
             toggle_states: HashMap::new(),
+            backend_collapse_states: HashMap::new(),
+            backend_panel,
             hotkey_confirm: None,
             reset_data_dialog: None,
             editing_max_items: false,
@@ -124,8 +137,14 @@ impl SettingsPanel {
 
     /// Reload theme from the computed ClippiTheme (called by RootView after ThemeChanged).
     pub fn reload_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
-        self.theme = theme;
+        self.theme = theme.clone();
+        self.backend_panel
+            .update(cx, |panel, cx| panel.set_theme(theme, cx));
         cx.notify();
+    }
+
+    pub fn backend_panel(&self) -> Entity<AddBackendPanel> {
+        self.backend_panel.clone()
     }
 }
 
@@ -281,8 +300,12 @@ impl Render for SettingsPanel {
                                                 2 => self
                                                     .render_hotkey_tab(window, cx)
                                                     .into_any_element(),
-                                                3 => self.render_data_tab(window, cx).into_any_element(),
-                                                4 => self.render_sync_tab().into_any_element(),
+                                                3 => self
+                                                    .render_data_tab(window, cx)
+                                                    .into_any_element(),
+                                                4 => self
+                                                    .render_sync_tab(window, cx)
+                                                    .into_any_element(),
                                                 _ => div().into_any_element(),
                                             }),
                                     ),
@@ -300,11 +323,8 @@ impl Render for SettingsPanel {
                                     ),
                             ),
                     )
-            // ── Reset data directory dialog (overlay) ──
-            .child(
-                self.render_reset_data_dialog(window, cx)
-                    .into_any_element(),
-            )
+                    // ── Reset data directory dialog (overlay) ──
+                    .child(self.render_reset_data_dialog(window, cx).into_any_element()),
             )
     }
 }
@@ -465,21 +485,5 @@ impl SettingsPanel {
     pub fn clear_hotkey_confirm(&mut self, cx: &mut Context<Self>) {
         self.hotkey_confirm = None;
         cx.notify();
-    }
-
-}
-
-// ── Tab rendering stubs (not yet migrated) ──
-
-impl SettingsPanel {
-    fn render_sync_tab(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(100.))
-            .text_color(self.theme.text_3)
-            .text_size(px(13.))
-            .child("Sync settings")
     }
 }

@@ -13,6 +13,7 @@ use crate::core::types::ContentType;
 use crate::core::types::FileData;
 use crate::core::types::RichData;
 use crate::core::types::TagInfo;
+use crate::state::sync::SyncState;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -67,6 +68,8 @@ pub struct AppState {
     pub foreground_app_icon_base64: String,
     /// Whether a hotkey recording is in progress (set by settings UI, cleared by WM poll).
     pub hotkey_recording: bool,
+    /// GPUI-facing sync status and backend snapshots.
+    pub sync: SyncState,
 }
 
 impl AppState {
@@ -99,6 +102,8 @@ impl AppState {
             Vec::new()
         });
 
+        let sync = SyncState::from_settings(&settings);
+
         Self {
             settings,
             db,
@@ -120,6 +125,7 @@ impl AppState {
             foreground_window_title: String::new(),
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
+            sync,
         }
     }
 

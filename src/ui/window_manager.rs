@@ -19,6 +19,7 @@ use crate::platform::hotkey::{create_hotkey_listener, HotkeyListener};
 use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
 use crate::services::gpui_clipboard::GpuiClipboardService;
+use crate::services::gpui_sync::GpuiSyncService;
 use crate::services::update;
 use crate::state::app::AppState;
 
@@ -40,6 +41,8 @@ pub enum WindowManagerEvent {
     /// Hotkey recording completed (success or error) — RootView should
     /// notify SettingsPanel to re-render with updated hotkey / recording state.
     HotkeyRecordingComplete,
+    /// Sync backend status or settings changed.
+    SyncChanged,
 }
 
 /// Unified window manager entity.
@@ -72,6 +75,7 @@ pub struct WindowManager {
     // ── Dependencies ──
     state: Entity<AppState>,
     clipboard_service: GpuiClipboardService,
+    sync_service: GpuiSyncService,
 
     // ── Raw window handle (HWND on Windows) ──
     #[allow(dead_code)]
@@ -113,6 +117,7 @@ impl WindowManager {
         let foreground_app_name = Arc::new(Mutex::new(String::new()));
 
         let clipboard_service = GpuiClipboardService::new();
+        let sync_service = GpuiSyncService::new(&settings, state.read(cx).sync_dirty.clone());
 
         // ── Initialize tray ──
         let tray = Some(TrayManager::new());
@@ -133,6 +138,7 @@ impl WindowManager {
             blacklist: settings.hotkey_blacklist.clone(),
             state,
             clipboard_service,
+            sync_service,
             tray,
             hwnd: 0,
             window_handle: None,
@@ -195,6 +201,9 @@ impl WindowManager {
 
         // 7. Capture window geometry for persistence
         self.capture_window_geometry(cx);
+
+        // 8. Cloud sync
+        self.poll_sync(cx);
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
@@ -273,6 +282,17 @@ impl WindowManager {
             .update(cx, |state, _cx| self.clipboard_service.poll_state(state));
         if changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
+    }
+
+    fn poll_sync(&mut self, cx: &mut Context<Self>) {
+        let sync_service = &mut self.sync_service;
+        let outcome = self.state.update(cx, |state, _cx| sync_service.poll(state));
+        if outcome.data_changed {
+            cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
+        if outcome.state_changed {
+            cx.emit(WindowManagerEvent::SyncChanged);
         }
     }
 
@@ -719,6 +739,204 @@ impl WindowManager {
             hk.unregister();
             hk.start_recording();
         }
+    }
+
+    pub fn toggle_sync_auto_enabled(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            let next = !state.settings.sync_auto_enabled;
+            if next && state.settings.sync_backends.is_empty() {
+                state.toast_message = Some("Please add a sync service first".into());
+                return None;
+            }
+            state.settings.sync_auto_enabled = next;
+            state.settings.save();
+            state.sync.auto_enabled = next;
+            Some(state.settings.clone())
+        });
+        if let Some(settings) = settings {
+            self.sync_service.reload_from_settings(&settings);
+            if settings.sync_auto_enabled {
+                self.sync_service.trigger_pull_all();
+            }
+            cx.emit(WindowManagerEvent::SyncChanged);
+        } else {
+            cx.emit(WindowManagerEvent::SyncChanged);
+        }
+    }
+
+    pub fn toggle_sync_favorites_only(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state.settings.sync_favorites_only = !state.settings.sync_favorites_only;
+            state.settings.save();
+            state.sync.favorites_only = state.settings.sync_favorites_only;
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn set_backend_sync_interval(&mut self, id: &str, secs: u64, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
+                config.sync_interval_secs = Some(secs);
+                state.settings.save();
+            }
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn sync_backend_now(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.sync_service.trigger_backend_sync(id);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn add_local_folder_backend(
+        &mut self,
+        name: String,
+        folder_path: String,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state
+                .settings
+                .sync_backends
+                .push(crate::core::settings::BackendConfig {
+                    id: crate::core::settings::generate_id(),
+                    enabled: true,
+                    backend_type: "local_folder".into(),
+                    name,
+                    folder_path,
+                    device_name: String::new(),
+                    last_sync_at: String::new(),
+                    last_item_count: 0,
+                    last_tag_count: 0,
+                    sync_interval_secs: Some(60),
+                    webdav_url: String::new(),
+                    webdav_username: String::new(),
+                    webdav_password: String::new(),
+                });
+            state.settings.save();
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn add_webdav_backend(
+        &mut self,
+        name: String,
+        url: String,
+        username: String,
+        password: String,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state
+                .settings
+                .sync_backends
+                .push(crate::core::settings::BackendConfig {
+                    id: crate::core::settings::generate_id(),
+                    enabled: true,
+                    backend_type: "webdav".into(),
+                    name,
+                    folder_path: String::new(),
+                    device_name: crate::services::backends::local_folder::hostname(),
+                    last_sync_at: String::new(),
+                    last_item_count: 0,
+                    last_tag_count: 0,
+                    sync_interval_secs: Some(600),
+                    webdav_url: url,
+                    webdav_username: username,
+                    webdav_password: password,
+                });
+            state.settings.save();
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn edit_backend(
+        &mut self,
+        id: &str,
+        name: String,
+        folder_path: String,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = self.state.update(cx, |state, _cx| {
+            if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
+                config.name = name;
+                config.folder_path = folder_path;
+                state.settings.save();
+            }
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn edit_webdav_backend(
+        &mut self,
+        id: &str,
+        name: String,
+        url: String,
+        username: String,
+        password: String,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = self.state.update(cx, |state, _cx| {
+            if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
+                config.name = name;
+                config.webdav_url = url;
+                config.webdav_username = username;
+                if !password.is_empty() {
+                    config.webdav_password = password;
+                }
+                state.settings.save();
+            }
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn remove_sync_backend(&mut self, id: &str, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state
+                .settings
+                .sync_backends
+                .retain(|config| config.id != id);
+            state.settings.save();
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn toggle_sync_backend(&mut self, id: &str, cx: &mut Context<Self>) {
+        let (settings, enabled) = self.state.update(cx, |state, _cx| {
+            let mut enabled = false;
+            if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
+                config.enabled = !config.enabled;
+                enabled = config.enabled;
+                state.settings.save();
+            }
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            (state.settings.clone(), enabled)
+        });
+        self.sync_service.reload_from_settings(&settings);
+        if enabled {
+            self.sync_service.trigger_backend_sync(id);
+        }
+        cx.emit(WindowManagerEvent::SyncChanged);
     }
 
     /// Get a clone of the current foreground app name.

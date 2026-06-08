@@ -79,8 +79,15 @@ impl RootView {
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
         let search_bar = cx
             .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
-        let settings_panel = cx
-            .new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), window, cx));
+        let settings_panel = cx.new(|cx| {
+            SettingsPanel::new(
+                state.clone(),
+                window_manager.clone(),
+                theme.clone(),
+                window,
+                cx,
+            )
+        });
         let edit_panel = cx.new(|cx| EditPanel::new(state.clone(), theme.clone(), window, cx));
         let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone(), &theme));
         let tag_filter_panel = cx.new(|cx| {
@@ -125,16 +132,26 @@ impl RootView {
                         cx.notify();
                     });
                 }
+                WindowManagerEvent::SyncChanged => {
+                    let _ = this.settings_panel.update(cx, |_panel, cx| {
+                        cx.notify();
+                    });
+                    cx.notify();
+                }
             },
         );
 
         let wm = window_manager.clone();
         let titlebar_for_events = titlebar.clone();
+        let backend_panel = settings_panel.read(cx).backend_panel();
         let _subscriptions = vec![
             cx.observe(&search_bar, |_this, _, cx| {
                 cx.notify();
             }),
             cx.observe(&tag_filter_panel, |_this, _, cx| {
+                cx.notify();
+            }),
+            cx.observe(&backend_panel, |_this, _, cx| {
                 cx.notify();
             }),
             cx.subscribe(
@@ -275,8 +292,10 @@ impl RootView {
                     }
                     SettingsEvent::DataError(msg) => {
                         this.state.update(cx, |s, _cx| {
-                            s.toast_message =
-                                Some(format!("{}: {msg}", i18n::tr("数据操作失败", "Data operation failed")));
+                            s.toast_message = Some(format!(
+                                "{}: {msg}",
+                                i18n::tr("数据操作失败", "Data operation failed")
+                            ));
                         });
                         cx.notify();
                     }
@@ -320,6 +339,8 @@ impl Render for RootView {
         let list_view = self.list_view.clone();
         let search_bar = self.search_bar.clone();
         let settings_panel = self.settings_panel.clone();
+        let backend_panel = self.settings_panel.read(cx).backend_panel();
+        let backend_panel_visible = backend_panel.read(cx).is_visible();
         let edit_panel = self.edit_panel.clone();
         let tag_filter_panel = self.tag_filter_panel.clone();
         let tag_panel_open = self.search_bar.read(cx).tag_panel_open();
@@ -694,12 +715,7 @@ impl Render for RootView {
             )
             // ── Settings hotkey blacklist ConfirmDialog ──
             .when(
-                is_settings
-                    && self
-                        .settings_panel
-                        .read(cx)
-                        .hotkey_confirm
-                        .is_some(),
+                is_settings && self.settings_panel.read(cx).hotkey_confirm.is_some(),
                 |root| {
                     let settings = self.settings_panel.clone();
                     let wm = self.window_manager.clone();
@@ -723,7 +739,8 @@ impl Render for RootView {
                                             }
                                         });
                                         // Sync WindowManager's blacklist from settings
-                                        let updated = app_state.read(cx).settings.hotkey_blacklist.clone();
+                                        let updated =
+                                            app_state.read(cx).settings.hotkey_blacklist.clone();
                                         wm.update(cx, |wm, _cx| {
                                             wm.set_blacklist(updated);
                                         });
@@ -755,7 +772,8 @@ impl Render for RootView {
                                             s.settings.save();
                                         });
                                         // Sync WindowManager's blacklist from settings
-                                        let updated = app_state.read(cx).settings.hotkey_blacklist.clone();
+                                        let updated =
+                                            app_state.read(cx).settings.hotkey_blacklist.clone();
                                         wm.update(cx, |wm, _cx| {
                                             wm.set_blacklist(updated);
                                         });
@@ -788,6 +806,17 @@ impl Render for RootView {
                     )
                 },
             )
+            .when(is_settings && backend_panel_visible, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .child(backend_panel),
+                )
+            })
             .when(
                 {
                     let toast_visible = self.state.read(cx).toast_message.is_some();
