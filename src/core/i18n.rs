@@ -22,6 +22,7 @@ pub fn is_en() -> bool {
 
 /// Get the current language code.
 #[inline]
+#[allow(dead_code)]
 pub fn current_language() -> &'static str {
     if is_en() {
         "en"
@@ -45,6 +46,7 @@ macro_rules! define_i18n {
     ($($key:ident: ($zh:literal, $en:literal)),* $(,)?) => {
         /// Every user-visible string key — compile-time safe.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[allow(dead_code)]
         pub enum I18nKey {
             $($key,)*
         }
