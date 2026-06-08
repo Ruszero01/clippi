@@ -73,6 +73,7 @@ impl AppState {
     /// Open the database and load initial data.
     pub fn new(settings: AppSettings) -> Self {
         let db_path = settings.resolve_db_path();
+        crate::core::paths::init_images_dir(&settings.db_path);
         let order_by = if settings.sort_by_created {
             "created_at"
         } else {

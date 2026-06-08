@@ -12,6 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_transitions::WindowUseTransition;
 
+use crate::core::i18n;
 use crate::state::app::AppState;
 use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
@@ -269,6 +270,13 @@ impl RootView {
                     SettingsEvent::ShowHotkeyConfirm(action) => {
                         let _ = this.settings_panel.update(cx, |panel, _cx| {
                             panel.hotkey_confirm = Some(action.clone());
+                        });
+                        cx.notify();
+                    }
+                    SettingsEvent::DataError(msg) => {
+                        this.state.update(cx, |s, _cx| {
+                            s.toast_message =
+                                Some(format!("{}: {msg}", i18n::tr("数据操作失败", "Data operation failed")));
                         });
                         cx.notify();
                     }

@@ -31,8 +31,8 @@ fn ensure_single_instance() -> bool {
     std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
 }
 
-fn init_logging(db_path: &str) {
-    let log_path = core::paths::log_path(db_path);
+fn init_logging() {
+    let log_path = core::paths::log_path();
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -57,8 +57,12 @@ fn main() {
         return;
     }
 
-    let db_path = core::paths::resolve_db_path("");
-    init_logging(&db_path.to_string_lossy());
+    // Detect portable mode before loading any settings (so config/log paths
+    // are resolved correctly). Must run before init_logging() and
+    // AppSettings::load().
+    core::paths::init_portable_mode();
+    core::paths::migrate_legacy_files();
+    init_logging();
 
     log::info!("Starting Clippi (GPUI experiment)");
 
@@ -71,6 +75,9 @@ fn main() {
         }
 
         let settings = AppSettings::load();
+
+        // Initialize images cache directory — follows db_path if set.
+        core::paths::init_images_dir(&settings.db_path);
 
         // Set gpui_component theme based on user settings (not hardcoded Dark).
         let is_dark = match settings.theme.as_str() {

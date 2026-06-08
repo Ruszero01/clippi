@@ -18,8 +18,10 @@ use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 mod clipboard;
 mod general;
 pub mod hotkey;
+mod data;
 
 use hotkey::HotkeyConfirmAction;
+use data::ResetDataDirState;
 
 use crate::state::app::AppState;
 use crate::ui::components::toggle::{render_toggle, ToggleTransitionState};
@@ -40,6 +42,8 @@ pub enum SettingsEvent {
     HotkeyError(String),
     /// User clicked add/remove blacklist — RootView should show a ConfirmDialog.
     ShowHotkeyConfirm(HotkeyConfirmAction),
+    /// Data settings error — RootView should show a toast.
+    DataError(String),
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}
@@ -55,6 +59,8 @@ pub struct SettingsPanel {
     toggle_states: HashMap<String, ToggleTransitionState>,
     /// Pending hotkey blacklist confirmation (consumed by RootView).
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
+    /// Reset-data-directory dialog state (portable mode only).
+    pub reset_data_dialog: Option<ResetDataDirState>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -74,6 +80,7 @@ impl SettingsPanel {
             scroll_handle: ScrollHandle::default(),
             toggle_states: HashMap::new(),
             hotkey_confirm: None,
+            reset_data_dialog: None,
         }
     }
 
@@ -241,7 +248,7 @@ impl Render for SettingsPanel {
                                                 2 => self
                                                     .render_hotkey_tab(window, cx)
                                                     .into_any_element(),
-                                                3 => self.render_data_tab().into_any_element(),
+                                                3 => self.render_data_tab(window, cx).into_any_element(),
                                                 4 => self.render_sync_tab().into_any_element(),
                                                 _ => div().into_any_element(),
                                             }),
@@ -259,7 +266,12 @@ impl Render for SettingsPanel {
                                             .scrollbar_show(ScrollbarShow::Scrolling),
                                     ),
                             ),
-                    ),
+                    )
+            // ── Reset data directory dialog (overlay) ──
+            .child(
+                self.render_reset_data_dialog(window, cx)
+                    .into_any_element(),
+            )
             )
     }
 }
@@ -421,22 +433,12 @@ impl SettingsPanel {
         self.hotkey_confirm = None;
         cx.notify();
     }
+
 }
 
 // ── Tab rendering stubs (not yet migrated) ──
 
 impl SettingsPanel {
-    fn render_data_tab(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(100.))
-            .text_color(self.theme.text_3)
-            .text_size(px(13.))
-            .child("Data settings")
-    }
-
     fn render_sync_tab(&self) -> impl IntoElement {
         div()
             .flex()

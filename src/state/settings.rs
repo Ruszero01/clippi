@@ -70,6 +70,20 @@ impl SettingsState {
         self.inner.max_items
     }
 
+    pub fn db_path(&self) -> &str {
+        &self.inner.db_path
+    }
+
+    pub fn set_db_path(&mut self, path: String) {
+        self.inner.db_path = path;
+        self.save();
+    }
+
+    pub fn set_max_items(&mut self, n: u32) {
+        self.inner.max_items = n;
+        self.save();
+    }
+
     // ── Mutation helpers ──
 
     pub fn set_theme(&mut self, theme: String) {
