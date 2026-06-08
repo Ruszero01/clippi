@@ -135,7 +135,7 @@ pub struct ClipboardItem {
     pub source_app_icon: String, // base64-encoded PNG icon
     pub size: i64,               // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
-    pub meta_type: String, // subtype for plain_text: "" | "email" | "phone"
+    pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html"
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -469,6 +469,32 @@ pub fn is_phone(text: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Check if plain text uses common Markdown structure.
+///
+/// This is intentionally conservative so ordinary prose with punctuation does
+/// not get promoted to rich text by accident.
+pub fn is_markdown_like(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 3 {
+        return false;
+    }
+
+    trimmed.contains("```")
+        || trimmed.contains("**")
+        || trimmed.contains("__")
+        || (trimmed.contains('[') && trimmed.contains("]("))
+        || trimmed.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("# ")
+                || line.starts_with("## ")
+                || line.starts_with("### ")
+                || line.starts_with("- ")
+                || line.starts_with("* ")
+                || line.starts_with("> ")
+                || line.starts_with("1. ")
+        })
 }
 
 /// Check if text is solely a file system path (Windows absolute, UNC, or Unix absolute).

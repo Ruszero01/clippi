@@ -6,8 +6,8 @@
 use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
 use crate::core::types::{
-    is_email, is_image_extension, is_path, is_phone, is_url, ClipboardItem, ContentType, FileData,
-    FileInfo, RichData,
+    is_email, is_image_extension, is_markdown_like, is_path, is_phone, is_url, ClipboardItem,
+    ContentType, FileData, FileInfo, RichData,
 };
 use crate::platform::favicon;
 use crate::platform::source;
@@ -267,6 +267,18 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                     Some(&rich),
                 ));
             }
+        }
+
+        if is_markdown_like(&text) {
+            let mut item = ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::RichText,
+                source_info.as_ref(),
+                None,
+            );
+            item.meta_type = "markdown".into();
+            return Some(item);
         }
 
         return Some(ClipboardItem::new_text(

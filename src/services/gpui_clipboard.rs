@@ -90,6 +90,7 @@ impl GpuiClipboardService {
             if state.settings.copy_as_plain_text && item.content_type == ContentType::RichText {
                 item.content_type = ContentType::PlainText;
                 item.rich_data.clear();
+                item.meta_type.clear();
             }
 
             item.size = compute_size(&item);

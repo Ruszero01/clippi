@@ -32,6 +32,12 @@ pub(crate) enum ConfirmDialogState {
     DeleteBatch { count: usize },
 }
 
+pub enum ClipboardListEvent {
+    OpenEdit(i64),
+}
+
+impl EventEmitter<ClipboardListEvent> for ClipboardListView {}
+
 /// The clipboard list view entity.
 pub struct ClipboardListView {
     items: Vec<ClipboardItem>,
@@ -544,7 +550,11 @@ impl ClipboardListView {
                 );
             }
             // Edit panel migration is tracked separately.
-            "edit" => {}
+            "edit" => {
+                if let Some(ref item) = self.context_menu_item {
+                    cx.emit(ClipboardListEvent::OpenEdit(item.id));
+                }
+            }
             _ => {}
         }
         self.hide_context_menu(cx);
@@ -631,7 +641,13 @@ impl ClipboardListView {
                 }
             }
             // Edit panel migration is tracked separately.
-            "edit" => {}
+            "edit" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        cx.emit(ClipboardListEvent::OpenEdit(item.id));
+                    }
+                }
+            }
             _ => {}
         }
     }

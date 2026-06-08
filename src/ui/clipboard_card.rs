@@ -18,8 +18,8 @@ use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
 use crate::core::types::{
-    format_relative_time, is_email, is_phone, mask_sensitive_preview, url_domain, url_path,
-    ClipboardItem, ContentType, FileData, FileInfo, RichData,
+    format_relative_time, is_email, is_markdown_like, is_phone, mask_sensitive_preview, url_domain,
+    url_path, ClipboardItem, ContentType, FileData, FileInfo, RichData,
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
@@ -59,6 +59,12 @@ fn type_label(item: &ClipboardItem) -> String {
     match item.content_type {
         ContentType::PlainText => "Text".into(),
         ContentType::RichText => {
+            if item.meta_type == "markdown" {
+                return "MD".into();
+            }
+            if item.meta_type == "html" {
+                return "HTML".into();
+            }
             let rich = RichData::from_json(&item.rich_data);
             if rich
                 .html
@@ -182,6 +188,13 @@ struct StyledHtmlSpan {
 fn rich_preview(item: &ClipboardItem) -> RichPreview {
     if item.content_type == ContentType::RichText {
         let rich = RichData::from_json(&item.rich_data);
+        if item.meta_type == "markdown" {
+            return RichPreview::Markdown(item.full_text.clone());
+        }
+        if item.meta_type == "html" {
+            let html = rich.html.unwrap_or_else(|| item.full_text.clone());
+            return RichPreview::Html(normalize_clipboard_html_for_render(&html));
+        }
         if let Some(html) = rich.html.filter(|html| !html.trim().is_empty()) {
             let html = normalize_clipboard_html_for_render(&html);
             if let Some(lines) = parse_styled_html_lines(&html) {
@@ -400,26 +413,6 @@ fn parse_cf_html_offset(header: &str, key: &str) -> Option<usize> {
         line.strip_prefix(key)
             .and_then(|value| value.trim().parse::<usize>().ok())
     })
-}
-
-fn is_markdown_like(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.len() < 3 {
-        return false;
-    }
-
-    trimmed.contains("**")
-        || trimmed.contains("__")
-        || trimmed.contains("```")
-        || (trimmed.contains('[') && trimmed.contains("]("))
-        || trimmed.lines().any(|line| {
-            let line = line.trim_start();
-            line.starts_with("# ")
-                || line.starts_with("## ")
-                || line.starts_with("- ")
-                || line.starts_with("* ")
-                || line.starts_with("> ")
-        })
 }
 
 fn rtf_to_plain_text(rtf: &str) -> String {

@@ -18,9 +18,11 @@ use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 /// Toast enter / exit animation duration.
 const TOAST_ANIM_DURATION: Duration = Duration::from_millis(220);
 
-use super::clipboard_list::{ClipboardListView, ConfirmDialogState};
+use super::clipboard_list::{ClipboardListEvent, ClipboardListView, ConfirmDialogState};
 use super::components::confirm_dialog::ConfirmDialog;
+use super::components::toast::Toast;
 use super::context_menu::{ContextMenu, MenuItemContext};
+use super::edit_panel::{EditPanel, EditPanelEvent};
 use super::search_bar::SearchBar;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
@@ -28,7 +30,6 @@ use super::tag_filter::{render_edit_panel, TagFilterPanel};
 use super::tag_picker::TagPickerPanel;
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
-use super::components::toast::Toast;
 
 pub struct RootView {
     state: Entity<AppState>,
@@ -37,6 +38,7 @@ pub struct RootView {
     list_view: Entity<ClipboardListView>,
     search_bar: Entity<SearchBar>,
     settings_panel: Entity<SettingsPanel>,
+    edit_panel: Entity<EditPanel>,
     sidebar: Entity<Sidebar>,
     tag_filter_panel: Entity<TagFilterPanel>,
     current_view: String,
@@ -77,6 +79,7 @@ impl RootView {
             .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
         let settings_panel = cx
             .new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), cx));
+        let edit_panel = cx.new(|cx| EditPanel::new(state.clone(), theme.clone(), window, cx));
         let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone(), &theme));
         let tag_filter_panel = cx.new(|cx| {
             TagFilterPanel::new(
@@ -125,6 +128,40 @@ impl RootView {
             cx.observe(&tag_filter_panel, |_this, _, cx| {
                 cx.notify();
             }),
+            cx.subscribe(
+                &list_view,
+                move |this, _list, event: &ClipboardListEvent, cx| match event {
+                    ClipboardListEvent::OpenEdit(id) => {
+                        let opened = this
+                            .state
+                            .update(cx, |state, _cx| state.start_edit_item(*id));
+                        if opened {
+                            this.current_view = "edit".into();
+                            this.search_bar
+                                .update(cx, |bar, cx| bar.close_tag_panel(cx));
+                            cx.notify();
+                        }
+                    }
+                },
+            ),
+            cx.subscribe(
+                &edit_panel,
+                move |this, _panel, event: &EditPanelEvent, cx| {
+                    match event {
+                        EditPanelEvent::Back => {
+                            this.state.update(cx, |state, _cx| state.cancel_edit_item());
+                        }
+                        EditPanelEvent::Saved => {
+                            let items = this.state.read(cx).items.clone();
+                            let _ = this.list_view.update(cx, |list, cx| {
+                                list.set_items(items, cx);
+                            });
+                        }
+                    }
+                    this.current_view = "clipboard".into();
+                    cx.notify();
+                },
+            ),
             cx.subscribe(
                 &titlebar,
                 move |this, _, event: &TitlebarEvent, cx| match event {
@@ -189,6 +226,9 @@ impl RootView {
                         let _ = this.settings_panel.update(cx, |panel, cx| {
                             panel.reload_theme(theme.clone(), cx);
                         });
+                        let _ = this.edit_panel.update(cx, |panel, cx| {
+                            panel.set_theme(theme.clone(), cx);
+                        });
                         let _ = this.sidebar.update(cx, |sidebar, cx| {
                             sidebar.set_theme(&theme, cx);
                         });
@@ -222,6 +262,7 @@ impl RootView {
             list_view,
             search_bar,
             settings_panel,
+            edit_panel,
             sidebar,
             tag_filter_panel,
             current_view: "clipboard".into(),
@@ -251,9 +292,12 @@ impl Render for RootView {
         let list_view = self.list_view.clone();
         let search_bar = self.search_bar.clone();
         let settings_panel = self.settings_panel.clone();
+        let edit_panel = self.edit_panel.clone();
         let tag_filter_panel = self.tag_filter_panel.clone();
         let tag_panel_open = self.search_bar.read(cx).tag_panel_open();
         let is_clipboard = self.current_view == "clipboard";
+        let is_settings = self.current_view == "settings";
+        let is_edit = self.current_view == "edit";
         let theme = &self.theme;
         let panel_border = if theme.bg == rgb(0x191a1b) {
             rgb(0x3a3b3c)
@@ -276,28 +320,29 @@ impl Render for RootView {
             if has_toast && !self.toast_dismissing && self._toast_timer.is_none() {
                 // Bump generation so the enter animation replays for a new message.
                 self.toast_generation = self.toast_generation.wrapping_add(1);
-                let show_duration = super::components::toast::TOAST_DURATION
-                    .saturating_sub(TOAST_ANIM_DURATION);
-                self._toast_timer = Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
-                    Timer::after(show_duration).await;
-                    if let Some(this) = weak_self.upgrade() {
-                        let _ = this.update(cx, |root, root_cx| {
-                            // Start exit animation — same generation so the
-                            // transition smoothly reverses from its current value.
-                            root.toast_dismissing = true;
-                            root_cx.notify();
-                        });
-                        // Cleanup after the exit transition finishes, plus a
-                        // small grace period so the visual zero point is stable.
-                        Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
+                let show_duration =
+                    super::components::toast::TOAST_DURATION.saturating_sub(TOAST_ANIM_DURATION);
+                self._toast_timer =
+                    Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
+                        Timer::after(show_duration).await;
                         if let Some(this) = weak_self.upgrade() {
                             let _ = this.update(cx, |root, root_cx| {
-                                root.state.update(root_cx, |s, _cx| s.clear_toast());
-                                root.toast_dismissing = false;
+                                // Start exit animation — same generation so the
+                                // transition smoothly reverses from its current value.
+                                root.toast_dismissing = true;
+                                root_cx.notify();
                             });
+                            // Cleanup after the exit transition finishes, plus a
+                            // small grace period so the visual zero point is stable.
+                            Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
+                            if let Some(this) = weak_self.upgrade() {
+                                let _ = this.update(cx, |root, root_cx| {
+                                    root.state.update(root_cx, |s, _cx| s.clear_toast());
+                                    root.toast_dismissing = false;
+                                });
+                            }
                         }
-                    }
-                }));
+                    }));
             } else if !has_toast {
                 self._toast_timer = None;
                 self._toast_cleanup = None;
@@ -328,7 +373,8 @@ impl Render for RootView {
                     .when(is_clipboard, |panel| {
                         panel.child(search_bar.clone()).child(list_view.clone())
                     })
-                    .when(!is_clipboard, |panel| panel.child(settings_panel)),
+                    .when(is_settings, |panel| panel.child(settings_panel))
+                    .when(is_edit, |panel| panel.child(edit_panel)),
             )
             // Tag filter panel — ConfirmDialog pattern:
             // full-screen backdrop that closes on click outside,
@@ -693,9 +739,7 @@ impl Render for RootView {
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         let _ = state.update(cx, |s, _cx| s.clear_toast());
                                     })
-                                    .when(dismiss_state, |el| {
-                                        el.cursor(CursorStyle::Arrow)
-                                    })
+                                    .when(dismiss_state, |el| el.cursor(CursorStyle::Arrow))
                                     .child(Toast::new(message).theme(theme)),
                             ),
                     )

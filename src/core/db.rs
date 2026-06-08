@@ -219,15 +219,27 @@ impl Database {
         content_type: &str,
         meta_type: &str,
     ) -> SqlResult<()> {
+        self.update_content_with_rich_data(id, text, content_type, meta_type, "")
+    }
+
+    pub fn update_content_with_rich_data(
+        &self,
+        id: i64,
+        text: &str,
+        content_type: &str,
+        meta_type: &str,
+        rich_data: &str,
+    ) -> SqlResult<()> {
         let hash = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&text, &mut hasher);
             std::hash::Hasher::finish(&hasher)
         };
         let now = chrono::Utc::now().to_rfc3339();
+        let size = text.chars().count() as i64;
         self.conn.execute(
-            "UPDATE clipboard_items SET full_text = ?1, content_hash = ?2, content_type = ?3, updated_at = ?4, rich_data = '', image_path = '', file_data = '', meta_type = ?5 WHERE id = ?6",
-            params![text, hash as i64, content_type, now, meta_type, id],
+            "UPDATE clipboard_items SET full_text = ?1, content_hash = ?2, content_type = ?3, updated_at = ?4, rich_data = ?5, image_path = '', file_data = '', image_width = 0, image_height = 0, size = ?6, meta_type = ?7 WHERE id = ?8",
+            params![text, hash as i64, content_type, now, rich_data, size, meta_type, id],
         )?;
         Ok(())
     }

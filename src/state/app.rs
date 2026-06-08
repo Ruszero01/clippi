@@ -40,6 +40,9 @@ pub struct AppState {
     pub editing_tag_id: i64,
     pub editing_tag_name: String,
     pub editing_tag_color: String,
+    /// Clipboard item editing state for the GPUI edit panel.
+    pub editing_item_id: i64,
+    pub editing_item: Option<ClipboardItem>,
     /// Shared with clipboard listener — set true during batch paste
     /// to prevent recording intermediate writes (newline separators).
     pub batch_pasting: Arc<AtomicBool>,
@@ -99,6 +102,8 @@ impl AppState {
             editing_tag_id: -1,
             editing_tag_name: String::new(),
             editing_tag_color: "#3B82F6".into(),
+            editing_item_id: -1,
+            editing_item: None,
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
@@ -274,6 +279,70 @@ impl AppState {
                 self.reload_tags();
             }
             Err(e) => log::error!("Failed to update tag: {e}"),
+        }
+    }
+
+    pub fn start_edit_item(&mut self, id: i64) -> bool {
+        match self.db.get_by_id_with_tags(id) {
+            Ok(Some(item)) => {
+                self.editing_item_id = id;
+                self.editing_item = Some(item);
+                true
+            }
+            Ok(None) => {
+                log::warn!("start_edit_item({id}): item not found");
+                false
+            }
+            Err(e) => {
+                log::error!("start_edit_item({id}): {e}");
+                false
+            }
+        }
+    }
+
+    pub fn cancel_edit_item(&mut self) {
+        self.editing_item_id = -1;
+        self.editing_item = None;
+    }
+
+    pub fn save_edited_item(&mut self, id: i64, text: &str, editor_type: &str) -> bool {
+        let (content_type, meta_type, rich_data) = Self::storage_for_editor_type(editor_type, text);
+        match self
+            .db
+            .update_content_with_rich_data(id, text, content_type, meta_type, &rich_data)
+        {
+            Ok(_) => {
+                self.sync_dirty.store(true, Ordering::SeqCst);
+                self.cancel_edit_item();
+                self.reload_items();
+                true
+            }
+            Err(e) => {
+                log::error!("save_edited_item({id}): {e}");
+                false
+            }
+        }
+    }
+
+    fn storage_for_editor_type(
+        editor_type: &str,
+        text: &str,
+    ) -> (&'static str, &'static str, String) {
+        match editor_type {
+            "markdown" => ("rich_text", "markdown", String::new()),
+            "html" => {
+                let rich = RichData {
+                    html: Some(text.to_string()),
+                    ..Default::default()
+                };
+                ("rich_text", "html", rich.to_json())
+            }
+            "link" => ("link", "", String::new()),
+            "path" => ("path", "", String::new()),
+            "color" => ("color", "", String::new()),
+            "email" => ("plain_text", "email", String::new()),
+            "phone" => ("plain_text", "phone", String::new()),
+            _ => ("plain_text", "", String::new()),
         }
     }
 

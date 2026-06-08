@@ -1108,6 +1108,7 @@ impl Pollable for ClipboardService {
                     {
                         item.content_type = crate::core::types::ContentType::PlainText;
                         item.rich_data = String::new();
+                        item.meta_type.clear();
                     }
 
                     // Compute size once before upsert (file: byte sum, text: char count)
