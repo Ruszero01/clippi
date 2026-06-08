@@ -92,8 +92,8 @@ impl ConfirmDialog {
     /// Single item delete confirmation — simple yes/no.
     pub fn delete_single() -> Self {
         Self::new()
-            .title("Confirm Delete")
-            .message("Are you sure you want to delete this item?")
+            .title(I18nKey::ConfirmDeleteSingleTitle.text())
+            .message(I18nKey::ConfirmDeleteSingleMsg.text())
             .confirm_label(I18nKey::ConfirmDeleteLabel.text())
             .danger(true)
     }
@@ -101,11 +101,8 @@ impl ConfirmDialog {
     /// Batch delete confirmation for N selected items.
     pub fn delete_batch(count: usize) -> Self {
         Self::new()
-            .title("Confirm Batch Delete")
-            .message(format!(
-                "Delete {} selected items?\nThis action cannot be undone.",
-                count
-            ))
+            .title(I18nKey::ConfirmBatchTitle.text())
+            .message(I18nKey::ConfirmBatchMsg.fmt(&[&count.to_string()]))
             .confirm_label(I18nKey::ConfirmDeleteLabel.text())
             .danger(true)
     }
@@ -113,21 +110,18 @@ impl ConfirmDialog {
     /// Remove app from hotkey blacklist confirmation.
     pub fn remove_blacklist(app_name: &str) -> Self {
         Self::new()
-            .title("Remove from Blacklist")
-            .message(format!("Stop ignoring clipboard from \"{}\"?", app_name))
-            .confirm_label("Remove")
+            .title(I18nKey::ConfirmRemoveTitle.text())
+            .message(I18nKey::ConfirmRemoveMsg.fmt(&[app_name]))
+            .confirm_label(I18nKey::ConfirmRemoveLabel.text())
             .danger(false)
     }
 
     /// Add app to hotkey blacklist confirmation.
     pub fn add_blacklist(app_name: &str) -> Self {
         Self::new()
-            .title("Add to Blacklist")
-            .message(format!(
-                "Disable Clippi hotkey in \"{}\"?\nHotkey will be ignored while this app is active.",
-                app_name
-            ))
-            .confirm_label("Add")
+            .title(I18nKey::ConfirmAddBlacklistTitle.text())
+            .message(I18nKey::ConfirmAddBlacklistMsg.fmt(&[app_name]))
+            .confirm_label(I18nKey::ConfirmAddLabel.text())
             .danger(false)
     }
 }

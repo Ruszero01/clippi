@@ -54,7 +54,7 @@ impl AddBackendPanel {
             name_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhName.text())),
             folder_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhFolder.text())),
             url_input: cx
-                .new(|cx| InputState::new(window, cx).placeholder("https://example.com/dav")),
+                .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUrl.text())),
             username_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUser.text())),
             password_input: cx.new(|cx| {
                 InputState::new(window, cx)

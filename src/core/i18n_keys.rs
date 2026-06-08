@@ -327,6 +327,16 @@ define_i18n! {
 
     // ─── Confirm dialog ───
     ConfirmDeleteLabel:     ("删除", "Delete"),
+    ConfirmDeleteSingleTitle:("确认删除", "Confirm Delete"),
+    ConfirmDeleteSingleMsg: ("确定要删除此项吗？", "Are you sure you want to delete this item?"),
+    ConfirmBatchTitle:      ("确认批量删除", "Confirm Batch Delete"),
+    ConfirmBatchMsg:        ("确定要删除 {0} 个条目吗？\n此操作不可撤销。", "Delete {0} selected items?\nThis action cannot be undone."),
+    ConfirmRemoveTitle:     ("从黑名单移除", "Remove from Blacklist"),
+    ConfirmRemoveMsg:       ("停止忽略来自 \"{0}\" 的剪贴板内容？", "Stop ignoring clipboard from \"{0}\"?"),
+    ConfirmRemoveLabel:     ("移除", "Remove"),
+    ConfirmAddBlacklistTitle:("添加到黑名单", "Add to Blacklist"),
+    ConfirmAddBlacklistMsg: ("在 \"{0}\" 中禁用 Clippi 快捷键？\n当此应用激活时将忽略快捷键。", "Disable Clippi hotkey in \"{0}\"?\nHotkey will be ignored while this app is active."),
+    ConfirmAddLabel:        ("添加", "Add"),
 
     // ─── Titlebar ───
     TitlebarAppName:        ("Clippi", "Clippi"),
