@@ -26,6 +26,7 @@ use data::ResetDataDirState;
 use hotkey::HotkeyConfirmAction;
 
 use crate::state::app::AppState;
+use crate::core::i18n_keys::I18nKey;
 use crate::ui::add_backend::AddBackendPanel;
 use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};
 use crate::ui::theme::ClippiTheme;
@@ -72,7 +73,15 @@ pub struct SettingsPanel {
     _max_items_focus_sub: gpui::Subscription,
 }
 
-const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
+fn tab_names() -> [&'static str; 5] {
+    [
+        I18nKey::TabGeneral.text(),
+        I18nKey::TabClipboard.text(),
+        I18nKey::TabHotkey.text(),
+        I18nKey::TabData.text(),
+        I18nKey::TabSync.text(),
+    ]
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct BackendCollapseState {
@@ -190,13 +199,13 @@ impl Render for SettingsPanel {
                                     .child("\u{e62b}"),
                             ),
                     )
-                    // --- Title "Settings" (14px, 700 weight, text_1) ---
+                    // --- Title (14px, 700 weight, text_1) ---
                     .child(
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text_1)
-                            .child("Settings"),
+                            .child(I18nKey::SettingsTitle.text()),
                     ),
             )
             //  Tab bar (height 36px, mt 8px matching Slint spacing)
@@ -209,7 +218,7 @@ impl Render for SettingsPanel {
                     .mt(px(8.))
                     .border_b(px(1.))
                     .border_color(theme.divider)
-                    .children(TAB_NAMES.iter().enumerate().map(|(i, name)| {
+                    .children(tab_names().iter().enumerate().map(|(i, name)| {
                         let is_active = i == active;
                         let tab_color = if is_active {
                             theme.accent

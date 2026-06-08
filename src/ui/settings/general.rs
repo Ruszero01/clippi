@@ -3,7 +3,9 @@
 
 use gpui::*;
 
+use crate::core;
 use crate::core::frontend::PositionMode;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::set_auto_start;
 use crate::ui::settings::SettingsEvent;
 
@@ -26,6 +28,7 @@ impl SettingsPanel {
         let silent_start = app.settings.silent_start;
         let theme_str = app.settings.theme.clone();
         let position_mode = app.settings.window_position_mode.clone();
+        let lang = app.settings.language.clone();
         // --- borrow released here — `app` is a &AppState reference ---
 
         // --- Derive display indices from string settings ---
@@ -49,8 +52,8 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 self.setting_row_with_toggle(
-                    "Auto-start",
-                    "Run on system startup",
+                    I18nKey::SettingAutoStart.text(),
+                    I18nKey::DescAutoStart.text(),
                     auto_start,
                     window,
                     cx,
@@ -74,8 +77,8 @@ impl SettingsPanel {
                 let wm = wm.clone();
                 let this = this.clone();
                 self.setting_row_with_toggle(
-                    "Auto-hide",
-                    "Hide on focus loss",
+                    I18nKey::SettingAutoHide.text(),
+                    I18nKey::DescAutoHide.text(),
                     auto_hide,
                     window,
                     cx,
@@ -95,8 +98,8 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 self.setting_row_with_toggle(
-                    "Silent start",
-                    "Start silently in tray",
+                    I18nKey::SettingSilentStart.text(),
+                    I18nKey::DescSilentStart.text(),
                     silent_start,
                     window,
                     cx,
@@ -114,9 +117,13 @@ impl SettingsPanel {
                 let state = state.clone();
                 let this = this.clone();
                 self.setting_row_with_options(
-                    "Theme",
-                    "Select theme",
-                    &[("system", "Auto"), ("dark", "Dark"), ("light", "Light")],
+                    I18nKey::SettingTheme.text(),
+                    I18nKey::DescTheme.text(),
+                    &[
+                        ("system", I18nKey::ThemeSystem.text()),
+                        ("dark", I18nKey::ThemeDark.text()),
+                        ("light", I18nKey::ThemeLight.text()),
+                    ],
                     match theme_idx {
                         1 => "dark",
                         2 => "light",
@@ -135,18 +142,49 @@ impl SettingsPanel {
                     },
                 )
             })
+            // --- Language ---
+            .child({
+                let state = state.clone();
+                let this = this.clone();
+                let wm = wm.clone();
+                self.setting_row_with_options(
+                    I18nKey::SettingLanguage.text(),
+                    I18nKey::DescLanguage.text(),
+                    &[
+                        ("system", I18nKey::LangSystem.text()),
+                        ("zh_CN", I18nKey::LangZh.text()),
+                        ("en", I18nKey::LangEn.text()),
+                    ],
+                    if lang.is_empty() { "system" } else { &lang },
+                    move |key, _window, _cx| {
+                        let new_lang = if key == "system" { String::new() } else { key.to_string() };
+                        let effective = if new_lang.is_empty() {
+                            core::settings::detect_system_language()
+                        } else {
+                            new_lang.clone()
+                        };
+                        core::i18n::set_language(&effective);
+                        state.update(_cx, |s, _cx| {
+                            s.settings.language = new_lang;
+                            s.settings.save();
+                        });
+                        wm.update(_cx, |wm, _cx| wm.update_tray_language());
+                        this.update(_cx, |_, cx| cx.notify());
+                    },
+                )
+            })
             // --- Window position ---
             .child({
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
                 self.setting_row_with_options(
-                    "Position",
-                    "Popup position",
+                    I18nKey::SettingPosition.text(),
+                    I18nKey::DescPosition.text(),
                     &[
-                        ("center", "Center"),
-                        ("follow", "Follow"),
-                        ("remember", "Pin"),
+                        ("center", I18nKey::PosCenter.text()),
+                        ("follow", I18nKey::PosFollow.text()),
+                        ("remember", I18nKey::PosRemember.text()),
                     ],
                     match position_idx {
                         1 => "follow",

@@ -724,6 +724,13 @@ impl WindowManager {
         self.auto_hide = auto_hide;
     }
 
+    /// Update tray menu texts when language changes.
+    pub fn update_tray_language(&mut self) {
+        if let Some(ref mut tray) = self.tray {
+            tray.update_language();
+        }
+    }
+
     pub fn set_position_mode(&mut self, mode: PositionMode) {
         self.position_mode = mode;
     }
