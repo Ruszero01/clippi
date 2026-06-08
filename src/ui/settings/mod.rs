@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use gpui_component::input::InputState;
 
 mod clipboard;
 mod general;
@@ -63,10 +64,8 @@ pub struct SettingsPanel {
     pub reset_data_dialog: Option<ResetDataDirState>,
     /// Whether the max-items field is in editing mode.
     editing_max_items: bool,
-    /// Current text in the max-items editor.
-    max_items_edit_text: String,
-    /// Focus handle for detecting blur on the max-items editor.
-    max_items_focus: FocusHandle,
+    /// Input entity for the max-items editor (created once in constructor).
+    max_items_input: Entity<InputState>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -76,9 +75,12 @@ impl SettingsPanel {
         state: Entity<AppState>,
         window_manager: Entity<WindowManager>,
         theme: ClippiTheme,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let max_items_input = cx
+            .new(|cx| gpui_component::input::InputState::new(window, cx));
+
         Self {
             active_tab: 0,
             state,
@@ -89,8 +91,7 @@ impl SettingsPanel {
             hotkey_confirm: None,
             reset_data_dialog: None,
             editing_max_items: false,
-            max_items_edit_text: String::new(),
-            max_items_focus: cx.focus_handle(),
+            max_items_input,
         }
     }
 
