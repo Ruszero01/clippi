@@ -37,6 +37,9 @@ pub enum WindowManagerEvent {
     /// Tray menu "Settings" clicked — switch to settings view.
     /// TODO: Implement when settings panel GPUI migration is complete.
     OpenSettings,
+    /// Hotkey recording completed (success or error) — RootView should
+    /// notify SettingsPanel to re-render with updated hotkey / recording state.
+    HotkeyRecordingComplete,
 }
 
 /// Unified window manager entity.
@@ -175,19 +178,22 @@ impl WindowManager {
         // 1. Hotkey press -> show window
         self.poll_hotkey(cx);
 
-        // 2. Hotkey blacklist — dynamic register/unregister
+        // 2. Hotkey recording — check for completion
+        self.poll_recording(cx);
+
+        // 3. Hotkey blacklist — dynamic register/unregister
         self.poll_blacklist();
 
-        // 3. Clipboard changes -> update state + notify
+        // 4. Clipboard changes -> update state + notify
         self.poll_clipboard(cx);
 
-        // 4. Focus / auto-hide logic
+        // 5. Focus / auto-hide logic (also updates foreground app info in AppState)
         self.poll_focus(cx);
 
-        // 5. Tray events
+        // 6. Tray events
         self.poll_tray(cx);
 
-        // 6. Capture window geometry for persistence
+        // 7. Capture window geometry for persistence
         self.capture_window_geometry(cx);
     }
 
@@ -195,6 +201,51 @@ impl WindowManager {
         if let Some(ref hk) = self.hotkey {
             if hk.poll_pressed() {
                 self.show_and_focus(cx);
+            }
+        }
+    }
+
+    /// Poll for hotkey recording completion.
+    /// When the user is recording a new hotkey (initiated from the settings UI),
+    /// check if they've pressed a key combo. On success, update the hotkey and
+    /// persist to settings. On failure, store the error for toast display.
+    ///
+    /// Note: `start_hotkey_recording()` unregisters the current hotkey so that
+    /// `poll_hotkey()` won't fire during recording. On completion the new
+    /// hotkey is registered (via `update_hotkey`); on error the old hotkey is
+    /// re-registered.
+    fn poll_recording(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut hk) = self.hotkey {
+            // poll_recording_pressed() returns None when not recording —
+            // it checks the hotkey's internal is_recording flag directly,
+            // avoiding any AppState synchronization gap.
+            if let Some(new_hotkey) = hk.poll_recording_pressed() {
+                if !new_hotkey.is_empty() {
+                    match hk.update_hotkey(&new_hotkey) {
+                        Ok(()) => {
+                            // update_hotkey already registered the new hotkey.
+                            hk.finish_recording();
+                            self.state.update(cx, |state, _cx| {
+                                state.settings.hotkey = new_hotkey.clone();
+                                state.settings.save();
+                                state.hotkey_recording = false;
+                            });
+                            cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+                        }
+                        Err(e) => {
+                            // update_hotkey failed — the hotkey is still the
+                            // old one and unregistered. Re-register it and
+                            // show the error.
+                            hk.finish_recording();
+                            hk.register();
+                            self.state.update(cx, |state, _cx| {
+                                state.hotkey_recording = false;
+                                state.toast_message = Some(e);
+                            });
+                            cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+                        }
+                    }
+                }
             }
         }
     }
@@ -227,7 +278,7 @@ impl WindowManager {
 
     fn poll_focus(&mut self, cx: &mut Context<Self>) {
         // Update foreground app name for blacklist
-        self.update_foreground_app_name();
+        self.update_foreground_app_name(cx);
 
         let is_self_fg = self.is_self_foreground();
 
@@ -399,13 +450,14 @@ impl WindowManager {
 
     // ── Foreground tracking ───────────────────────────────────────────
 
-    fn update_foreground_app_name(&mut self) {
+    fn update_foreground_app_name(&mut self, cx: &mut Context<Self>) {
         use crate::platform::focus::get_foreground_app_info;
 
         if self.is_self_foreground() {
             if let Ok(mut fg) = self.foreground_app_name.lock() {
                 fg.clear();
             }
+            // Keep the UI showing the last foreground app (don't clear AppState).
             return;
         }
 
@@ -413,6 +465,15 @@ impl WindowManager {
             if let Ok(mut fg) = self.foreground_app_name.lock() {
                 *fg = info.app_name.clone();
             }
+            // Push foreground app info to AppState for the settings UI.
+            let app_name = info.app_name.clone();
+            let window_title = info.window_title.clone();
+            let icon_base64 = info.icon_base64.clone();
+            self.state.update(cx, |state, _cx| {
+                state.foreground_app_name = app_name;
+                state.foreground_window_title = window_title;
+                state.foreground_app_icon_base64 = icon_base64;
+            });
         }
     }
 
@@ -495,9 +556,31 @@ impl WindowManager {
     // ── Window operations (platform-specific) ────────────────────────
 
     /// Show the window, calculate position, and bring it to foreground.
+    ///
+    /// When the window is already visible this only extends the suppress
+    /// period and brings the window to foreground — it skips repositioning
+    /// and item reload to avoid disrupting the current view.
     pub fn show_and_focus(&mut self, cx: &mut Context<Self>) {
         self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+
+        let was_already_visible = self.visible;
         self.visible = true;
+
+        if was_already_visible {
+            // Window is already open (e.g. user is in settings recording a
+            // hotkey). Just bring to foreground without repositioning.
+            #[cfg(target_os = "windows")]
+            {
+                use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+                let hwnd = self.hwnd as *mut std::ffi::c_void;
+                if !hwnd.is_null() {
+                    unsafe { SetForegroundWindow(hwnd) };
+                }
+            }
+            cx.notify();
+            return;
+        }
+
         self.pinned = false;
         cx.emit(WindowManagerEvent::PinnedChanged(false));
 
@@ -630,6 +713,10 @@ impl WindowManager {
 
     pub fn start_hotkey_recording(&mut self) {
         if let Some(ref mut hk) = self.hotkey {
+            // Unregister the current hotkey before recording so the old
+            // hotkey doesn't fire poll_pressed() during the recording
+            // session (which would trigger show_and_focus / reposition).
+            hk.unregister();
             hk.start_recording();
         }
     }
@@ -644,6 +731,11 @@ impl WindowManager {
     }
 
     // ── Blacklist management ──────────────────────────────────────────
+
+    /// Replace the internal blacklist with the given list (used for sync from settings).
+    pub fn set_blacklist(&mut self, blacklist: Vec<String>) {
+        self.blacklist = blacklist;
+    }
 
     pub fn blacklist_add(&mut self, app_name: &str, settings: &mut AppSettings) {
         if app_name.is_empty() || self.blacklist.contains(&app_name.to_string()) {

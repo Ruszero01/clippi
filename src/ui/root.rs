@@ -24,6 +24,7 @@ use super::components::toast::Toast;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::edit_panel::{EditPanel, EditPanelEvent};
 use super::search_bar::SearchBar;
+use super::settings::hotkey;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
 use super::tag_filter::{render_edit_panel, TagFilterPanel};
@@ -115,6 +116,13 @@ impl RootView {
                     this.search_bar
                         .update(cx, |bar, cx| bar.close_tag_panel(cx));
                     cx.notify();
+                }
+                WindowManagerEvent::HotkeyRecordingComplete => {
+                    // Notify SettingsPanel so it re-renders with the updated
+                    // hotkey display and recording state from AppState.
+                    let _ = this.settings_panel.update(cx, |_panel, cx| {
+                        cx.notify();
+                    });
                 }
             },
         );
@@ -250,6 +258,18 @@ impl RootView {
                                 list_view.refresh_settings_from_state(*scroll_to_top, cx);
                             });
                         }
+                        cx.notify();
+                    }
+                    SettingsEvent::HotkeyError(msg) => {
+                        this.state.update(cx, |s, _cx| {
+                            s.toast_message = Some(msg.clone());
+                        });
+                        cx.notify();
+                    }
+                    SettingsEvent::ShowHotkeyConfirm(action) => {
+                        let _ = this.settings_panel.update(cx, |panel, _cx| {
+                            panel.hotkey_confirm = Some(action.clone());
+                        });
                         cx.notify();
                     }
                 },
@@ -653,6 +673,102 @@ impl Render for RootView {
 
                     // Constrain to main panel bounds (left=36px offset for sidebar).
                     // ConfirmDialog fills this container and centers the modal card within it.
+                    root.child(
+                        div()
+                            .absolute()
+                            .left(px(36.))
+                            .right(px(0.))
+                            .top(px(0.))
+                            .bottom(px(0.))
+                            .child(dialog_element),
+                    )
+                },
+            )
+            // ── Settings hotkey blacklist ConfirmDialog ──
+            .when(
+                is_settings
+                    && self
+                        .settings_panel
+                        .read(cx)
+                        .hotkey_confirm
+                        .is_some(),
+                |root| {
+                    let settings = self.settings_panel.clone();
+                    let wm = self.window_manager.clone();
+                    let app_state = self.state.clone();
+
+                    let action = settings.read(cx).hotkey_confirm.clone();
+                    let dialog_element: AnyElement = match action {
+                        Some(hotkey::HotkeyConfirmAction::Add { app_name }) => {
+                            ConfirmDialog::add_blacklist(&app_name)
+                                .on_confirm({
+                                    let wm = wm.clone();
+                                    let app_state = app_state.clone();
+                                    let settings = settings.clone();
+                                    let app_name = app_name.clone();
+                                    move |_window, cx| {
+                                        let app_name = app_name.clone();
+                                        app_state.update(cx, |s, _cx| {
+                                            if !s.settings.hotkey_blacklist.contains(&app_name) {
+                                                s.settings.hotkey_blacklist.push(app_name.clone());
+                                                s.settings.save();
+                                            }
+                                        });
+                                        // Sync WindowManager's blacklist from settings
+                                        let updated = app_state.read(cx).settings.hotkey_blacklist.clone();
+                                        wm.update(cx, |wm, _cx| {
+                                            wm.set_blacklist(updated);
+                                        });
+                                        let _ = settings.update(cx, |panel, cx| {
+                                            panel.clear_hotkey_confirm(cx);
+                                        });
+                                    }
+                                })
+                                .on_cancel({
+                                    let settings = settings.clone();
+                                    move |_window, cx| {
+                                        let _ = settings.update(cx, |panel, cx| {
+                                            panel.clear_hotkey_confirm(cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                        Some(hotkey::HotkeyConfirmAction::Remove { app_name }) => {
+                            ConfirmDialog::remove_blacklist(&app_name)
+                                .on_confirm({
+                                    let wm = wm.clone();
+                                    let app_state = app_state.clone();
+                                    let settings = settings.clone();
+                                    let app_name = app_name.clone();
+                                    move |_window, cx| {
+                                        app_state.update(cx, |s, _cx| {
+                                            s.settings.hotkey_blacklist.retain(|a| a != &app_name);
+                                            s.settings.save();
+                                        });
+                                        // Sync WindowManager's blacklist from settings
+                                        let updated = app_state.read(cx).settings.hotkey_blacklist.clone();
+                                        wm.update(cx, |wm, _cx| {
+                                            wm.set_blacklist(updated);
+                                        });
+                                        let _ = settings.update(cx, |panel, cx| {
+                                            panel.clear_hotkey_confirm(cx);
+                                        });
+                                    }
+                                })
+                                .on_cancel({
+                                    let settings = settings.clone();
+                                    move |_window, cx| {
+                                        let _ = settings.update(cx, |panel, cx| {
+                                            panel.clear_hotkey_confirm(cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                        None => div().into_any_element(),
+                    };
+
                     root.child(
                         div()
                             .absolute()

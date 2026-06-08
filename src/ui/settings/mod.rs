@@ -17,6 +17,9 @@ use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 
 mod clipboard;
 mod general;
+pub mod hotkey;
+
+use hotkey::HotkeyConfirmAction;
 
 use crate::state::app::AppState;
 use crate::ui::components::toggle::{render_toggle, ToggleTransitionState};
@@ -33,6 +36,10 @@ pub enum SettingsEvent {
         reload_items: bool,
         scroll_to_top: bool,
     },
+    /// Hotkey recording failed — RootView should show a toast with the error.
+    HotkeyError(String),
+    /// User clicked add/remove blacklist — RootView should show a ConfirmDialog.
+    ShowHotkeyConfirm(HotkeyConfirmAction),
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}
@@ -46,6 +53,8 @@ pub struct SettingsPanel {
     scroll_handle: ScrollHandle,
     /// Track toggle values + generation counter for transition animation.
     toggle_states: HashMap<String, ToggleTransitionState>,
+    /// Pending hotkey blacklist confirmation (consumed by RootView).
+    pub hotkey_confirm: Option<HotkeyConfirmAction>,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -64,6 +73,7 @@ impl SettingsPanel {
             theme,
             scroll_handle: ScrollHandle::default(),
             toggle_states: HashMap::new(),
+            hotkey_confirm: None,
         }
     }
 
@@ -228,7 +238,9 @@ impl Render for SettingsPanel {
                                                 1 => self
                                                     .render_clipboard_tab(window, cx)
                                                     .into_any_element(),
-                                                2 => self.render_hotkey_tab().into_any_element(),
+                                                2 => self
+                                                    .render_hotkey_tab(window, cx)
+                                                    .into_any_element(),
                                                 3 => self.render_data_tab().into_any_element(),
                                                 4 => self.render_sync_tab().into_any_element(),
                                                 _ => div().into_any_element(),
@@ -404,22 +416,16 @@ impl SettingsPanel {
                     })),
             )
     }
+    /// Clear pending hotkey confirm dialog.
+    pub fn clear_hotkey_confirm(&mut self, cx: &mut Context<Self>) {
+        self.hotkey_confirm = None;
+        cx.notify();
+    }
 }
 
 // ── Tab rendering stubs (not yet migrated) ──
 
 impl SettingsPanel {
-    fn render_hotkey_tab(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(100.))
-            .text_color(self.theme.text_3)
-            .text_size(px(13.))
-            .child("Hotkey settings")
-    }
-
     fn render_data_tab(&self) -> impl IntoElement {
         div()
             .flex()

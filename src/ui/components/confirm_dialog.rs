@@ -131,12 +131,27 @@ impl ConfirmDialog {
             .danger(true)
     }
 
-    /// [FUTURE] Remove app from hotkey blacklist confirmation.
+    /// Remove app from hotkey blacklist confirmation.
     pub fn remove_blacklist(app_name: &str) -> Self {
         Self::new()
             .title("Remove from Blacklist")
-            .message(format!("Stop ignoring clipboard from \"{}\"?", app_name))
+            .message(format!(
+                "Stop ignoring clipboard from \"{}\"?",
+                app_name
+            ))
             .confirm_label("Remove")
+            .danger(false)
+    }
+
+    /// Add app to hotkey blacklist confirmation.
+    pub fn add_blacklist(app_name: &str) -> Self {
+        Self::new()
+            .title("Add to Blacklist")
+            .message(format!(
+                "Disable Clippi hotkey in \"{}\"?\nHotkey will be ignored while this app is active.",
+                app_name
+            ))
+            .confirm_label("Add")
             .danger(false)
     }
 }

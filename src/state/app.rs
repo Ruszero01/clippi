@@ -60,6 +60,13 @@ pub struct AppState {
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
     pub toast_message: Option<String>,
+    /// Foreground app info (updated by WindowManager poll loop, consumed by hotkey settings tab).
+    pub foreground_app_name: String,
+    pub foreground_window_title: String,
+    /// Base64-encoded PNG icon of the current foreground app.
+    pub foreground_app_icon_base64: String,
+    /// Whether a hotkey recording is in progress (set by settings UI, cleared by WM poll).
+    pub hotkey_recording: bool,
 }
 
 impl AppState {
@@ -108,6 +115,10 @@ impl AppState {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
             toast_message: None,
+            foreground_app_name: String::new(),
+            foreground_window_title: String::new(),
+            foreground_app_icon_base64: String::new(),
+            hotkey_recording: false,
         }
     }
 
