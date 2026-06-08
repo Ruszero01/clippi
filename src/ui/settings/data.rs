@@ -60,12 +60,6 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    /// Cancel editing without saving.
-    fn cancel_edit_max_items(&mut self, cx: &mut Context<Self>) {
-        self.editing_max_items = false;
-        cx.notify();
-    }
-
     /// Render the Data settings tab content.
     pub fn render_data_tab(
         &mut self,
@@ -319,90 +313,42 @@ impl SettingsPanel {
                                     )),
                             ),
                     )
-                    // Right: max-items value (button or Input + confirm/cancel)
+                    // Right: max-items value (button or Input)
                     .child({
                         let this = this.clone();
 
                         if self.editing_max_items {
-                            // ── Editing: Input + confirm (✓) / cancel (✕) ──
+                            // ── Editing: Input with Enter to save, blur auto-saves ──
                             div()
+                                .w(px(80.))
+                                .h(px(28.))
+                                .rounded(px(7.))
+                                .bg(input_bg)
+                                .border(px(1.))
+                                .border_color(self.theme.accent)
+                                .px(px(6.))
                                 .flex()
-                                .flex_row()
                                 .items_center()
-                                .gap(px(4.))
                                 .child(
-                                    // Number input
-                                    div()
-                                        .w(px(64.))
-                                        .h(px(28.))
-                                        .rounded(px(7.))
-                                        .bg(input_bg)
-                                        .border(px(1.))
-                                        .border_color(self.theme.accent)
-                                        .px(px(6.))
-                                        .flex()
-                                        .items_center()
-                                        .child(
-                                            Input::new(&self.max_items_input)
-                                                .appearance(false)
-                                                .bordered(false)
-                                                .focus_bordered(false)
-                                                .w_full()
-                                                .h(px(20.))
-                                                .text_size(px(12.))
-                                                .text_color(text_1),
-                                        ),
-                                )
-                                // Confirm button (✓)
-                                .child({
-                                    let this = this.clone();
-                                    div()
-                                        .w(px(20.))
+                                    Input::new(&self.max_items_input)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .focus_bordered(false)
+                                        .w_full()
                                         .h(px(20.))
-                                        .rounded(px(4.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(|s| s.bg(rgba(0xffffff10)))
-                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        .text_size(px(12.))
+                                        .text_color(text_1),
+                                )
+                                // Enter key saves (same pattern as tag_filter)
+                                .on_key_down({
+                                    move |ev: &KeyDownEvent, _window, cx| {
+                                        if ev.keystroke.key.as_str() == "enter" {
                                             cx.stop_propagation();
                                             let _ = this.update(cx, |panel, cx| {
                                                 panel.save_max_items(cx);
                                             });
-                                        })
-                                        .child(
-                                            div()
-                                                .font_family("iconfont")
-                                                .text_size(px(12.))
-                                                .text_color(self.theme.accent)
-                                                .child("\u{e611}"),
-                                        )
-                                })
-                                // Cancel button (✕)
-                                .child({
-                                    let this = this.clone();
-                                    div()
-                                        .w(px(20.))
-                                        .h(px(20.))
-                                        .rounded(px(4.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(|s| s.bg(rgba(0xffffff10)))
-                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                            cx.stop_propagation();
-                                            let _ = this.update(cx, |panel, cx| {
-                                                panel.cancel_edit_max_items(cx);
-                                            });
-                                        })
-                                        .child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(text_3)
-                                                .child("\u{2715}"),
-                                        )
+                                        }
+                                    }
                                 })
                         } else {
                             // ── Normal: clickable value button ──

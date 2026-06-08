@@ -66,6 +66,8 @@ pub struct SettingsPanel {
     editing_max_items: bool,
     /// Input entity for the max-items editor (created once in constructor).
     max_items_input: Entity<InputState>,
+    /// Focus-out subscription for the max-items input (auto-save on blur).
+    _max_items_focus_sub: gpui::Subscription,
 }
 
 const TAB_NAMES: &[&str] = &["General", "Clipboard", "Hotkey", "Data", "Sync"];
@@ -81,6 +83,25 @@ impl SettingsPanel {
         let max_items_input = cx
             .new(|cx| gpui_component::input::InputState::new(window, cx));
 
+        // Subscribe to focus-out on the max-items InputState.
+        // When the input loses focus, save and exit editing.
+        let state_sub = state.clone();
+        let input_sub = max_items_input.clone();
+        let handle = max_items_input.read(cx).focus_handle(cx);
+        let _max_items_focus_sub =
+            cx.on_focus_out(&handle, window, move |this, _ev, _window, cx| {
+                if this.editing_max_items {
+                    let text = input_sub.read(cx).value().to_string();
+                    let n: u32 = text.trim().parse().unwrap_or(0);
+                    state_sub.update(cx, |s, _cx| {
+                        s.settings.max_items = n;
+                        s.settings.save();
+                    });
+                    this.editing_max_items = false;
+                    cx.notify();
+                }
+            });
+
         Self {
             active_tab: 0,
             state,
@@ -92,6 +113,7 @@ impl SettingsPanel {
             reset_data_dialog: None,
             editing_max_items: false,
             max_items_input,
+            _max_items_focus_sub,
         }
     }
 
