@@ -7,7 +7,7 @@ use crate::core::types::SourceAppInfo;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use crate::core::i18n;
+    use crate::core::i18n_keys::I18nKey;
     use crate::core::types::SourceAppInfo;
     use windows_sys::Win32::Foundation::{CloseHandle, HWND};
     use windows_sys::Win32::System::Threading::{
@@ -60,7 +60,7 @@ mod windows_impl {
     }
 
     fn extract_app_name(exe_path: &str) -> String {
-        let fallback = i18n::tr("未知应用", "Unknown app");
+        let fallback = I18nKey::UnknownApp.text();
         let name = std::path::Path::new(exe_path)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -95,7 +95,7 @@ mod windows_impl {
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use crate::core::i18n;
+    use crate::core::i18n_keys::I18nKey;
     use crate::core::types::SourceAppInfo;
     use crate::platform::util::nsimage_to_base64_png;
     use objc2_app_kit::NSWorkspace;
@@ -114,7 +114,7 @@ mod macos_impl {
             .localizedName()
             .map(|n| n.to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| i18n::tr("未知应用", "Unknown app").to_string());
+            .unwrap_or_else(|| I18nKey::UnknownApp.text().to_string());
         let icon_base64 = app
             .icon()
             .and_then(|i| nsimage_to_base64_png(&i, 32))

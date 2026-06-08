@@ -3,7 +3,7 @@
 //! Reads/writes `clippi_sync.json` in a cloud-synced folder (OneDrive, iCloud,
 //! Dropbox, etc.). The OS/cloud-provider handles the actual network sync.
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{self, BackendStatus, SyncBackend, SyncPayload};
 use std::path::PathBuf;
@@ -81,7 +81,7 @@ impl SyncBackend for LocalFolderBackend {
         }
         if !dir.is_dir() {
             return BackendStatus::Error(
-                i18n::tr("路径不是目录", "Path is not a directory").into(),
+                I18nKey::SyncErrNotDir.text().into(),
             );
         }
         BackendStatus::Online
@@ -90,7 +90,7 @@ impl SyncBackend for LocalFolderBackend {
     fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String> {
         let path = self.file_path();
         if !path.exists() {
-            return Err(i18n::tr("同步文件不存在", "Sync file not found").into());
+            return Err(I18nKey::SyncErrNotFound.text().into());
         }
 
         // Check if remote file has changed since last pull.
@@ -124,13 +124,13 @@ impl SyncBackend for LocalFolderBackend {
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("读取同步文件失败", "Failed to read sync file")
+                    I18nKey::SyncErrRead.text()
                 )
             })?;
             serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("解析同步文件失败", "Failed to parse sync file")
+                    I18nKey::SyncErrParse.text()
                 )
             })?
         } else {
@@ -143,13 +143,13 @@ impl SyncBackend for LocalFolderBackend {
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("读取同步文件失败", "Failed to read sync file")
+                    I18nKey::SyncErrRead.text()
                 )
             })?;
             serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("解析同步文件失败", "Failed to parse sync file")
+                    I18nKey::SyncErrParse.text()
                 )
             })?
         };
@@ -180,27 +180,27 @@ impl SyncBackend for LocalFolderBackend {
         std::fs::create_dir_all(&dir).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("创建目录失败", "Failed to create directory")
+                I18nKey::ErrCreateDir.text()
             )
         })?;
 
         let file_path = self.file_path();
         let json = serde_json::to_string_pretty(payload)
-            .map_err(|e| format!("{}: {e}", i18n::tr("序列化失败", "Serialization failed")))?;
+            .map_err(|e| format!("{}: {e}", I18nKey::SyncErrSerialize.text()))?;
 
         // --- Atomic write: temp file + rename ---
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
         std::fs::write(&tmp_path, &json).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("写入临时文件失败", "Failed to write temp file")
+                I18nKey::SyncErrWriteTemp.text()
             )
         })?;
         std::fs::rename(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             format!(
                 "{}: {e}",
-                i18n::tr("替换同步文件失败", "Failed to replace sync file")
+                I18nKey::SyncErrReplace.text()
             )
         })?;
         // --- Cache new mtime so our own push doesn't trigger a changed-file ---

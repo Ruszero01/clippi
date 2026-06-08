@@ -197,8 +197,7 @@ pub fn get_extension_label(name: &str) -> String {
     if let Some(idx) = name.rfind('.') {
         name[idx..].to_lowercase()
     } else {
-        use crate::core::i18n;
-        i18n::tr("文件", "File").to_string()
+        crate::core::i18n_keys::I18nKey::ContentTypeFile.text().to_string()
     }
 }
 
@@ -353,33 +352,17 @@ impl ClipboardItem {
 pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     let elapsed = Utc::now().signed_duration_since(*captured_at);
     let secs = elapsed.num_seconds();
-    use crate::core::i18n;
+    use crate::core::i18n_keys::I18nKey;
     if secs < 60 {
-        i18n::tr("刚刚", "Just now").to_string()
+        I18nKey::FormatJustNow.text().to_string()
     } else if secs < 3600 {
-        if i18n::is_en() {
-            format!("{} min ago", secs / 60)
-        } else {
-            format!("{}分钟前", secs / 60)
-        }
+        I18nKey::FormatMinutesAgo.fmt(&[&(secs / 60).to_string()])
     } else if secs < 86400 {
-        if i18n::is_en() {
-            format!("{} hr ago", secs / 3600)
-        } else {
-            format!("{}小时前", secs / 3600)
-        }
+        I18nKey::FormatHoursAgo.fmt(&[&(secs / 3600).to_string()])
     } else if secs < 604800 {
-        if i18n::is_en() {
-            format!("{} days ago", secs / 86400)
-        } else {
-            format!("{}天前", secs / 86400)
-        }
+        I18nKey::FormatDaysAgo.fmt(&[&(secs / 86400).to_string()])
     } else {
-        if i18n::is_en() {
-            format!("{} wks ago", secs / 604800)
-        } else {
-            format!("{}周前", secs / 604800)
-        }
+        I18nKey::FormatWeeksAgo.fmt(&[&(secs / 604800).to_string()])
     }
 }
 

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use global_hotkey::hotkey::Code;
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
@@ -168,7 +168,7 @@ mod windows {
             manager.register(hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
 
@@ -196,7 +196,7 @@ mod windows {
             self.manager.register(new_hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
             self.hotkey = new_hotkey;
@@ -384,7 +384,7 @@ mod windows {
             }
         }
 
-        let key = key.ok_or(i18n::tr("未指定按键", "No key specified"))?;
+        let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
         Ok(HotKey::new(Some(mods), key))
     }
 
@@ -441,7 +441,7 @@ mod macos {
             manager.register(hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
 
@@ -469,7 +469,7 @@ mod macos {
             self.manager.register(new_hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
             self.hotkey = new_hotkey;
@@ -656,7 +656,7 @@ mod macos {
             }
         }
 
-        let key = key.ok_or(i18n::tr("未指定按键", "No key specified"))?;
+        let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
         Ok(HotKey::new(Some(mods), key))
     }
 

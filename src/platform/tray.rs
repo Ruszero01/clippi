@@ -15,7 +15,7 @@ pub enum TrayAction {
     CheckUpdate,
 }
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 
 /// System tray manager
 pub struct TrayManager {
@@ -53,14 +53,14 @@ impl TrayManager {
 
         // Check for updates button
         let check_update_item =
-            MenuItem::new(i18n::tr("检查更新", "Check for Updates"), true, None);
+            MenuItem::new(I18nKey::TrayCheckUpdate.text(), true, None);
         let check_update_id = check_update_item.id().clone();
 
         // --- Existing functional menu items ---
-        let show_item = MenuItem::new(i18n::tr("显示窗口", "Show Window"), true, None);
-        let settings_item = MenuItem::new(i18n::tr("设置", "Settings"), true, None);
-        let restart_item = MenuItem::new(i18n::tr("重启应用", "Restart"), true, None);
-        let quit_item = MenuItem::new(i18n::tr("退出", "Quit"), true, None);
+        let show_item = MenuItem::new(I18nKey::TrayShow.text(), true, None);
+        let settings_item = MenuItem::new(I18nKey::TraySettings.text(), true, None);
+        let restart_item = MenuItem::new(I18nKey::TrayRestart.text(), true, None);
+        let quit_item = MenuItem::new(I18nKey::TrayQuit.text(), true, None);
 
         let show_id = show_item.id().clone();
         let settings_id = settings_item.id().clone();
@@ -128,6 +128,16 @@ impl TrayManager {
         }
 
         None
+    }
+
+    /// Update all menu item texts when language changes.
+    /// muda supports live text updates — no tray recreation needed.
+    pub fn update_language(&mut self) {
+        self._check_update_item.set_text(I18nKey::TrayCheckUpdate.text());
+        self._items[0].set_text(I18nKey::TrayShow.text());
+        self._items[1].set_text(I18nKey::TraySettings.text());
+        self._items[2].set_text(I18nKey::TrayRestart.text());
+        self._items[3].set_text(I18nKey::TrayQuit.text());
     }
 }
 

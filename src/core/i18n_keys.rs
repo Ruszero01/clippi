@@ -214,6 +214,7 @@ define_i18n! {
     FormatMinutesAgo:   ("{0}分钟前", "{0} min ago"),
     FormatHoursAgo:     ("{0}小时前", "{0} h ago"),
     FormatDaysAgo:      ("{0}天前", "{0} d ago"),
+    FormatWeeksAgo:     ("{0}周前", "{0} w ago"),
     ContentTypeFile:    ("文件", "File"),
     UnknownApp:         ("未知应用", "Unknown app"),
 

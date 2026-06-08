@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::i18n;
+use super::i18n_keys::I18nKey;
 
 #[cfg(target_os = "windows")]
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
@@ -307,7 +307,7 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
         .map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("打开注册表失败", "Failed to open registry")
+                I18nKey::ErrRegistryOpen.text()
             )
         })?;
 
@@ -315,14 +315,14 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
         let exe_path = std::env::current_exe().map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("获取程序路径失败", "Failed to get program path")
+                I18nKey::ErrGetExePath.text()
             )
         })?;
         key.set_value(APP_NAME, &exe_path.to_string_lossy().as_ref())
             .map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("写入注册表失败", "Failed to write registry")
+                    I18nKey::ErrRegistryWrite.text()
                 )
             })?;
     } else {
@@ -341,19 +341,13 @@ fn launch_agent_plist_path() -> Option<std::path::PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub fn set_auto_start(enable: bool) -> Result<(), String> {
-    let plist_path = launch_agent_plist_path().ok_or(i18n::tr(
-        "无法获取 LaunchAgents 路径",
-        "Cannot get LaunchAgents path",
-    ))?;
+    let plist_path = launch_agent_plist_path().ok_or(I18nKey::ErrLaunchAgentsPath.text())?;
 
     if let Some(parent) = plist_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr(
-                    "创建 LaunchAgents 目录失败",
-                    "Failed to create LaunchAgents directory"
-                )
+                I18nKey::ErrCreateLaunchAgents.text()
             )
         })?;
     }
@@ -362,7 +356,7 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
         let exe_path = std::env::current_exe().map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("获取程序路径失败", "Failed to get program path")
+                I18nKey::ErrGetExePath.text()
             )
         })?;
         let exe_str = exe_path.to_string_lossy();
@@ -389,7 +383,7 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
         std::fs::write(&plist_path, plist_content).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("写入 plist 失败", "Failed to write plist")
+                I18nKey::ErrWritePlist.text()
             )
         })?;
     } else {
@@ -397,7 +391,7 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
             std::fs::remove_file(&plist_path).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("删除 plist 失败", "Failed to delete plist")
+                    I18nKey::ErrDeletePlist.text()
                 )
             })?;
         }
@@ -428,14 +422,14 @@ pub(crate) fn generate_id() -> String {
 
 pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), String> {
     if *new_path == *old_path {
-        return Err(i18n::tr("新路径与当前路径相同", "New path is same as current").into());
+        return Err(I18nKey::ErrSamePath.text().into());
     }
 
     if let Some(parent) = new_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("创建目录失败", "Failed to create directory")
+                I18nKey::ErrCreateDir.text()
             )
         })?;
     }
@@ -443,7 +437,7 @@ pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), St
     std::fs::copy(old_path, new_path).map_err(|e| {
         format!(
             "{}: {e}",
-            i18n::tr("复制数据库失败", "Failed to copy database")
+            I18nKey::ErrCopyDb.text()
         )
     })?;
 
