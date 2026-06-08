@@ -80,7 +80,7 @@ impl RootView {
         let search_bar = cx
             .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
         let settings_panel = cx
-            .new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), cx));
+            .new(|cx| SettingsPanel::new(state.clone(), window_manager.clone(), theme.clone(), window, cx));
         let edit_panel = cx.new(|cx| EditPanel::new(state.clone(), theme.clone(), window, cx));
         let sidebar = cx.new(|_cx| Sidebar::new(state.clone(), list_view.clone(), &theme));
         let tag_filter_panel = cx.new(|cx| {

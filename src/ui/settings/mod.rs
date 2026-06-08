@@ -73,8 +73,24 @@ impl SettingsPanel {
         state: Entity<AppState>,
         window_manager: Entity<WindowManager>,
         theme: ClippiTheme,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Self {
+        // Create the max-items input with initial value from settings.
+        let current = state.read(cx).settings.max_items;
+        let display = if current == 0 {
+            String::new()
+        } else {
+            current.to_string()
+        };
+        let placeholder = crate::core::i18n::tr("不限制", "Unlimited");
+        let max_items_input = cx.new(|cx| {
+            gpui_component::input::InputState::new(window, cx).placeholder(placeholder)
+        });
+        max_items_input.update(cx, |input, cx| {
+            input.set_value(&display, window, cx);
+        });
+
         Self {
             active_tab: 0,
             state,
@@ -84,7 +100,7 @@ impl SettingsPanel {
             toggle_states: HashMap::new(),
             hotkey_confirm: None,
             reset_data_dialog: None,
-            max_items_input: None,
+            max_items_input: Some(max_items_input),
         }
     }
 

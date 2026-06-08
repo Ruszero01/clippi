@@ -33,7 +33,6 @@ pub struct ResetDataDirState {
 }
 
 impl SettingsPanel {
-    /// Render the Data settings tab content.
     /// Commit the current max-items input value to settings.
     fn commit_max_items(&mut self, cx: &mut Context<Self>) {
         if let Some(ref input) = self.max_items_input {
@@ -47,9 +46,10 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    /// Render the Data settings tab content.
     pub fn render_data_tab(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.clone();
@@ -262,7 +262,6 @@ impl SettingsPanel {
             })
             // ── Max items row (66px, standard row) ──
             .child({
-                let state = state.clone();
                 let surface = self.theme.surface;
                 let divider = self.theme.divider;
                 let text_1 = self.theme.text_1;
@@ -309,27 +308,6 @@ impl SettingsPanel {
                     )
                     // Right: editable number input (80x28)
                     .child({
-                        let this = this.clone();
-
-                        // Lazy-create the InputState entity on first render.
-                        if self.max_items_input.is_none() {
-                            let current = state.read(cx).settings.max_items;
-                            let display = if current == 0 {
-                                String::new()
-                            } else {
-                                current.to_string()
-                            };
-                            let placeholder = i18n::tr("不限制", "Unlimited");
-                            let input = cx.new(|cx| {
-                                gpui_component::input::InputState::new(window, cx)
-                                    .placeholder(placeholder)
-                            });
-                            input.update(cx, |s, cx| {
-                                s.set_value(&display, window, cx);
-                            });
-                            self.max_items_input = Some(input);
-                        }
-
                         let this2 = this.clone();
                         div()
                             .w(px(80.))
@@ -362,7 +340,7 @@ impl SettingsPanel {
                                 Input::new(
                                     self.max_items_input
                                         .as_ref()
-                                        .expect("max_items_input just created"),
+                                        .expect("max_items_input created in constructor"),
                                 )
                                 .appearance(false)
                                 .bordered(false)
