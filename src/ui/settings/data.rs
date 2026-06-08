@@ -326,9 +326,9 @@ impl SettingsPanel {
                             let focus_handle = self.max_items_focus.clone();
                             let edit_text = self.max_items_edit_text.clone();
                             let display = if edit_text.is_empty() {
-                                "0".to_string()
+                                "|".to_string()
                             } else {
-                                edit_text.clone()
+                                format!("{edit_text}|")
                             };
 
                             div()
@@ -341,6 +341,7 @@ impl SettingsPanel {
                                 .px(px(6.))
                                 .flex()
                                 .items_center()
+                                .cursor(CursorStyle::IBeam)
                                 .track_focus(&focus_handle)
                                 .on_key_down({
                                     let this = this.clone();
