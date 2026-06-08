@@ -16,6 +16,7 @@
 use std::rc::Rc;
 
 use gpui::*;
+use crate::core::i18n_keys::I18nKey;
 
 use crate::ui::theme::ClippiTheme;
 
@@ -93,7 +94,7 @@ impl ConfirmDialog {
         Self::new()
             .title("Confirm Delete")
             .message("Are you sure you want to delete this item?")
-            .confirm_label("Delete")
+            .confirm_label(I18nKey::ConfirmDeleteLabel.text())
             .danger(true)
     }
 
@@ -105,7 +106,7 @@ impl ConfirmDialog {
                 "Delete {} selected items?\nThis action cannot be undone.",
                 count
             ))
-            .confirm_label("Delete")
+            .confirm_label(I18nKey::ConfirmDeleteLabel.text())
             .danger(true)
     }
 

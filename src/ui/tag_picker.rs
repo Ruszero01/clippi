@@ -8,6 +8,8 @@ type PanelHandler = Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
+use crate::core::i18n_keys::I18nKey;
+
 use crate::core::types::TagInfo;
 
 use super::theme::ClippiTheme;
@@ -127,7 +129,7 @@ impl RenderOnce for TagPickerPanel {
                         .py(px(12.))
                         .text_size(px(11.))
                         .text_color(text_3)
-                        .child("No tags. Create tags in the tag filter panel."),
+                        .child(I18nKey::TagPickerNoTags.text()),
                 )
             })
             .when(!is_empty, |el| {

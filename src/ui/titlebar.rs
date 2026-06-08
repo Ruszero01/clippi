@@ -6,6 +6,7 @@
 
 use gpui::*;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
@@ -98,7 +99,7 @@ impl Render for Titlebar {
                             .text_size(px(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_2)
-                            .child("Clippi"),
+                            .child(I18nKey::TitlebarAppName.text()),
                     ),
             )
             // --- Spacer ---

@@ -14,6 +14,7 @@ use gpui_component::VirtualListScrollHandle;
 
 use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
+use crate::core::i18n_keys::I18nKey;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
 use super::tag_picker::TagState;
@@ -108,7 +109,7 @@ impl ClipboardListView {
             tag_picker_is_batch: false,
             selected_count: 0,
             editing_note_id: -1,
-            note_input: cx.new(|cx| InputState::new(window, cx).placeholder("Add a note...")),
+            note_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::ListNotePlaceholder.text())),
             confirm_dialog: None,
             theme,
         }
@@ -707,13 +708,13 @@ impl Render for ClipboardListView {
                     div()
                         .text_size(px(13.))
                         .text_color(text_2)
-                        .child("No items yet"),
+                        .child(I18nKey::ListNoItems.text()),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
                         .text_color(text_3)
-                        .child("Copied items will appear here"),
+                        .child(I18nKey::ListEmptyHint.text()),
                 )
                 .into_any_element();
         }
@@ -775,13 +776,13 @@ impl Render for ClipboardListView {
                             div()
                                 .text_size(px(13.))
                                 .text_color(text_2)
-                                .child("No items yet"),
+                                .child(I18nKey::ListNoItems.text()),
                         )
                         .child(
                             div()
                                 .text_size(px(11.))
                                 .text_color(text_3)
-                                .child("Copied items will appear here"),
+                                .child(I18nKey::ListEmptyHint.text()),
                         ),
                 )
             })

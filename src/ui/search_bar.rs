@@ -13,45 +13,45 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::frontend::PANEL_OFFSET_X;
+use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
 use super::theme::ClippiTheme;
 
 struct FilterDef {
-    label: &'static str,
     key: &'static str,
     icon: &'static str,
+    label_key: I18nKey,
 }
 
 const FILTER_TYPES: &[FilterDef] = &[
     FilterDef {
-        label: "Text",
+        label_key: I18nKey::FilterTextLabel,
         key: "plain_text",
         icon: "\u{e60e}",
     },
     FilterDef {
-        label: "RTF",
+        label_key: I18nKey::FilterRtfLabel,
         key: "rich_text",
         icon: "\u{e6ae}",
     },
     FilterDef {
-        label: "Files",
+        label_key: I18nKey::FilterFilesLabel,
         key: "file",
         icon: "\u{e646}",
     },
     FilterDef {
-        label: "Links",
+        label_key: I18nKey::FilterLinksLabel,
         key: "link",
         icon: "\u{e6d7}",
     },
     FilterDef {
-        label: "Color",
+        label_key: I18nKey::FilterColorLabel,
         key: "color",
         icon: "\u{e610}",
     },
 ];
-
 const SEARCH_BAR_HORIZONTAL_PADDING: f32 = 16.0;
 const TOOLBAR_GROUP_GAP: f32 = 6.0;
 const TOOLBAR_DIVIDER_WIDTH: f32 = 1.0;
@@ -77,7 +77,7 @@ impl SearchBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search clipboard..."));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::SearchPlaceholderFull.text()));
         let state_for_input = state.clone();
         let list_for_input = list_view.clone();
         let input_for_read = input.clone();
@@ -252,7 +252,7 @@ impl Render for SearchBar {
                                 let list_view = self.list_view.clone();
                                 let this = this.clone();
                                 let key = f.key;
-                                let label = f.label;
+                                let label = f.label_key.text();
 
                                 div()
                                     .id(("filter-type", index))
@@ -276,8 +276,9 @@ impl Render for SearchBar {
                                     .items_center()
                                     .cursor(CursorStyle::PointingHand)
                                     .when(icon_only, move |button| {
+                                        let label_for_tip = label;
                                         button.tooltip(move |window, cx| {
-                                            Tooltip::new(label).build(window, cx)
+                                            Tooltip::new(label_for_tip).build(window, cx)
                                         })
                                     })
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -297,7 +298,7 @@ impl Render for SearchBar {
                                                 .text_size(px(11.))
                                                 .font_weight(filter_weight)
                                                 .text_color(filter_text)
-                                                .child(label.to_string()),
+                                                .child(label),
                                         )
                                     })
                             })),
@@ -326,7 +327,7 @@ impl Render for SearchBar {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .tooltip(|window, cx| Tooltip::new("Tags").build(window, cx))
+                                    .tooltip(|window, cx| Tooltip::new(I18nKey::FilterTagsTooltip.text()).build(window, cx))
                                     .bg(if has_tag_filter {
                                         theme.accent_overlay()
                                     } else {

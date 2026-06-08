@@ -6,6 +6,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
 
 use crate::core::settings::BackendConfig;
+use crate::core::i18n_keys::I18nKey;
 use crate::services::backends::local_folder::detect_presets;
 use crate::services::gpui_sync::test_webdav_connection;
 use crate::ui::theme::ClippiTheme;
@@ -50,14 +51,14 @@ impl AddBackendPanel {
             theme,
             window_manager,
             presets: detect_presets(),
-            name_input: cx.new(|cx| InputState::new(window, cx).placeholder("Backend name")),
-            folder_input: cx.new(|cx| InputState::new(window, cx).placeholder("Folder path")),
+            name_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhName.text())),
+            folder_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhFolder.text())),
             url_input: cx
                 .new(|cx| InputState::new(window, cx).placeholder("https://example.com/dav")),
-            username_input: cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
+            username_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUser.text())),
             password_input: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Password")
+                    .placeholder(I18nKey::BackendPhPass.text())
                     .masked(true)
             }),
             test_pending: false,
@@ -163,7 +164,7 @@ impl AddBackendPanel {
                     panel.test_error = if ok {
                         String::new()
                     } else {
-                        "Connection failed. Check URL and credentials.".into()
+                        I18nKey::BackendTestFail.text().into()
                     };
                     cx.notify();
                 });
@@ -174,12 +175,12 @@ impl AddBackendPanel {
 
     fn title(&self) -> &'static str {
         if self.edit_id.is_some() {
-            "Edit backend"
+            I18nKey::BackendEditTitle.text()
         } else {
             match self.step {
-                EditorStep::SelectType => "Add backend",
-                EditorStep::LocalFolder => "Local Folder",
-                EditorStep::WebDav => "WebDAV",
+                EditorStep::SelectType => I18nKey::BackendAddTitle.text(),
+                EditorStep::LocalFolder => I18nKey::BackendLocalFolder.text(),
+                EditorStep::WebDav => I18nKey::BackendWebdav.text(),
             }
         }
     }
@@ -200,7 +201,7 @@ impl AddBackendPanel {
                     .text_size(px(11.))
                     .font_weight(FontWeight::BOLD)
                     .text_color(self.theme.text_2)
-                    .child("Select backend type"),
+                    .child(I18nKey::BackendSelectType.text()),
             )
             .child(
                 div()
@@ -208,8 +209,8 @@ impl AddBackendPanel {
                     .gap(px(10.))
                     .child(type_card(
                         "\u{e60a}",
-                        "Local Folder",
-                        "OneDrive, iCloud, etc.",
+                        I18nKey::BackendLocalFolder.text(),
+                        I18nKey::BackendLocalDesc.text(),
                         accent,
                         accent_soft,
                         text_1,
@@ -226,8 +227,8 @@ impl AddBackendPanel {
                     ))
                     .child(type_card(
                         "\u{e7b1}",
-                        "WebDAV",
-                        "NAS, Nextcloud, etc.",
+                        I18nKey::BackendWebdav.text(),
+                        I18nKey::BackendWebdavDesc.text(),
                         accent,
                         accent_soft,
                         text_1,
@@ -237,7 +238,7 @@ impl AddBackendPanel {
                                 panel.step = EditorStep::WebDav;
                                 if panel.name_input.read(cx).value().is_empty() {
                                     panel.name_input.update(cx, |input, cx| {
-                                        input.set_value("WebDAV", window, cx)
+                                        input.set_value(I18nKey::BackendWebdav.text(), window, cx)
                                     });
                                 }
                                 cx.notify();
@@ -261,7 +262,7 @@ impl AddBackendPanel {
             .flex_col()
             .gap(px(8.))
             .when(!editing && !self.presets.is_empty(), |form| {
-                form.child(field_label("Quick add", text_2)).child(
+                form.child(field_label(I18nKey::BackendQuickAdd.text(), text_2)).child(
                     div()
                         .flex()
                         .gap(px(8.))
@@ -310,9 +311,9 @@ impl AddBackendPanel {
                 )
             })
             .when(!editing, |form| form.child(div().h(px(1.)).bg(divider)))
-            .child(field_label("Name", text_2))
+            .child(field_label(I18nKey::BackendName.text(), text_2))
             .child(input_box(&self.name_input, &self.theme, false))
-            .child(field_label("Folder", text_2))
+            .child(field_label(I18nKey::BackendFolder.text(), text_2))
             .child(
                 div()
                     .flex()
@@ -350,11 +351,11 @@ impl AddBackendPanel {
                                     }
                                 }
                             })
-                            .child("Browse"),
+                            .child(I18nKey::BackendBrowse.text()),
                     ),
             )
             .child(primary_button(
-                if editing { "Save" } else { "Add backend" },
+                if editing { "Save" } else { I18nKey::BackendAddTitle.text() },
                 accent,
                 accent_soft,
                 {
@@ -393,13 +394,13 @@ impl AddBackendPanel {
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(field_label("Server URL", text_2))
+            .child(field_label(I18nKey::BackendServerUrl.text(), text_2))
             .child(input_box(&self.url_input, &self.theme, false))
-            .child(field_label("Name", text_2))
+            .child(field_label(I18nKey::BackendName.text(), text_2))
             .child(input_box(&self.name_input, &self.theme, false))
-            .child(field_label("Username", text_2))
+            .child(field_label(I18nKey::BackendUsername.text(), text_2))
             .child(input_box(&self.username_input, &self.theme, false))
-            .child(field_label("Password", text_2))
+            .child(field_label(I18nKey::BackendPassword.text(), text_2))
             .child(input_box(&self.password_input, &self.theme, true))
             .when(!self.test_error.is_empty(), |form| {
                 form.child(
@@ -413,9 +414,9 @@ impl AddBackendPanel {
             .when(!self.test_ok, |form| {
                 form.child(primary_button(
                     if self.test_pending {
-                        "Testing..."
+                        I18nKey::BackendTesting.text()
                     } else {
-                        "Test connection"
+                        I18nKey::BackendTest.text()
                     },
                     accent,
                     accent_soft,
@@ -431,7 +432,7 @@ impl AddBackendPanel {
             })
             .when(self.test_ok, |form| {
                 form.child(primary_button(
-                    if editing { "Save" } else { "Add backend" },
+                    if editing { "Save" } else { I18nKey::BackendAddTitle.text() },
                     rgb(0x4caf50),
                     accent_soft,
                     {

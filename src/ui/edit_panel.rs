@@ -11,18 +11,19 @@ use std::borrow::Cow;
 
 use crate::core::types::{ClipboardItem, ContentType, RichData};
 use crate::state::app::AppState;
+use crate::core::i18n_keys::I18nKey;
 
 use super::theme::ClippiTheme;
 
-const TYPE_OPTIONS: [(&str, &str); 8] = [
-    ("plain_text", "Text"),
-    ("markdown", "Markdown"),
-    ("html", "HTML"),
-    ("link", "URL"),
-    ("path", "Path"),
-    ("color", "Color"),
-    ("email", "Email"),
-    ("phone", "Phone"),
+const TYPE_OPTIONS: [(&str, I18nKey); 8] = [
+    ("plain_text", I18nKey::EditTypeText),
+    ("markdown", I18nKey::EditTypeMarkdown),
+    ("html", I18nKey::EditTypeHtml),
+    ("link", I18nKey::EditTypeUrl),
+    ("path", I18nKey::EditTypePath),
+    ("color", I18nKey::EditTypeColor),
+    ("email", I18nKey::EditTypeEmail),
+    ("phone", I18nKey::EditTypePhone),
 ];
 
 pub struct EditPanel {
@@ -53,7 +54,7 @@ impl EditPanel {
         let content_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
-                .placeholder("Content...")
+                .placeholder(I18nKey::EditContentPlaceholder.text())
         });
         let content_for_sub = content_input.clone();
         let _subscriptions =
@@ -188,7 +189,7 @@ impl Render for EditPanel {
                             .text_size(px(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
-                            .child("Edit"),
+                            .child(I18nKey::EditPanelTitle.text()),
                     ),
             )
             .child(
@@ -311,7 +312,7 @@ impl Render for EditPanel {
                             });
                         }
                     }))
-                    .child(text_button("Save", rgb(0xffffff), accent, accent, {
+                    .child(text_button(I18nKey::EditSave.text(), rgb(0xffffff), accent, accent, {
                         let this = this.clone();
                         move |window, cx| {
                             this.update(cx, |panel, cx| panel.save(window, cx));
@@ -347,9 +348,10 @@ impl Render for EditPanel {
                             .shadow_lg()
                             .p(px(4.))
                             .occlude()
-                            .children(TYPE_OPTIONS.into_iter().map(|(key, label)| {
+                            .children(TYPE_OPTIONS.into_iter().map(|(key, label_key)| {
                                 let this = this.clone();
                                 let key = key.to_string();
+                                let label = label_key.text();
                                 let active = self.selected_type == key;
                                 div()
                                     .h(px(26.))
@@ -542,8 +544,8 @@ fn editor_type_from_item(item: &ClipboardItem) -> &'static str {
 fn type_label(key: &str) -> &'static str {
     TYPE_OPTIONS
         .iter()
-        .find_map(|(option_key, label)| (*option_key == key).then_some(*label))
-        .unwrap_or("Text")
+        .find_map(|(option_key, label_key)| (*option_key == key).then_some(label_key.text()))
+        .unwrap_or(I18nKey::EditTypeText.text())
 }
 
 fn json_format(text: &str) -> String {

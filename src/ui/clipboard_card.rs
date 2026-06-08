@@ -17,6 +17,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
     format_relative_time, get_extension_label, is_email, is_markdown_like, is_phone,
     mask_sensitive_preview, parse_hex_color, url_domain, url_path, ClipboardItem, ContentType,
@@ -63,7 +64,7 @@ fn type_label(item: &ClipboardItem) -> String {
         return "QR".into();
     }
     match item.content_type {
-        ContentType::PlainText => "Text".into(),
+        ContentType::PlainText => I18nKey::CardTypeText.text().into(),
         ContentType::RichText => {
             if item.meta_type == "markdown" {
                 return "MD".into();
@@ -82,7 +83,7 @@ fn type_label(item: &ClipboardItem) -> String {
                 "RTF".into()
             }
         }
-        ContentType::Image => "Image".into(),
+        ContentType::Image => I18nKey::CardTypeImage.text().into(),
         ContentType::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
             if fd.files.len() <= 1 {
@@ -93,7 +94,7 @@ fn type_label(item: &ClipboardItem) -> String {
                     .map(|f| get_extension_label(&f.name))
                     .unwrap_or_default();
                 if label == "file" || label == "dir" {
-                    "File".into()
+                    I18nKey::CardTypeFile.text().into()
                 } else {
                     label.trim_start_matches('.').to_uppercase()
                 }
@@ -103,7 +104,7 @@ fn type_label(item: &ClipboardItem) -> String {
         }
         ContentType::Link => "URL".into(),
         ContentType::Path => "Path".into(),
-        ContentType::Color => "Color".into(),
+        ContentType::Color => I18nKey::CardTypeColor.text().into(),
     }
 }
 

@@ -8,6 +8,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 
+use crate::core::i18n_keys::I18nKey;
 use super::SettingsPanel;
 
 /// Confirm action for hotkey blacklist operations.
@@ -86,7 +87,7 @@ impl SettingsPanel {
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.text_1)
-                                    .child("Hotkey"),
+                                    .child(I18nKey::HotkeyTabTitle.text()),
                             )
                             .child({
                                 let desc_color = if recording {
@@ -233,7 +234,7 @@ impl SettingsPanel {
                                             div()
                                                 .text_size(px(12.))
                                                 .text_color(theme.text_3)
-                                                .child("No foreground app"),
+                                                .child(I18nKey::HotkeyNoForeground.text()),
                                         )
                                     }),
                             )

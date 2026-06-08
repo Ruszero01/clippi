@@ -15,6 +15,7 @@ use gpui_component::input::{Input, InputState};
 
 use crate::core::types::{tag_preset_colors, TagInfo};
 use crate::state::app::AppState;
+use crate::core::i18n_keys::I18nKey;
 
 use super::clipboard_list::ClipboardListView;
 use super::search_bar::SearchBar;
@@ -37,7 +38,7 @@ impl TagFilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let create_input = cx.new(|cx| InputState::new(window, cx).placeholder("Tag name..."));
+        let create_input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text()));
         let edit_name_input = cx.new(|cx| InputState::new(window, cx));
 
         Self {
@@ -186,7 +187,7 @@ impl Render for TagFilterPanel {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(text_1)
-                            .child("Tag filter"),
+                            .child(I18nKey::TagFilterTitle.text()),
                     )
                     .child(div().flex_1())
                     .child(icon_btn(
@@ -272,7 +273,7 @@ impl Render for TagFilterPanel {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(accent)
                                     .hover(|style| style.text_color(rgb(0xffffff)))
-                                    .child("+"),
+                                    .child(I18nKey::TagFilterAdd.text()),
                             )
                             .on_mouse_down(MouseButton::Left, {
                                 let this = this.clone();
@@ -401,7 +402,7 @@ impl Render for TagFilterPanel {
                         .px(px(6.))
                         .text_size(px(11.))
                         .text_color(text_3)
-                        .child("No tags. Create above"),
+                        .child(I18nKey::TagFilterNoTags.text()),
                 )
             })
     }
@@ -462,10 +463,10 @@ pub fn render_edit_panel(
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(text_1)
-                .child("Edit tag"),
+                .child(I18nKey::TagEditTitle.text()),
         )
         .child(div().h(px(1.)).w_full().bg(sep_line))
-        .child(div().text_size(px(11.)).text_color(text_2).child("Name"))
+        .child(div().text_size(px(11.)).text_color(text_2).child(I18nKey::TagNameLabel.text()))
         .child(
             div()
                 .h(px(26.))
@@ -487,7 +488,7 @@ pub fn render_edit_panel(
                 ),
         )
         .child(div().h(px(1.)).w_full().bg(sep_line))
-        .child(div().text_size(px(11.)).text_color(text_2).child("Color"))
+        .child(div().text_size(px(11.)).text_color(text_2).child(I18nKey::TagColor.text()))
         .child(
             div()
                 .flex()
@@ -544,7 +545,7 @@ pub fn render_edit_panel(
                         .hover(|style| style.bg(btn_hover))
                         .text_size(px(11.))
                         .text_color(text_2)
-                        .child("Cancel")
+                        .child(I18nKey::BtnCancel.text())
                         .occlude()
                         .on_mouse_down(MouseButton::Left, {
                             let on_cancel = on_cancel.clone();
@@ -565,7 +566,7 @@ pub fn render_edit_panel(
                         .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(0xffffff))
-                        .child("Save")
+                        .child(I18nKey::BackendSave.text())
                         .occlude()
                         .on_mouse_down(MouseButton::Left, {
                             let on_save = on_save.clone();

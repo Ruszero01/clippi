@@ -8,6 +8,7 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_transitions::WindowUseTransition;
 
 use crate::services::gpui_sync::format_last_sync;
+use crate::core::i18n_keys::I18nKey;
 use crate::state::sync::BackendStatus;
 use crate::ui::components::toggle::{render_toggle, ToggleColors};
 
@@ -64,7 +65,7 @@ impl SettingsPanel {
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
-                                    .child("Sync"),
+                                    .child(I18nKey::SyncTabTitle.text()),
                             )
                             .child(render_toggle(
                                 sync.auto_enabled,
@@ -99,7 +100,7 @@ impl SettingsPanel {
                                         .text_size(px(12.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_1)
-                                        .child("Favorites only"),
+                                        .child(I18nKey::SyncFavoritesOnly.text()),
                                 )
                                 .child(render_toggle(
                                     sync.favorites_only,
@@ -155,7 +156,7 @@ impl SettingsPanel {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(text_2)
-                                    .child("Add backend"),
+                                    .child(I18nKey::SyncAddBackend.text()),
                             ),
                     )
                     .when(!backend_cards.is_empty(), |card| {
@@ -411,7 +412,7 @@ impl SettingsPanel {
                     .items_center()
                     .gap(px(4.))
                     .children(
-                        [(30, "30s"), (60, "1m"), (600, "10m"), (1800, "30m")]
+                        [(30, I18nKey::SyncInterval30s.text()), (60, I18nKey::SyncInterval1m.text()), (600, I18nKey::SyncInterval10m.text()), (1800, I18nKey::SyncInterval30m.text())]
                             .into_iter()
                             .map(|(secs, label)| {
                                 let selected = interval == secs;
@@ -468,9 +469,9 @@ impl SettingsPanel {
                                 }
                             })
                             .child(if backend.syncing {
-                                "Syncing"
+                                I18nKey::SyncSyncing.text()
                             } else {
-                                "Sync now"
+                                I18nKey::SyncNow.text()
                             }),
                     ),
             )

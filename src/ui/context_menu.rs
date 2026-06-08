@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use gpui::*;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::ui::theme::ClippiTheme;
 
 type MenuActionHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
@@ -94,7 +95,7 @@ impl ContextMenu {
 
         // Copy
         items.push(RawMenuItem {
-            label: "Copy".into(),
+            label: I18nKey::CtxCopy.text().into(),
             action: "copy".into(),
             icon: "\u{e600}".into(),
             danger: false,
@@ -102,7 +103,7 @@ impl ContextMenu {
         });
         // --- Paste ---
         items.push(RawMenuItem {
-            label: "Paste".into(),
+            label: I18nKey::CtxPaste.text().into(),
             action: "paste".into(),
             icon: "\u{e600}".into(),
             danger: false,
@@ -137,7 +138,7 @@ impl ContextMenu {
         // Edit (not for image/file)
         if !ctx.is_image && !ctx.is_file {
             items.push(RawMenuItem {
-                label: "Edit".into(),
+                label: I18nKey::CtxEdit.text().into(),
                 action: "edit".into(),
                 icon: "\u{e648}".into(),
                 danger: false,
@@ -213,7 +214,7 @@ impl ContextMenu {
 
         // --- Delete ---
         items.push(RawMenuItem {
-            label: "Delete".into(),
+            label: I18nKey::CtxDelete.text().into(),
             action: "delete".into(),
             icon: "\u{e8b6}".into(),
             danger: true,

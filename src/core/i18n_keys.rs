@@ -257,4 +257,77 @@ define_i18n! {
 
     // ─── Image save ───
     ImageSaved:             ("图片已保存", "Image saved"),
+
+    // ─── Search bar / Filters ───
+    FilterTextLabel:        ("文本", "Text"),
+    FilterRtfLabel:         ("RTF", "RTF"),
+    FilterFilesLabel:       ("文件", "Files"),
+    FilterLinksLabel:       ("链接", "Links"),
+    FilterColorLabel:       ("颜色", "Color"),
+    FilterTagsTooltip:      ("标签", "Tags"),
+    SearchPlaceholderFull:  ("搜索剪贴板...", "Search clipboard..."),
+
+    // ─── Hotkey settings ───
+    HotkeyTabTitle:         ("快捷键", "Hotkey"),
+    HotkeyNoForeground:     ("无前台应用", "No foreground app"),
+    HotkeyPressToRecord:    ("按下新快捷键进行录制", "Press new hotkey to record"),
+    HotkeyConfirmAddTitle:  ("确认添加黑名单", "Confirm Add to Blacklist"),
+    HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
+    HotkeyConfirmRemoveTitle:("确认移除黑名单", "Confirm Remove from Blacklist"),
+    HotkeyConfirmRemoveMsg: ("将 {0} 从快捷键黑名单中移除？", "Remove {0} from hotkey blacklist?"),
+
+    // ─── Sync settings (additional) ───
+    SyncTabTitle:           ("同步", "Sync"),
+    SyncInterval30s:        ("30秒", "30s"),
+    SyncInterval1m:         ("1分钟", "1m"),
+    SyncInterval10m:        ("10分钟", "10m"),
+    SyncInterval30m:        ("30分钟", "30m"),
+
+    // ─── Tag filter ───
+    TagFilterTitle:         ("标签筛选", "Tag filter"),
+    TagFilterAdd:           ("+", "+"),
+    TagFilterNoTags:        ("暂无标签，请在上方创建", "No tags. Create above"),
+    TagEditTitle:           ("编辑标签", "Edit tag"),
+    TagCreatePlaceholder:   ("标签名称...", "Tag name..."),
+
+    // ─── Tag picker ───
+    TagPickerNoTags:        ("暂无标签，请在标签筛选面板中创建", "No tags. Create tags in the tag filter panel."),
+
+    // ─── Edit panel ───
+    EditPanelTitle:         ("编辑", "Edit"),
+    EditContentPlaceholder: ("内容...", "Content..."),
+    EditTypeText:           ("文本", "Text"),
+    EditTypeColor:          ("颜色", "Color"),
+    EditTypeMarkdown:       ("Markdown", "Markdown"),
+    EditTypeHtml:           ("HTML", "HTML"),
+    EditTypeUrl:            ("URL", "URL"),
+    EditTypePath:           ("路径", "Path"),
+    EditTypeEmail:          ("Email", "Email"),
+    EditTypePhone:          ("电话", "Phone"),
+
+    // ─── Add backend (additional from settings/sync) ───
+    BackendAddLabel:        ("添加后端", "Add backend"),
+
+    // ─── Clipboard card ───
+    CardTypeText:           ("文本", "Text"),
+    CardTypeImage:          ("图片", "Image"),
+    CardTypeFile:           ("文件", "File"),
+    CardTypeColor:          ("颜色", "Color"),
+    CardImageSize:          ("{0} × {1}", "{0} × {1}"),
+
+    // ─── Clipboard list ───
+    ListNoItems:            ("暂无条目", "No items yet"),
+    ListEmptyHint:          ("复制的内容将显示在这里", "Copied items will appear here"),
+    ListNotePlaceholder:    ("添加备注...", "Add a note..."),
+    ListSelectionOrder:     ("{0}", "{0}"),
+
+    // ─── Context menu ───
+    CtxFav:                 ("收藏", "Fav"),
+    CtxUnfav:               ("取消收藏", "Unfav"),
+
+    // ─── Confirm dialog ───
+    ConfirmDeleteLabel:     ("删除", "Delete"),
+
+    // ─── Titlebar ───
+    TitlebarAppName:        ("Clippi", "Clippi"),
 }
