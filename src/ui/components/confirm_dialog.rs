@@ -41,8 +41,8 @@ impl ConfirmDialog {
         Self {
             title: String::new(),
             message: String::new(),
-            confirm_label: "Confirm".into(),
-            cancel_label: "Cancel".into(),
+            confirm_label: I18nKey::DialogConfirm.text().into(),
+            cancel_label: I18nKey::BtnCancel.text().into(),
             danger: false,
             theme: ClippiTheme::dark(),
             on_confirm: None,

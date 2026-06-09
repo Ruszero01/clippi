@@ -355,7 +355,7 @@ impl AddBackendPanel {
                     ),
             )
             .child(primary_button(
-                if editing { "Save" } else { I18nKey::BackendAddTitle.text() },
+                if editing { I18nKey::BackendSave.text() } else { I18nKey::BackendAddTitle.text() },
                 accent,
                 accent_soft,
                 {
@@ -432,7 +432,7 @@ impl AddBackendPanel {
             })
             .when(self.test_ok, |form| {
                 form.child(primary_button(
-                    if editing { "Save" } else { I18nKey::BackendAddTitle.text() },
+                    if editing { I18nKey::BackendSave.text() } else { I18nKey::BackendAddTitle.text() },
                     rgb(0x4caf50),
                     accent_soft,
                     {

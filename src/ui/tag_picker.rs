@@ -115,7 +115,7 @@ impl RenderOnce for TagPickerPanel {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(text_1)
-                            .child(if is_batch { "Batch tag" } else { "Tag" }),
+                            .child(if is_batch { I18nKey::CtxBatchTag.text() } else { I18nKey::CtxTag.text() }),
                     )
                     .child(div().flex_1())
                     .child(icon_button("\u{e607}", text_2, btn_hover, on_clear))

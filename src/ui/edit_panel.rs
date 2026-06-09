@@ -313,7 +313,7 @@ impl Render for EditPanel {
                     .justify_end()
                     .items_center()
                     .gap(px(8.))
-                    .child(text_button("Cancel", text_2, divider, rgba(0x00000000), {
+                    .child(text_button(I18nKey::BtnCancel.text(), text_2, divider, rgba(0x00000000), {
                         let this = this.clone();
                         move |_window, cx| {
                             this.update(cx, |_panel, cx| {

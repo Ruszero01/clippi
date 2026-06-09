@@ -113,9 +113,9 @@ impl ContextMenu {
         // Color conversion (only for color type)
         if ctx.is_color {
             let (label, action) = if ctx.is_hex {
-                ("Paste as RGB", "paste_as_rgb")
+                (I18nKey::CtxPasteAsRgb.text(), "paste_as_rgb")
             } else {
-                ("Paste as HEX", "paste_as_hex")
+                (I18nKey::CtxPasteAsHex.text(), "paste_as_hex")
             };
             items.push(RawMenuItem {
                 label: label.into(),
@@ -148,7 +148,7 @@ impl ContextMenu {
 
         // Note
         items.push(RawMenuItem {
-            label: "Note".into(),
+            label: I18nKey::EditNote.text().into(),
             action: "edit_note".into(),
             icon: "\u{e606}".into(),
             danger: false,
@@ -158,21 +158,21 @@ impl ContextMenu {
         // --- Open original image (image only) ---
         if ctx.is_image {
             items.push(RawMenuItem {
-                label: "Open image".into(),
+                label: I18nKey::CtxOpenImage.text().into(),
                 action: "open_image".into(),
                 icon: "\u{e626}".into(),
                 danger: false,
                 fav: false,
             });
             items.push(RawMenuItem {
-                label: "Paste OCR text".into(),
+                label: I18nKey::CtxPasteOcr.text().into(),
                 action: "paste_ocr".into(),
                 icon: "\u{e648}".into(),
                 danger: false,
                 fav: false,
             });
             items.push(RawMenuItem {
-                label: "Detect QR Code".into(),
+                label: I18nKey::CtxDetectQr.text().into(),
                 action: "qr_detect".into(),
                 icon: "\u{e605}".into(),
                 danger: false,
@@ -182,7 +182,7 @@ impl ContextMenu {
 
         // Tag
         items.push(RawMenuItem {
-            label: "Tag".into(),
+            label: I18nKey::CtxTag.text().into(),
             action: "show_tag_picker".into(),
             icon: "\u{ec07}".into(),
             danger: false,
@@ -200,9 +200,9 @@ impl ContextMenu {
 
         // --- Favorite ---
         let (fav_label, fav_icon) = if ctx.is_favorite {
-            ("Unfav", "\u{e630}")
+            (I18nKey::CtxUnfav.text(), "\u{e630}")
         } else {
-            ("Fav", "\u{e68d}")
+            (I18nKey::CtxFav.text(), "\u{e68d}")
         };
         items.push(RawMenuItem {
             label: fav_label.into(),
@@ -228,7 +228,7 @@ impl ContextMenu {
     pub fn for_batch(selected_count: usize) -> Self {
         let items = vec![
             RawMenuItem {
-                label: format!("Paste {} items", selected_count),
+                label: I18nKey::CtxBatchPasteN.fmt(&[&selected_count.to_string()]),
                 action: "batch_paste".into(),
                 icon: "\u{e600}".into(),
                 danger: false,
@@ -242,7 +242,7 @@ impl ContextMenu {
                 fav: false,
             },
             RawMenuItem {
-                label: "Batch tag".into(),
+                label: I18nKey::CtxBatchTag.text().into(),
                 action: "show_tag_picker".into(),
                 icon: "\u{ec07}".into(),
                 danger: false,
@@ -256,14 +256,14 @@ impl ContextMenu {
                 fav: false,
             },
             RawMenuItem {
-                label: "Batch fav".into(),
+                label: I18nKey::CtxBatchFav.text().into(),
                 action: "batch_favorite".into(),
                 icon: "\u{e630}".into(),
                 danger: false,
                 fav: true,
             },
             RawMenuItem {
-                label: "Batch delete".into(),
+                label: I18nKey::CtxBatchDelete.text().into(),
                 action: "batch_delete".into(),
                 icon: "\u{e8b6}".into(),
                 danger: true,
