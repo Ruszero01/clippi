@@ -1,13 +1,13 @@
-//! WebDAV sync backend.
+//! --- WebDAV sync backend. ---
 //!
-//! Reads/writes `clippi_sync.json` to a WebDAV server via HTTP.
+//! --- Reads/writes `clippi_sync.json` to a WebDAV server via HTTP. ---
 //! Uses ETag/If-None-Match for cache-aware pulls (analogous to
-//! mtime-based caching in local_folder).
+//! --- mtime-based caching in local_folder). ---
 
-use base64::Engine;
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
-use crate::core::sync::{BackendStatus, BackendType, SyncBackend, SyncPayload};
+use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
+use base64::Engine;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -45,21 +45,16 @@ impl WebDAVBackend {
             "{}:{}",
             self.config.webdav_username, self.config.webdav_password
         );
-        format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(&raw))
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(&raw)
+        )
     }
 }
 
 impl SyncBackend for WebDAVBackend {
-    fn id(&self) -> &str {
-        &self.config.id
-    }
-
     fn name(&self) -> &str {
         &self.config.name
-    }
-
-    fn backend_type(&self) -> BackendType {
-        BackendType::WebDAV
     }
 
     fn sync_interval(&self) -> u64 {
@@ -68,45 +63,29 @@ impl SyncBackend for WebDAVBackend {
 
     fn check_status(&self) -> BackendStatus {
         if self.config.webdav_url.is_empty() {
-            return BackendStatus::Error(
-                i18n::tr("未配置 URL", "URL not configured").into(),
-            );
+            return BackendStatus::Error(I18nKey::SyncErrNoUrl.text().into());
         }
         let url = self.file_url();
         let auth = self.auth_header();
-        match self
-            .agent
-            .head(&url)
-            .set("Authorization", &auth)
-            .call()
-        {
+        match self.agent.head(&url).set("Authorization", &auth).call() {
             Ok(resp) => {
                 let status = resp.status();
                 if (200..400).contains(&status) {
                     BackendStatus::Online
                 } else if status == 401 || status == 403 {
-                    BackendStatus::Error(
-                        i18n::tr("认证失败", "Authentication failed").into(),
-                    )
+                    BackendStatus::Error(I18nKey::SyncErrAuth.text().into())
                 } else {
                     BackendStatus::Error(format!("HTTP {status}"))
                 }
             }
             Err(ureq::Error::Status(code, _)) => {
                 if code == 401 || code == 403 {
-                    BackendStatus::Error(
-                        i18n::tr("认证失败", "Authentication failed").into(),
-                    )
+                    BackendStatus::Error(I18nKey::SyncErrAuth.text().into())
                 } else if code == 404 {
-                    // File doesn't exist yet — treat as online (will create on first push)
-                    // Check parent collection instead
+                    // --- File doesn't exist yet — treat as online (will create on first push) ---
+                    // --- Check parent collection instead ---
                     let base = self.config.webdav_url.trim_end_matches('/');
-                    match self
-                        .agent
-                        .head(base)
-                        .set("Authorization", &auth)
-                        .call()
-                    {
+                    match self.agent.head(base).set("Authorization", &auth).call() {
                         Ok(_) => BackendStatus::Online,
                         Err(_) => BackendStatus::Error(format!("HTTP {code}")),
                     }
@@ -116,7 +95,7 @@ impl SyncBackend for WebDAVBackend {
             }
             Err(e) => BackendStatus::Error(format!(
                 "{}: {e}",
-                i18n::tr("连接失败", "Connection failed")
+                I18nKey::SyncErrConnect.text()
             )),
         }
     }
@@ -136,26 +115,33 @@ impl SyncBackend for WebDAVBackend {
 
         match req.call() {
             Ok(resp) => {
-                // Cache the new ETag
+                // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
                     *self.last_etag.lock().unwrap() = Some(etag.to_string());
                 }
-                let body = resp
-                    .into_string()
-                    .map_err(|e| format!("{}: {e}", i18n::tr("读取响应失败", "Failed to read response")))?;
-                serde_json::from_str::<SyncPayload>(&body)
-                    .map_err(|e| format!("{}: {e}", i18n::tr("解析同步文件失败", "Failed to parse sync file")))
+                let body = resp.into_string().map_err(|e| {
+                    format!(
+                        "{}: {e}",
+                        I18nKey::SyncErrReadResp.text()
+                    )
+                })?;
+                serde_json::from_str::<SyncPayload>(&body).map_err(|e| {
+                    format!(
+                        "{}: {e}",
+                        I18nKey::SyncErrParse.text()
+                    )
+                })
             }
             Err(ureq::Error::Status(304, _)) => {
-                // Not Modified — no changes
+                // --- Not Modified — no changes ---
                 Err("@@unchanged".into())
             }
             Err(ureq::Error::Status(404, _)) => {
-                Err(i18n::tr("同步文件不存在", "Sync file not found").into())
+                Err(I18nKey::SyncErrNotFound.text().into())
             }
             Err(e) => Err(format!(
                 "{}: {e}",
-                i18n::tr("拉取同步文件失败", "Failed to pull sync file")
+                I18nKey::SyncErrPull.text()
             )),
         }
     }
@@ -164,7 +150,7 @@ impl SyncBackend for WebDAVBackend {
         let url = self.file_url();
         let auth = self.auth_header();
         let json = serde_json::to_string_pretty(payload)
-            .map_err(|e| format!("{}: {e}", i18n::tr("序列化失败", "Serialization failed")))?;
+            .map_err(|e| format!("{}: {e}", I18nKey::SyncErrSerialize.text()))?;
 
         match self
             .agent
@@ -174,7 +160,7 @@ impl SyncBackend for WebDAVBackend {
             .send_bytes(json.as_bytes())
         {
             Ok(resp) => {
-                // Cache the new ETag
+                // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
                     *self.last_etag.lock().unwrap() = Some(etag.to_string());
                 }
@@ -182,9 +168,8 @@ impl SyncBackend for WebDAVBackend {
             }
             Err(e) => Err(format!(
                 "{}: {e}",
-                i18n::tr("推送同步文件失败", "Failed to push sync file")
+                I18nKey::SyncErrPush.text()
             )),
         }
     }
 }
-

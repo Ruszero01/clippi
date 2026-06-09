@@ -1,11 +1,11 @@
-//! Local-folder sync backend.
+//! --- Local-folder sync backend. ---
 //!
 //! Reads/writes `clippi_sync.json` in a cloud-synced folder (OneDrive, iCloud,
 //! Dropbox, etc.). The OS/cloud-provider handles the actual network sync.
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
-use crate::core::sync::{self, BackendStatus, BackendType, SyncBackend, SyncPayload};
+use crate::core::sync::{self, BackendStatus, SyncBackend, SyncPayload};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -45,7 +45,7 @@ impl LocalFolderBackend {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if name.starts_with("clippi_sync-") && name.ends_with(".json") {
-                    // Skip files modified within the last 5 seconds
+                    // --- Skip files modified within the last 5 seconds ---
                     if let Ok(meta) = path.metadata() {
                         if let Ok(mtime) = meta.modified() {
                             if now
@@ -66,16 +66,8 @@ impl LocalFolderBackend {
 }
 
 impl SyncBackend for LocalFolderBackend {
-    fn id(&self) -> &str {
-        &self.config.id
-    }
-
     fn name(&self) -> &str {
         &self.config.name
-    }
-
-    fn backend_type(&self) -> BackendType {
-        BackendType::LocalFolder
     }
 
     fn sync_interval(&self) -> u64 {
@@ -89,7 +81,7 @@ impl SyncBackend for LocalFolderBackend {
         }
         if !dir.is_dir() {
             return BackendStatus::Error(
-                i18n::tr("路径不是目录", "Path is not a directory").into(),
+                I18nKey::SyncErrNotDir.text().into(),
             );
         }
         BackendStatus::Online
@@ -98,13 +90,13 @@ impl SyncBackend for LocalFolderBackend {
     fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String> {
         let path = self.file_path();
         if !path.exists() {
-            return Err(i18n::tr("同步文件不存在", "Sync file not found").into());
+            return Err(I18nKey::SyncErrNotFound.text().into());
         }
 
         // Check if remote file has changed since last pull.
-        // Only applies to the main file; conflict files always need processing.
-        // When bypass_cache is true (local dirty, need to compare hashes),
-        // force mtime_changed so we always read the file.
+        // --- Only applies to the main file; conflict files always need processing. ---
+        // --- When bypass_cache is true (local dirty, need to compare hashes), ---
+        // --- force mtime_changed so we always read the file. ---
         let mut mtime_changed = bypass_cache;
         if !bypass_cache {
             if let Ok(meta) = std::fs::metadata(&path) {
@@ -127,18 +119,18 @@ impl SyncBackend for LocalFolderBackend {
             }
         }
 
-        // Read main payload
+        // --- Read main payload ---
         let mut payload = if mtime_changed {
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("读取同步文件失败", "Failed to read sync file")
+                    I18nKey::SyncErrRead.text()
                 )
             })?;
             serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("解析同步文件失败", "Failed to parse sync file")
+                    I18nKey::SyncErrParse.text()
                 )
             })?
         } else {
@@ -147,22 +139,22 @@ impl SyncBackend for LocalFolderBackend {
             if conflicts.is_empty() {
                 return Err("@@unchanged".into());
             }
-            // Re-read main payload to merge with conflicts
+            // --- Re-read main payload to merge with conflicts ---
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("读取同步文件失败", "Failed to read sync file")
+                    I18nKey::SyncErrRead.text()
                 )
             })?;
             serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("解析同步文件失败", "Failed to parse sync file")
+                    I18nKey::SyncErrParse.text()
                 )
             })?
         };
 
-        // Merge conflict files
+        // --- Merge conflict files ---
         let conflicts = self.find_conflicts();
         for conflict_path in &conflicts {
             match std::fs::read_to_string(conflict_path) {
@@ -188,31 +180,31 @@ impl SyncBackend for LocalFolderBackend {
         std::fs::create_dir_all(&dir).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("创建目录失败", "Failed to create directory")
+                I18nKey::ErrCreateDir.text()
             )
         })?;
 
         let file_path = self.file_path();
         let json = serde_json::to_string_pretty(payload)
-            .map_err(|e| format!("{}: {e}", i18n::tr("序列化失败", "Serialization failed")))?;
+            .map_err(|e| format!("{}: {e}", I18nKey::SyncErrSerialize.text()))?;
 
-        // Atomic write: temp file + rename
+        // --- Atomic write: temp file + rename ---
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
         std::fs::write(&tmp_path, &json).map_err(|e| {
             format!(
                 "{}: {e}",
-                i18n::tr("写入临时文件失败", "Failed to write temp file")
+                I18nKey::SyncErrWriteTemp.text()
             )
         })?;
         std::fs::rename(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             format!(
                 "{}: {e}",
-                i18n::tr("替换同步文件失败", "Failed to replace sync file")
+                I18nKey::SyncErrReplace.text()
             )
         })?;
-        // Cache new mtime so our own push doesn't trigger a changed-file
-        // detection on the next pull.
+        // --- Cache new mtime so our own push doesn't trigger a changed-file ---
+        // --- detection on the next pull. ---
         if let Ok(meta) = std::fs::metadata(&file_path) {
             if let Ok(mtime) = meta.modified() {
                 *self.last_remote_mtime.lock().unwrap() = Some(mtime);
@@ -231,7 +223,7 @@ impl SyncBackend for LocalFolderBackend {
     }
 }
 
-// ── Platform detection helpers ──
+// --- ── Platform detection helpers ── ---
 
 /// Get a human-readable device name for conflict identification.
 #[allow(clippy::bind_instead_of_map)]
@@ -259,7 +251,7 @@ pub fn hostname() -> String {
 /// Try to detect the OneDrive folder path on Windows.
 #[cfg(target_os = "windows")]
 pub fn detect_onedrive_path() -> Option<PathBuf> {
-    // Method 1: Environment variables
+    // --- Method 1: Environment variables ---
     for var in &["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
         if let Ok(val) = std::env::var(var) {
             let p = PathBuf::from(&val);
@@ -269,7 +261,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
         }
     }
 
-    // Method 2: Registry
+    // --- Method 2: Registry ---
     if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .open_subkey_with_flags(r"Software\Microsoft\OneDrive", winreg::enums::KEY_READ)
     {
@@ -281,7 +273,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
         }
     }
 
-    // Method 3: Default location
+    // --- Method 3: Default location ---
     let home = dirs::home_dir()?;
     let candidate = home.join("OneDrive");
     if candidate.exists() {
@@ -322,7 +314,7 @@ pub fn detect_onedrive_path() -> Option<PathBuf> {
         }
     }
 
-    // Method 2: Standalone client default path
+    // --- Method 2: Standalone client default path ---
     let candidate = home.join("OneDrive");
     if candidate.exists() {
         return Some(candidate);
@@ -348,7 +340,7 @@ pub fn detect_icloud_path() -> Option<PathBuf> {
 pub fn detect_presets() -> Vec<(&'static str, String)> {
     let mut presets = Vec::new();
 
-    // OneDrive — available on both Windows and macOS
+    // --- OneDrive — available on both Windows and macOS ---
     if let Some(p) = detect_onedrive_path() {
         presets.push(("OneDrive", p.join("Clippi").to_string_lossy().to_string()));
     }

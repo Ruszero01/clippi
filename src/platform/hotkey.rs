@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 use global_hotkey::hotkey::Code;
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
@@ -164,11 +164,11 @@ mod windows {
                 .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
             let hotkey = parse_hotkey(hotkey_str)?;
 
-            // Try to register
+            // --- Try to register ---
             manager.register(hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
 
@@ -187,16 +187,16 @@ mod windows {
         }
 
         fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-            // Unregister old
+            // --- Unregister old ---
             let _ = self.manager.unregister(self.hotkey);
             std::thread::sleep(Duration::from_millis(50));
 
-            // Parse and register new
+            // --- Parse and register new ---
             let new_hotkey = parse_hotkey(hotkey_str)?;
             self.manager.register(new_hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
             self.hotkey = new_hotkey;
@@ -384,7 +384,7 @@ mod windows {
             }
         }
 
-        let key = key.ok_or(i18n::tr("未指定按键", "No key specified"))?;
+        let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
         Ok(HotKey::new(Some(mods), key))
     }
 
@@ -411,7 +411,7 @@ mod macos {
     const KVK_COMMAND: u16 = 0x37;
 
     // FFI binding for CGEventSourceKeyState.
-    // This function is part of the public CoreGraphics C API but is not yet
+    // --- This function is part of the public CoreGraphics C API but is not yet ---
     // wrapped by the core-graphics crate (checked v0.25). Using a raw extern
     // binding avoids pulling in a second CG bindings crate just for one function.
     extern "C" {
@@ -437,11 +437,11 @@ mod macos {
                 .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
             let hotkey = parse_hotkey(hotkey_str)?;
 
-            // Try to register
+            // --- Try to register ---
             manager.register(hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
 
@@ -460,16 +460,16 @@ mod macos {
         }
 
         fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-            // Unregister old
+            // --- Unregister old ---
             let _ = self.manager.unregister(self.hotkey);
             std::thread::sleep(Duration::from_millis(50));
 
-            // Parse and register new
+            // --- Parse and register new ---
             let new_hotkey = parse_hotkey(hotkey_str)?;
             self.manager.register(new_hotkey).map_err(|e| {
                 format!(
                     "{}: {e}",
-                    i18n::tr("注册快捷键失败", "Failed to register hotkey")
+                    I18nKey::HotkeyErrRegister.text()
                 )
             })?;
             self.hotkey = new_hotkey;
@@ -559,9 +559,9 @@ mod macos {
     }
 
     fn detect_pressed_key() -> Option<Code> {
-        // macOS virtual key code to Code mapping
+        // --- macOS virtual key code to Code mapping ---
         let vk_map: &[(u16, Code)] = &[
-            // Letters
+            // --- Letters ---
             (0x00, Code::KeyA),
             (0x01, Code::KeyS),
             (0x02, Code::KeyD),
@@ -608,14 +608,14 @@ mod macos {
             (0x2D, Code::KeyN),
             (0x2E, Code::KeyM),
             (0x2F, Code::Period),
-            // Special keys
+            // --- Special keys ---
             (0x24, Code::Enter),     // kVK_Return
             (0x30, Code::Tab),       // kVK_Tab
             (0x31, Code::Space),     // kVK_Space
             (0x33, Code::Backspace), // kVK_Delete (Backspace)
             (0x35, Code::Escape),    // kVK_Escape
             (0x32, Code::Backquote), // kVK_ANSI_Grave
-            // Function keys
+            // --- Function keys ---
             (0x7A, Code::F1),
             (0x78, Code::F2),
             (0x63, Code::F3),
@@ -656,7 +656,7 @@ mod macos {
             }
         }
 
-        let key = key.ok_or(i18n::tr("未指定按键", "No key specified"))?;
+        let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
         Ok(HotKey::new(Some(mods), key))
     }
 

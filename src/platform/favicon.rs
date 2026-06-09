@@ -26,23 +26,18 @@ fn cache_path(domain: &str) -> PathBuf {
         .join(format!("favicon_{}.png", sanitize_domain(domain)))
 }
 
-/// Get the expected cache path for a domain (does not guarantee file exists).
-pub fn favicon_cache_path(domain: &str) -> String {
-    cache_path(domain).to_string_lossy().to_string()
-}
-
 /// Try to fetch a favicon from Google's service and cache it to disk.
 /// Returns the disk path if already cached or successfully fetched.
 /// Returns `None` on any failure (network, non-200, disk write).
 pub fn ensure_favicon_cached(domain: &str) -> Option<String> {
     let path = cache_path(domain);
 
-    // Already cached
+    // --- Already cached ---
     if path.exists() {
         return Some(path.to_string_lossy().to_string());
     }
 
-    // Ensure icons directory exists
+    // --- Ensure icons directory exists ---
     let _ = std::fs::create_dir_all(path.parent()?);
 
     let url = format!("https://www.google.com/s2/favicons?domain={}&sz=32", domain);
@@ -53,7 +48,7 @@ pub fn ensure_favicon_cached(domain: &str) -> Option<String> {
             if response.into_reader().read_to_end(&mut body).is_err() {
                 return None;
             }
-            // Quick PNG validation: check magic bytes
+            // --- Quick PNG validation: check magic bytes ---
             if body.len() < 8 || &body[..4] != b"\x89PNG" {
                 return None;
             }

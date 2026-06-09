@@ -1,13 +1,13 @@
-//! Clipboard listener trait and platform implementations
+//! --- Clipboard listener trait and platform implementations ---
 //!
-//! Provides multi-format clipboard monitoring with detection priority:
-//! Files > Image > Link > Color > RichText > PlainText
+//! --- Provides multi-format clipboard monitoring with detection priority: ---
+//! --- Files > Image > Link > Color > RichText > PlainText ---
 
 use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
 use crate::core::types::{
-    is_email, is_image_extension, is_path, is_phone, is_url, ClipboardItem, ContentType, FileData,
-    FileInfo, RichData,
+    is_email, is_image_extension, is_markdown_like, is_path, is_phone, is_url, ClipboardItem,
+    ContentType, FileData, FileInfo, RichData,
 };
 use crate::platform::favicon;
 use crate::platform::source;
@@ -61,10 +61,10 @@ pub trait ClipboardListener: Send {
 /// Shared clipboard content detection (platform-agnostic).
 /// Priority: Files > Image > Link > Color > RichText > PlainText
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
-    // Capture source app info at detection time (only once, not on re-copy)
+    // --- Capture source app info at detection time (only once, not on re-copy) ---
     let source_info = source::get_clipboard_owner_info();
 
-    // ── File list detection (CF_HDROP on Windows, NSFilenames on macOS) ──
+    // --- ── File list detection (CF_HDROP on Windows, NSFilenames on macOS) ── ---
     let has_files = ctx.has(ContentFormat::Files);
     if has_files {
         let files_result = ctx.get_files();
@@ -132,10 +132,10 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                             }
                         }
                     }
-                    // On any failure, fall through to File type below
+                    // --- On any failure, fall through to File type below ---
                 }
 
-                // Multi-file, single directory, or single non-image file → File type
+                // --- Multi-file, single directory, or single non-image file → File type ---
                 let file_data = FileData { files: entries };
                 let mut hasher = DefaultHasher::new();
                 for f in &file_data.files {
@@ -193,7 +193,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         }
 
         if is_url(&text) {
-            // Prefetch favicon in background thread (non-critical)
+            // --- Prefetch favicon in background thread (non-critical) ---
             let domain = crate::core::types::url_to_domain(&text);
             let _ = favicon::ensure_favicon_cached(&domain);
             return Some(ClipboardItem::new_text(
@@ -228,7 +228,7 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             ));
         }
 
-        // Email / phone detection: record as plain_text with meta_type set
+        // --- Email / phone detection: record as plain_text with meta_type set ---
         if is_email(&text) || is_phone(&text) {
             let meta = if is_email(&text) {
                 "email".to_string()
@@ -247,10 +247,18 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
         }
 
         if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {
-            let html = ctx.get_html().ok();
+            let html = ctx
+                .get_html()
+                .ok()
+                .map(|html| normalize_clipboard_html(&html));
             let rtf = ctx.get_rich_text().ok();
             if html.is_some() || rtf.is_some() {
-                let rich = RichData { html, rtf, ocr_text: None, qr_text: None };
+                let rich = RichData {
+                    html,
+                    rtf,
+                    ocr_text: None,
+                    qr_text: None,
+                };
                 return Some(ClipboardItem::new_text(
                     0,
                     &text,
@@ -259,6 +267,18 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
                     Some(&rich),
                 ));
             }
+        }
+
+        if is_markdown_like(&text) {
+            let mut item = ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::RichText,
+                source_info.as_ref(),
+                None,
+            );
+            item.meta_type = "markdown".into();
+            return Some(item);
         }
 
         return Some(ClipboardItem::new_text(
@@ -273,6 +293,41 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     None
 }
 
+fn normalize_clipboard_html(html: &str) -> String {
+    let Some(header_end) = html.find("<html").or_else(|| html.find("<!DOCTYPE")) else {
+        return html.to_string();
+    };
+
+    let header = &html[..header_end];
+    if !header.lines().any(|line| line.starts_with("Version:")) {
+        return html.to_string();
+    }
+
+    if let (Some(start), Some(end)) = (
+        parse_cf_html_offset(header, "StartFragment:"),
+        parse_cf_html_offset(header, "EndFragment:"),
+    ) {
+        if start < end && end <= html.len() {
+            return String::from_utf8_lossy(&html.as_bytes()[start..end])
+                .trim()
+                .to_string();
+        }
+    }
+
+    html[header_end..]
+        .replace("<!--StartFragment-->", "")
+        .replace("<!--EndFragment-->", "")
+        .trim()
+        .to_string()
+}
+
+fn parse_cf_html_offset(header: &str, key: &str) -> Option<usize> {
+    header.lines().find_map(|line| {
+        line.strip_prefix(key)
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    })
+}
+
 /// Parse PNG image dimensions from raw bytes without full decoding.
 /// Only reads the 24-byte header (signature + IHDR chunk header).
 fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
@@ -285,16 +340,16 @@ fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Extract PNG bytes and dimensions from a clipboard image.
-/// Fast path: `get_buffer("PNG")` for native PNG (avoids decode→re-encode).
+/// Fast path: `get_buffer("PNG")` for native PNG (avoids decode→ re-encode).
 /// Fallback: `get_image()` + `to_png()` for TIFF etc (e.g. macOS screenshots).
 fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(Vec<u8>, u32, u32)> {
-    // Fast path: raw PNG bytes already on pasteboard
+    // --- Fast path: raw PNG bytes already on pasteboard ---
     if let Ok(raw_png) = ctx.get_buffer("PNG") {
         if let Some((w, h)) = png_dimensions(&raw_png) {
             return Some((raw_png, w, h));
         }
     }
-    // Fallback: decode + re-encode (e.g. TIFF screenshots on macOS)
+    // --- Fallback: decode + re-encode (e.g. TIFF screenshots on macOS) ---
     let img = ctx.get_image().ok()?;
     if img.is_empty() {
         return None;
@@ -329,7 +384,7 @@ fn generate_thumbnail(image_path: &std::path::Path, img_dir: &std::path::Path, h
 }
 
 // ============================================================================
-// Generic Polling Listener (used by both Windows and macOS)
+// --- Generic Polling Listener (used by both Windows and macOS) ---
 // ============================================================================
 
 /// Generic clipboard listener that polls at a fixed interval.
@@ -372,15 +427,15 @@ impl ClipboardListener for PollingClipboardListener {
         let skip_next = shared.skip_next.clone();
 
         // Windows: use cheap sequence-number check to avoid opening the clipboard
-        // and encoding large bitmaps to PNG every 50ms when nothing changed.
+        // --- and encoding large bitmaps to PNG every 50ms when nothing changed. ---
         #[cfg(target_os = "windows")]
         let last_seq = Arc::new(Mutex::new(unsafe {
             windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
         }));
 
         // macOS: use NSPasteboard.changeCount for the same fast-path purpose.
-        // changeCount increments on every pasteboard write, giving an efficient
-        // signal before the expensive clipboard open + PNG encode.
+        // --- changeCount increments on every pasteboard write, giving an efficient ---
+        // --- signal before the expensive clipboard open + PNG encode. ---
         #[cfg(target_os = "macos")]
         let last_cc = Arc::new(Mutex::new(
             objc2_app_kit::NSPasteboard::generalPasteboard().changeCount(),
@@ -388,14 +443,14 @@ impl ClipboardListener for PollingClipboardListener {
 
         self.handle = Some(thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
-                // 批量粘贴期间跳过记录，避免产生冗余条目
+                // --- Skip recording during batch paste to avoid redundant entries ---
                 if batch_pasting.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                     continue;
                 }
 
-                // 内部复制：调用方已直接推入 pending，监听器跳过本轮检测
-                // 同时更新 last_seq/last_cc，防止下个周期检测到内部写入
+                // --- Internal copy: caller already pushed to pending, listener skips this cycle ---
+                // --- Also update last_seq/last_cc to prevent detecting internal writes next cycle ---
                 if skip_next.swap(false, Ordering::SeqCst) {
                     #[cfg(target_os = "windows")]
                     {
@@ -414,7 +469,7 @@ impl ClipboardListener for PollingClipboardListener {
                 }
 
                 // Fast-path: if the clipboard sequence number hasn't changed,
-                // skip the expensive clipboard open + image encoding entirely.
+                // --- skip the expensive clipboard open + image encoding entirely. ---
                 #[cfg(target_os = "windows")]
                 {
                     let seq = unsafe {
@@ -429,7 +484,7 @@ impl ClipboardListener for PollingClipboardListener {
                     *last = seq;
                 }
 
-                // macOS equivalent: NSPasteboard.changeCount increments on every
+                // --- macOS equivalent: NSPasteboard.changeCount increments on every ---
                 // pasteboard write, serving the same role as the Windows sequence number.
                 #[cfg(target_os = "macos")]
                 {
@@ -482,7 +537,7 @@ impl ClipboardListener for PollingClipboardListener {
 }
 
 // ============================================================================
-// Linux Stub
+// --- Linux Stub ---
 // ============================================================================
 
 #[cfg(target_os = "linux")]

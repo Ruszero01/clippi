@@ -1,0 +1,353 @@
+//! Translation keys — all user-visible strings in one place.
+//!
+//! Each key: `KeyName: ("中文", "English")`
+//! Usage: `I18nKey::KeyName.text()`
+
+use crate::define_i18n;
+
+define_i18n! {
+    // ─── App ───
+    AppName:            ("Clippi 剪贴板", "Clippi Clipboard"),
+
+    // ─── Tray ───
+    TrayShow:           ("显示窗口", "Show Window"),
+    TraySettings:       ("设置", "Settings"),
+    TrayRestart:        ("重启应用", "Restart"),
+    TrayQuit:           ("退出", "Quit"),
+    TrayCheckUpdate:    ("检查更新", "Check for Updates"),
+
+    // ─── Settings window ───
+    SettingsTitle:      ("设置", "Settings"),
+
+    // ─── Settings tabs ───
+    TabGeneral:         ("通用", "General"),
+    TabClipboard:       ("剪贴板", "Clipboard"),
+    TabHotkey:          ("快捷键", "Hotkey"),
+    TabData:            ("数据", "Data"),
+    TabSync:            ("同步", "Sync"),
+
+    // ─── General settings ───
+    SettingAutoStart:   ("开机自启", "Auto-start"),
+    DescAutoStart:      ("系统启动时自动运行", "Run on system startup"),
+    SettingAutoHide:    ("自动隐藏", "Auto-hide"),
+    DescAutoHide:       ("失去焦点时隐藏窗口", "Hide on focus loss"),
+    SettingSilentStart: ("静默启动", "Silent start"),
+    DescSilentStart:    ("启动后最小化到托盘", "Start silently in tray"),
+    SettingTheme:       ("主题", "Theme"),
+    DescTheme:          ("选择界面主题", "Select theme"),
+    SettingPosition:    ("弹出位置", "Position"),
+    DescPosition:       ("窗口弹出位置", "Popup position"),
+    SettingLanguage:    ("语言", "Language"),
+    DescLanguage:       ("选择界面语言", "Select interface language"),
+
+    // ─── Theme options ───
+    ThemeSystem:        ("跟随系统", "Auto"),
+    ThemeDark:          ("深色", "Dark"),
+    ThemeLight:         ("浅色", "Light"),
+
+    // ─── Position options ───
+    PosCenter:          ("居中", "Center"),
+    PosFollow:          ("跟随鼠标", "Follow"),
+    PosRemember:        ("记住位置", "Pin"),
+
+    // ─── Language options ───
+    LangSystem:         ("跟随系统", "Auto"),
+    LangZh:             ("中文", "中文"),
+    LangEn:             ("English", "English"),
+
+    // ─── Clipboard settings ───
+    SettingSortCreated:     ("按创建时间排序", "Sort by created"),
+    DescSortFirst:          ("最先创建的在前", "First created"),
+    DescSortLast:           ("最近修改的在前", "Last modified"),
+    SettingCardHeight:      ("卡片高度", "Card height"),
+    DescCardHeight:         ("调整卡片高度", "Adjust card height"),
+    CardHeightTall:         ("高", "Tall"),
+    CardHeightMed:          ("中", "Med"),
+    CardHeightShort:        ("低", "Short"),
+    CardHeightAuto:         ("自动", "Auto"),
+    SettingShowSource:      ("显示来源应用", "Show source app"),
+    DescShowSourceOn:       ("显示来源应用图标", "Show source app icon"),
+    DescShowSourceOff:      ("仅显示内容类型", "Show content type only"),
+    SettingScrollTop:       ("滚动到顶部", "Scroll to top"),
+    DescScrollTopOn:        ("打开时滚动到顶部", "Scroll to top on open"),
+    DescScrollTopOff:       ("保持上次滚动位置", "Keep last scroll position"),
+    SettingCopyPlain:       ("复制为纯文本", "Copy as plain text"),
+    DescCopyPlainOn:        ("仅保存纯文本", "Save as plain text only"),
+    DescCopyPlainOff:       ("保留富文本格式", "Keep rich formatting"),
+    SettingShowOriginal:    ("悬停显示原文", "Show original on hover"),
+    DescShowOriginalOn:     ("悬停时显示原始内容", "Show original on hover"),
+    DescShowOriginalOff:    ("有备注的卡片显示备注", "Cards with notes show note"),
+    SettingOcr:             ("自动图片 OCR", "Auto Image OCR"),
+    DescOcrOn:              ("自动识别图片文字", "Auto OCR for images"),
+    DescOcrOff:             ("OCR 已关闭", "OCR disabled"),
+    SettingQr:              ("自动二维码识别", "Auto QR Detection"),
+    DescQrOn:               ("自动识别图片中的二维码", "Auto detect QR in images"),
+    DescQrOff:              ("二维码识别已关闭", "QR detection disabled"),
+
+    // ─── Data settings ───
+    SettingDbPath:      ("数据库路径", "Database path"),
+    BtnChange:          ("更改", "Change"),
+    BtnReset:           ("重置", "Reset"),
+    BtnCancel:          ("取消", "Cancel"),
+    BtnApply:           ("应用", "Apply"),
+    BtnResetDataDir:    ("重置数据目录", "Reset Data Directory"),
+    SettingMaxItems:    ("最大保存条目数", "Max items"),
+    DescMaxItems:       ("设为 0 不限制条目数", "Set to 0 for unlimited items"),
+    Unlimited:          ("不限制", "Unlimited"),
+    SystemDefault:      ("系统默认", "System default"),
+    DescResetData:      ("将数据和配置恢复到默认位置，原文件不会删除", "Restore data and config to default location. Old files won't be deleted"),
+    DescStorageChoose:  ("选择数据库和缓存文件的存储位置：", "Choose where to store the database and cache files:"),
+    StoragePortable:    ("便携（安装目录）", "Portable (install directory)"),
+    StorageSystem:      ("系统（AppData）", "System (AppData)"),
+    ConfirmResetTitle:  ("确认重置", "Confirm Reset"),
+    ConfirmResetMsg:    ("确定要恢复默认数据目录吗？应用将自动重启。", "Restore default data directory? The app will restart."),
+
+    // ─── Hotkey settings ───
+    HotkeyCurrent:      ("当前快捷键", "Current hotkey"),
+    HotkeyPressHint:    ("按下组合键...", "Press keys..."),
+    HotkeyBlacklist:    ("快捷键黑名单", "Hotkey blacklist"),
+    HotkeyAddBlacklist: ("添加应用", "Add app"),
+    HotkeyClear:        ("清除", "Clear"),
+
+    // ─── Sync settings ───
+    SyncTitle:          ("同步", "Sync"),
+    SyncFavoritesOnly:  ("仅同步收藏", "Favorites only"),
+    SyncAddBackend:     ("添加后端", "Add backend"),
+    SyncNow:            ("立即同步", "Sync now"),
+    SyncSyncing:        ("同步中", "Syncing"),
+
+    // ─── Add backend ───
+    BackendAddTitle:    ("添加后端", "Add backend"),
+    BackendEditTitle:   ("编辑后端", "Edit backend"),
+    BackendLocalFolder: ("本地文件夹", "Local Folder"),
+    BackendWebdav:      ("WebDAV", "WebDAV"),
+    BackendSelectType:  ("选择后端类型", "Select backend type"),
+    BackendLocalDesc:   ("OneDrive、iCloud 等", "OneDrive, iCloud, etc."),
+    BackendWebdavDesc:  ("NAS、Nextcloud 等", "NAS, Nextcloud, etc."),
+    BackendQuickAdd:    ("快速添加", "Quick add"),
+    BackendName:        ("名称", "Name"),
+    BackendFolder:      ("文件夹", "Folder"),
+    BackendServerUrl:   ("服务器地址", "Server URL"),
+    BackendUsername:    ("用户名", "Username"),
+    BackendPassword:    ("密码", "Password"),
+    BackendBrowse:      ("浏览", "Browse"),
+    BackendSave:        ("保存", "Save"),
+    BackendTest:        ("测试连接", "Test connection"),
+    BackendTesting:     ("测试中...", "Testing..."),
+    BackendTestFail:    ("连接失败，请检查地址和凭据", "Connection failed. Check URL and credentials."),
+    BackendPhName:      ("后端名称", "Backend name"),
+    BackendPhFolder:    ("文件夹路径", "Folder path"),
+    BackendPhUrl:       ("https://example.com/dav", "https://example.com/dav"),
+    BackendPhUser:      ("用户名", "Username"),
+    BackendPhPass:      ("密码", "Password"),
+
+    // ─── Root view / Clipboard list ───
+    ClipboardEmpty:     ("剪贴板为空", "Clipboard is empty"),
+    ClipboardHint:      ("复制内容后将显示在这里", "Copied content will appear here"),
+    SearchPlaceholder:  ("搜索...", "Search..."),
+    FilterAll:          ("全部", "All"),
+    FilterText:         ("文本", "Text"),
+    FilterImage:        ("图片", "Image"),
+    FilterFile:         ("文件", "File"),
+    FilterLink:         ("链接", "Link"),
+    FilterColor:        ("颜色", "Color"),
+    FilterFav:          ("收藏", "Fav"),
+
+    // ─── Context menu ───
+    CtxCopy:            ("复制", "Copy"),
+    CtxPaste:           ("粘贴", "Paste"),
+    CtxEdit:            ("编辑", "Edit"),
+    CtxFavorite:        ("收藏", "Favorite"),
+    CtxUnfavorite:      ("取消收藏", "Unfavorite"),
+    CtxDelete:          ("删除", "Delete"),
+    CtxSelectAll:       ("全选", "Select All"),
+    CtxDeselectAll:     ("取消全选", "Deselect All"),
+    CtxAddTag:          ("添加标签", "Add Tag"),
+    CtxCopyPlain:       ("复制纯文本", "Copy Plain Text"),
+    CtxCopyHtml:        ("复制 HTML", "Copy HTML"),
+    CtxSaveImage:       ("保存图片", "Save Image"),
+    CtxOpenLink:        ("打开链接", "Open Link"),
+    CtxOpenFile:        ("打开文件", "Open File"),
+    CtxOpenFolder:      ("打开文件夹", "Open Folder"),
+
+    // ─── Edit panel ───
+    EditTitle:          ("编辑", "Edit"),
+    EditSave:           ("保存", "Save"),
+    EditNote:           ("备注", "Note"),
+    EditContent:        ("内容", "Content"),
+
+    // ─── Tag management ───
+    TagNew:             ("新建标签", "New Tag"),
+    TagNameLabel:       ("标签名", "Tag name"),
+    TagColor:           ("颜色", "Color"),
+    TagDelete:          ("删除标签", "Delete Tag"),
+    TagConfirmDelete:   ("确定要删除此标签吗？", "Delete this tag?"),
+    TagManage:          ("管理标签", "Manage Tags"),
+    TagNoTags:          ("暂无标签", "No tags"),
+
+    // ─── Titlebar ───
+    TitlebarPin:        ("固定窗口", "Pin Window"),
+    TitlebarUnpin:      ("取消固定", "Unpin"),
+
+    // ─── Hover toolbar ───
+    HoverCopy:          ("复制", "Copy"),
+    HoverFavorite:      ("收藏", "Favorite"),
+    HoverDelete:        ("删除", "Delete"),
+    HoverNote:          ("备注", "Note"),
+
+    // ─── Toast ───
+    ToastCopied:        ("已复制", "Copied"),
+    ToastDeleted:       ("已删除", "Deleted"),
+    ToastSaved:         ("已保存", "Saved"),
+    ToastErrorMsg:      ("操作失败", "Operation failed"),
+    ToastTagAdded:      ("标签已添加", "Tag added"),
+    ToastTagRemoved:    ("标签已移除", "Tag removed"),
+
+    // ─── Batch operations ───
+    BatchSelect:        ("批量选择", "Select"),
+    BatchDelete:        ("批量删除", "Delete"),
+    BatchTag:           ("批量标签", "Tag"),
+    BatchCopy:          ("批量复制", "Copy"),
+    BatchPaste:         ("批量粘贴", "Paste"),
+    ConfirmDeleteTitle: ("确认删除", "Confirm Delete"),
+    ConfirmDeleteMsg:   ("确定要删除所选项吗？此操作不可撤销。", "Delete selected items? This cannot be undone."),
+
+    // ─── Types / Data ───
+    FormatJustNow:      ("刚刚", "Just now"),
+    FormatMinutesAgo:   ("{0}分钟前", "{0} min ago"),
+    FormatHoursAgo:     ("{0}小时前", "{0} h ago"),
+    FormatDaysAgo:      ("{0}天前", "{0} d ago"),
+    FormatWeeksAgo:     ("{0}周前", "{0} w ago"),
+    ContentTypeFile:    ("文件", "File"),
+    UnknownApp:         ("未知应用", "Unknown app"),
+
+    // ─── Registry / Plist errors ───
+    ErrRegistryOpen:        ("打开注册表失败", "Failed to open registry"),
+    ErrGetExePath:          ("获取程序路径失败", "Failed to get program path"),
+    ErrRegistryWrite:       ("写入注册表失败", "Failed to write registry"),
+    ErrLaunchAgentsPath:    ("无法获取 LaunchAgents 路径", "Cannot get LaunchAgents path"),
+    ErrCreateLaunchAgents:  ("创建 LaunchAgents 目录失败", "Failed to create LaunchAgents directory"),
+    ErrWritePlist:          ("写入 plist 失败", "Failed to write plist"),
+    ErrDeletePlist:         ("删除 plist 失败", "Failed to delete plist"),
+    ErrSamePath:            ("新路径与当前路径相同", "New path is same as current"),
+    ErrCreateDir:           ("创建目录失败", "Failed to create directory"),
+    ErrCopyDb:              ("复制数据库失败", "Failed to copy database"),
+
+    // ─── Sync backends ───
+    SyncErrNotDir:          ("路径不是目录", "Path is not a directory"),
+    SyncErrNotFound:        ("同步文件不存在", "Sync file not found"),
+    SyncErrRead:            ("读取同步文件失败", "Failed to read sync file"),
+    SyncErrParse:           ("解析同步文件失败", "Failed to parse sync file"),
+    SyncErrSerialize:       ("序列化失败", "Serialization failed"),
+    SyncErrWriteTemp:       ("写入临时文件失败", "Failed to write temp file"),
+    SyncErrReplace:         ("替换同步文件失败", "Failed to replace sync file"),
+    SyncErrNoUrl:           ("未配置 URL", "URL not configured"),
+    SyncErrAuth:            ("认证失败", "Authentication failed"),
+    SyncErrConnect:         ("连接失败", "Connection failed"),
+    SyncErrReadResp:        ("读取响应失败", "Failed to read response"),
+    SyncErrPull:            ("拉取同步文件失败", "Failed to pull sync file"),
+    SyncErrPush:            ("推送同步文件失败", "Failed to push sync file"),
+
+    // ─── Hotkey registration ───
+    HotkeyErrRegister:      ("注册快捷键失败", "Failed to register hotkey"),
+    HotkeyErrNoKey:         ("未指定按键", "No key specified"),
+
+    // ─── Data operation ───
+    ErrDataOp:              ("数据操作失败", "Data operation failed"),
+
+    // ─── Image save ───
+    ImageSaved:             ("图片已保存", "Image saved"),
+
+    // ─── Search bar / Filters ───
+    FilterTextLabel:        ("文本", "Text"),
+    FilterRtfLabel:         ("富文本", "RTF"),
+    FilterFilesLabel:       ("文件", "Files"),
+    FilterLinksLabel:       ("链接", "Links"),
+    FilterColorLabel:       ("颜色", "Color"),
+    FilterTagsTooltip:      ("标签", "Tags"),
+    SearchPlaceholderFull:  ("搜索剪贴板...", "Search clipboard..."),
+
+    // ─── Hotkey settings ───
+    HotkeyTabTitle:         ("快捷键", "Hotkey"),
+    HotkeyNoForeground:     ("无前台应用", "No foreground app"),
+    HotkeyPressToRecord:    ("按下新快捷键进行录制", "Press new hotkey to record"),
+    HotkeyConfirmAddTitle:  ("确认添加黑名单", "Confirm Add to Blacklist"),
+    HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
+    HotkeyConfirmRemoveTitle:("确认移除黑名单", "Confirm Remove from Blacklist"),
+    HotkeyConfirmRemoveMsg: ("将 {0} 从快捷键黑名单中移除？", "Remove {0} from hotkey blacklist?"),
+
+    // ─── Sync settings (additional) ───
+    SyncTabTitle:           ("同步", "Sync"),
+    SyncInterval30s:        ("30秒", "30s"),
+    SyncInterval1m:         ("1分钟", "1m"),
+    SyncInterval10m:        ("10分钟", "10m"),
+    SyncInterval30m:        ("30分钟", "30m"),
+
+    // ─── Tag filter ───
+    TagFilterTitle:         ("标签筛选", "Tag filter"),
+    TagFilterAdd:           ("+", "+"),
+    TagFilterNoTags:        ("暂无标签，请在上方创建", "No tags. Create above"),
+    TagEditTitle:           ("编辑标签", "Edit tag"),
+    TagCreatePlaceholder:   ("标签名称...", "Tag name..."),
+
+    // ─── Tag picker ───
+    TagPickerNoTags:        ("暂无标签，请在标签筛选面板中创建", "No tags. Create tags in the tag filter panel."),
+
+    // ─── Edit panel ───
+    EditPanelTitle:         ("编辑", "Edit"),
+    EditContentPlaceholder: ("内容...", "Content..."),
+    EditTypeText:           ("纯文本", "Text"),
+    EditTypeColor:          ("颜色", "Color"),
+    EditTypeMarkdown:       ("Markdown", "Markdown"),
+    EditTypeHtml:           ("HTML", "HTML"),
+    EditTypeUrl:            ("链接", "URL"),
+    EditTypePath:           ("路径", "Path"),
+    EditTypeEmail:          ("邮件", "Email"),
+    EditTypePhone:          ("电话", "Phone"),
+
+    // ─── Add backend (additional from settings/sync) ───
+    BackendAddLabel:        ("添加后端", "Add backend"),
+
+    // ─── Clipboard card ───
+    CardTypeText:           ("文本", "Text"),
+    CardTypeImage:          ("图片", "Image"),
+    CardTypeFile:           ("文件", "File"),
+    CardTypeFolder:         ("文件夹", "Folder"),
+    CardTypeColor:          ("颜色", "Color"),
+    CardTypeEmail:          ("邮件", "Email"),
+    CardTypePhone:          ("电话", "Phone"),
+    CardTypeQr:             ("二维码", "QR"),
+    CardTypeMd:             ("MD", "MD"),
+    CardTypeHtml:           ("HTML", "HTML"),
+    CardTypeRtf:            ("富文本", "RTF"),
+    CardTypeUrl:            ("链接", "URL"),
+    CardTypePath:           ("路径", "Path"),
+    CardTypeFiles:          ("{0} 个文件", "{0} Files"),
+    CardImageSize:          ("{0} × {1}", "{0} × {1}"),
+
+    // ─── Clipboard list ───
+    ListNoItems:            ("暂无条目", "No items yet"),
+    ListEmptyHint:          ("复制的内容将显示在这里", "Copied items will appear here"),
+    ListNotePlaceholder:    ("添加备注...", "Add a note..."),
+    ListSelectionOrder:     ("{0}", "{0}"),
+
+    // ─── Context menu ───
+    CtxFav:                 ("收藏", "Fav"),
+    CtxUnfav:               ("取消收藏", "Unfav"),
+
+    // ─── Confirm dialog ───
+    ConfirmDeleteLabel:     ("删除", "Delete"),
+    ConfirmDeleteSingleTitle:("确认删除", "Confirm Delete"),
+    ConfirmDeleteSingleMsg: ("确定要删除此项吗？", "Are you sure you want to delete this item?"),
+    ConfirmBatchTitle:      ("确认批量删除", "Confirm Batch Delete"),
+    ConfirmBatchMsg:        ("确定要删除 {0} 个条目吗？\n此操作不可撤销。", "Delete {0} selected items?\nThis action cannot be undone."),
+    ConfirmRemoveTitle:     ("从黑名单移除", "Remove from Blacklist"),
+    ConfirmRemoveMsg:       ("停止忽略来自 \"{0}\" 的剪贴板内容？", "Stop ignoring clipboard from \"{0}\"?"),
+    ConfirmRemoveLabel:     ("移除", "Remove"),
+    ConfirmAddBlacklistTitle:("添加到黑名单", "Add to Blacklist"),
+    ConfirmAddBlacklistMsg: ("在 \"{0}\" 中禁用 Clippi 快捷键？\n当此应用激活时将忽略快捷键。", "Disable Clippi hotkey in \"{0}\"?\nHotkey will be ignored while this app is active."),
+    ConfirmAddLabel:        ("添加", "Add"),
+
+    // ─── Titlebar ───
+    TitlebarAppName:        ("Clippi", "Clippi"),
+}

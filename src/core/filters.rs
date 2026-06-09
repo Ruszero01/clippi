@@ -1,9 +1,7 @@
 //! Extensible filter system for clipboard items
 //!
 //! Each filter dimension (type, keyword, favorites, etc.) is a separate field.
-//! Multiple filters combine with AND logic.
-
-use crate::core::types::ClipboardItem;
+//! --- Multiple filters combine with AND logic. ---
 
 /// Unified filter state for clipboard queries.
 ///
@@ -46,15 +44,6 @@ impl ClipboardFilters {
         self.favorites_only = !self.favorites_only;
     }
 
-    /// Clear all filters across all dimensions
-    pub fn clear_all(&mut self) {
-        self.type_filters.clear();
-        self.keyword = None;
-        self.favorites_only = false;
-        self.tag_ids.clear();
-        self.tag_match_all = false;
-    }
-
     /// Check if a specific type filter is active
     pub fn is_type_active(&self, type_name: &str) -> bool {
         self.type_filters.iter().any(|t| t == type_name)
@@ -74,26 +63,9 @@ impl ClipboardFilters {
         }
     }
 
-    /// Unconditionally remove a tag filter (no-op if not present)
-    pub fn remove_tag(&mut self, tag_id: i64) {
-        if let Some(pos) = self.tag_ids.iter().position(|&t| t == tag_id) {
-            self.tag_ids.remove(pos);
-        }
-    }
-
-    /// Check if a specific tag filter is active
-    pub fn is_tag_active(&self, tag_id: i64) -> bool {
-        self.tag_ids.contains(&tag_id)
-    }
-
     /// Clear all tag filters (keeps other filter dimensions)
     pub fn clear_tag_filters(&mut self) {
         self.tag_ids.clear();
-    }
-
-    /// Check if any tag filter is active
-    pub fn has_tag_filters(&self) -> bool {
-        !self.tag_ids.is_empty()
     }
 
     /// Toggle tag match mode between OR and AND
@@ -106,67 +78,13 @@ impl ClipboardFilters {
         self.tag_match_all
     }
 
-    /// Check if an in-memory item matches all active filters (AND logic).
-    /// Used during poll() for real-time filtering of incoming items.
-    pub fn matches_item(&self, item: &ClipboardItem) -> bool {
-        // Favorites filter dimension
-        if self.favorites_only && !item.is_favorite {
-            return false;
-        }
-        // Tag filter dimension: OR = item has any selected tag, AND = item has all selected tags
-        if !self.tag_ids.is_empty() {
-            let matched = if self.tag_match_all {
-                self.tag_ids
-                    .iter()
-                    .all(|tid| item.tags.iter().any(|t| t.id == *tid))
-            } else {
-                item.tags.iter().any(|t| self.tag_ids.contains(&t.id))
-            };
-            if !matched {
-                return false;
-            }
-        }
-        // Type filter dimension
-        if !self.type_filters.is_empty() {
-            let type_str = item.content_type.as_str();
-            if !self
-                .type_filters
-                .iter()
-                .any(|t| t.as_str() == type_str || (t == "link" && type_str == "path"))
-            {
-                return false;
-            }
-        }
-        // Keyword filter: match against full_text for text types; for images, search OCR text in rich_data
-        if let Some(ref kw) = self.keyword {
-            match item.content_type {
-                crate::core::types::ContentType::Image => {
-                    let rd = crate::core::types::RichData::from_json(&item.rich_data);
-                    let hit = rd
-                        .ocr_text
-                        .as_ref()
-                        .is_some_and(|ocr| ocr.to_lowercase().contains(&kw.to_lowercase()));
-                    if !hit {
-                        return false;
-                    }
-                }
-                _ => {
-                    if !item.full_text.to_lowercase().contains(&kw.to_lowercase()) {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
-    }
-
     /// Build SQL WHERE clause and params for database queries.
     /// Returns (sql_fragment, params) where sql_fragment may be empty string if no filters.
     pub fn db_where(&self) -> (String, Vec<rusqlite::types::Value>) {
         let mut conditions = Vec::new();
         let mut params = Vec::new();
 
-        // Favorites filter
+        // --- Favorites filter ---
         if self.favorites_only {
             conditions.push("is_favorite = 1".to_string());
         }
@@ -191,7 +109,7 @@ impl ClipboardFilters {
             }
         }
 
-        // Type filter — expand "link" to also include "path"
+        // --- Type filter — expand "link" to also include "path" ---
         if !self.type_filters.is_empty() {
             let expanded: Vec<String> = self
                 .type_filters

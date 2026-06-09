@@ -1,29 +1,38 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-slint::include_modules!();
+use std::borrow::Cow;
 
-use crate::core::frontend::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH};
-use slint::{ComponentHandle, LogicalSize};
+use gpui::*;
 
-mod app;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+// --- Core modules are UI-framework independent — keep them ---
 mod core;
-mod looper;
+// --- Platform modules are UI-framework independent — keep them ---
 mod platform;
+// --- GPUI state layer (new) ---
+mod state;
+// --- GPUI UI components (new) ---
+mod ui;
+// --- GPUI polling and services ---
 mod services;
 
-/// Returns `true` if this is the first instance and the app should start.
-/// Uses a localhost TCP port as a cross-process lock — the OS releases it
-/// automatically when the owning process exits (cleanly or via crash).
+// Root view lives in ui::root — use that instead of inline ClippiApp
+use core::settings::AppSettings;
+use state::app::AppState;
+use ui::root::RootView;
+use ui::window_manager::WindowManager;
+
 fn ensure_single_instance() -> bool {
     std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
 }
 
-fn init_logging(db_path: &str) {
-    let log_path = crate::core::paths::log_path(db_path);
+fn init_logging() {
+    let log_path = core::paths::log_path();
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Rotate: if log > 1 MB, rename to .old before starting fresh
     if let Ok(meta) = std::fs::metadata(&log_path) {
         if meta.len() > 1_000_000 {
             let old = log_path.with_extension("log.old");
@@ -40,133 +49,235 @@ fn init_logging(db_path: &str) {
     }
 }
 
-/// Search for PingFang.ttc under the MobileAsset font directory.
-/// macOS 13+ delivers system CJK fonts via AssetsV2 at hash-based paths.
-/// Returns `None` if not found; caller should fall back to STHeiti.
-#[cfg(target_os = "macos")]
-fn find_pingfang_path() -> Option<String> {
-    let assets_dir =
-        std::fs::read_dir("/System/Library/AssetsV2/com_apple_MobileAsset_Font8").ok()?;
-    for entry in assets_dir.filter_map(|e| e.ok()) {
-        let candidate = entry.path().join("AssetData").join("PingFang.ttc");
-        if candidate.exists() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
 fn main() {
-    // Prevent multiple instances — desktop clipboard manager must be a singleton.
     if !ensure_single_instance() {
         return;
     }
 
-    // On macOS, disable Slint's default menu bar to avoid muda class name conflict
-    // with tray-icon. Both Slint and tray-icon depend on muda (different versions)
-    // which register the same ObjC class "MudaMenuItem", causing a crash.
-    #[cfg(target_os = "macos")]
-    {
-        let backend = i_slint_backend_winit::Backend::builder()
-            .with_default_menu_bar(false)
-            .build()
-            .expect("Failed to create Slint backend");
-        slint::platform::set_platform(Box::new(backend)).expect("Failed to set Slint platform");
-    }
+    // --- Detect portable mode before loading any settings (so config/log paths ---
+    // --- are resolved correctly). Must run before init_logging() and ---
+    // --- AppSettings::load(). ---
+    core::paths::init_portable_mode();
+    core::paths::migrate_legacy_files();
+    // If running in portable mode for the first time after upgrading from
+    // --- a non-portable install, migrate existing data from the system dir. ---
+    core::paths::migrate_portable_data();
+    init_logging();
 
-    // Load settings early so we can initialize logging before UI setup
-    let mut settings = crate::core::settings::AppSettings::load();
-    init_logging(&settings.db_path);
+    log::info!("Starting Clippi (GPUI experiment)");
 
-    // Detect system language on first run.
-    if settings.language.is_empty() {
-        settings.language = crate::core::settings::detect_system_language();
-        settings.save();
-    }
-    crate::core::i18n::set_language(&settings.language);
-
-    let slint_app = App::new().unwrap();
-
-    // select_bundled_translation MUST be called after the first component is created.
-    // Always call it: for "en", Slint uses msgid as-is; for "zh_CN", it loads translations.
-    slint::select_bundled_translation(&settings.language)
-        .unwrap_or_else(|e| eprintln!("Failed to set language: {e}"));
-
-    // Register iconfont after app is initialized
-    {
-        let font_data = include_bytes!("../assets/fonts/iconfont.ttf");
-        let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data.to_vec()));
-        let mut collection = slint::fontique_08::shared_collection();
-        let _fonts = collection.register_fonts(blob, None);
-    }
-
-    // The default SansSerif font lacks CJK glyphs on both macOS and Windows.
-    // Register a system CJK font to prevent missing-glyph boxes (tofu).
-    #[cfg(target_os = "macos")]
-    {
-        let cjk_font_path = find_pingfang_path()
-            .unwrap_or_else(|| "/System/Library/Fonts/STHeiti Medium.ttc".into());
-
-        if let Ok(font_data) = std::fs::read(&cjk_font_path) {
-            let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
-            let mut collection = slint::fontique_08::shared_collection();
-            let cjk_override = slint::fontique_08::fontique::FontInfoOverride {
-                family_name: Some("system-cjk"),
-                ..Default::default()
-            };
-            collection.register_fonts(blob, Some(cjk_override));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let cjk_font_path = "C:\\Windows\\Fonts\\msyh.ttc";
-        if let Ok(font_data) = std::fs::read(cjk_font_path) {
-            let blob = slint::fontique_08::fontique::Blob::new(std::sync::Arc::new(font_data));
-            let mut collection = slint::fontique_08::shared_collection();
-            let cjk_override = slint::fontique_08::fontique::FontInfoOverride {
-                family_name: Some("system-cjk"),
-                ..Default::default()
-            };
-            collection.register_fonts(blob, Some(cjk_override));
-        }
-    }
-
-    let controller = app::AppController::new(&slint_app).expect("Failed to init");
-    let restart_flag = controller.restart_flag();
-
-    // Show window first to initialize layout, then apply physical-pixel sizing
-    // to prevent DPI-scaling from inflating the window (logical px * scale factor).
-    // This runs before the event loop, so no visible flash occurs.
-    // When silent_start is enabled, skip showing the window entirely.
-    if !slint_app.get_silent_start() {
+    Application::new().run(|cx: &mut App| {
+        gpui_component::init(cx);
+        // --- iconfont.ttf has an 'm' glyph added (mapped to first icon ---
+        // --- glyph) because GPUI's load_family skips any font without ---
+        // --- glyph_for_char('m') — icon-only fonts would be silently ---
+        // --- dropped and render as tofu (□). The CTFontManager path ---
+        // --- registers with the system as a fallback. ---
         #[cfg(target_os = "macos")]
         {
-            slint_app.window().show().unwrap();
-            slint_app.window().set_size(LogicalSize::new(
-                DEFAULT_WINDOW_WIDTH,
-                DEFAULT_WINDOW_HEIGHT,
-            ));
-            let mtm = objc2::MainThreadMarker::new().unwrap();
-            let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-            ns_app.activate();
+            use objc2::AnyThread;
+            use objc2_foundation::NSURL;
+            use std::io::Write;
+
+            let font_bytes = include_bytes!("../assets/fonts/iconfont.ttf");
+            let tmp_dir = std::env::temp_dir();
+            let font_path = tmp_dir.join("clippi_iconfont.ttf");
+            if let Ok(mut f) = std::fs::File::create(&font_path) {
+                if f.write_all(font_bytes).is_ok() {
+                    let path_str = font_path.to_string_lossy();
+                    let path_ns = objc2_foundation::NSString::from_str(&path_str);
+                    let url = NSURL::initFileURLWithPath(NSURL::alloc(), &path_ns);
+                    extern "C" {
+                        fn CTFontManagerRegisterFontsForURL(
+                            url: *const std::ffi::c_void,
+                            scope: u32,
+                            error: *mut *const std::ffi::c_void,
+                        ) -> bool;
+                    }
+                    const K_CT_FONT_MANAGER_SCOPE_PROCESS: u32 = 1;
+                    let url_ptr: *const std::ffi::c_void =
+                        unsafe { std::mem::transmute_copy(&url) };
+                    unsafe {
+                        CTFontManagerRegisterFontsForURL(
+                            url_ptr,
+                            K_CT_FONT_MANAGER_SCOPE_PROCESS,
+                            std::ptr::null_mut(),
+                        );
+                    }
+                }
+            }
         }
-        #[cfg(not(target_os = "macos"))]
+
+        // --- CGFont→Handle::from_native preserves PostScript name & ---
+        // --- CoreText traits that GPUI's load_family requires. ---
+        // --- (Handle::from_memory via Cow::Owned may lose PostScript ---
+        // --- name, causing zed-font-kit to silently drop the font.) ---
+        if let Err(err) = cx.text_system().add_fonts(vec![Cow::Borrowed(
+            include_bytes!("../assets/fonts/iconfont.ttf").as_slice(),
+        )]) {
+            log::error!("Failed to load iconfont.ttf: {err}");
+        }
+
+        let settings = AppSettings::load();
+        let effective_language = if settings.language.is_empty() {
+            core::settings::detect_system_language()
+        } else {
+            settings.language.clone()
+        };
+        core::i18n::set_language(&effective_language);
+
+        // Initialize images cache directory — follows db_path if set.
+        core::paths::init_images_dir(&settings.db_path);
+
+        // --- Set gpui_component theme based on user settings (not hardcoded Dark). ---
+        let is_dark = match settings.theme.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => core::settings::is_system_dark_mode(),
+        };
+        let theme_mode = if is_dark {
+            gpui_component::ThemeMode::Dark
+        } else {
+            gpui_component::ThemeMode::Light
+        };
+        gpui_component::Theme::change(theme_mode, None, cx);
+        gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
+
+        // Calculate initial position (physical pixels) and size (logical pixels)
+        // before the settings are moved into AppState. We use SetWindowPos on
+        // Windows because GPUI's window_bounds with transparent windows is unreliable.
+        let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
+        let (initial_logical_w, initial_logical_h) =
+            core::frontend::effective_window_size(&settings);
+
+        let mut window_options = WindowOptions {
+            window_background: WindowBackgroundAppearance::Transparent,
+            titlebar: Some(TitlebarOptions {
+                appears_transparent: true,
+                ..Default::default()
+            }),
+            window_min_size: Some(size(
+                px(core::frontend::MIN_WINDOW_WIDTH),
+                px(core::frontend::MIN_WINDOW_HEIGHT),
+            )),
+            ..Default::default()
+        };
+
+        #[cfg(target_os = "macos")]
         {
-            slint_app.window().show().unwrap();
-            slint_app.window().set_size(LogicalSize::new(
-                DEFAULT_WINDOW_WIDTH,
-                DEFAULT_WINDOW_HEIGHT,
-            ));
+            let origin = initial_phys_pos
+                .map(|(x, y)| point(px(x as f32), px(y as f32)))
+                .unwrap_or_else(|| {
+                    Bounds::centered(
+                        None,
+                        size(px(initial_logical_w), px(initial_logical_h)),
+                        cx,
+                    )
+                    .origin
+                });
+            window_options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(
+                origin,
+                size(px(initial_logical_w), px(initial_logical_h)),
+            )));
         }
-    }
 
-    slint::run_event_loop_until_quit().unwrap();
+        cx.open_window(
+            window_options,
+            |window, cx| {
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    use windows_sys::Win32::Graphics::Dwm::{
+                        DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY,
+                    };
+                    const DWMNCRP_DISABLED: u32 = 1;
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                            let _ = DwmSetWindowAttribute(
+                                wh.hwnd.get() as _,
+                                DWMWA_NCRENDERING_POLICY as u32,
+                                &DWMNCRP_DISABLED as *const u32 as *const _,
+                                std::mem::size_of::<u32>() as u32,
+                            );
+                        }
+                    }
+                }
+                let silent_start = settings.silent_start;
+                let state = cx.new(|_cx| AppState::new(settings));
+                let window_manager = cx.new(|cx| WindowManager::new(state.clone(), cx));
 
-    if restart_flag.load(std::sync::atomic::Ordering::SeqCst) {
-        controller.prepare_restart();
-        crate::core::settings::spawn_new_process();
-    }
+                // --- ── Store raw window handle + set initial position/size ── ---
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                            let hwnd = wh.hwnd.get();
+                            window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
 
-    controller.shutdown();
+                            // --- Set initial position and size via platform API. ---
+                            // --- calculate_initial_position returns physical pixels ---
+                            // (matching SetWindowPos convention on Windows).
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                SetWindowPos, HWND_TOP, SWP_NOACTIVATE,
+                            };
+                            if let Some((x, y)) = initial_phys_pos {
+                                let scale = platform::monitor::get_scale_factor(x, y);
+                                let phys_w = (initial_logical_w * scale) as i32;
+                                let phys_h = (initial_logical_h * scale) as i32;
+                                unsafe {
+                                    SetWindowPos(
+                                        hwnd as _,
+                                        HWND_TOP,
+                                        x,
+                                        y,
+                                        phys_w,
+                                        phys_h,
+                                        SWP_NOACTIVATE,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::AppKit(wh) = handle.as_raw() {
+                            let ns_view =
+                                wh.ns_view.as_ptr() as *mut objc2::runtime::AnyObject;
+                            let ns_window: *mut objc2_app_kit::NSWindow =
+                                unsafe { objc2::msg_send![ns_view, window] };
+                            window_manager.update(cx, |wm, _cx| {
+                                wm.set_ns_window(ns_window as isize)
+                            });
+                        }
+                    }
+                }
+
+                let view =
+                    cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
+
+                // --- Intercept window close — hide to background instead of ---
+                // --- destroying the window. Returns false to prevent GPUI ---
+                // --- from closing the window and exiting the process. ---
+                let wm_close = window_manager.clone();
+                window.on_window_should_close(cx, move |_window, cx| {
+                    wm_close.update(cx, |wm, cx| wm.hide(cx));
+                    false
+                });
+
+                // --- Silent start: defer hide until after window is fully initialized, ---
+                // --- so GPUI doesn't override the hidden state with its own show. ---
+                if silent_start {
+                    let wm_hide = window_manager.clone();
+                    cx.defer(move |cx| {
+                        wm_hide.update(cx, |wm, cx| wm.hide(cx));
+                    });
+                }
+
+                cx.new(|cx| gpui_component::Root::new(view, window, cx))
+            },
+        )
+        .unwrap();
+    });
 }

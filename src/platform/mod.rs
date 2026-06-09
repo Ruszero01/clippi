@@ -1,9 +1,8 @@
-//! Platform adaptation layer
+//! --- Platform adaptation layer ---
 
 pub mod blacklist;
 pub mod clipboard;
 pub mod favicon;
-pub mod file_icon;
 pub mod focus;
 pub mod hotkey;
 pub mod monitor;

@@ -20,7 +20,9 @@ long_description = "Clippi is a lightweight clipboard manager that helps you man
 osx_minimum_system_version = "12.0"
 
 [dependencies]
-slint = { version = "1.16", features = ["unstable-fontique-08"] }
+gpui = "0.2.2"
+gpui-component = "0.5"
+gpui_transitions = "0.1.5"
 clipboard-rs = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 image = "0.25"
@@ -40,6 +42,8 @@ semver = "1"
 log = "0.4"
 simplelog = "0.12"
 libc = "0.2"
+hostname = "0.4"
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_Memory"] }
@@ -51,13 +55,11 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSBundle", "NSDictionary", "NSArray", "NSThread", "NSLocale"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow", "NSEvent"] }
 core-graphics = { version = "0.25", features = ["elcapitan"] }
-i-slint-backend-winit = { version = "1.16", features = ["renderer-femtovg", "accessibility"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"
 
 [build-dependencies]
-slint-build = "1.16"
 cc = "1"
 
 [profile.release]

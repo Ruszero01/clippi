@@ -1,4 +1,4 @@
-//! OCR (Optical Character Recognition) module
+//! --- OCR (Optical Character Recognition) module ---
 //!
 //! Platform-agnostic trait with native implementations for Windows and macOS.
 
@@ -13,7 +13,7 @@ pub trait OcrEngine: Send {
     fn recognize(&self, image_path: &Path) -> OcrResult;
 }
 
-// ── Windows: Windows.Media.Ocr ──
+// --- ── Windows: Windows.Media.Ocr ── ---
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -57,12 +57,15 @@ mod win {
 
     impl OcrEngine for WindowsOcrEngine {
         fn recognize(&self, image_path: &Path) -> OcrResult {
-            let path_str = image_path.to_str().ok_or_else(|| "OCR: invalid image path".to_string())?;
+            let path_str = image_path
+                .to_str()
+                .ok_or_else(|| "OCR: invalid image path".to_string())?;
 
-            let file = windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path_str))
-                .map_err(|e| format!("OCR StorageFile: {e}"))?
-                .get()
-                .map_err(|e| format!("OCR StorageFile get: {e}"))?;
+            let file =
+                windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path_str))
+                    .map_err(|e| format!("OCR StorageFile: {e}"))?
+                    .get()
+                    .map_err(|e| format!("OCR StorageFile get: {e}"))?;
 
             let stream = file
                 .OpenAsync(windows::Storage::FileAccessMode::Read)
@@ -81,26 +84,28 @@ mod win {
                 .get()
                 .map_err(|e| format!("OCR GetSoftwareBitmap get: {e}"))?;
 
-            // Use the original bitmap directly — Gray8 conversion loses detail
-            // on small images, hurting recognition accuracy.
+            // --- Use the original bitmap directly — Gray8 conversion loses detail ---
+            // --- on small images, hurting recognition accuracy. ---
 
-            // Language priority mirrors macOS behavior:
-            // ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"]
+            // --- Language priority mirrors macOS behavior: ---
+            // --- ff32a47 sets recognitionLanguages = ["zh-Hans", "zh-Hant", "en"] ---
             // Try zh-Hans first for Chinese accuracy, then user languages, then en-US
             let language_tags: &[(bool, &str)] = &[
-                (false, "zh-Hans"),   // Simplified Chinese (primary)
-                (true, ""),           // User profile languages
-                (false, "en-US"),     // English final fallback
+                (false, "zh-Hans"), // Simplified Chinese (primary)
+                (true, ""),         // User profile languages
+                (false, "en-US"),   // English final fallback
             ];
 
             for &(use_profile, tag) in language_tags {
                 let engine = if use_profile {
                     windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages().ok()
                 } else {
-                    let lang = match windows::Globalization::Language::CreateLanguage(&HSTRING::from(tag)) {
-                        Ok(l) => l,
-                        Err(_) => continue,
-                    };
+                    let lang =
+                        match windows::Globalization::Language::CreateLanguage(&HSTRING::from(tag))
+                        {
+                            Ok(l) => l,
+                            Err(_) => continue,
+                        };
                     windows::Media::Ocr::OcrEngine::TryCreateFromLanguage(&lang).ok()
                 };
 
@@ -126,7 +131,7 @@ mod win {
 #[cfg(target_os = "windows")]
 pub use win::WindowsOcrEngine;
 
-// ── macOS: Apple Vision Framework via native ObjC helper ──
+// --- ── macOS: Apple Vision Framework via native ObjC helper ── ---
 ///
 /// Uses a small Objective-C helper (ocr_helper.m) compiled into the binary
 /// to avoid objc2 msg_send! type-encoding issues with CGImageRef etc.
@@ -147,15 +152,17 @@ mod mac {
             let path_str = image_path
                 .to_str()
                 .ok_or_else(|| "OCR: non-UTF-8 path".to_string())?;
-            let c_path = CString::new(path_str)
-                .map_err(|_| "OCR: path contains null byte".to_string())?;
+            let c_path =
+                CString::new(path_str).map_err(|_| "OCR: path contains null byte".to_string())?;
 
             let ptr = unsafe { clippi_ocr_recognize(c_path.as_ptr()) };
             if ptr.is_null() {
                 return Err("OCR: recognition failed".to_string());
             }
 
-            let result = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+            let result = unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned();
             unsafe { clippi_ocr_free_string(ptr) };
             Ok(result)
         }
@@ -165,7 +172,7 @@ mod mac {
 #[cfg(target_os = "macos")]
 pub use mac::AppleVisionOcrEngine;
 
-// ── Stub (Linux / unsupported) ──
+// --- ── Stub (Linux / unsupported) ── ---
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod stub {

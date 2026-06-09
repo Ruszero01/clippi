@@ -18,8 +18,10 @@ clippi.toml
 # Claude Code
 .claude/
 CLAUDE.md
-docs/
+AGENTS.md
 .superpowers/
 
 # Local dev plan
 PLAN.md
+assets/fonts/iconfont.ttf.orig
+assets/fonts/iconfont.ttf.bak

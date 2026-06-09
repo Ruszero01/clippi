@@ -1,4 +1,4 @@
-//! System tray - platform implementation using tray-icon
+//! --- System tray - platform implementation using tray-icon ---
 
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -15,7 +15,7 @@ pub enum TrayAction {
     CheckUpdate,
 }
 
-use crate::core::i18n;
+use crate::core::i18n_keys::I18nKey;
 
 /// System tray manager
 pub struct TrayManager {
@@ -44,23 +44,23 @@ impl TrayManager {
 
         let menu = Menu::new();
 
-        // Version label (disabled, gray)
+        // --- Version label (disabled, gray) ---
         let version_text = format!("Clippi v{}", env!("CARGO_PKG_VERSION"));
         let version_item = MenuItem::new(&version_text, false, None);
 
-        // Separator between version and functional items
+        // --- Separator between version and functional items ---
         let sep = PredefinedMenuItem::separator();
 
         // Check for updates button
         let check_update_item =
-            MenuItem::new(i18n::tr("检查更新", "Check for Updates"), true, None);
+            MenuItem::new(I18nKey::TrayCheckUpdate.text(), true, None);
         let check_update_id = check_update_item.id().clone();
 
-        // Existing functional menu items
-        let show_item = MenuItem::new(i18n::tr("显示窗口", "Show Window"), true, None);
-        let settings_item = MenuItem::new(i18n::tr("设置", "Settings"), true, None);
-        let restart_item = MenuItem::new(i18n::tr("重启应用", "Restart"), true, None);
-        let quit_item = MenuItem::new(i18n::tr("退出", "Quit"), true, None);
+        // --- Existing functional menu items ---
+        let show_item = MenuItem::new(I18nKey::TrayShow.text(), true, None);
+        let settings_item = MenuItem::new(I18nKey::TraySettings.text(), true, None);
+        let restart_item = MenuItem::new(I18nKey::TrayRestart.text(), true, None);
+        let quit_item = MenuItem::new(I18nKey::TrayQuit.text(), true, None);
 
         let show_id = show_item.id().clone();
         let settings_id = settings_item.id().clone();
@@ -101,14 +101,14 @@ impl TrayManager {
 
     /// Poll for tray events - call this from main thread
     pub fn poll(&self) -> Option<TrayAction> {
-        // Check double-click
+        // --- Check double-click ---
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             if let TrayIconEvent::DoubleClick { .. } = event {
                 return Some(TrayAction::Show);
             }
         }
 
-        // Check menu events
+        // --- Check menu events ---
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.show_id {
                 return Some(TrayAction::Show);
@@ -128,6 +128,16 @@ impl TrayManager {
         }
 
         None
+    }
+
+    /// Update all menu item texts when language changes.
+    /// muda supports live text updates — no tray recreation needed.
+    pub fn update_language(&mut self) {
+        self._check_update_item.set_text(I18nKey::TrayCheckUpdate.text());
+        self._items[0].set_text(I18nKey::TrayShow.text());
+        self._items[1].set_text(I18nKey::TraySettings.text());
+        self._items[2].set_text(I18nKey::TrayRestart.text());
+        self._items[3].set_text(I18nKey::TrayQuit.text());
     }
 }
 

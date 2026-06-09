@@ -1,4 +1,4 @@
-//! Focus event listener module
+//! --- Focus event listener module ---
 //! Uses Win32 SetWinEventHook for event-driven focus monitoring
 //! Uses NSWorkspace polling for macOS focus monitoring
 
@@ -20,9 +20,9 @@ use windows_sys::Win32::UI::Accessibility::{
 use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DispatchMessageW, GetForegroundWindow, GetWindowTextW,
-    GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, TranslateMessage,
-    EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE, WINEVENT_OUTOFCONTEXT, WM_QUIT,
+    DestroyIcon, DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    PeekMessageW, PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
+    WINEVENT_OUTOFCONTEXT, WM_QUIT,
 };
 
 #[cfg(target_os = "windows")]
@@ -46,6 +46,11 @@ pub struct ForegroundAppInfo {
 /// Last non-Clippi foreground window (paste target)
 #[cfg(target_os = "windows")]
 static LAST_NON_CLIPPI_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Our own window handle (set at window creation).
+/// Used by `is_clippi_window` to avoid depending on window title.
+#[cfg(target_os = "windows")]
+static CLIPPI_HWND: AtomicUsize = AtomicUsize::new(0);
 
 /// Last foreground window title (raw UTF-16 buffer)
 #[cfg(target_os = "windows")]
@@ -164,7 +169,7 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
                 let pid = app.processIdentifier();
 
                 if pid == my_pid {
-                    // LAST_NON_CLIPPI_PID already holds the correct paste target.
+                    // --- LAST_NON_CLIPPI_PID already holds the correct paste target. ---
                 } else {
                     LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
                 }
@@ -196,6 +201,12 @@ pub fn get_last_non_clippi_window() -> Option<HWND> {
     }
 }
 
+/// Register our window HWND so the focus watcher can identify us.
+#[cfg(target_os = "windows")]
+pub fn set_clippi_hwnd(hwnd: isize) {
+    CLIPPI_HWND.store(hwnd as usize, Ordering::SeqCst);
+}
+
 /// Get the paste target PID
 #[cfg(target_os = "macos")]
 pub fn get_last_non_clippi_pid() -> Option<i32> {
@@ -209,14 +220,8 @@ pub fn get_last_non_clippi_pid() -> Option<i32> {
 
 #[cfg(target_os = "windows")]
 fn is_clippi_window(hwnd: HWND) -> bool {
-    let mut buffer: [u16; 256] = [0; 256];
-    let len = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), 256) };
-    if len > 0 {
-        let title = String::from_utf16_lossy(&buffer[..len as usize]);
-        title == "Clippi"
-    } else {
-        false
-    }
+    let our_hwnd = CLIPPI_HWND.load(Ordering::SeqCst);
+    our_hwnd != 0 && hwnd as usize == our_hwnd
 }
 
 #[cfg(target_os = "windows")]
@@ -236,15 +241,15 @@ unsafe extern "system" fn win_event_proc(
     let is_clippi_now = is_clippi_window(current_fg);
 
     if is_clippi_now {
-        // LAST_NON_CLIPPI_WINDOW already holds the correct paste target from
-        // the most recent non-Clippi focus event. Do not overwrite it.
+        // --- LAST_NON_CLIPPI_WINDOW already holds the correct paste target from ---
+        // --- the most recent non-Clippi focus event. Do not overwrite it. ---
     } else {
         LAST_NON_CLIPPI_WINDOW.store(current_fg as usize, Ordering::SeqCst);
-        // Capture window title alongside HWND
+        // --- Capture window title alongside HWND ---
         if let Ok(mut buf) = LAST_FOREGROUND_TITLE.lock() {
             let len = GetWindowTextW(current_fg, buf.as_mut_ptr(), 512);
             if len > 0 {
-                // Fill remaining with zeros
+                // --- Fill remaining with zeros ---
                 for i in len as usize..512 {
                     buf[i] = 0;
                 }
@@ -255,7 +260,7 @@ unsafe extern "system" fn win_event_proc(
     }
 }
 
-// ── Foreground app info extraction ──
+// --- ── Foreground app info extraction ── ---
 
 /// Get information about the current foreground application.
 /// Returns None on unsupported platforms or if the info is unavailable.
@@ -277,7 +282,7 @@ pub fn get_foreground_app_info() -> Option<ForegroundAppInfo> {
 #[cfg(target_os = "windows")]
 fn windows_foreground_info() -> Option<ForegroundAppInfo> {
     unsafe {
-        // Use the stored non-Clippi window; fall back to current foreground
+        // --- Use the stored non-Clippi window; fall back to current foreground ---
         let hwnd = get_last_non_clippi_window().or_else(|| {
             let fg = GetForegroundWindow();
             if fg.is_null() || is_clippi_window(fg) {
@@ -287,7 +292,7 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             }
         })?;
 
-        // Window title from stored buffer
+        // --- Window title from stored buffer ---
         let window_title = if let Ok(buf) = LAST_FOREGROUND_TITLE.lock() {
             let end = buf.iter().position(|&c| c == 0).unwrap_or(512);
             String::from_utf16_lossy(&buf[..end])
@@ -295,7 +300,7 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             String::new()
         };
 
-        // Get PID
+        // --- Get PID ---
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
         if pid == 0 {
@@ -306,7 +311,7 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             });
         }
 
-        // Get exe path
+        // --- Get exe path ---
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if process.is_null() {
             return Some(ForegroundAppInfo {
@@ -345,7 +350,7 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             })
             .unwrap_or_default();
 
-        // Extract icon
+        // --- Extract icon ---
         let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
         let mut shfi: SHFILEINFOW = std::mem::zeroed();
         let icon_result = SHGetFileInfoW(
@@ -377,11 +382,11 @@ fn macos_foreground_info() -> Option<ForegroundAppInfo> {
     let app = workspace.frontmostApplication()?;
 
     if app.processIdentifier() == std::process::id() as i32 {
-        // Clippi itself — no foreground info to show
+        // --- Clippi itself — no foreground info to show ---
         return None;
     }
 
-    // Use generated methods (nil-safe via Option)
+    // --- Use generated methods (nil-safe via Option) ---
     let app_name = app
         .localizedName()
         .map(|n| n.to_string())
