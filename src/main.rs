@@ -250,6 +250,59 @@ fn main() {
                                 }
                             }
 
+                            // --- Set window icon via WM_SETICON so the taskbar, Alt+Tab, ---
+                            // --- and window system menu all show the Clippi icon. ---
+                            // --- Without this, windows_subsystem = "windows" builds ---
+                            // --- show a blank/default icon. ---
+                            {
+                                use std::io::Write;
+                                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                    LoadImageW, SendMessageW, IMAGE_ICON, ICON_BIG,
+                                    ICON_SMALL, LR_LOADFROMFILE, WM_SETICON,
+                                };
+                                const LOGO_ICO: &[u8] =
+                                    include_bytes!("../assets/LOGO.ico");
+                                let tmp_dir = std::env::temp_dir();
+                                let icon_path = tmp_dir.join("clippi_app_icon.ico");
+                                if let Ok(mut f) = std::fs::File::create(&icon_path) {
+                                    if f.write_all(LOGO_ICO).is_ok() {
+                                        drop(f);
+                                        let path_wide: Vec<u16> = icon_path
+                                            .to_string_lossy()
+                                            .encode_utf16()
+                                            .chain(std::iter::once(0))
+                                            .collect();
+                                        let hicon = unsafe {
+                                            LoadImageW(
+                                                std::ptr::null_mut(),
+                                                path_wide.as_ptr(),
+                                                IMAGE_ICON,
+                                                0,
+                                                0,
+                                                LR_LOADFROMFILE,
+                                            )
+                                        };
+                                        if !hicon.is_null() {
+                                            unsafe {
+                                                SendMessageW(
+                                                    hwnd as _,
+                                                    WM_SETICON,
+                                                    ICON_BIG as usize,
+                                                    hicon as isize,
+                                                );
+                                                SendMessageW(
+                                                    hwnd as _,
+                                                    WM_SETICON,
+                                                    ICON_SMALL as usize,
+                                                    hicon as isize,
+                                                );
+                                            }
+                                            log::info!("Window icon set successfully");
+                                        }
+                                    }
+                                }
+                            }
+
                             // --- Defer hotkey registration until after GPUI's first ---
                             // --- render, so the input/IME pipeline is ready before ---
                             // --- the user's first hotkey press can trigger show_and_focus. ---

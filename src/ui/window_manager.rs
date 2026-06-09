@@ -862,6 +862,46 @@ impl WindowManager {
 
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;
+
+        // --- Platform-level topmost / floating window control ---
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOPMOST, HWND_NOTOPMOST, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOACTIVATE, SWP_SHOWWINDOW,
+            };
+            let hwnd = self.hwnd as *mut std::ffi::c_void;
+            if !hwnd.is_null() {
+                let insert_after = if pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        insert_after,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if self.ns_window != 0 {
+                use objc2_app_kit::NSFloatingWindowLevel;
+                let level = if pinned {
+                    objc2_app_kit::NSFloatingWindowLevel
+                } else {
+                    objc2_app_kit::NSNormalWindowLevel
+                };
+                unsafe {
+                    let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
+                    window.setLevel(level);
+                }
+            }
+        }
+
         cx.emit(WindowManagerEvent::PinnedChanged(pinned));
     }
 
