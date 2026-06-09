@@ -13,6 +13,7 @@ use crate::core::types::{ClipboardItem, ContentType, RichData};
 use crate::state::app::AppState;
 use crate::core::i18n_keys::I18nKey;
 
+use super::rich_preview;
 use super::theme::ClippiTheme;
 
 const TYPE_OPTIONS: [(&str, I18nKey); 8] = [
@@ -97,7 +98,14 @@ impl EditPanel {
         self.type_menu_open = false;
         self.preview_generation = self.preview_generation.wrapping_add(1);
 
-        let content = SharedString::from(item.full_text.clone());
+        // --- For HTML items, load the raw HTML from rich_data so the ---
+        // --- preview can render colored <span> tags properly.         ---
+        let content = if item_type == "html" {
+            let rich = RichData::from_json(&item.rich_data);
+            SharedString::from(rich.html.unwrap_or_else(|| item.full_text.clone()))
+        } else {
+            SharedString::from(item.full_text.clone())
+        };
         self.content_input.update(cx, |input, cx| {
             input.set_value(content.clone(), window, cx);
             input.focus_handle(cx).focus(window);
@@ -288,6 +296,7 @@ impl Render for EditPanel {
                                                     &content_text,
                                                     self.last_item_id,
                                                     preview_generation,
+                                                    text_1,
                                                     window,
                                                     cx,
                                                 )),
@@ -423,6 +432,7 @@ fn render_rich_preview(
     text: &str,
     item_id: i64,
     generation: u64,
+    fallback_color: Rgba,
     window: &mut Window,
     cx: &mut Context<EditPanel>,
 ) -> AnyElement {
@@ -433,9 +443,16 @@ fn render_rich_preview(
         .paragraph_gap(rems(0.25))
         .heading_font_size(|level, base| if level <= 2 { base * 1.08 } else { base });
     if selected_type == "html" {
+        // --- Try to render colored spans first, fall back to plain HTML ---
+        let normalized = rich_preview::normalize_clipboard_html_for_render(text);
+        if let Some(lines) = rich_preview::parse_styled_html_lines(&normalized) {
+            return div()
+                .child(rich_preview::render_styled_html_lines(lines, fallback_color))
+                .into_any_element();
+        }
         TextView::html(
             ("edit-html-preview", preview_key),
-            text.to_string(),
+            normalized,
             window,
             cx,
         )
