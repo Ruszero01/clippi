@@ -56,22 +56,22 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
 /// Get a content type display label.
 fn type_label(item: &ClipboardItem) -> String {
     if item.meta_type == "email" {
-        return "Email".into();
+        return I18nKey::CardTypeEmail.text().into();
     }
     if item.meta_type == "phone" {
-        return "Phone".into();
+        return I18nKey::CardTypePhone.text().into();
     }
     if has_qr_code(item) {
-        return "QR".into();
+        return I18nKey::CardTypeQr.text().into();
     }
     match item.content_type {
         ContentType::PlainText => I18nKey::CardTypeText.text().into(),
         ContentType::RichText => {
             if item.meta_type == "markdown" {
-                return "MD".into();
+                return I18nKey::CardTypeMd.text().into();
             }
             if item.meta_type == "html" {
-                return "HTML".into();
+                return I18nKey::CardTypeHtml.text().into();
             }
             let rich = RichData::from_json(&item.rich_data);
             if rich
@@ -79,9 +79,9 @@ fn type_label(item: &ClipboardItem) -> String {
                 .as_deref()
                 .is_some_and(|html| !html.trim().is_empty())
             {
-                "HTML".into()
+                I18nKey::CardTypeHtml.text().into()
             } else {
-                "RTF".into()
+                I18nKey::CardTypeRtf.text().into()
             }
         }
         ContentType::Image => I18nKey::CardTypeImage.text().into(),
@@ -100,11 +100,11 @@ fn type_label(item: &ClipboardItem) -> String {
                     label.trim_start_matches('.').to_uppercase()
                 }
             } else {
-                format!("{} Files", fd.files.len())
+                I18nKey::CardTypeFiles.fmt(&[&fd.files.len().to_string()])
             }
         }
-        ContentType::Link => "URL".into(),
-        ContentType::Path => "Path".into(),
+        ContentType::Link => I18nKey::CardTypeUrl.text().into(),
+        ContentType::Path => I18nKey::CardTypePath.text().into(),
         ContentType::Color => I18nKey::CardTypeColor.text().into(),
     }
 }

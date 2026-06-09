@@ -313,6 +313,15 @@ define_i18n! {
     CardTypeImage:          ("图片", "Image"),
     CardTypeFile:           ("文件", "File"),
     CardTypeColor:          ("颜色", "Color"),
+    CardTypeEmail:          ("邮件", "Email"),
+    CardTypePhone:          ("电话", "Phone"),
+    CardTypeQr:             ("二维码", "QR"),
+    CardTypeMd:             ("MD", "MD"),
+    CardTypeHtml:           ("HTML", "HTML"),
+    CardTypeRtf:            ("富文本", "RTF"),
+    CardTypeUrl:            ("链接", "URL"),
+    CardTypePath:           ("路径", "Path"),
+    CardTypeFiles:          ("{0} 个文件", "{0} Files"),
     CardImageSize:          ("{0} × {1}", "{0} × {1}"),
 
     // ─── Clipboard list ───
