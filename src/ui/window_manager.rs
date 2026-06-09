@@ -763,13 +763,40 @@ impl WindowManager {
 
     #[cfg(target_os = "macos")]
     pub fn set_ns_window(&mut self, ns_window: isize) {
+        use objc2_app_kit::{NSColor, NSWindow, NSWindowButton};
+
         self.ns_window = ns_window;
-        if ns_window != 0 {
-            unsafe {
-                let window = &*(ns_window as *const objc2_app_kit::NSWindow);
-                window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+        if ns_window == 0 {
+            return;
+        }
+        let window = unsafe { &*(ns_window as *const NSWindow) };
+
+        // --- Floating always-on-top level ---
+        window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+
+        // --- Hide traffic light buttons (close/minimize/zoom). GPUI ---
+        // --- only repositions them — never hides. They don't belong on ---
+        // --- our frameless custom-titlebar overlay window. ---
+        for btn_id in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(btn) = window.standardWindowButton(btn_id) {
+                btn.setHidden(true);
             }
         }
+
+        // --- Disable window shadow → removes the visible border/glow ---
+        // --- that surrounds transparent GPUI windows on macOS. ---
+        window.setHasShadow(false);
+
+        // --- Truly transparent background to fix the "brighter than ---
+        // --- exterior" artifact that GPUI's default (alpha 0.0001) ---
+        // --- causes on floating overlay windows. ---
+        let clear = NSColor::clearColor();
+        window.setBackgroundColor(Some(&clear));
+        window.setOpaque(false);
     }
 
     #[cfg(target_os = "macos")]

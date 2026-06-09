@@ -139,9 +139,10 @@ pub fn hicon_to_base64_png(
     }
 }
 
-// macOS geometry types for NSImage drawing (CGRect/CGSize equivalents
-// with objc2::Encode impls, since core_graphics types use a different objc2 version).
+// macOS geometry types for use with objc2 Encode (available for future needs).
+// Kept for potential use with CoreGraphics rendering paths.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod macos_geometry {
     use objc2::encode::{Encode, Encoding, RefEncode};
 
@@ -209,39 +210,23 @@ mod macos_geometry {
     }
 }
 
-/// Convert an NSImage to a base64-encoded PNG at the target size.
+/// Convert an NSImage to a base64-encoded PNG (no resize — caller can scale via UI).
 ///
-/// Uses native NSImage drawing (GPU-accelerated) to scale the source icon
-/// into a new 32×32 image, then encodes via TIFF → NSBitmapImageRep → PNG.
-/// Avoids the `image` crate decode/encode cycle entirely (no Lanczos3 in
-/// software, no transparent-edge trimming ― NSImage scaling handles it).
+/// Uses TIFF → NSBitmapImageRep → PNG pipeline which is thread-safe
+/// (unlike lockFocus/unlockFocus which require the main thread).
+/// GPUI's `img()` element handles display sizing via `object_fit`.
 #[cfg(target_os = "macos")]
-pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Option<String> {
+pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, _size: i32) -> Option<String> {
     unsafe {
         use base64::Engine;
-        use macos_geometry::{CGPoint, CGRect, CGSize};
         use objc2::class;
         use objc2::msg_send;
         use objc2::rc::Retained;
 
-        let size_f = size as f64;
-
-        // 1. Create target NSImage and draw source into it (GPU-accelerated scale)
-        let target: Retained<objc2::runtime::NSObject> = msg_send![
-            msg_send![class!(NSImage), alloc],
-            initWithSize: CGSize::new(size_f, size_f)
-        ];
-        let _: () = msg_send![&target, lockFocus];
-
-        let src_size: CGSize = msg_send![image, size];
-        let dest_rect = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(size_f, size_f));
-        let src_rect = CGRect::new(CGPoint::new(0.0, 0.0), src_size);
-        // --- NSCompositingOperationCopy = 2 ---
-        let _: () = msg_send![image, drawInRect: dest_rect, fromRect: src_rect, operation: 2usize, fraction: 1.0f64];
-        let _: () = msg_send![&target, unlockFocus];
-
-        // --- 2. TIFF → NSBitmapImageRep → PNG ---
-        let tiff: Retained<objc2::runtime::NSObject> = msg_send![&target, TIFFRepresentation];
+        // --- 1. TIFF → NSBitmapImageRep (thread-safe, no lockFocus needed) ---
+        let tiff: Option<Retained<objc2::runtime::NSObject>> =
+            msg_send![image, TIFFRepresentation];
+        let tiff = tiff?;
         let rep: Retained<objc2::runtime::NSObject> = msg_send![
             msg_send![class!(NSBitmapImageRep), alloc],
             initWithData: &*tiff
@@ -253,7 +238,7 @@ pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, size: i32) -> Optio
         ];
         let png_data = png_data?;
 
-        // --- 3. Base64 encode PNG bytes directly (no image crate round-trip) ---
+        // --- 2. Base64 encode PNG bytes directly (no image crate round-trip) ---
         let bytes: *const std::ffi::c_void = msg_send![&png_data, bytes];
         let len: usize = msg_send![&png_data, length];
         if bytes.is_null() || len == 0 {

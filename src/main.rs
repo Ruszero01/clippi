@@ -68,8 +68,13 @@ fn main() {
 
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
-        if let Err(err) = cx.text_system().add_fonts(vec![Cow::Borrowed(
-            include_bytes!("../assets/fonts/iconfont.ttf").as_slice(),
+        // --- Use Cow::Owned so font_kit takes the memory path ---
+        // --- (Handle::from_memory) instead of the CoreGraphics bridge ---
+        // --- (Handle::from_native). The native path via CGFont may not ---
+        // --- correctly expose the font family name to the font database ---
+        // --- on macOS, causing all icon glyphs to render as tofu (□). ---
+        if let Err(err) = cx.text_system().add_fonts(vec![Cow::Owned(
+            include_bytes!("../assets/fonts/iconfont.ttf").to_vec(),
         )]) {
             log::error!("Failed to load iconfont.ttf: {err}");
         }
