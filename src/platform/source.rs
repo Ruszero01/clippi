@@ -95,8 +95,15 @@ mod windows_impl {
         }
     }
 
-    pub fn get_file_icon_base64(file_path: &str) -> Option<String> {
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+    pub fn get_file_icon_base64(file_path: &str, is_dir: bool) -> Option<String> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        };
+        let attrs = if is_dir {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
         unsafe {
             let wide_path: Vec<u16> =
                 file_path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -104,7 +111,7 @@ mod windows_impl {
             let mut shfi: SHFILEINFOW = std::mem::zeroed();
             let result = SHGetFileInfoW(
                 wide_path.as_ptr(),
-                FILE_ATTRIBUTE_NORMAL,
+                attrs,
                 &mut shfi,
                 std::mem::size_of::<SHFILEINFOW>() as u32,
                 SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES,
@@ -151,8 +158,7 @@ mod macos_impl {
         })
     }
 
-    pub fn get_file_icon_base64(file_path: &str) -> Option<String> {
-        use objc2::class;
+    pub fn get_file_icon_base64(file_path: &str, _is_dir: bool) -> Option<String> {
         use objc2::msg_send;
         use objc2::rc::Retained;
         use objc2_foundation::NSURL;
@@ -191,18 +197,18 @@ pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
 /// Get a file's associated system icon as a base64-encoded PNG (32×32).
 /// Uses `SHGetFileInfoW` with `SHGFI_USEFILEATTRIBUTES` on Windows so the
 /// file doesn't need to exist — extension-based lookup.
-pub fn get_file_icon_base64(file_path: &str) -> Option<String> {
+pub fn get_file_icon_base64(file_path: &str, is_dir: bool) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        windows_impl::get_file_icon_base64(file_path)
+        windows_impl::get_file_icon_base64(file_path, is_dir)
     }
     #[cfg(target_os = "macos")]
     {
-        macos_impl::get_file_icon_base64(file_path)
+        macos_impl::get_file_icon_base64(file_path, is_dir)
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = file_path;
+        let _ = (file_path, is_dir);
         None
     }
 }

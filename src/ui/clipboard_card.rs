@@ -171,18 +171,23 @@ fn cached_source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
 }
 
 /// Get a cached file system icon for a given file path.
-/// Icons are cached by extension in `images_dir()/file_icons/{ext}.png`.
-fn cached_file_icon_path(file_path: &str) -> Option<std::path::PathBuf> {
+/// Icons are cached by extension (or "folder" for dirs) in `images_dir()/file_icons/`.
+fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std::path::PathBuf> {
     use std::path::Path;
-    let ext = Path::new(file_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("file");
+    let cache_key = if is_dir {
+        "folder".to_string()
+    } else {
+        Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("file")
+            .to_string()
+    };
     let icon_dir = crate::core::paths::images_dir().join("file_icons");
     let _ = std::fs::create_dir_all(&icon_dir);
-    let icon_path = icon_dir.join(format!("{ext}.png"));
+    let icon_path = icon_dir.join(format!("{cache_key}.png"));
     if !icon_path.exists() {
-        let icon_base64 = crate::platform::source::get_file_icon_base64(file_path)?;
+        let icon_base64 = crate::platform::source::get_file_icon_base64(file_path, is_dir)?;
         let png = base64::engine::general_purpose::STANDARD
             .decode(&icon_base64)
             .ok()?;
@@ -705,7 +710,7 @@ impl RenderOnce for ClipboardCard {
                     .ok()
                     .and_then(|fd| {
                         if fd.files.len() == 1 {
-                            fd.files.first().and_then(|fi| cached_file_icon_path(&fi.path))
+                            fd.files.first().and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
                         } else {
                             None
                         }
