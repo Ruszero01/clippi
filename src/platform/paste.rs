@@ -124,6 +124,18 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     }
 }
 
+/// Check whether the current process has Accessibility permission granted.
+/// Required for CGEventPost to HID (Cmd+V paste simulation).
+/// On macOS Sequoia 15+, CGEventPostToPid also requires this permission,
+/// so the check applies regardless of the posting method.
+#[cfg(target_os = "macos")]
+pub fn check_accessibility_permission() -> bool {
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+    unsafe { AXIsProcessTrusted() }
+}
+
 #[cfg(target_os = "macos")]
 const SLEEP_MS: u64 = 100;
 
@@ -162,16 +174,19 @@ pub fn paste_sync() {
     send_cmd_v();
 }
 
-/// Send Cmd+V keyboard events directly to the target process via CGEventPostToPid.
-/// This bypasses the HID event tap and does not require the target app to be
-/// frontmost, avoiding TCC Accessibility permission issues in release builds.
+/// Send Cmd+V keyboard events to the HID event stream.
+///
+/// Uses `CGEventPost` to the HID event tap location so the system delivers
+/// Cmd+V to whichever application is frontmost at the time of posting.
+/// The caller must have called `restore_paste_target()` beforehand to activate
+/// the target application and waited long enough for it to become frontmost.
+///
+/// This requires the Accessibility permission to be granted in
+/// System Settings → Privacy & Security → Accessibility.
+/// Without it, macOS silently drops the events and nothing happens.
 #[cfg(target_os = "macos")]
 fn send_cmd_v() {
     std::thread::sleep(std::time::Duration::from_millis(SLEEP_MS));
-
-    // --- Get the target PID — must be a valid non-Clippi process ---
-    let target_pid = crate::platform::focus::get_last_non_clippi_pid();
-    let Some(pid) = target_pid else { return };
 
     let source = core_graphics::event_source::CGEventSource::new(
         core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
@@ -179,29 +194,30 @@ fn send_cmd_v() {
     let Ok(source) = source else { return };
 
     let cmd_flag = core_graphics::event::CGEventFlags::CGEventFlagCommand;
+    let hid = core_graphics::event::CGEventTapLocation::HID;
 
     // --- Cmd down — modifiers were NOT active before pressing Cmd ---
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true)
     {
-        event.post_to_pid(pid);
+        event.post(hid);
     }
     // --- V down — Cmd IS held ---
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true)
     {
         event.set_flags(cmd_flag);
-        event.post_to_pid(pid);
+        event.post(hid);
     }
     // --- V up — Cmd IS held ---
     if let Ok(event) =
         core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false)
     {
         event.set_flags(cmd_flag);
-        event.post_to_pid(pid);
+        event.post(hid);
     }
     // --- Cmd up — Cmd WAS held before releasing ---
     if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source, 0x37, false) {
         event.set_flags(cmd_flag);
-        event.post_to_pid(pid);
+        event.post(hid);
     }
 }
 

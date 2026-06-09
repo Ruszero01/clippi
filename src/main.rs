@@ -126,6 +126,17 @@ fn main() {
         };
         core::i18n::set_language(&effective_language);
 
+        // --- Warn if Accessibility permission is missing on macOS — ---
+        // --- required for CGEventPost to HID (Cmd+V paste simulation). ---
+        #[cfg(target_os = "macos")]
+        {
+            if !crate::platform::paste::check_accessibility_permission() {
+                log::warn!(
+                    "Accessibility 权限未授予。请前往 系统设置 → 隐私与安全性 → 辅助功能 添加 Clippi 以启用自动粘贴功能。"
+                );
+            }
+        }
+
         // Initialize images cache directory — follows db_path if set.
         core::paths::init_images_dir(&settings.db_path);
 
