@@ -5,7 +5,7 @@
 
   # Clippi
 
-  轻量级剪贴板管理器 · 基于 Rust + Slint 构建<br>
+  轻量级剪贴板管理器 · 基于 Rust + GPUI 构建<br>
   支持 Windows 和 macOS
 
   <p>
@@ -20,7 +20,7 @@
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
     <img src="https://img.shields.io/badge/Rust-2021-%23000000?logo=rust" alt="Rust">
-    <img src="https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint" alt="Slint">
+    <img src="https://img.shields.io/badge/GPUI-0.2-%23555555?logo=rust" alt="GPUI">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue" alt="Platform">
   </p>
 </div>
@@ -33,7 +33,7 @@
 
 ## 为什么是 Clippi？
 
-- Slint 原生前端渲染，无需 webview 进程支持，低资源占用与美观度并存
+- GPUI 原生 GPU 渲染，无需 webview 进程支持，低资源占用与美观度并存
 - Rust 后端响应快速，具备良好的性能和跨平台能力
 - 多后端云同步架构，支持OneDrive/iCloud/WebDAV，低门槛易扩展
 
@@ -126,7 +126,7 @@
 
 | 组件 | 技术 |
 |------|------|
-| UI 框架 | [Slint](https://slint.dev/) 1.16 |
+| UI 框架 | [GPUI](https://www.gpui.rs/) 0.2 |
 | 剪贴板 | [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) |
 | 数据存储 | [rusqlite](https://github.com/rusqlite/rusqlite) (bundled SQLite, WAL 模式) |
 | 系统托盘 | [tray-icon](https://github.com/tauri-apps/tray-icon) |

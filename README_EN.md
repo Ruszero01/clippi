@@ -5,7 +5,7 @@
 
   # Clippi
 
-  Lightweight Clipboard Manager · Built with Rust + Slint<br>
+  Lightweight Clipboard Manager · Built with Rust + GPUI<br>
   Available for Windows and macOS
 
   <p>
@@ -20,7 +20,7 @@
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
     <img src="https://img.shields.io/badge/Rust-2021-%23000000?logo=rust" alt="Rust">
-    <img src="https://img.shields.io/badge/Slint-1.16-%232374FF?logo=slint" alt="Slint">
+    <img src="https://img.shields.io/badge/GPUI-0.2-%23555555?logo=rust" alt="GPUI">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue" alt="Platform">
   </p>
 </div>
@@ -33,7 +33,7 @@
 
 ## Why Clippi?
 
-- Slint native frontend rendering: No webview required, combining low resource footprint with high aesthetics.
+- GPUI native GPU rendering: No webview required, combining low resource footprint with high aesthetics.
 - Fast Rust backend: High performance and robust cross-platform capabilities.
 - Multi-backend cloud sync: Supports OneDrive/iCloud/WebDAV with an extensible architecture.
 
@@ -126,7 +126,7 @@
 
 | Component | Technology |
 |-----------|------------|
-| UI Framework | [Slint](https://slint.dev/) 1.16 |
+| UI Framework | [GPUI](https://www.gpui.rs/) 0.2 |
 | Clipboard | [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) |
 | Storage | [rusqlite](https://github.com/rusqlite/rusqlite) (bundled SQLite, WAL mode) |
 | System Tray | [tray-icon](https://github.com/tauri-apps/tray-icon) |
