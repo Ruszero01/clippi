@@ -139,6 +139,12 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      - name: Setup macOS environment
+        if: runner.os == 'macOS'
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> $GITHUB_ENV
       - name: Configure NSIS
         if: runner.os == 'Windows'
         run: |

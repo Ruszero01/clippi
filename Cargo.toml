@@ -20,7 +20,7 @@ long_description = "Clippi is a lightweight clipboard manager that helps you man
 osx_minimum_system_version = "12.0"
 
 [dependencies]
-gpui = "0.2.2"
+gpui = { version = "0.2.2", default-features = false }
 gpui-component = "0.5"
 gpui_transitions = "0.1.5"
 clipboard-rs = "0.2"
@@ -46,11 +46,13 @@ hostname = "0.4"
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+gpui = { version = "0.2.2", features = ["windows-manifest"] }
 windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_Memory"] }
 windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Media_Ocr", "Graphics_Imaging", "Storage", "Storage_Streams", "Globalization"] }
 winreg = "0.56"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gpui = { version = "0.2.2", features = ["font-kit"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSBundle", "NSDictionary", "NSArray", "NSThread", "NSLocale"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow", "NSEvent"] }
