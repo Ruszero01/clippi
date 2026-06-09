@@ -138,6 +138,14 @@ impl RootView {
                     });
                     cx.notify();
                 }
+                WindowManagerEvent::WindowHidden => {
+                    this.list_view.update(cx, |list, cx| {
+                        list.dismiss_all_panels(cx);
+                    });
+                    this.search_bar.update(cx, |bar, cx| {
+                        bar.close_tag_panel(cx);
+                    });
+                }
             },
         );
 
@@ -586,6 +594,7 @@ impl Render for RootView {
                     let (picker_x, picker_y) = list.read(cx).tag_picker_position();
                     let is_batch = list.read(cx).tag_picker_is_batch();
                     let rows = list.update(cx, |list, cx| list.tag_picker_rows(cx));
+                    let create_input = list.read(cx).tag_create_input().clone();
                     let clamped_x = picker_x.clamp(4.0, (win_w - 304.0 - 4.0).max(4.0));
                     let clamped_y = picker_y.clamp(4.0, (win_h - 300.0 - 4.0).max(4.0));
 
@@ -608,7 +617,7 @@ impl Render for RootView {
                             .top(px(clamped_y))
                             .occlude()
                             .child(
-                                TagPickerPanel::new(rows, is_batch, self.theme.clone())
+                                TagPickerPanel::new(rows, is_batch, create_input, self.theme.clone())
                                     .on_toggle({
                                         let l = list_for_panel.clone();
                                         move |tag_id, state, _window, cx| {
@@ -630,6 +639,14 @@ impl Render for RootView {
                                         move |_window, cx| {
                                             l.update(cx, |lst, cx| {
                                                 lst.hide_tag_picker(cx);
+                                            });
+                                        }
+                                    })
+                                    .on_create({
+                                        let l = list_for_panel.clone();
+                                        move |name, _window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.create_tag_from_picker(&name, cx);
                                             });
                                         }
                                     }),

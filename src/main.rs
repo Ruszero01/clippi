@@ -249,6 +249,14 @@ fn main() {
                                     );
                                 }
                             }
+
+                            // --- Defer hotkey registration until after GPUI's first ---
+                            // --- render, so the input/IME pipeline is ready before ---
+                            // --- the user's first hotkey press can trigger show_and_focus. ---
+                            let wm_for_hotkey = window_manager.clone();
+                            cx.defer(move |cx| {
+                                wm_for_hotkey.update(cx, |wm, cx| wm.init_hotkey(cx));
+                            });
                         }
                     }
                 }

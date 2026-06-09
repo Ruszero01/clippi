@@ -4,9 +4,11 @@ use std::rc::Rc;
 
 type TagToggleHandler = Rc<dyn Fn(i64, TagState, &mut gpui::Window, &mut gpui::App)>;
 type PanelHandler = Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
+type CreateTagHandler = Rc<dyn Fn(String, &mut gpui::Window, &mut gpui::App)>;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::{Input, InputState};
 
 use crate::core::i18n_keys::I18nKey;
 
@@ -25,20 +27,29 @@ pub enum TagState {
 pub struct TagPickerPanel {
     tags: Vec<(TagInfo, TagState)>,
     is_batch: bool,
+    create_input: Entity<InputState>,
     on_toggle: Option<TagToggleHandler>,
     on_clear: Option<PanelHandler>,
     on_close: Option<PanelHandler>,
+    on_create: Option<CreateTagHandler>,
     theme: ClippiTheme,
 }
 
 impl TagPickerPanel {
-    pub fn new(tags: Vec<(TagInfo, TagState)>, is_batch: bool, theme: ClippiTheme) -> Self {
+    pub fn new(
+        tags: Vec<(TagInfo, TagState)>,
+        is_batch: bool,
+        create_input: Entity<InputState>,
+        theme: ClippiTheme,
+    ) -> Self {
         Self {
             tags,
             is_batch,
+            create_input,
             on_toggle: None,
             on_clear: None,
             on_close: None,
+            on_create: None,
             theme,
         }
     }
@@ -60,6 +71,14 @@ impl TagPickerPanel {
         self.on_close = Some(Rc::new(handler));
         self
     }
+
+    pub fn on_create(
+        mut self,
+        handler: impl Fn(String, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_create = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for TagPickerPanel {
@@ -67,9 +86,11 @@ impl RenderOnce for TagPickerPanel {
         let Self {
             tags,
             is_batch,
+            create_input,
             on_toggle,
             on_clear,
             on_close,
+            on_create,
             theme,
         } = self;
 
@@ -121,6 +142,88 @@ impl RenderOnce for TagPickerPanel {
                     .child(icon_button("\u{e607}", text_2, btn_hover, on_clear))
                     .child(icon_button("\u{e7b7}", text_2, btn_hover, on_close)),
             )
+            .child(div().h(px(1.)).w_full().bg(sep_line))
+            // --- Create tag row ---
+            .child({
+                let on_create = on_create.clone();
+                let input = create_input.clone();
+                div()
+                    .h(px(26.))
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(26.))
+                            .rounded(px(5.))
+                            .bg(input_bg)
+                            .px(px(7.))
+                            .flex()
+                            .items_center()
+                            .child(
+                                Input::new(&create_input)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .focus_bordered(false)
+                                    .w_full()
+                                    .h(px(20.))
+                                    .text_size(px(11.))
+                                    .text_color(text_1),
+                            )
+                            .on_key_down({
+                                let on_create = on_create.clone();
+                                let input = input.clone();
+                                move |ev: &KeyDownEvent, window, cx| {
+                                    if ev.keystroke.key.as_str() == "enter" {
+                                        cx.stop_propagation();
+                                        let name = input.read(cx).value().to_string();
+                                        if !name.trim().is_empty() {
+                                            if let Some(ref handler) = on_create {
+                                                handler(name.trim().to_string(), window, cx);
+                                            }
+                                            input.update(cx, |input, cx| {
+                                                input.set_value("", window, cx);
+                                            });
+                                        }
+                                    }
+                                }
+                            }),
+                    )
+                    .child({
+                        let on_create = on_create.clone();
+                        let input = input.clone();
+                        div()
+                            .w(px(26.))
+                            .h(px(26.))
+                            .rounded(px(5.))
+                            .bg(btn_hover)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(|style| style.bg(accent))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(accent)
+                                    .hover(|style| style.text_color(rgb(0xffffff)))
+                                    .child(I18nKey::TagFilterAdd.text()),
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                let name = input.read(cx).value().to_string();
+                                if !name.trim().is_empty() {
+                                    if let Some(ref handler) = on_create {
+                                        handler(name.trim().to_string(), window, cx);
+                                    }
+                                    input.update(cx, |input, cx| {
+                                        input.set_value("", window, cx);
+                                    });
+                                }
+                            })
+                    })
+            })
             .child(div().h(px(1.)).w_full().bg(sep_line))
             .when(is_empty, |el| {
                 el.child(

@@ -42,6 +42,8 @@ pub enum WindowManagerEvent {
     HotkeyRecordingComplete,
     /// Sync backend status or settings changed.
     SyncChanged,
+    /// Window was hidden — RootView should dismiss all floating panels.
+    WindowHidden,
 }
 
 /// Unified window manager entity.
@@ -95,14 +97,9 @@ impl WindowManager {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let settings = state.read(cx).settings.clone();
 
-        // --- Initialize hotkey listener ---
-        let hotkey = match create_hotkey_listener(&settings.hotkey) {
-            Ok(hk) => Some(hk),
-            Err(e) => {
-                log::error!("Failed to create hotkey listener: {e}");
-                None
-            }
-        };
+        // --- Hotkey is NOT created here — it's deferred via init_hotkey() ---
+        // --- so the user can't trigger show_and_focus before GPUI has ---
+        // --- finished initialising its input/IME pipeline. ---
 
         // --- Initialize focus watcher ---
         let focus_watcher = match start_focus_watcher() {
@@ -127,7 +124,7 @@ impl WindowManager {
             auto_hide: settings.auto_hide,
             visible: true,
             suppress_until: Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS)),
-            hotkey,
+            hotkey: None,
             focus_watcher,
             foreground_app_name,
             saved_x: settings.saved_window_x,
@@ -685,9 +682,30 @@ impl WindowManager {
         cx.notify();
     }
 
+    /// Initialise the hotkey listener after GPUI has finished its first render.
+    ///
+    /// Creating the hotkey during `WindowManager::new()` (inside the `open_window`
+    /// callback) registers the OS-level hotkey BEFORE GPUI's input/IME pipeline is
+    /// ready. If the user presses the hotkey immediately the resulting `show_and_focus`
+    /// shows the window with a non-functional text input pipeline.
+    ///
+    /// Deferring hotkey creation to after the first frame ensures the input pipeline
+    /// is ready before the first `show_and_focus` can be triggered.
+    pub fn init_hotkey(&mut self, cx: &mut Context<Self>) {
+        let hotkey_str = self.state.read(cx).settings.hotkey.clone();
+        self.hotkey = match create_hotkey_listener(&hotkey_str) {
+            Ok(hk) => Some(hk),
+            Err(e) => {
+                log::error!("Failed to create hotkey listener: {e}");
+                None
+            }
+        };
+    }
+
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
         self.dismiss_ui(cx);
+        cx.emit(WindowManagerEvent::WindowHidden);
 
         //  Release memory: clear items list (mirrors Slint release_model_resources)
         self.state.update(cx, |state, _cx| state.clear_items());

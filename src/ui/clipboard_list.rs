@@ -71,6 +71,8 @@ pub struct ClipboardListView {
     /// Shared InputState entity for the inline note editor.
     /// Created once at init, value is updated when editing starts.
     note_input: Entity<InputState>,
+    /// Shared InputState for the tag picker's create-tag input.
+    tag_create_input: Entity<InputState>,
     /// Active confirmation dialog (None = hidden).
     confirm_dialog: Option<ConfirmDialogState>,
     theme: ClippiTheme,
@@ -110,6 +112,7 @@ impl ClipboardListView {
             selected_count: 0,
             editing_note_id: -1,
             note_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::ListNotePlaceholder.text())),
+            tag_create_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())),
             confirm_dialog: None,
             theme,
         }
@@ -298,6 +301,16 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    /// Dismiss all floating panels (context menu, tag picker).
+    pub fn dismiss_all_panels(&mut self, cx: &mut Context<Self>) {
+        self.context_menu_visible = false;
+        self.context_menu_item = None;
+        self.hovered_index = None;
+        self.tag_picker_visible = false;
+        self.tag_picker_item_id = -1;
+        cx.notify();
+    }
+
     pub fn tag_picker_visible(&self) -> bool {
         self.tag_picker_visible
     }
@@ -308,6 +321,10 @@ impl ClipboardListView {
 
     pub fn tag_picker_is_batch(&self) -> bool {
         self.tag_picker_is_batch
+    }
+
+    pub fn tag_create_input(&self) -> &Entity<InputState> {
+        &self.tag_create_input
     }
 
     pub fn hide_tag_picker(&mut self, cx: &mut Context<Self>) {
@@ -379,6 +396,11 @@ impl ClipboardListView {
             self.state
                 .update(cx, |s, _cx| s.toggle_item_tag(item_id, tag_id));
         }
+        self.sync_items_from_state(cx);
+    }
+
+    pub fn create_tag_from_picker(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.state.update(cx, |s, _cx| s.create_tag(name));
         self.sync_items_from_state(cx);
     }
 
@@ -747,12 +769,33 @@ impl Render for ClipboardListView {
                     .as_str()
                 {
                     "up" => {
+                        this.dismiss_all_panels(cx);
                         this.select_previous(ScrollStrategy::Top, cx);
                         cx.stop_propagation();
                     }
                     "down" => {
+                        this.dismiss_all_panels(cx);
                         this.select_next(ScrollStrategy::Bottom, cx);
                         cx.stop_propagation();
+                    }
+                    "enter" => {
+                        this.dismiss_all_panels(cx);
+                        let plain = this.state.read(cx).settings.copy_as_plain_text;
+                        if this.selected_count > 1 {
+                            let ids = this.selected_ids.clone();
+                            this.state.update(cx, |s, _cx| {
+                                s.batch_paste(&ids, plain);
+                            });
+                            cx.stop_propagation();
+                        } else if let Some(idx) = this.selected_index {
+                            if let Some(item) = this.items.get(idx) {
+                                let item_id = item.id;
+                                this.state.update(cx, |s, _cx| {
+                                    s.paste_item(item_id, plain);
+                                });
+                                cx.stop_propagation();
+                            }
+                        }
                     }
                     _ => {}
                 }),
