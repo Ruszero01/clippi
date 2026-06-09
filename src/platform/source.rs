@@ -159,23 +159,10 @@ mod macos_impl {
     }
 
     pub fn get_file_icon_base64(file_path: &str, _is_dir: bool) -> Option<String> {
-        use objc2::msg_send;
-        use objc2::rc::Retained;
-        use objc2_foundation::NSURL;
-
-        unsafe {
-            // Build file:// URL from the path string
-            let path_ns: Retained<objc2_foundation::NSString> =
-                objc2_foundation::NSString::from_str(file_path);
-            let url = NSURL::fileURLWithPath(&path_ns);
-            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-
-            // iconForFile returns the icon for the given file URL
-            let icon: Option<Retained<objc2_app_kit::NSImage>> = msg_send![&workspace, iconForFile: &url];
-            let icon = icon?;
-
-            super::super::util::nsimage_to_base64_png(&icon, 32)
-        }
+        let path = objc2_foundation::NSString::from_str(file_path);
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let icon = workspace.iconForFile(&path);
+        super::super::util::nsimage_to_base64_png(&icon, 32)
     }
 }
 

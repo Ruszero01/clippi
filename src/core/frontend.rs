@@ -84,6 +84,10 @@ pub fn effective_window_size(settings: &crate::core::settings::AppSettings) -> (
     (w, h)
 }
 
+pub fn has_saved_window_geometry(settings: &crate::core::settings::AppSettings) -> bool {
+    settings.saved_window_width > 0.0 && settings.saved_window_height > 0.0
+}
+
 /// Calculate the initial window position based on settings.
 ///
 /// Returns `(x, y)` in **physical pixels** (Windows) or logical points (macOS),
@@ -137,7 +141,7 @@ fn calc_remember(
     win_h: i32,
 ) -> Option<(i32, i32)> {
     let (sx, sy) = (settings.saved_window_x, settings.saved_window_y);
-    if sx < 0 || sy < 0 {
+    if !has_saved_window_geometry(settings) {
         return None;
     }
     // saved x/y are logical pixels; convert to physical for monitor check
@@ -149,4 +153,21 @@ fn calc_remember(
     }
     let area = monitor::get_monitor_work_area(sx_phys, sy_phys)?;
     Some(clamp_to_work_area(sx_phys, sy_phys, win_w, win_h, &area))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_saved_window_geometry;
+    use crate::core::settings::AppSettings;
+
+    #[test]
+    fn negative_coordinates_are_valid_when_window_size_was_saved() {
+        let mut settings = AppSettings::default();
+        settings.saved_window_x = -1440;
+        settings.saved_window_y = 120;
+        settings.saved_window_width = 360.0;
+        settings.saved_window_height = 480.0;
+
+        assert!(has_saved_window_geometry(&settings));
+    }
 }

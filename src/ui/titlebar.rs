@@ -67,6 +67,10 @@ impl Render for Titlebar {
         let fav_titlebar = cx.entity().clone();
         let pin_titlebar = cx.entity().clone();
         let settings_titlebar = cx.entity().clone();
+        #[cfg(target_os = "windows")]
+        let logo_path = "assets/LOGO_notext.ico";
+        #[cfg(not(target_os = "windows"))]
+        let logo_path = "assets/LOGO_notext.png";
 
         div()
             .flex()
@@ -89,7 +93,7 @@ impl Render for Titlebar {
                     .window_control_area(WindowControlArea::Drag)
                     // --- Logo (20x20, loaded from assets) ---
                     .child(
-                        gpui::img(std::path::Path::new("assets/LOGO_notext.ico"))
+                        gpui::img(std::path::Path::new(logo_path))
                             .w(px(20.))
                             .h(px(20.)),
                     )

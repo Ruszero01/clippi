@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use gpui::*;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 // --- Core modules are UI-framework independent — keep them ---
@@ -106,15 +106,39 @@ fn main() {
         let (initial_logical_w, initial_logical_h) =
             core::frontend::effective_window_size(&settings);
 
-        cx.open_window(
-            WindowOptions {
-                window_background: WindowBackgroundAppearance::Transparent,
-                titlebar: Some(TitlebarOptions {
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
+        let mut window_options = WindowOptions {
+            window_background: WindowBackgroundAppearance::Transparent,
+            titlebar: Some(TitlebarOptions {
+                appears_transparent: true,
                 ..Default::default()
-            },
+            }),
+            window_min_size: Some(size(
+                px(core::frontend::MIN_WINDOW_WIDTH),
+                px(core::frontend::MIN_WINDOW_HEIGHT),
+            )),
+            ..Default::default()
+        };
+
+        #[cfg(target_os = "macos")]
+        {
+            let origin = initial_phys_pos
+                .map(|(x, y)| point(px(x as f32), px(y as f32)))
+                .unwrap_or_else(|| {
+                    Bounds::centered(
+                        None,
+                        size(px(initial_logical_w), px(initial_logical_h)),
+                        cx,
+                    )
+                    .origin
+                });
+            window_options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(
+                origin,
+                size(px(initial_logical_w), px(initial_logical_h)),
+            )));
+        }
+
+        cx.open_window(
+            window_options,
             |window, cx| {
                 #[cfg(target_os = "windows")]
                 unsafe {
@@ -167,6 +191,21 @@ fn main() {
                                     );
                                 }
                             }
+                        }
+                    }
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::AppKit(wh) = handle.as_raw() {
+                            let ns_view =
+                                wh.ns_view.as_ptr() as *mut objc2::runtime::AnyObject;
+                            let ns_window: *mut objc2_app_kit::NSWindow =
+                                unsafe { objc2::msg_send![ns_view, window] };
+                            window_manager.update(cx, |wm, _cx| {
+                                wm.set_ns_window(ns_window as isize)
+                            });
                         }
                     }
                 }

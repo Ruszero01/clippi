@@ -79,6 +79,8 @@ pub struct WindowManager {
     // --- Raw window handle (HWND on Windows) ---
     #[allow(dead_code)]
     hwnd: isize,
+    #[cfg(target_os = "macos")]
+    ns_window: isize,
     // --- System tray ---
     tray: Option<TrayManager>,
 
@@ -138,6 +140,8 @@ impl WindowManager {
             sync_service,
             tray,
             hwnd: 0,
+            #[cfg(target_os = "macos")]
+            ns_window: 0,
             _poll_task: None,
         };
 
@@ -355,8 +359,7 @@ impl WindowManager {
 
     /// Capture the current window size from the platform and update
     /// saved_w / saved_h. Called from the poll loop while the window
-    /// is visible. On Windows this uses GetWindowRect; on other platforms
-    /// it is a no-op (window size is not yet tracked).
+    /// is visible.
     fn capture_window_geometry(&mut self, cx: &mut Context<Self>) {
         if !self.visible {
             return;
@@ -409,7 +412,7 @@ impl WindowManager {
                 // --- Persist to settings ---
                 self.state.update(cx, |state, _cx| {
                     let settings = &mut state.settings;
-                    if self.saved_x >= 0 && self.saved_y >= 0 {
+                    if self.saved_w > 0.0 && self.saved_h > 0.0 {
                         settings.saved_window_x = self.saved_x;
                         settings.saved_window_y = self.saved_y;
                     }
@@ -422,7 +425,45 @@ impl WindowManager {
             }
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            if self.ns_window == 0 {
+                return;
+            }
+            let Some(mtm) = objc2::MainThreadMarker::new() else {
+                return;
+            };
+            let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
+                return;
+            };
+            let frame = unsafe {
+                (&*(self.ns_window as *const objc2_app_kit::NSWindow)).frame()
+            };
+            let rect = monitor::cocoa_rect_to_top_left(
+                main_screen.frame().size.height,
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            );
+            if rect.width <= 0 || rect.height <= 0 {
+                return;
+            }
+
+            let changed = self.saved_x != rect.x
+                || self.saved_y != rect.y
+                || (self.saved_w - rect.width as f32).abs() > 1.0
+                || (self.saved_h - rect.height as f32).abs() > 1.0;
+            if changed {
+                self.saved_x = rect.x;
+                self.saved_y = rect.y;
+                self.saved_w = rect.width as f32;
+                self.saved_h = rect.height as f32;
+                self.persist_geometry(cx);
+            }
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             let _ = cx;
         }
@@ -431,11 +472,12 @@ impl WindowManager {
     /// Prepare for graceful shutdown: save geometry, flush WAL,
     /// release platform resources.
     fn prepare_shutdown(&mut self, cx: &mut Context<Self>) {
+        self.capture_window_geometry(cx);
         let (sx, sy, sw, sh) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
         self.state.update(cx, |state, _cx| {
             let _ = state.db.checkpoint();
             let settings = &mut state.settings;
-            if sx >= 0 && sy >= 0 {
+            if sw > 0.0 && sh > 0.0 {
                 settings.saved_window_x = sx;
                 settings.saved_window_y = sy;
             }
@@ -552,7 +594,7 @@ impl WindowManager {
 
     fn calc_remember(&self, win_w: i32, win_h: i32) -> Option<(i32, i32)> {
         let (sx, sy) = (self.saved_x, self.saved_y);
-        if sx < 0 || sy < 0 {
+        if self.saved_w <= 0.0 || self.saved_h <= 0.0 {
             return None;
         }
         if !monitor::is_point_on_monitor(sx, sy) {
@@ -606,6 +648,11 @@ impl WindowManager {
                     unsafe { SetForegroundWindow(hwnd) };
                 }
             }
+            #[cfg(target_os = "macos")]
+            {
+                cx.activate(true);
+                self.activate_macos_window();
+            }
             cx.notify();
             return;
         }
@@ -640,10 +687,11 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            // On macOS, activate the app and let the window become visible
-            let mtm = objc2::MainThreadMarker::new().unwrap();
-            let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-            ns_app.activateIgnoringOtherApps(true);
+            if let Some((x, y)) = self.calculate_position() {
+                self.position_macos_window(x, y);
+            }
+            cx.activate(true);
+            self.activate_macos_window();
         }
 
         cx.notify();
@@ -688,7 +736,8 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            // --- macOS: hide is handled via NSApplication ---
+            self.capture_window_geometry(cx);
+            self.hide_macos_window();
         }
 
         self.visible = false;
@@ -712,8 +761,71 @@ impl WindowManager {
         crate::platform::focus::set_clippi_hwnd(hwnd);
     }
 
-    #[cfg(not(target_os = "windows"))]
-    pub fn set_hwnd(&mut self, _hwnd: isize) {}
+    #[cfg(target_os = "macos")]
+    pub fn set_ns_window(&mut self, ns_window: isize) {
+        self.ns_window = ns_window;
+        if ns_window != 0 {
+            unsafe {
+                let window = &*(ns_window as *const objc2_app_kit::NSWindow);
+                window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn activate_macos_window(&self) {
+        if self.ns_window == 0 {
+            return;
+        }
+        unsafe {
+            let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
+            window.makeKeyAndOrderFront(None);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn hide_macos_window(&self) {
+        if self.ns_window == 0 {
+            return;
+        }
+        unsafe {
+            let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
+            window.orderOut(None);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn position_macos_window(&self, x: i32, y: i32) {
+        if self.ns_window == 0 {
+            return;
+        }
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
+            return;
+        };
+        let top = main_screen.frame().size.height - y as f64;
+        unsafe {
+            let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
+            window.setFrameTopLeftPoint(objc2_foundation::NSPoint::new(x as f64, top));
+        }
+    }
+
+    fn persist_geometry(&self, cx: &mut Context<Self>) {
+        let (x, y, width, height) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
+        self.state.update(cx, |state, _cx| {
+            if width > 0.0 && height > 0.0 {
+                state.settings.saved_window_x = x;
+                state.settings.saved_window_y = y;
+            }
+            if width > 0.0 && height > 0.0 {
+                state.settings.saved_window_width = width;
+                state.settings.saved_window_height = height;
+            }
+            state.settings.save();
+        });
+    }
 
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;
