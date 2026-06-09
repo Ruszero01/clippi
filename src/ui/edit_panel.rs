@@ -445,14 +445,15 @@ fn render_rich_preview(
     if selected_type == "html" {
         // --- Try to render colored spans first, fall back to plain HTML ---
         let normalized = rich_preview::normalize_clipboard_html_for_render(text);
-        if let Some(lines) = rich_preview::parse_styled_html_lines(&normalized) {
+        let stripped = rich_preview::strip_html_links(&normalized);
+        if let Some(lines) = rich_preview::parse_styled_html_lines(&stripped) {
             return div()
                 .child(rich_preview::render_styled_html_lines(lines, fallback_color))
                 .into_any_element();
         }
         TextView::html(
             ("edit-html-preview", preview_key),
-            normalized,
+            stripped,
             window,
             cx,
         )
@@ -462,7 +463,7 @@ fn render_rich_preview(
     } else {
         TextView::markdown(
             ("edit-markdown-preview", preview_key),
-            text.to_string(),
+            rich_preview::strip_markdown_links(text),
             window,
             cx,
         )

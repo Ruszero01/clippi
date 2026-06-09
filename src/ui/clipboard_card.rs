@@ -207,27 +207,28 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
     if item.content_type == ContentType::RichText {
         let rich = RichData::from_json(&item.rich_data);
         if item.meta_type == "markdown" {
-            return RichPreview::Markdown(item.full_text.clone());
+            return RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text));
         }
         if item.meta_type == "html" {
             let html = rich.html.unwrap_or_else(|| item.full_text.clone());
-            return RichPreview::Html(rich_preview::normalize_clipboard_html_for_render(&html));
+            let html = rich_preview::normalize_clipboard_html_for_render(&html);
+            return RichPreview::Html(rich_preview::strip_html_links(&html));
         }
         if let Some(html) = rich.html.filter(|html| !html.trim().is_empty()) {
             let html = rich_preview::normalize_clipboard_html_for_render(&html);
             if let Some(lines) = rich_preview::parse_styled_html_lines(&html) {
                 return RichPreview::StyledHtml(lines);
             }
-            return RichPreview::Html(html);
+            return RichPreview::Html(rich_preview::strip_html_links(&html));
         }
         if is_markdown_like(&item.full_text) {
-            return RichPreview::Markdown(item.full_text.clone());
+            return RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text));
         }
         if let Some(rtf) = rich.rtf.filter(|rtf| !rtf.trim().is_empty()) {
             return RichPreview::Markdown(rtf_to_plain_text(&rtf));
         }
     } else if is_markdown_like(&item.full_text) {
-        return RichPreview::Markdown(item.full_text.clone());
+        return RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text));
     }
 
     RichPreview::Plain(item.full_text.chars().take(300).collect())
@@ -958,24 +959,14 @@ impl RenderOnce for ClipboardCard {
                                 .selectable(false),
                             ),
                             RichPreview::Markdown(markdown) => content_box.child(
-                                div()
-                                    .relative()
-                                    .w_full()
-                                    .h_full()
-                                    .overflow_hidden()
-                                    .capture_any_mouse_up(|_ev, _window, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .child(
-                                        TextView::markdown(
-                                            ("clipboard-card-markdown", item.content_hash),
-                                            markdown,
-                                            window,
-                                            cx,
-                                        )
-                                        .style(style)
-                                        .selectable(false),
-                                    ),
+                                TextView::markdown(
+                                    ("clipboard-card-markdown", item.content_hash),
+                                    markdown,
+                                    window,
+                                    cx,
+                                )
+                                .style(style)
+                                .selectable(false),
                             ),
                             RichPreview::StyledHtml(lines) => {
                                 content_box.child(

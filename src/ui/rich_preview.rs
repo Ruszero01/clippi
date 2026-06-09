@@ -71,6 +71,162 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
     }
 }
 
+/// Strip `[text](url)` markdown links, keeping only the display text.
+///
+/// GPUI's `TextView::markdown` renders links with hit areas that extend past
+/// `overflow_hidden` boundaries — clicking on the gap *between* cards still
+/// navigates to the URL because the link's hit-test area leaks out.
+/// Stripping the URL at the source prevents this entirely.
+///
+/// Images (`![alt](url)`) are intentionally left untouched — they are not
+/// interactive links and must keep their URL for the image to render.
+///
+/// Works at the **character** level to preserve multi-byte UTF-8 sequences
+/// (CJK, emoji, etc.). Byte-level iteration would split these into garbled
+/// Latin-1 fragments.
+pub fn strip_markdown_links(md: &str) -> String {
+    let chars: Vec<char> = md.chars().collect();
+    let len = chars.len();
+    let mut result = String::with_capacity(md.len());
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '[' {
+            let is_image = i > 0 && chars[i - 1] == '!';
+
+            // Find the matching ']'
+            let mut j = i + 1;
+            let mut depth = 1u32;
+            while j < len && depth > 0 {
+                match chars[j] {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    '\n' => break,
+                    _ => {}
+                }
+                j += 1;
+            }
+
+            if !is_image
+                && depth == 0
+                && j < len
+                && chars[j] == '('
+            {
+                // Build the URL string to check if it looks like a real URL
+                let url_str: String = chars[j + 1..].iter().collect();
+                if looks_like_url(&url_str) {
+                    // --- Strip the link: keep [text], drop (url) ---
+                    for &ch in &chars[(i + 1)..(j - 1)] {
+                        result.push(ch);
+                    }
+                    // Skip past ](url)
+                    i = j + 1;
+                    depth = 1;
+                    while i < len && depth > 0 {
+                        match chars[i] {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            '\n' => break,
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+
+            // Image, false positive, or unmatched — output [ as-is
+            result.push('[');
+            i += 1;
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Strip `<a href="...">text</a>` HTML links, keeping only the inner text.
+///
+/// Same rationale as `strip_markdown_links` — GPUI's `TextView::html` renders
+/// clickable links whose hit areas leak past `overflow_hidden`.
+///
+/// Works at the **character** level to preserve multi-byte UTF-8 sequences.
+pub fn strip_html_links(html: &str) -> String {
+    let chars: Vec<char> = html.chars().collect();
+    let len = chars.len();
+    let mut result = String::with_capacity(html.len());
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '<' && tag_is_a(&chars, i) {
+            // Skip the opening <a ...> tag
+            while i < len && chars[i] != '>' {
+                i += 1;
+            }
+            if i < len {
+                i += 1; // skip >
+            }
+            // Copy inner text until matching </a>
+            let mut depth = 1u32;
+            while i < len && depth > 0 {
+                if chars[i] == '<' {
+                    if tag_is_a(&chars, i) {
+                        // Nested <a> — skip opening tag
+                        while i < len && chars[i] != '>' {
+                            i += 1;
+                        }
+                        if i < len {
+                            i += 1;
+                        }
+                        depth += 1;
+                        continue;
+                    }
+                    if tag_is_close_a(&chars, i) {
+                        // </a> — skip closing tag
+                        while i < len && chars[i] != '>' {
+                            i += 1;
+                        }
+                        if i < len {
+                            i += 1;
+                        }
+                        depth -= 1;
+                        continue;
+                    }
+                }
+                result.push(chars[i]);
+                i += 1;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Check if chars starting at `i` form `<a ` or `<a>` (case-insensitive).
+fn tag_is_a(chars: &[char], i: usize) -> bool {
+    chars.get(i..).is_some_and(|rest| {
+        rest.len() >= 3
+            && rest[0] == '<'
+            && rest[1].eq_ignore_ascii_case(&'a')
+            && (rest[2] == ' ' || rest[2] == '>')
+    })
+}
+
+/// Check if chars starting at `i` form `</a` (case-insensitive).
+fn tag_is_close_a(chars: &[char], i: usize) -> bool {
+    chars.get(i..).is_some_and(|rest| {
+        rest.len() >= 3
+            && rest[0] == '<'
+            && rest[1] == '/'
+            && rest[2].eq_ignore_ascii_case(&'a')
+    })
+}
+
 /// Normalize a clipboard HTML payload for rendering.
 ///
 /// Removes the CF_HTML header / fragment markers so the parser only sees
@@ -247,4 +403,21 @@ fn parse_cf_html_offset(header: &str, key: &str) -> Option<usize> {
         line.strip_prefix(key)
             .and_then(|value| value.trim().parse::<usize>().ok())
     })
+}
+
+/// Heuristic to distinguish real URLs from code patterns like `array[i](fn)`.
+///
+/// Only treats `(...)` after `[...]` as a markdown link URL when the content
+/// starts with a known scheme, avoiding false positives on code syntax.
+fn looks_like_url(after_paren: &str) -> bool {
+    let s = after_paren.trim_start();
+    s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("ftp://")
+        || s.starts_with("mailto:")
+        || s.starts_with("tel:")
+        || s.starts_with("//")  // protocol-relative
+        || s.starts_with('#')   // anchor
+        || s.starts_with('/')   // absolute path
+        || s.contains("://")    // any other protocol
 }
