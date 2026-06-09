@@ -161,6 +161,9 @@ fn main() {
         let (initial_logical_w, initial_logical_h) =
             core::frontend::effective_window_size(&settings);
 
+        // --- window_options is mutated on macOS (window_bounds override) but not on ---
+        // --- Windows, so allow unused_mut to keep the common struct literal. ---
+        #[allow(unused_mut)]
         let mut window_options = WindowOptions {
             window_background: WindowBackgroundAppearance::Transparent,
             titlebar: Some(TitlebarOptions {

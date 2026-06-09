@@ -409,19 +409,7 @@ impl WindowManager {
                 self.saved_x = phys_x;
                 self.saved_y = phys_y;
 
-                // --- Persist to settings ---
-                self.state.update(cx, |state, _cx| {
-                    let settings = &mut state.settings;
-                    if self.saved_w > 0.0 && self.saved_h > 0.0 {
-                        settings.saved_window_x = self.saved_x;
-                        settings.saved_window_y = self.saved_y;
-                    }
-                    if self.saved_w > 0.0 && self.saved_h > 0.0 {
-                        settings.saved_window_width = self.saved_w;
-                        settings.saved_window_height = self.saved_h;
-                    }
-                    settings.save();
-                });
+                self.persist_geometry(cx);
             }
         }
 
