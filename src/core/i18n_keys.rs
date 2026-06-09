@@ -260,7 +260,7 @@ define_i18n! {
 
     // ─── Search bar / Filters ───
     FilterTextLabel:        ("文本", "Text"),
-    FilterRtfLabel:         ("RTF", "RTF"),
+    FilterRtfLabel:         ("富文本", "RTF"),
     FilterFilesLabel:       ("文件", "Files"),
     FilterLinksLabel:       ("链接", "Links"),
     FilterColorLabel:       ("颜色", "Color"),
@@ -296,13 +296,13 @@ define_i18n! {
     // ─── Edit panel ───
     EditPanelTitle:         ("编辑", "Edit"),
     EditContentPlaceholder: ("内容...", "Content..."),
-    EditTypeText:           ("文本", "Text"),
+    EditTypeText:           ("纯文本", "Text"),
     EditTypeColor:          ("颜色", "Color"),
     EditTypeMarkdown:       ("Markdown", "Markdown"),
     EditTypeHtml:           ("HTML", "HTML"),
-    EditTypeUrl:            ("URL", "URL"),
+    EditTypeUrl:            ("链接", "URL"),
     EditTypePath:           ("路径", "Path"),
-    EditTypeEmail:          ("Email", "Email"),
+    EditTypeEmail:          ("邮件", "Email"),
     EditTypePhone:          ("电话", "Phone"),
 
     // ─── Add backend (additional from settings/sync) ───
