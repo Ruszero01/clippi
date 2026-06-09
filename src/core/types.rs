@@ -192,15 +192,6 @@ impl FileData {
     }
 }
 
-/// Return a human-readable label for a file extension or directory
-pub fn get_extension_label(name: &str) -> String {
-    if let Some(idx) = name.rfind('.') {
-        name[idx..].to_lowercase()
-    } else {
-        crate::core::i18n_keys::I18nKey::ContentTypeFile.text().to_string()
-    }
-}
-
 /// Check if a file path has a common image extension
 pub fn is_image_extension(path: &str) -> bool {
     let lower = path.to_lowercase();

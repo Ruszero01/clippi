@@ -13,7 +13,10 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use windows_sys::Win32::UI::Shell::{
+        SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SMALLICON,
+        SHGFI_USEFILEATTRIBUTES,
+    };
 
     extern "system" {
         fn GetClipboardOwner() -> HWND;
@@ -91,6 +94,28 @@ mod windows_impl {
             super::super::util::hicon_to_base64_png(shfi.hIcon, 32)
         }
     }
+
+    pub fn get_file_icon_base64(file_path: &str) -> Option<String> {
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+        unsafe {
+            let wide_path: Vec<u16> =
+                file_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+            let mut shfi: SHFILEINFOW = std::mem::zeroed();
+            let result = SHGetFileInfoW(
+                wide_path.as_ptr(),
+                FILE_ATTRIBUTE_NORMAL,
+                &mut shfi,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES,
+            );
+            if result == 0 || shfi.hIcon.is_null() {
+                return None;
+            }
+
+            super::super::util::hicon_to_base64_png(shfi.hIcon, 32)
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -125,6 +150,27 @@ mod macos_impl {
             icon_base64,
         })
     }
+
+    pub fn get_file_icon_base64(file_path: &str) -> Option<String> {
+        use objc2::class;
+        use objc2::msg_send;
+        use objc2::rc::Retained;
+        use objc2_foundation::NSURL;
+
+        unsafe {
+            // Build file:// URL from the path string
+            let path_ns: Retained<objc2_foundation::NSString> =
+                objc2_foundation::NSString::from_str(file_path);
+            let url = NSURL::fileURLWithPath(&path_ns);
+            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+
+            // iconForFile returns the icon for the given file URL
+            let icon: Option<Retained<objc2_app_kit::NSImage>> = msg_send![&workspace, iconForFile: &url];
+            let icon = icon?;
+
+            super::super::util::nsimage_to_base64_png(&icon, 32)
+        }
+    }
 }
 
 pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
@@ -138,6 +184,25 @@ pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
+        None
+    }
+}
+
+/// Get a file's associated system icon as a base64-encoded PNG (32×32).
+/// Uses `SHGetFileInfoW` with `SHGFI_USEFILEATTRIBUTES` on Windows so the
+/// file doesn't need to exist — extension-based lookup.
+pub fn get_file_icon_base64(file_path: &str) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::get_file_icon_base64(file_path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_impl::get_file_icon_base64(file_path)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = file_path;
         None
     }
 }

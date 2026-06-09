@@ -19,7 +19,7 @@ use gpui_component::text::{TextView, TextViewStyle};
 use crate::core::color::detect_color;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
-    format_relative_time, get_extension_label, is_email, is_markdown_like, is_phone,
+    format_relative_time, is_email, is_markdown_like, is_phone,
     mask_sensitive_preview, parse_hex_color, url_domain, url_path, ClipboardItem, ContentType,
     FileData, FileInfo, RichData,
 };
@@ -88,16 +88,12 @@ fn type_label(item: &ClipboardItem) -> String {
         ContentType::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
             if fd.files.len() <= 1 {
-                // --- Single file: show extension label ---
-                let label = fd
-                    .files
-                    .first()
-                    .map(|f| get_extension_label(&f.name))
-                    .unwrap_or_default();
-                if label == "file" || label == "dir" {
-                    I18nKey::CardTypeFile.text().into()
+                // --- Single file: show "文件" or "文件夹" ---
+                let is_dir = fd.files.first().is_some_and(|f| f.is_dir);
+                if is_dir {
+                    I18nKey::CardTypeFolder.text().into()
                 } else {
-                    label.trim_start_matches('.').to_uppercase()
+                    I18nKey::CardTypeFile.text().into()
                 }
             } else {
                 I18nKey::CardTypeFiles.fmt(&[&fd.files.len().to_string()])
@@ -172,6 +168,27 @@ fn cached_source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
         std::fs::write(&path, png).ok()?;
     }
     Some(path)
+}
+
+/// Get a cached file system icon for a given file path.
+/// Icons are cached by extension in `images_dir()/file_icons/{ext}.png`.
+fn cached_file_icon_path(file_path: &str) -> Option<std::path::PathBuf> {
+    use std::path::Path;
+    let ext = Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("file");
+    let icon_dir = crate::core::paths::images_dir().join("file_icons");
+    let _ = std::fs::create_dir_all(&icon_dir);
+    let icon_path = icon_dir.join(format!("{ext}.png"));
+    if !icon_path.exists() {
+        let icon_base64 = crate::platform::source::get_file_icon_base64(file_path)?;
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(&icon_base64)
+            .ok()?;
+        std::fs::write(&icon_path, png).ok()?;
+    }
+    Some(icon_path)
 }
 
 enum RichPreview {
@@ -682,6 +699,63 @@ impl RenderOnce for ClipboardCard {
                                 .child(label.to_string()),
                         ),
                 ),
+            ContentType::File => {
+                // --- Single file: prefer file system icon over source app icon ---
+                let file_icon = serde_json::from_str::<FileData>(&item.file_data)
+                    .ok()
+                    .and_then(|fd| {
+                        if fd.files.len() == 1 {
+                            fd.files.first().and_then(|fi| cached_file_icon_path(&fi.path))
+                        } else {
+                            None
+                        }
+                    });
+                let effective_icon = file_icon.or(source_icon_path);
+                div()
+                    .w(px(36.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .w(px(36.))
+                            .h(px(28.))
+                            .rounded(px(6.))
+                            .bg(tag_bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if let Some(path) = effective_icon {
+                                gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                            } else {
+                                div()
+                                    .text_size(px(18.))
+                                    .font_family("iconfont")
+                                    .text_color(tag_text)
+                                    .child(icon.to_string())
+                                    .into_any_element()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w(px(36.))
+                            .h(px(14.))
+                            .rounded(px(3.))
+                            .bg(tag_bg)
+                            .px(px(3.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(tag_text)
+                                    .truncate()
+                                    .child(label.to_string()),
+                            ),
+                    )
+            }
             _ => div()
                 .w(px(36.))
                 .flex()
@@ -995,7 +1069,7 @@ impl RenderOnce for ClipboardCard {
                                             .overflow_hidden()
                                             .child(stem),
                                     )
-                                    .child(div().text_size(px(10.)).text_color(text_3).child(ext)),
+                                    .child(div().text_size(px(10.)).text_color(text_2).child(ext)),
                             )
                         }))
                 }

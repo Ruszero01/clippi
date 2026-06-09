@@ -312,6 +312,7 @@ define_i18n! {
     CardTypeText:           ("文本", "Text"),
     CardTypeImage:          ("图片", "Image"),
     CardTypeFile:           ("文件", "File"),
+    CardTypeFolder:         ("文件夹", "Folder"),
     CardTypeColor:          ("颜色", "Color"),
     CardTypeEmail:          ("邮件", "Email"),
     CardTypePhone:          ("电话", "Phone"),
