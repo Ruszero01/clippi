@@ -68,10 +68,11 @@ fn main() {
 
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
-        // --- Register icon font with macOS CoreText so GPUI's ---
-        // --- system_source can find it via select_family_by_name. ---
-        // --- zed-font-kit's MemSource silently drops fonts without ---
-        // --- a PostScript name, but CoreText has no such restriction. ---
+        // --- iconfont.ttf has an 'm' glyph added (mapped to first icon ---
+        // --- glyph) because GPUI's load_family skips any font without ---
+        // --- glyph_for_char('m') — icon-only fonts would be silently ---
+        // --- dropped and render as tofu (□). The CTFontManager path ---
+        // --- registers with the system as a fallback. ---
         #[cfg(target_os = "macos")]
         {
             use objc2::AnyThread;
@@ -107,9 +108,12 @@ fn main() {
             }
         }
 
-        // --- GPUI add_fonts as secondary path (works on Windows/Linux) ---
-        if let Err(err) = cx.text_system().add_fonts(vec![Cow::Owned(
-            include_bytes!("../assets/fonts/iconfont.ttf").to_vec(),
+        // --- CGFont→Handle::from_native preserves PostScript name & ---
+        // --- CoreText traits that GPUI's load_family requires. ---
+        // --- (Handle::from_memory via Cow::Owned may lose PostScript ---
+        // --- name, causing zed-font-kit to silently drop the font.) ---
+        if let Err(err) = cx.text_system().add_fonts(vec![Cow::Borrowed(
+            include_bytes!("../assets/fonts/iconfont.ttf").as_slice(),
         )]) {
             log::error!("Failed to load iconfont.ttf: {err}");
         }
