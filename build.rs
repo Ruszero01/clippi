@@ -15,6 +15,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=framework=Vision");
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
         // Compile the native ObjC OCR helper
         cc::Build::new()
             .file("src/platform/ocr_helper.m")
