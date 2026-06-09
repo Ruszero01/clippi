@@ -118,6 +118,15 @@ impl RenderOnce for HoverToolbar {
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
+            // --- Paste Plain Text (rich text only) ---
+            if props.content_type == ContentType::RichText {
+                buttons.push((
+                    "\u{e60e}",
+                    "paste_plain",
+                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                ));
+            }
+
             // --- Open image (image only) ---
             if props.content_type == ContentType::Image {
                 buttons.push((

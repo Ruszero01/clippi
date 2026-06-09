@@ -691,6 +691,33 @@ impl AppState {
         paste_after_delay();
     }
 
+    /// Paste a single item as plain text: write plain text to clipboard, restore focus, simulate Ctrl+V.
+    pub fn paste_item_plain(&self, id: i64) {
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("paste_item_plain: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("paste_item_plain: db error for {id}: {e}");
+                return;
+            }
+        };
+
+        let expected = item.full_text.clone();
+        crate::services::clipboard_ops::write_item_to_clipboard(&item, true);
+
+        if !expected.is_empty() {
+            crate::services::clipboard_ops::verify_clipboard_content(&expected, 200);
+        }
+
+        restore_paste_target();
+        paste_after_delay();
+    }
+
     /// Convert a color item from HEX to RGB and paste.
     pub fn paste_as_rgb(&self, id: i64) {
         use crate::core::color::detect_color;

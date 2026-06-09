@@ -476,6 +476,12 @@ impl ClipboardListView {
                     self.state.update(cx, |s, _cx| s.paste_item(item_id, plain));
                 }
             }
+            "paste_plain" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_item_plain(item_id));
+                }
+            }
             "paste_as_rgb" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
@@ -574,6 +580,14 @@ impl ClipboardListView {
                     if let Some(item) = self.items.get(index) {
                         let item_id = item.id;
                         self.state.update(cx, |s, _cx| s.copy_item(item_id, plain));
+                    }
+                }
+            }
+            "paste_plain" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        let item_id = item.id;
+                        self.state.update(cx, |s, _cx| s.paste_item_plain(item_id));
                     }
                 }
             }

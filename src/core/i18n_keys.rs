@@ -156,6 +156,7 @@ define_i18n! {
     // ─── Context menu ───
     CtxCopy:            ("复制", "Copy"),
     CtxPaste:           ("粘贴", "Paste"),
+    CtxPastePlain:      ("粘贴纯文本", "Paste Plain Text"),
     CtxEdit:            ("编辑", "Edit"),
     CtxFavorite:        ("收藏", "Favorite"),
     CtxUnfavorite:      ("取消收藏", "Unfavorite"),

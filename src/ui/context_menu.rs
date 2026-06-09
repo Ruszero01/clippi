@@ -24,6 +24,7 @@ pub struct MenuItemContext {
     pub is_image: bool,
     pub is_file: bool,
     pub is_color: bool,
+    pub is_rich_text: bool,
     /// true = current format is HEX → show "Paste as RGB"
     pub is_hex: bool,
     pub is_favorite: bool,
@@ -39,6 +40,7 @@ impl MenuItemContext {
             is_image: item.content_type == ContentType::Image,
             is_file: item.content_type == ContentType::File,
             is_color,
+            is_rich_text: item.content_type == ContentType::RichText,
             is_hex,
             is_favorite: item.is_favorite,
         }
@@ -109,6 +111,16 @@ impl ContextMenu {
             danger: false,
             fav: false,
         });
+        // --- Paste Plain Text (rich text only) ---
+        if ctx.is_rich_text {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxPastePlain.text().into(),
+                action: "paste_plain".into(),
+                icon: "\u{e60e}".into(),
+                danger: false,
+                fav: false,
+            });
+        }
 
         // Color conversion (only for color type)
         if ctx.is_color {
