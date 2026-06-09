@@ -68,11 +68,46 @@ fn main() {
 
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
-        // --- Use Cow::Owned so font_kit takes the memory path ---
-        // --- (Handle::from_memory) instead of the CoreGraphics bridge ---
-        // --- (Handle::from_native). The native path via CGFont may not ---
-        // --- correctly expose the font family name to the font database ---
-        // --- on macOS, causing all icon glyphs to render as tofu (□). ---
+        // --- Register icon font with macOS CoreText so GPUI's ---
+        // --- system_source can find it via select_family_by_name. ---
+        // --- zed-font-kit's MemSource silently drops fonts without ---
+        // --- a PostScript name, but CoreText has no such restriction. ---
+        #[cfg(target_os = "macos")]
+        {
+            use objc2::AnyThread;
+            use objc2_foundation::NSURL;
+            use std::io::Write;
+
+            let font_bytes = include_bytes!("../assets/fonts/iconfont.ttf");
+            let tmp_dir = std::env::temp_dir();
+            let font_path = tmp_dir.join("clippi_iconfont.ttf");
+            if let Ok(mut f) = std::fs::File::create(&font_path) {
+                if f.write_all(font_bytes).is_ok() {
+                    let path_str = font_path.to_string_lossy();
+                    let path_ns = objc2_foundation::NSString::from_str(&path_str);
+                    let url = NSURL::initFileURLWithPath(NSURL::alloc(), &path_ns);
+                    extern "C" {
+                        fn CTFontManagerRegisterFontsForURL(
+                            url: *const std::ffi::c_void,
+                            scope: u32,
+                            error: *mut *const std::ffi::c_void,
+                        ) -> bool;
+                    }
+                    const K_CT_FONT_MANAGER_SCOPE_PROCESS: u32 = 1;
+                    let url_ptr: *const std::ffi::c_void =
+                        unsafe { std::mem::transmute_copy(&url) };
+                    unsafe {
+                        CTFontManagerRegisterFontsForURL(
+                            url_ptr,
+                            K_CT_FONT_MANAGER_SCOPE_PROCESS,
+                            std::ptr::null_mut(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // --- GPUI add_fonts as secondary path (works on Windows/Linux) ---
         if let Err(err) = cx.text_system().add_fonts(vec![Cow::Owned(
             include_bytes!("../assets/fonts/iconfont.ttf").to_vec(),
         )]) {
