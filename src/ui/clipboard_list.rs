@@ -161,6 +161,11 @@ impl ClipboardListView {
                     .scroll_to_item(idx, ScrollStrategy::Top);
             }
         }
+        // --- Fallback: select first item when nothing else matched ---
+        // --- (first launch, persisted item deleted, empty history, etc.) ---
+        if self.selected_index.is_none() && !self.items.is_empty() {
+            self.select_index_without_scroll(0, cx);
+        }
         cx.notify();
     }
 
