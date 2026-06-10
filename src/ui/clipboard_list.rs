@@ -120,16 +120,20 @@ impl ClipboardListView {
 
     pub fn set_items(&mut self, items: Vec<ClipboardItem>, cx: &mut Context<Self>) {
         self.item_sizes = Rc::new(Self::compute_sizes(&items, &self.card_height_mode));
+        // --- Save previous selection before swapping items ---
+        let prev_id = self
+            .selected_index
+            .and_then(|idx| self.items.get(idx))
+            .map(|item| item.id);
         self.items = items;
         self.selected_ids.clear();
         self.selected_index = None;
         self.anchor_index = None;
         self.selected_count = 0;
         self.hovered_index = None;
-        // --- When "scroll to latest" is enabled, auto-select the most recently ---
-        // --- updated item and scroll to it. Otherwise keep previous position. ---
         let scroll_to_latest = self.state.read(cx).settings.auto_scroll_to_top;
         if scroll_to_latest && !self.items.is_empty() {
+            // --- Scroll to latest: select the most recently updated item ---
             let latest_idx = self
                 .items
                 .iter()
@@ -140,6 +144,13 @@ impl ClipboardListView {
             self.select_index_without_scroll(latest_idx, cx);
             self.scroll_handle
                 .scroll_to_item(latest_idx, ScrollStrategy::Top);
+        } else if let Some(id) = prev_id {
+            // --- Keep position: restore the previously selected item ---
+            if let Some(idx) = self.items.iter().position(|item| item.id == id) {
+                self.select_index_without_scroll(idx, cx);
+                self.scroll_handle
+                    .scroll_to_item(idx, ScrollStrategy::Top);
+            }
         }
         cx.notify();
     }
