@@ -249,7 +249,7 @@ impl SettingsPanel {
         let backend_panel = self.backend_panel();
         let status_color = match backend.status.as_str() {
             "online" => rgb(0x4caf50),
-            "syncing" => accent,
+            "syncing" => rgb(0x3b82f6),
             "error" => danger,
             _ => rgb(0x9e9e9e),
         };
@@ -279,6 +279,7 @@ impl SettingsPanel {
             .child(
                 div()
                     .h(px(52.))
+                    .flex_shrink_0()
                     .px(px(12.))
                     .flex()
                     .items_center()
@@ -403,6 +404,7 @@ impl SettingsPanel {
             .child(
                 div()
                     .h(px(31.))
+                    .flex_shrink_0()
                     .opacity(footer_opacity)
                     .border_t(px(1.))
                     .border_color(divider)
