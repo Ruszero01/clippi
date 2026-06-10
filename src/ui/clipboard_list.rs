@@ -126,11 +126,10 @@ impl ClipboardListView {
         self.anchor_index = None;
         self.selected_count = 0;
         self.hovered_index = None;
-        // --- Auto-select the most recently updated item and scroll to it. ---
-        // --- When sorted by updated_at DESC, index 0 is always correct. ---
-        // --- When sorted by created_at DESC, a re-copied duplicate keeps its ---
-        // --- old created_at, so we scan for the newest updated_at instead. ---
-        if !self.items.is_empty() {
+        // --- When "scroll to latest" is enabled, auto-select the most recently ---
+        // --- updated item and scroll to it. Otherwise keep previous position. ---
+        let scroll_to_latest = self.state.read(cx).settings.auto_scroll_to_top;
+        if scroll_to_latest && !self.items.is_empty() {
             let latest_idx = self
                 .items
                 .iter()
@@ -165,7 +164,16 @@ impl ClipboardListView {
             self.item_sizes = Rc::new(Self::compute_sizes(&self.items, &self.card_height_mode));
         }
         if scroll_to_top && !self.items.is_empty() {
-            self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+            let latest_idx = self
+                .items
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, item)| &item.updated_at)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.select_index_without_scroll(latest_idx, cx);
+            self.scroll_handle
+                .scroll_to_item(latest_idx, ScrollStrategy::Top);
         }
         cx.notify();
     }
