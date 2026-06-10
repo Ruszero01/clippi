@@ -49,6 +49,91 @@ fn init_logging() {
     }
 }
 
+/// Parse an ICO file from embedded bytes and create an HICON.
+///
+/// The ICO format structure:
+/// - Header (6 bytes): reserved(u16) + type(u16) + count(u16)
+/// - Directory entries (16 bytes each): width, height, colors, reserved,
+///   planes, bpp, image_size, image_offset
+/// - At each image_offset: raw DIB image data that `CreateIconFromResourceEx`
+///   accepts directly.
+///
+/// Picks the largest embedded icon for best visual quality.
+#[cfg(target_os = "windows")]
+fn load_icon_from_embedded_bytes(ico_data: &[u8]) -> Option<isize> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::CreateIconFromResourceEx;
+
+    // Parse ICO header
+    if ico_data.len() < 6 {
+        return None;
+    }
+    let _reserved = u16::from_le_bytes([ico_data[0], ico_data[1]]);
+    let img_type = u16::from_le_bytes([ico_data[2], ico_data[3]]);
+    let count = u16::from_le_bytes([ico_data[4], ico_data[5]]) as usize;
+    if img_type != 1 {
+        return None;
+    } // 1 = ICO
+
+    let dir_start = 6;
+    let dir_size = count * 16;
+    if ico_data.len() < dir_start + dir_size {
+        return None;
+    }
+
+    // Find the entry with the largest image data (best quality icon)
+    let mut best_offset = 0u32;
+    let mut best_size = 0u32;
+
+    for i in 0..count {
+        let entry = dir_start + i * 16;
+        let img_size = u32::from_le_bytes([
+            ico_data[entry + 8],
+            ico_data[entry + 9],
+            ico_data[entry + 10],
+            ico_data[entry + 11],
+        ]);
+        if img_size > best_size {
+            best_size = img_size;
+            best_offset = u32::from_le_bytes([
+                ico_data[entry + 12],
+                ico_data[entry + 13],
+                ico_data[entry + 14],
+                ico_data[entry + 15],
+            ]);
+        }
+    }
+
+    if best_size == 0 || best_offset == 0 {
+        return None;
+    }
+    let offset = best_offset as usize;
+    let size = best_size as usize;
+    if offset + size > ico_data.len() {
+        return None;
+    }
+
+    // CreateIconFromResourceEx expects the raw icon image bits
+    // (BITMAPINFOHEADER + pixels + mask) — exactly what's stored
+    // at the directory entry's offset in an .ico file.
+    let hicon = unsafe {
+        CreateIconFromResourceEx(
+            ico_data[offset..].as_ptr(),
+            size as u32,
+            1,          // fIcon = TRUE
+            0x00030000, // version (standard for all Windows icons)
+            0,          // cxDesired (use size from data)
+            0,          // cyDesired (use size from data)
+            0,          // flags (LR_DEFAULTCOLOR)
+        )
+    };
+
+    if hicon.is_null() {
+        None
+    } else {
+        Some(hicon as isize)
+    }
+}
+
 fn main() {
     if !ensure_single_instance() {
         return;
@@ -250,56 +335,34 @@ fn main() {
                                 }
                             }
 
-                            // --- Set window icon via WM_SETICON so the taskbar, Alt+Tab, ---
-                            // --- and window system menu all show the Clippi icon. ---
-                            // --- Without this, windows_subsystem = "windows" builds ---
-                            // --- show a blank/default icon. ---
+                            // --- Set window icon via WM_SETICON using embedded ICO bytes. ---
+                            // --- Parses the ICO binary directly to create an HICON — ---
+                            // --- no filesystem dependency (unlike LoadImageW + temp file). ---
                             {
-                                use std::io::Write;
                                 use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                    LoadImageW, SendMessageW, IMAGE_ICON, ICON_BIG,
-                                    ICON_SMALL, LR_LOADFROMFILE, WM_SETICON,
+                                    SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON,
                                 };
                                 const LOGO_ICO: &[u8] =
                                     include_bytes!("../assets/LOGO.ico");
-                                let tmp_dir = std::env::temp_dir();
-                                let icon_path = tmp_dir.join("clippi_app_icon.ico");
-                                if let Ok(mut f) = std::fs::File::create(&icon_path) {
-                                    if f.write_all(LOGO_ICO).is_ok() {
-                                        drop(f);
-                                        let path_wide: Vec<u16> = icon_path
-                                            .to_string_lossy()
-                                            .encode_utf16()
-                                            .chain(std::iter::once(0))
-                                            .collect();
-                                        let hicon = unsafe {
-                                            LoadImageW(
-                                                std::ptr::null_mut(),
-                                                path_wide.as_ptr(),
-                                                IMAGE_ICON,
-                                                0,
-                                                0,
-                                                LR_LOADFROMFILE,
-                                            )
-                                        };
-                                        if !hicon.is_null() {
-                                            unsafe {
-                                                SendMessageW(
-                                                    hwnd as _,
-                                                    WM_SETICON,
-                                                    ICON_BIG as usize,
-                                                    hicon as isize,
-                                                );
-                                                SendMessageW(
-                                                    hwnd as _,
-                                                    WM_SETICON,
-                                                    ICON_SMALL as usize,
-                                                    hicon as isize,
-                                                );
-                                            }
-                                            log::info!("Window icon set successfully");
-                                        }
+                                if let Some(hicon) = load_icon_from_embedded_bytes(LOGO_ICO)
+                                {
+                                    unsafe {
+                                        SendMessageW(
+                                            hwnd as _,
+                                            WM_SETICON,
+                                            ICON_BIG as usize,
+                                            hicon,
+                                        );
+                                        SendMessageW(
+                                            hwnd as _,
+                                            WM_SETICON,
+                                            ICON_SMALL as usize,
+                                            hicon,
+                                        );
                                     }
+                                    log::info!("Window icon set from embedded bytes");
+                                } else {
+                                    log::warn!("Failed to parse embedded ICO data");
                                 }
                             }
 
