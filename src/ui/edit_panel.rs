@@ -175,6 +175,8 @@ impl Render for EditPanel {
             .flex_col()
             .size_full()
             .bg(bg)
+            .rounded_b(px(12.))
+            .overflow_hidden()
             .p(px(8.))
             .gap(px(8.))
             .child(

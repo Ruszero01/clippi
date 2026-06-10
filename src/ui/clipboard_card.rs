@@ -566,6 +566,7 @@ impl RenderOnce for ClipboardCard {
             .border(px(1.))
             .border_color(border_color)
             .rounded(px(10.))
+            .overflow_hidden()
             .when(is_dark, |el| el.shadow_md())
             .when(!is_dark, |el| el.shadow_sm())
             .flex()
@@ -607,12 +608,13 @@ impl RenderOnce for ClipboardCard {
                         .w(px(36.))
                         .h(px(28.))
                         .rounded(px(6.))
+                        .overflow_hidden()
                         .bg(tag_bg)
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
-                            gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                            gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
                         } else {
                             div()
                                 .w(px(20.))
@@ -668,12 +670,13 @@ impl RenderOnce for ClipboardCard {
                         .w(px(36.))
                         .h(px(28.))
                         .rounded(px(6.))
+                        .overflow_hidden()
                         .bg(tag_bg)
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
-                            gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                            gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
                         } else {
                             div()
                                 .text_size(px(18.))
@@ -724,12 +727,13 @@ impl RenderOnce for ClipboardCard {
                             .w(px(36.))
                             .h(px(28.))
                             .rounded(px(6.))
+                            .overflow_hidden()
                             .bg(tag_bg)
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(if let Some(path) = effective_icon {
-                                gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                                gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
                             } else {
                                 div()
                                     .text_size(px(18.))
@@ -787,12 +791,13 @@ impl RenderOnce for ClipboardCard {
                             .w(px(36.))
                             .h(px(28.))
                             .rounded(px(6.))
+                            .overflow_hidden()
                             .bg(tag_bg)
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(if let Some(path) = effective_icon {
-                                gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                                gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
                             } else {
                                 div()
                                     .text_size(px(18.))
@@ -832,12 +837,13 @@ impl RenderOnce for ClipboardCard {
                         .w(px(36.))
                         .h(px(28.))
                         .rounded(px(6.))
+                        .overflow_hidden()
                         .bg(tag_bg)
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
-                            gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                            gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
                         } else {
                             div()
                                 .text_size(px(18.))
@@ -953,10 +959,11 @@ impl RenderOnce for ClipboardCard {
                             ObjectFit::Cover
                         };
                         div()
+                            .relative()
                             .flex_1()
                             .w_full()
                             .h_full()
-                            .rounded(px(6.))
+                            .rounded(px(8.))
                             .overflow_hidden()
                             .bg(tag_bg)
                             .flex()
@@ -966,7 +973,20 @@ impl RenderOnce for ClipboardCard {
                                 gpui::img(std::path::Path::new(&img_path))
                                     .w_full()
                                     .h_full()
+                                    .rounded(px(8.))
                                     .object_fit(object_fit),
+                            )
+                            .child(
+                                // --- Rounded border overlay — masks sharp image corners ---
+                                // --- since GPUI overflow_hidden does not clip img elements ---
+                                // --- Negative inset makes the overlay extend outward so the ---
+                                // --- border (which draws inward) covers the image corners.  ---
+                                div()
+                                    .absolute()
+                                    .inset(px(-3.))
+                                    .rounded(px(11.))
+                                    .border(px(4.))
+                                    .border_color(surface),
                             )
                     } else {
                         div()
