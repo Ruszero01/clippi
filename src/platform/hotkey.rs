@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use crate::core::i18n_keys::I18nKey;
-use global_hotkey::hotkey::Code;
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
 pub trait HotkeyListener {
@@ -77,6 +79,17 @@ pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
         "enter" | "return" => Some(Code::Enter),
         "esc" | "escape" => Some(Code::Escape),
         "backspace" => Some(Code::Backspace),
+        "=" | "equal" => Some(Code::Equal),
+        "-" | "minus" => Some(Code::Minus),
+        "[" | "bracketleft" => Some(Code::BracketLeft),
+        "]" | "bracketright" => Some(Code::BracketRight),
+        "'" | "quote" => Some(Code::Quote),
+        ";" | "semicolon" => Some(Code::Semicolon),
+        "\\" | "backslash" => Some(Code::Backslash),
+        "," | "comma" => Some(Code::Comma),
+        "." | "period" => Some(Code::Period),
+        "/" | "slash" => Some(Code::Slash),
+        "`" | "backquote" => Some(Code::Backquote),
         _ => None,
     }
 }
@@ -137,158 +150,221 @@ pub(crate) fn key_code_to_name(code: Code) -> &'static str {
         Code::Enter => "Enter",
         Code::Escape => "Esc",
         Code::Backspace => "Backspace",
+        Code::Equal => "=",
+        Code::Minus => "-",
+        Code::BracketLeft => "[",
+        Code::BracketRight => "]",
+        Code::Quote => "'",
+        Code::Semicolon => ";",
+        Code::Backslash => "\\",
+        Code::Comma => ",",
+        Code::Period => ".",
+        Code::Slash => "/",
+        Code::Backquote => "`",
         _ => "?",
     }
 }
 
+fn parse_hotkey(value: &str) -> Result<HotKey, String> {
+    let mut modifiers = Modifiers::empty();
+    let mut key = None;
+
+    for part in value.trim().to_lowercase().split('+') {
+        match part.trim() {
+            "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
+            "alt" | "option" => modifiers |= Modifiers::ALT,
+            "shift" => modifiers |= Modifiers::SHIFT,
+            "cmd" | "command" | "win" | "super" | "meta" => modifiers |= Modifiers::SUPER,
+            name => key = key_name_to_code(name),
+        }
+    }
+
+    let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
+    Ok(HotKey::new(Some(modifiers), key))
+}
+
+fn format_pressed_hotkey(modifiers: Modifiers, code: Code) -> String {
+    let mut parts = Vec::new();
+    if modifiers.contains(Modifiers::SUPER) {
+        parts.push(platform_input::super_key_name());
+    }
+    if modifiers.contains(Modifiers::CONTROL) {
+        parts.push("Ctrl");
+    }
+    if modifiers.contains(Modifiers::ALT) {
+        parts.push("Alt");
+    }
+    if modifiers.contains(Modifiers::SHIFT) {
+        parts.push("Shift");
+    }
+    parts.push(key_code_to_name(code));
+    parts.join("+")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hotkey;
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+
+    #[test]
+    fn shared_parser_accepts_platform_modifier_aliases() {
+        let expected = HotKey::new(
+            Some(Modifiers::SUPER | Modifiers::ALT | Modifiers::SHIFT),
+            Code::KeyV,
+        );
+
+        for value in [
+            "Cmd+Option+Shift+V",
+            "Win+Alt+Shift+V",
+            "Super+Alt+Shift+V",
+            "Meta+Option+Shift+V",
+        ] {
+            assert_eq!(parse_hotkey(value).unwrap().id(), expected.id(), "{value}");
+        }
+    }
+
+    #[test]
+    fn shared_parser_round_trips_symbol_keys() {
+        for (name, code) in [
+            ("=", Code::Equal),
+            ("-", Code::Minus),
+            ("[", Code::BracketLeft),
+            ("]", Code::BracketRight),
+            ("'", Code::Quote),
+            (";", Code::Semicolon),
+            ("\\", Code::Backslash),
+            (",", Code::Comma),
+            (".", Code::Period),
+            ("/", Code::Slash),
+            ("`", Code::Backquote),
+        ] {
+            let expected = HotKey::new(Some(Modifiers::ALT), code);
+            assert_eq!(
+                parse_hotkey(&format!("Alt+{name}")).unwrap().id(),
+                expected.id(),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+struct DesktopHotkeyListener {
+    manager: GlobalHotKeyManager,
+    hotkey: HotKey,
+    is_recording: bool,
+    registered: bool,
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+impl DesktopHotkeyListener {
+    fn new(hotkey_str: &str) -> Result<Self, String> {
+        let manager = GlobalHotKeyManager::new()
+            .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
+        let hotkey = parse_hotkey(hotkey_str)?;
+        manager
+            .register(hotkey)
+            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+
+        Ok(Self {
+            manager,
+            hotkey,
+            is_recording: false,
+            registered: true,
+        })
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+impl HotkeyListener for DesktopHotkeyListener {
+    fn stop(&mut self) {
+        self.unregister();
+    }
+
+    fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
+        let new_hotkey = parse_hotkey(hotkey_str)?;
+        self.unregister();
+        std::thread::sleep(Duration::from_millis(50));
+
+        self.manager
+            .register(new_hotkey)
+            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+        self.hotkey = new_hotkey;
+        self.registered = true;
+        Ok(())
+    }
+
+    fn start_recording(&mut self) {
+        self.is_recording = true;
+    }
+
+    fn finish_recording(&mut self) {
+        self.is_recording = false;
+    }
+
+    fn unregister(&mut self) {
+        if self.registered {
+            let _ = self.manager.unregister(self.hotkey);
+            self.registered = false;
+        }
+    }
+
+    fn register(&mut self) {
+        if !self.registered {
+            match self.manager.register(self.hotkey) {
+                Ok(()) => self.registered = true,
+                Err(e) => log::error!("hotkey register failed: {e}"),
+            }
+        }
+    }
+
+    fn poll_pressed(&self) -> bool {
+        GlobalHotKeyEvent::receiver().try_recv().is_ok_and(|event| {
+            event.state() == HotKeyState::Pressed && event.id() == self.hotkey.id()
+        })
+    }
+
+    fn poll_recording_pressed(&mut self) -> Option<String> {
+        if !self.is_recording {
+            return None;
+        }
+        let modifiers = platform_input::pressed_modifiers();
+        platform_input::pressed_key().map(|code| format_pressed_hotkey(modifiers, code))
+    }
+}
+
 #[cfg(target_os = "windows")]
-mod windows {
-    use super::*;
+mod platform_input {
+    use super::{Code, Modifiers};
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
-    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-    use std::sync::atomic::{AtomicBool, Ordering};
 
-    pub struct WindowsHotkeyListener {
-        manager: GlobalHotKeyManager,
-        hotkey: HotKey,
-        is_recording: AtomicBool,
-        registered: AtomicBool,
+    pub fn super_key_name() -> &'static str {
+        "Win"
     }
 
-    impl WindowsHotkeyListener {
-        pub fn new(hotkey_str: &str) -> Result<Self, String> {
-            let manager = GlobalHotKeyManager::new()
-                .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
-            let hotkey = parse_hotkey(hotkey_str)?;
-
-            // --- Try to register ---
-            manager.register(hotkey).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::HotkeyErrRegister.text()
-                )
-            })?;
-
-            Ok(Self {
-                manager,
-                hotkey,
-                is_recording: AtomicBool::new(false),
-                registered: AtomicBool::new(true),
-            })
-        }
-    }
-
-    impl HotkeyListener for WindowsHotkeyListener {
-        fn stop(&mut self) {
-            let _ = self.manager.unregister(self.hotkey);
-        }
-
-        fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-            // --- Unregister old ---
-            let _ = self.manager.unregister(self.hotkey);
-            std::thread::sleep(Duration::from_millis(50));
-
-            // --- Parse and register new ---
-            let new_hotkey = parse_hotkey(hotkey_str)?;
-            self.manager.register(new_hotkey).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::HotkeyErrRegister.text()
-                )
-            })?;
-            self.hotkey = new_hotkey;
-            self.registered.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-
-        fn start_recording(&mut self) {
-            self.is_recording.store(true, Ordering::SeqCst);
-        }
-
-        fn finish_recording(&mut self) {
-            self.is_recording.store(false, Ordering::SeqCst);
-        }
-
-        fn unregister(&mut self) {
-            if self.registered.load(Ordering::SeqCst) {
-                let _ = self.manager.unregister(self.hotkey);
-                self.registered.store(false, Ordering::SeqCst);
-            }
-        }
-
-        fn register(&mut self) {
-            if !self.registered.load(Ordering::SeqCst) {
-                match self.manager.register(self.hotkey) {
-                    Ok(()) => {
-                        self.registered.store(true, Ordering::SeqCst);
-                    }
-                    Err(e) => {
-                        log::error!("hotkey register failed: {e}");
-                    }
-                }
-            }
-        }
-
-        fn poll_pressed(&self) -> bool {
-            if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state() == HotKeyState::Pressed {
-                    return event.id() == self.hotkey.id();
-                }
-            }
-            false
-        }
-
-        fn poll_recording_pressed(&mut self) -> Option<String> {
-            if !self.is_recording.load(Ordering::SeqCst) {
-                return None;
-            }
-            detect_pressed_hotkey()
-        }
-    }
-
-    fn detect_pressed_hotkey() -> Option<String> {
-        let mut mods = Modifiers::empty();
+    pub fn pressed_modifiers() -> Modifiers {
+        let mut modifiers = Modifiers::empty();
         unsafe {
             if GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 {
-                mods |= Modifiers::CONTROL;
+                modifiers |= Modifiers::CONTROL;
             }
             if GetAsyncKeyState(VK_MENU.0 as i32) < 0 {
-                mods |= Modifiers::ALT;
+                modifiers |= Modifiers::ALT;
             }
             if GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 {
-                mods |= Modifiers::SHIFT;
+                modifiers |= Modifiers::SHIFT;
             }
             if GetAsyncKeyState(VK_LWIN.0 as i32) < 0 || GetAsyncKeyState(VK_RWIN.0 as i32) < 0 {
-                mods |= Modifiers::SUPER;
+                modifiers |= Modifiers::SUPER;
             }
         }
-
-        if let Some(code) = detect_pressed_key() {
-            let mut parts = Vec::new();
-            if mods.contains(Modifiers::SUPER) {
-                parts.push("Win");
-            }
-            if mods.contains(Modifiers::CONTROL) {
-                parts.push("Ctrl");
-            }
-            if mods.contains(Modifiers::ALT) {
-                parts.push("Alt");
-            }
-            if mods.contains(Modifiers::SHIFT) {
-                parts.push("Shift");
-            }
-            parts.push(code_to_name(code));
-            Some(parts.join("+"))
-        } else {
-            None
-        }
+        modifiers
     }
 
-    fn detect_pressed_key() -> Option<Code> {
-        let vk_map: &[(i32, Code)] = &[
+    pub fn pressed_key() -> Option<Code> {
+        let key_map: &[(i32, Code)] = &[
             (0x41, Code::KeyA),
             (0x42, Code::KeyB),
             (0x43, Code::KeyC),
@@ -356,212 +432,56 @@ mod windows {
             (0xC0, Code::Backquote),    // VK_OEM_3
         ];
 
-        for (vk, code) in vk_map {
-            unsafe {
-                if GetAsyncKeyState(*vk) < 0 {
-                    return Some(*code);
-                }
+        key_map.iter().find_map(|(virtual_key, code)| unsafe {
+            if GetAsyncKeyState(*virtual_key) < 0 {
+                Some(*code)
+            } else {
+                None
             }
-        }
-        None
-    }
-
-    fn parse_hotkey(s: &str) -> Result<HotKey, String> {
-        let s = s.trim().to_lowercase();
-        let mut mods = Modifiers::empty();
-        let mut key: Option<Code> = None;
-
-        for part in s.split('+') {
-            let part = part.trim();
-            match part {
-                "ctrl" | "control" => mods |= Modifiers::CONTROL,
-                "alt" => mods |= Modifiers::ALT,
-                "shift" => mods |= Modifiers::SHIFT,
-                "win" | "super" | "meta" => mods |= Modifiers::SUPER,
-                _ => {
-                    key = name_to_code(part);
-                }
-            }
-        }
-
-        let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
-        Ok(HotKey::new(Some(mods), key))
-    }
-
-    fn name_to_code(name: &str) -> Option<Code> {
-        key_name_to_code(name)
-    }
-
-    fn code_to_name(code: Code) -> &'static str {
-        key_code_to_name(code)
+        })
     }
 }
 
 #[cfg(target_os = "macos")]
-mod macos {
-    use super::*;
-    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-    use std::sync::atomic::{AtomicBool, Ordering};
+mod platform_input {
+    use super::{Code, Modifiers};
 
-    // macOS virtual key codes for modifiers
     const KVK_SHIFT: u16 = 0x38;
     const KVK_CONTROL: u16 = 0x3B;
     const KVK_OPTION: u16 = 0x3A;
     const KVK_COMMAND: u16 = 0x37;
 
-    // FFI binding for CGEventSourceKeyState.
-    // --- This function is part of the public CoreGraphics C API but is not yet ---
-    // wrapped by the core-graphics crate (checked v0.25). Using a raw extern
-    // binding avoids pulling in a second CG bindings crate just for one function.
     extern "C" {
         fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     }
 
-    /// Check if a key is currently pressed via CoreGraphics CGEventSourceKeyState.
-    /// Uses CombinedSessionState (0) as the source state.
     fn is_key_pressed(vk: u16) -> bool {
         unsafe { CGEventSourceKeyState(0, vk) }
     }
 
-    pub struct MacosHotkeyListener {
-        manager: GlobalHotKeyManager,
-        hotkey: HotKey,
-        is_recording: AtomicBool,
-        registered: AtomicBool,
+    pub fn super_key_name() -> &'static str {
+        "Cmd"
     }
 
-    impl MacosHotkeyListener {
-        pub fn new(hotkey_str: &str) -> Result<Self, String> {
-            let manager = GlobalHotKeyManager::new()
-                .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
-            let hotkey = parse_hotkey(hotkey_str)?;
-
-            // --- Try to register ---
-            manager.register(hotkey).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::HotkeyErrRegister.text()
-                )
-            })?;
-
-            Ok(Self {
-                manager,
-                hotkey,
-                is_recording: AtomicBool::new(false),
-                registered: AtomicBool::new(true),
-            })
-        }
-    }
-
-    impl HotkeyListener for MacosHotkeyListener {
-        fn stop(&mut self) {
-            let _ = self.manager.unregister(self.hotkey);
-        }
-
-        fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-            // --- Unregister old ---
-            let _ = self.manager.unregister(self.hotkey);
-            std::thread::sleep(Duration::from_millis(50));
-
-            // --- Parse and register new ---
-            let new_hotkey = parse_hotkey(hotkey_str)?;
-            self.manager.register(new_hotkey).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::HotkeyErrRegister.text()
-                )
-            })?;
-            self.hotkey = new_hotkey;
-            self.registered.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-
-        fn start_recording(&mut self) {
-            self.is_recording.store(true, Ordering::SeqCst);
-        }
-
-        fn finish_recording(&mut self) {
-            self.is_recording.store(false, Ordering::SeqCst);
-        }
-
-        fn unregister(&mut self) {
-            if self.registered.load(Ordering::SeqCst) {
-                let _ = self.manager.unregister(self.hotkey);
-                self.registered.store(false, Ordering::SeqCst);
-            }
-        }
-
-        fn register(&mut self) {
-            if !self.registered.load(Ordering::SeqCst) {
-                match self.manager.register(self.hotkey) {
-                    Ok(()) => {
-                        self.registered.store(true, Ordering::SeqCst);
-                    }
-                    Err(e) => {
-                        log::error!("hotkey register failed: {e}");
-                    }
-                }
-            }
-        }
-
-        fn poll_pressed(&self) -> bool {
-            if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state() == HotKeyState::Pressed {
-                    return event.id() == self.hotkey.id();
-                }
-            }
-            false
-        }
-
-        fn poll_recording_pressed(&mut self) -> Option<String> {
-            if !self.is_recording.load(Ordering::SeqCst) {
-                return None;
-            }
-            detect_pressed_hotkey()
-        }
-    }
-
-    fn detect_pressed_hotkey() -> Option<String> {
-        let mut mods = Modifiers::empty();
+    pub fn pressed_modifiers() -> Modifiers {
+        let mut modifiers = Modifiers::empty();
         if is_key_pressed(KVK_COMMAND) {
-            mods |= Modifiers::SUPER;
+            modifiers |= Modifiers::SUPER;
         }
         if is_key_pressed(KVK_CONTROL) {
-            mods |= Modifiers::CONTROL;
+            modifiers |= Modifiers::CONTROL;
         }
         if is_key_pressed(KVK_OPTION) {
-            mods |= Modifiers::ALT;
+            modifiers |= Modifiers::ALT;
         }
         if is_key_pressed(KVK_SHIFT) {
-            mods |= Modifiers::SHIFT;
+            modifiers |= Modifiers::SHIFT;
         }
-
-        if let Some(code) = detect_pressed_key() {
-            let mut parts = Vec::new();
-            if mods.contains(Modifiers::SUPER) {
-                parts.push("Cmd");
-            }
-            if mods.contains(Modifiers::CONTROL) {
-                parts.push("Ctrl");
-            }
-            if mods.contains(Modifiers::ALT) {
-                parts.push("Alt");
-            }
-            if mods.contains(Modifiers::SHIFT) {
-                parts.push("Shift");
-            }
-            parts.push(code_to_name(code));
-            Some(parts.join("+"))
-        } else {
-            None
-        }
+        modifiers
     }
 
-    fn detect_pressed_key() -> Option<Code> {
-        // --- macOS virtual key code to Code mapping ---
-        let vk_map: &[(u16, Code)] = &[
-            // --- Letters ---
+    pub fn pressed_key() -> Option<Code> {
+        let key_map: &[(u16, Code)] = &[
             (0x00, Code::KeyA),
             (0x01, Code::KeyS),
             (0x02, Code::KeyD),
@@ -608,14 +528,12 @@ mod macos {
             (0x2D, Code::KeyN),
             (0x2E, Code::KeyM),
             (0x2F, Code::Period),
-            // --- Special keys ---
-            (0x24, Code::Enter),     // kVK_Return
-            (0x30, Code::Tab),       // kVK_Tab
-            (0x31, Code::Space),     // kVK_Space
-            (0x33, Code::Backspace), // kVK_Delete (Backspace)
-            (0x35, Code::Escape),    // kVK_Escape
-            (0x32, Code::Backquote), // kVK_ANSI_Grave
-            // --- Function keys ---
+            (0x24, Code::Enter),
+            (0x30, Code::Tab),
+            (0x31, Code::Space),
+            (0x33, Code::Backspace),
+            (0x35, Code::Escape),
+            (0x32, Code::Backquote),
             (0x7A, Code::F1),
             (0x78, Code::F2),
             (0x63, Code::F3),
@@ -630,42 +548,9 @@ mod macos {
             (0x6F, Code::F12),
         ];
 
-        for (vk, code) in vk_map {
-            if is_key_pressed(*vk) {
-                return Some(*code);
-            }
-        }
-        None
-    }
-
-    fn parse_hotkey(s: &str) -> Result<HotKey, String> {
-        let s = s.trim().to_lowercase();
-        let mut mods = Modifiers::empty();
-        let mut key: Option<Code> = None;
-
-        for part in s.split('+') {
-            let part = part.trim();
-            match part {
-                "ctrl" | "control" => mods |= Modifiers::CONTROL,
-                "alt" | "option" => mods |= Modifiers::ALT,
-                "shift" => mods |= Modifiers::SHIFT,
-                "cmd" | "command" | "win" | "super" | "meta" => mods |= Modifiers::SUPER,
-                _ => {
-                    key = name_to_code(part);
-                }
-            }
-        }
-
-        let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
-        Ok(HotKey::new(Some(mods), key))
-    }
-
-    fn name_to_code(name: &str) -> Option<Code> {
-        key_name_to_code(name)
-    }
-
-    fn code_to_name(code: Code) -> &'static str {
-        key_code_to_name(code)
+        key_map
+            .iter()
+            .find_map(|(virtual_key, code)| is_key_pressed(*virtual_key).then_some(*code))
     }
 }
 
@@ -699,23 +584,13 @@ mod linux {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub use windows::WindowsHotkeyListener;
-
-#[cfg(target_os = "macos")]
-pub use macos::MacosHotkeyListener;
-
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHotkeyListener;
 
 pub fn create_hotkey_listener(hotkey_str: &str) -> Result<Box<dyn HotkeyListener>, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        Ok(Box::new(WindowsHotkeyListener::new(hotkey_str)?))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Ok(Box::new(MacosHotkeyListener::new(hotkey_str)?))
+        Ok(Box::new(DesktopHotkeyListener::new(hotkey_str)?))
     }
     #[cfg(target_os = "linux")]
     {

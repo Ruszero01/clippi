@@ -49,6 +49,20 @@ fn init_logging() {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeferredStartupAction {
+    InitializeHotkey,
+    HideWindow,
+}
+
+fn deferred_startup_actions(silent_start: bool) -> Vec<DeferredStartupAction> {
+    let mut actions = vec![DeferredStartupAction::InitializeHotkey];
+    if silent_start {
+        actions.push(DeferredStartupAction::HideWindow);
+    }
+    actions
+}
+
 /// Parse an ICO file from embedded bytes and create an HICON.
 ///
 /// The ICO format structure:
@@ -215,9 +229,9 @@ fn main() {
         // --- required for CGEventPost to HID (Cmd+V paste simulation). ---
         #[cfg(target_os = "macos")]
         {
-            if !crate::platform::paste::check_accessibility_permission() {
+            if !crate::platform::paste::request_accessibility_permission() {
                 log::warn!(
-                    "Accessibility 权限未授予。请前往 系统设置 → 隐私与安全性 → 辅助功能 添加 Clippi 以启用自动粘贴功能。"
+                    "Accessibility 权限未授予，已请求 macOS 显示授权提示。请在 系统设置 → 隐私与安全性 → 辅助功能 中启用 Clippi。"
                 );
             }
         }
@@ -366,13 +380,6 @@ fn main() {
                                 }
                             }
 
-                            // --- Defer hotkey registration until after GPUI's first ---
-                            // --- render, so the input/IME pipeline is ready before ---
-                            // --- the user's first hotkey press can trigger show_and_focus. ---
-                            let wm_for_hotkey = window_manager.clone();
-                            cx.defer(move |cx| {
-                                wm_for_hotkey.update(cx, |wm, cx| wm.init_hotkey(cx));
-                            });
                         }
                     }
                 }
@@ -395,6 +402,21 @@ fn main() {
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
 
+                // Defer startup actions until GPUI has completed the first render.
+                // Hotkey registration must happen on every desktop platform after
+                // the input pipeline and native window handle are ready.
+                for action in deferred_startup_actions(silent_start) {
+                    let wm = window_manager.clone();
+                    cx.defer(move |cx| match action {
+                        DeferredStartupAction::InitializeHotkey => {
+                            wm.update(cx, |wm, cx| wm.init_hotkey(cx));
+                        }
+                        DeferredStartupAction::HideWindow => {
+                            wm.update(cx, |wm, cx| wm.hide(cx));
+                        }
+                    });
+                }
+
                 // --- Intercept window close — hide to background instead of ---
                 // --- destroying the window. Returns false to prevent GPUI ---
                 // --- from closing the window and exiting the process. ---
@@ -404,18 +426,29 @@ fn main() {
                     false
                 });
 
-                // --- Silent start: defer hide until after window is fully initialized, ---
-                // --- so GPUI doesn't override the hidden state with its own show. ---
-                if silent_start {
-                    let wm_hide = window_manager.clone();
-                    cx.defer(move |cx| {
-                        wm_hide.update(cx, |wm, cx| wm.hide(cx));
-                    });
-                }
-
                 cx.new(|cx| gpui_component::Root::new(view, window, cx))
             },
         )
         .unwrap();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{deferred_startup_actions, DeferredStartupAction};
+
+    #[test]
+    fn startup_always_initializes_hotkey_after_window_setup() {
+        assert_eq!(
+            deferred_startup_actions(false),
+            vec![DeferredStartupAction::InitializeHotkey]
+        );
+        assert_eq!(
+            deferred_startup_actions(true),
+            vec![
+                DeferredStartupAction::InitializeHotkey,
+                DeferredStartupAction::HideWindow,
+            ]
+        );
+    }
 }

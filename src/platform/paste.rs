@@ -124,16 +124,47 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     }
 }
 
-/// Check whether the current process has Accessibility permission granted.
-/// Required for CGEventPost to HID (Cmd+V paste simulation).
-/// On macOS Sequoia 15+, CGEventPostToPid also requires this permission,
-/// so the check applies regardless of the posting method.
+fn should_request_accessibility_permission(is_trusted: bool, already_requested: bool) -> bool {
+    !is_trusted && !already_requested
+}
+
 #[cfg(target_os = "macos")]
 pub fn check_accessibility_permission() -> bool {
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
     }
     unsafe { AXIsProcessTrusted() }
+}
+
+/// Ask macOS to show the Accessibility permission prompt when needed.
+///
+/// The prompt is asynchronous. The return value reports the permission state
+/// before the prompt, so callers should not assume permission was granted yet.
+#[cfg(target_os = "macos")]
+pub fn request_accessibility_permission() -> bool {
+    use core_foundation::base::{CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    extern "C" {
+        static kAXTrustedCheckOptionPrompt: CFTypeRef;
+        fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+    }
+
+    static PROMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    let is_trusted = check_accessibility_permission();
+    let already_requested = PROMPT_REQUESTED.swap(true, Ordering::SeqCst);
+    if !should_request_accessibility_permission(is_trusted, already_requested) {
+        return is_trusted;
+    }
+
+    let prompt_key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt.cast()) };
+    let options =
+        CFDictionary::from_CFType_pairs(&[(prompt_key, CFBoolean::true_value())]).to_untyped();
+    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast()) }
 }
 
 #[cfg(target_os = "macos")]
@@ -188,6 +219,11 @@ pub fn paste_sync() {
 fn send_cmd_v() {
     std::thread::sleep(std::time::Duration::from_millis(SLEEP_MS));
 
+    if !check_accessibility_permission() {
+        log::warn!("macOS Accessibility permission is missing; Cmd+V event was not sent");
+        return;
+    }
+
     let source = core_graphics::event_source::CGEventSource::new(
         core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
     );
@@ -229,3 +265,15 @@ pub fn paste_after_delay() {}
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn paste_sync() {}
+
+#[cfg(test)]
+mod tests {
+    use super::should_request_accessibility_permission;
+
+    #[test]
+    fn accessibility_prompt_is_requested_once_when_permission_is_missing() {
+        assert!(should_request_accessibility_permission(false, false));
+        assert!(!should_request_accessibility_permission(false, true));
+        assert!(!should_request_accessibility_permission(true, false));
+    }
+}

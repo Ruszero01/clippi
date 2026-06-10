@@ -5,6 +5,7 @@
 //! --- The drag area covers the left portion (width - 92px). ---
 
 use gpui::*;
+use std::sync::{Arc, OnceLock};
 
 use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
@@ -14,6 +15,17 @@ use super::theme::ClippiTheme;
 
 /// Titlebar height matching original Slint design.
 pub const TITLEBAR_HEIGHT: f32 = 38.0;
+
+fn titlebar_logo_image() -> Arc<Image> {
+    static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
+    LOGO.get_or_init(|| {
+        Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../../assets/LOGO_notext.png").to_vec(),
+        ))
+    })
+    .clone()
+}
 
 pub enum TitlebarEvent {
     TogglePin,
@@ -67,10 +79,7 @@ impl Render for Titlebar {
         let fav_titlebar = cx.entity().clone();
         let pin_titlebar = cx.entity().clone();
         let settings_titlebar = cx.entity().clone();
-        #[cfg(target_os = "windows")]
-        let logo_path = "assets/LOGO_notext.ico";
-        #[cfg(not(target_os = "windows"))]
-        let logo_path = "assets/LOGO_notext.png";
+        let logo = titlebar_logo_image();
 
         div()
             .flex()
@@ -93,9 +102,7 @@ impl Render for Titlebar {
                     .window_control_area(WindowControlArea::Drag)
                     // --- Logo (20x20, loaded from assets) ---
                     .child(
-                        gpui::img(std::path::Path::new(logo_path))
-                            .w(px(20.))
-                            .h(px(20.)),
+                        gpui::img(logo).w(px(20.)).h(px(20.)),
                     )
                     // --- App name ---
                     .child(
@@ -191,5 +198,17 @@ impl Render for Titlebar {
                             ),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::titlebar_logo_image;
+
+    #[test]
+    fn titlebar_logo_is_embedded_and_decodable() {
+        let logo = titlebar_logo_image();
+        assert_eq!(logo.format, gpui::ImageFormat::Png);
+        assert!(image::load_from_memory(&logo.bytes).is_ok());
     }
 }

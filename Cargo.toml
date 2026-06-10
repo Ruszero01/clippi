@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.2.0"
+version = "0.2.1"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
@@ -12,7 +12,7 @@ build = "build.rs"
 name = "Clippi"
 identifier = "com.clippi.app"
 icon = ["assets/LOGO.icns"]
-version = "0.2.0"
+version = "0.2.1"
 copyright= "Copyright © 2025 Rains. MIT license."
 category = "Utility"
 short_description = "A lightweight clipboard manager"
@@ -57,6 +57,7 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSBundle", "NSDictionary", "NSArray", "NSThread", "NSLocale"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow", "NSEvent"] }
 core-graphics = { version = "0.25", features = ["elcapitan"] }
+core-foundation = "0.10"
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"

@@ -426,9 +426,7 @@ impl WindowManager {
             let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
                 return;
             };
-            let frame = unsafe {
-                (&*(self.ns_window as *const objc2_app_kit::NSWindow)).frame()
-            };
+            let frame = unsafe { (&*(self.ns_window as *const objc2_app_kit::NSWindow)).frame() };
             let rect = monitor::cocoa_rect_to_top_left(
                 main_screen.frame().size.height,
                 frame.origin.x,
@@ -483,14 +481,14 @@ impl WindowManager {
     /// Fully quit the application.
     fn do_quit(&mut self, cx: &mut Context<Self>) {
         self.prepare_shutdown(cx);
-        cx.shutdown();
+        cx.quit();
     }
 
     /// Restart the application: flush, spawn new process, then quit.
     fn do_restart(&mut self, cx: &mut Context<Self>) {
         self.prepare_shutdown(cx);
         crate::core::settings::spawn_new_process();
-        cx.shutdown();
+        cx.quit();
     }
 
     // --- Foreground detection ---
@@ -872,8 +870,8 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetWindowPos, HWND_TOPMOST, HWND_NOTOPMOST, SWP_NOMOVE, SWP_NOSIZE,
-                SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_SHOWWINDOW,
             };
             let hwnd = self.hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
@@ -894,7 +892,6 @@ impl WindowManager {
         #[cfg(target_os = "macos")]
         {
             if self.ns_window != 0 {
-                use objc2_app_kit::NSFloatingWindowLevel;
                 let level = if pinned {
                     objc2_app_kit::NSFloatingWindowLevel
                 } else {
@@ -1146,5 +1143,19 @@ impl WindowManager {
         if let Some(ref mut fw) = self.focus_watcher {
             fw.stop();
         }
+    }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    #[test]
+    fn tray_quit_requests_platform_termination() {
+        let source = include_str!("window_manager.rs");
+        let start = source.find("fn do_quit").unwrap();
+        let end = source[start..].find("fn do_restart").unwrap() + start;
+        let body = &source[start..end];
+
+        assert!(body.contains("cx.quit();"));
+        assert!(!body.contains("cx.shutdown();"));
     }
 }

@@ -1,7 +1,7 @@
 //! Platform-aware path resolution for config and data files
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
@@ -15,14 +15,41 @@ static IS_PORTABLE: AtomicBool = AtomicBool::new(false);
 /// Initialise portable mode detection. Call once at startup.
 pub fn init_portable_mode() {
     let exe = exe_dir();
-    // --- Try to create + delete a temp file to test writability. ---
-    let probe = exe.join(".clippi_writable_test");
-    let writable = std::fs::write(&probe, b"1").is_ok();
-    if writable {
-        let _ = std::fs::remove_file(&probe);
-    }
+    let writable = portable_mode_allowed(&exe) && {
+        // --- Try to create + delete a temp file to test writability. ---
+        let probe = exe.join(".clippi_writable_test");
+        let writable = std::fs::write(&probe, b"1").is_ok();
+        if writable {
+            let _ = std::fs::remove_file(&probe);
+        }
+        writable
+    };
     IS_PORTABLE.store(writable, Ordering::Relaxed);
     log::info!("Portable mode: {} (exe_dir: {})", writable, exe.display());
+}
+
+fn portable_mode_allowed(exe_dir: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let is_app_bundle = exe_dir.file_name().is_some_and(|name| name == "MacOS")
+            && exe_dir
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "Contents")
+            && exe_dir
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::extension)
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
+        !is_app_bundle
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = exe_dir;
+        true
+    }
 }
 
 /// The directory containing the running executable.
@@ -154,14 +181,6 @@ pub fn migrate_legacy_files() {
         return;
     }
 
-    let data_dir = app_data_dir();
-    let new_config = data_dir.join(CONFIG_FILE);
-
-    // Skip migration if new location already has config
-    if new_config.exists() {
-        return;
-    }
-
     // --- Find legacy files in exe's parent directory ---
     let Some(legacy_dir) = std::env::current_exe()
         .ok()
@@ -170,20 +189,45 @@ pub fn migrate_legacy_files() {
         return;
     };
 
-    let legacy_config = legacy_dir.join(CONFIG_FILE);
-    let legacy_db = legacy_dir.join(DB_FILE);
+    migrate_legacy_files_from(&legacy_dir, &app_data_dir());
+}
 
-    if legacy_config.exists() {
+fn migrate_legacy_files_from(legacy_dir: &Path, data_dir: &Path) {
+    if legacy_dir == data_dir {
+        return;
+    }
+    if let Err(e) = fs::create_dir_all(data_dir) {
+        log::error!("failed to create data directory: {e}");
+        return;
+    }
+
+    let legacy_config = legacy_dir.join(CONFIG_FILE);
+    let new_config = data_dir.join(CONFIG_FILE);
+    if legacy_config.exists() && !new_config.exists() {
         if let Err(e) = fs::copy(&legacy_config, &new_config) {
             log::error!("failed to migrate config: {e}");
         }
     }
 
-    if legacy_db.exists() {
-        let new_db = data_dir.join(DB_FILE);
+    let legacy_db = legacy_dir.join(DB_FILE);
+    let new_db = data_dir.join(DB_FILE);
+    if legacy_db.exists() && !new_db.exists() {
         if let Err(e) = fs::copy(&legacy_db, &new_db) {
             log::error!("failed to migrate database: {e}");
+        } else {
+            for suffix in ["-wal", "-shm"] {
+                let legacy_companion = legacy_dir.join(format!("{DB_FILE}{suffix}"));
+                let new_companion = data_dir.join(format!("{DB_FILE}{suffix}"));
+                if legacy_companion.exists() {
+                    let _ = fs::copy(legacy_companion, new_companion);
+                }
+            }
         }
+    }
+
+    let legacy_images = legacy_dir.join("images");
+    if legacy_images.is_dir() {
+        copy_dir_recursive_missing(&legacy_images, &data_dir.join("images"));
     }
 }
 
@@ -282,5 +326,87 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
         } else if let Err(e) = fs::copy(&path, &dest) {
             log::warn!("Portable: failed to copy {}: {e}", path.display());
         }
+    }
+}
+
+fn copy_dir_recursive_missing(src: &Path, dst: &Path) {
+    if let Err(e) = fs::create_dir_all(dst) {
+        log::warn!("failed to create migration directory {}: {e}", dst.display());
+        return;
+    }
+    let entries = match fs::read_dir(src) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("failed to read migration directory {}: {e}", src.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let source = entry.path();
+        let destination = dst.join(entry.file_name());
+        if source.is_dir() {
+            copy_dir_recursive_missing(&source, &destination);
+        } else if !destination.exists() {
+            if let Err(e) = fs::copy(&source, &destination) {
+                log::warn!("failed to migrate {}: {e}", source.display());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        migrate_legacy_files_from, portable_mode_allowed, CONFIG_FILE, DB_FILE,
+    };
+    use std::path::Path;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_app_bundle_is_never_treated_as_portable() {
+        assert!(!portable_mode_allowed(Path::new(
+            "/Applications/Clippi.app/Contents/MacOS"
+        )));
+        assert!(!portable_mode_allowed(Path::new(
+            "/Users/test/Clippi.app/Contents/MacOS"
+        )));
+        assert!(portable_mode_allowed(Path::new("/tmp/clippi-portable")));
+    }
+
+    #[test]
+    fn legacy_migration_copies_missing_data_when_config_already_exists() {
+        let root = std::env::temp_dir().join(format!(
+            "clippi-paths-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let legacy = root.join("legacy");
+        let data = root.join("data");
+        std::fs::create_dir_all(legacy.join("images")).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(legacy.join(CONFIG_FILE), "legacy").unwrap();
+        std::fs::write(legacy.join(DB_FILE), "database").unwrap();
+        std::fs::write(legacy.join("images").join("image.png"), "image").unwrap();
+        std::fs::write(data.join(CONFIG_FILE), "existing").unwrap();
+
+        migrate_legacy_files_from(&legacy, &data);
+
+        assert_eq!(
+            std::fs::read_to_string(data.join(CONFIG_FILE)).unwrap(),
+            "existing"
+        );
+        assert_eq!(
+            std::fs::read_to_string(data.join(DB_FILE)).unwrap(),
+            "database"
+        );
+        assert_eq!(
+            std::fs::read_to_string(data.join("images").join("image.png")).unwrap(),
+            "image"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

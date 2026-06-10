@@ -181,7 +181,7 @@ impl SettingsPanel {
                                                         s.settings.save();
                                                     });
                                                     crate::core::settings::spawn_new_process();
-                                                    _cx.shutdown();
+                                                    _cx.quit();
                                                 }
                                                 Err(e) => {
                                                     this.update(_cx, |_panel, cx| {
@@ -242,7 +242,7 @@ impl SettingsPanel {
                                                         s.settings.save();
                                                     });
                                                     crate::core::settings::spawn_new_process();
-                                                    _cx.shutdown();
+                                                    _cx.quit();
                                                 }
                                                 Err(e) => {
                                                     this.update(_cx, |_panel, cx| {
@@ -298,7 +298,12 @@ impl SettingsPanel {
                                     .text_color(text_1)
                                     .child(I18nKey::SettingMaxItems.text()),
                             )
-                            .child(div().text_size(px(10.)).text_color(text_3).child(I18nKey::DescMaxItems.text())),
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(text_3)
+                                    .child(I18nKey::DescMaxItems.text()),
+                            ),
                     )
                     // --- Right: max-items value (button or Input) ---
                     .child({
@@ -449,7 +454,7 @@ impl SettingsPanel {
                     s.settings.save();
                 });
                 crate::core::settings::spawn_new_process();
-                cx.shutdown();
+                cx.quit();
             }
             Err(e) => {
                 cx.emit(SettingsEvent::DataError(e));
@@ -514,7 +519,12 @@ impl SettingsPanel {
                             .child(I18nKey::BtnResetDataDir.text()),
                     )
                     // --- Description ---
-                    .child(div().text_size(px(12.)).text_color(text_3).child(I18nKey::DescStorageChoose.text()))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(text_3)
+                            .child(I18nKey::DescStorageChoose.text()),
+                    )
                     // --- Option: Portable ---
                     .child({
                         let selected = dialog.selected == StorageMode::Portable;

@@ -162,11 +162,13 @@ mod tests {
 
     #[test]
     fn negative_coordinates_are_valid_when_window_size_was_saved() {
-        let mut settings = AppSettings::default();
-        settings.saved_window_x = -1440;
-        settings.saved_window_y = 120;
-        settings.saved_window_width = 360.0;
-        settings.saved_window_height = 480.0;
+        let settings = AppSettings {
+            saved_window_x: -1440,
+            saved_window_y: 120,
+            saved_window_width: 360.0,
+            saved_window_height: 480.0,
+            ..AppSettings::default()
+        };
 
         assert!(has_saved_window_geometry(&settings));
     }

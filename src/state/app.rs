@@ -14,7 +14,6 @@ use crate::core::types::FileData;
 use crate::core::types::RichData;
 use crate::core::types::TagInfo;
 use crate::state::sync::SyncState;
-use clipboard_rs::{Clipboard, ClipboardContext};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -616,9 +615,7 @@ impl AppState {
             // --- (skip one cycle + update baseline seq#) rather than recorded ---
             // as a new history entry. This matches the Slint-era behaviour.
             self.skip_next.store(true, Ordering::SeqCst);
-            if let Ok(ctx) = ClipboardContext::new() {
-                let _ = ctx.set_text(text);
-            }
+            crate::services::clipboard_ops::write_text_to_clipboard(&text);
             crate::platform::paste::restore_paste_target();
             crate::platform::paste::paste_after_delay();
         } else {
@@ -637,8 +634,7 @@ impl AppState {
             });
             return;
         }
-        if let Ok(ctx) = ClipboardContext::new() {
-            let _ = ctx.set_text(text);
+        if crate::services::clipboard_ops::write_text_to_clipboard(&text) {
             self.show_toast("QR code content copied to clipboard");
         }
     }
@@ -733,9 +729,7 @@ impl AppState {
 
         if let Some(color) = detect_color(&item.full_text) {
             let rgb_text = color.to_rgb();
-            if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
-                let _ = clipboard_rs::Clipboard::set_text(&ctx, rgb_text.clone());
-            }
+            crate::services::clipboard_ops::write_text_to_clipboard(&rgb_text);
             crate::services::clipboard_ops::verify_clipboard_content(&rgb_text, 200);
             restore_paste_target();
             paste_after_delay();
@@ -757,9 +751,7 @@ impl AppState {
 
         if let Some(color) = detect_color(&item.full_text) {
             let hex_text = color.to_css_hex();
-            if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
-                let _ = clipboard_rs::Clipboard::set_text(&ctx, hex_text.clone());
-            }
+            crate::services::clipboard_ops::write_text_to_clipboard(&hex_text);
             crate::services::clipboard_ops::verify_clipboard_content(&hex_text, 200);
             restore_paste_target();
             paste_after_delay();
@@ -785,9 +777,7 @@ impl AppState {
         for (i, item) in items.iter().enumerate() {
             // --- Newline separator between items (not before first) ---
             if i > 0 {
-                if let Ok(ctx) = clipboard_rs::ClipboardContext::new() {
-                    let _ = clipboard_rs::Clipboard::set_text(&ctx, "\n".to_string());
-                }
+                crate::services::clipboard_ops::write_text_to_clipboard("\n");
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 restore_paste_target();
                 paste_sync();

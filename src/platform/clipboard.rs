@@ -25,6 +25,21 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::NSPasteboard;
 
+static CLIPBOARD_ACCESS: Mutex<()> = Mutex::new(());
+
+pub(crate) fn with_clipboard_access<T>(operation: impl FnOnce() -> T) -> T {
+    let _guard = CLIPBOARD_ACCESS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    operation()
+}
+
+pub(crate) fn with_clipboard_context<T>(
+    operation: impl FnOnce(&ClipboardContext) -> T,
+) -> Option<T> {
+    with_clipboard_access(|| ClipboardContext::new().ok().map(|ctx| operation(&ctx)))
+}
+
 /// Shared clipboard buffer for passing data to services
 #[derive(Clone)]
 pub struct ClipboardShared {
@@ -406,12 +421,9 @@ impl PollingClipboardListener {
 
     fn capture_baseline(&self) -> u64 {
         *self.startup_end.lock().unwrap() = Some(Instant::now());
-        if let Ok(ctx) = ClipboardContext::new() {
-            if let Some(item) = detect_clipboard_content(&ctx) {
-                return item.content_hash;
-            }
-        }
-        0
+        with_clipboard_context(detect_clipboard_content)
+            .flatten()
+            .map_or(0, |item| item.content_hash)
     }
 }
 
@@ -437,9 +449,9 @@ impl ClipboardListener for PollingClipboardListener {
         // --- changeCount increments on every pasteboard write, giving an efficient ---
         // --- signal before the expensive clipboard open + PNG encode. ---
         #[cfg(target_os = "macos")]
-        let last_cc = Arc::new(Mutex::new(
-            objc2_app_kit::NSPasteboard::generalPasteboard().changeCount(),
-        ));
+        let last_cc = Arc::new(Mutex::new(with_clipboard_access(|| {
+            objc2_app_kit::NSPasteboard::generalPasteboard().changeCount()
+        })));
 
         self.handle = Some(thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
@@ -461,7 +473,9 @@ impl ClipboardListener for PollingClipboardListener {
                     }
                     #[cfg(target_os = "macos")]
                     {
-                        let cc = NSPasteboard::generalPasteboard().changeCount();
+                        let cc = with_clipboard_access(|| {
+                            NSPasteboard::generalPasteboard().changeCount()
+                        });
                         *last_cc.lock().unwrap() = cc;
                     }
                     thread::sleep(Duration::from_millis(50));
@@ -488,7 +502,8 @@ impl ClipboardListener for PollingClipboardListener {
                 // pasteboard write, serving the same role as the Windows sequence number.
                 #[cfg(target_os = "macos")]
                 {
-                    let cc = NSPasteboard::generalPasteboard().changeCount();
+                    let cc =
+                        with_clipboard_access(|| NSPasteboard::generalPasteboard().changeCount());
                     let mut last = last_cc.lock().unwrap();
                     if cc == *last {
                         drop(last);
@@ -503,21 +518,19 @@ impl ClipboardListener for PollingClipboardListener {
                     .unwrap()
                     .is_none_or(|end| end.elapsed().as_millis() > 500);
 
-                if let Ok(ctx) = ClipboardContext::new() {
-                    if let Some(item) = detect_clipboard_content(&ctx) {
-                        // --- Update the hash tracker so external consumers can see ---
-                        // --- the latest hash. We intentionally push even when the ---
-                        // --- hash matches last round — a re-copy of the same content ---
-                        // --- should refresh updated_at and bump the item to the top. ---
-                        // --- The sequence-number fast-path above already skips ---
-                        // --- no-change cycles efficiently. ---
-                        {
-                            let mut last = last_hash.lock().unwrap();
-                            *last = item.content_hash;
-                        }
-                        if startup_done {
-                            pending.lock().unwrap().push(item);
-                        }
+                if let Some(item) = with_clipboard_context(detect_clipboard_content).flatten() {
+                    // --- Update the hash tracker so external consumers can see ---
+                    // --- the latest hash. We intentionally push even when the ---
+                    // --- hash matches last round — a re-copy of the same content ---
+                    // --- should refresh updated_at and bump the item to the top. ---
+                    // --- The sequence-number fast-path above already skips ---
+                    // --- no-change cycles efficiently. ---
+                    {
+                        let mut last = last_hash.lock().unwrap();
+                        *last = item.content_hash;
+                    }
+                    if startup_done {
+                        pending.lock().unwrap().push(item);
                     }
                 }
 
@@ -582,5 +595,44 @@ pub fn create_listener() -> Box<dyn ClipboardListener> {
     #[cfg(target_os = "linux")]
     {
         Box::new(LinuxClipboardListener::new())
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::with_clipboard_access;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn clipboard_access_is_serialized_between_threads() {
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let (second_entered_tx, second_entered_rx) = mpsc::channel();
+
+        let first = std::thread::spawn(move || {
+            with_clipboard_access(|| {
+                first_entered_tx.send(()).unwrap();
+                release_first_rx.recv().unwrap();
+            });
+        });
+        first_entered_rx.recv().unwrap();
+
+        let second = std::thread::spawn(move || {
+            with_clipboard_access(|| {
+                second_entered_tx.send(()).unwrap();
+            });
+        });
+
+        assert!(second_entered_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err());
+        release_first_tx.send(()).unwrap();
+        second_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        first.join().unwrap();
+        second.join().unwrap();
     }
 }
