@@ -357,8 +357,11 @@ fn copy_dir_recursive_missing(src: &Path, dst: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        migrate_legacy_files_from, portable_mode_allowed, CONFIG_FILE, DB_FILE,
+        migrate_legacy_files_from, CONFIG_FILE, DB_FILE,
     };
+    #[cfg(target_os = "macos")]
+    use super::portable_mode_allowed;
+    #[cfg(target_os = "macos")]
     use std::path::Path;
 
     #[cfg(target_os = "macos")]

@@ -124,6 +124,7 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_request_accessibility_permission(is_trusted: bool, already_requested: bool) -> bool {
     !is_trusted && !already_requested
 }
