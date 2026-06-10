@@ -153,7 +153,9 @@ impl GpuiClipboardService {
                 log::error!("Failed to upsert clipboard item: {err}");
                 continue;
             }
-            state.sync_dirty.store(true, Ordering::SeqCst);
+            if state.should_mark_sync_dirty(&item) {
+                state.sync_dirty.store(true, Ordering::SeqCst);
+            }
             changed = true;
 
             // ── Post-upsert: run detection for items that need it ──

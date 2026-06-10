@@ -428,7 +428,8 @@ fn run_sync_cycle_for_backend(
     let pushed_tags = payload.tags.len() as u32;
 
     if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
-        return (true, "Up to date".into(), stats, pushed_items, pushed_tags);
+        // Snapshot unchanged — nothing was actually pushed.
+        return (true, "Up to date".into(), stats, 0, 0);
     }
     if let Err(error) = backend.push(&payload) {
         return (

@@ -170,7 +170,8 @@ impl ClipboardListView {
     }
 
     /// Reload local items from AppState without resetting UI state.
-    /// Use after mutations (toggle_favorite, delete) to keep the list in sync.
+    /// Use after mutations (toggle_favorite, tag ops, delete) to keep the list
+    /// in sync. Items retain their current order; re-sort on next window open.
     pub(crate) fn sync_items_from_state(&mut self, cx: &mut Context<Self>) {
         let app_items = self.state.read(cx).items.clone();
         self.item_sizes = Rc::new(Self::compute_sizes(&app_items, &self.card_height_mode));
@@ -455,8 +456,8 @@ impl ClipboardListView {
                 .update(cx, |s, _cx| s.toggle_item_tag(target_id, tag_id));
         }
         self.sync_items_from_state(cx);
-        // --- After tag change the item may have sorted to a new position ---
-        // --- (updated_at changed). Scroll to keep it visible. ---
+        // --- Keep the affected item selected and visible. ---
+        // --- (updated_at is bumped but position is preserved — see AppState) ---
         self.scroll_to_item_if_visible(target_id, cx);
     }
 
@@ -478,9 +479,9 @@ impl ClipboardListView {
         self.scroll_to_item_if_visible(target_id, cx);
     }
 
-    /// After a tag operation changes `updated_at`, the item may sort to a
-    /// different position in the list. Find its new index and scroll to it
-    /// so the user doesn't lose sight of the item they were editing.
+    /// After a tag/favorite/note operation bumps `updated_at`, keep the affected
+    /// item selected and in view. The item retains its current list position;
+    /// re-sort happens on next window open.
     fn scroll_to_item_if_visible(&mut self, item_id: i64, cx: &mut Context<Self>) {
         if item_id <= 0 {
             return;

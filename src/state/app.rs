@@ -126,6 +126,20 @@ impl AppState {
         }
     }
 
+    /// Check whether a mutation on this item should mark sync as dirty.
+    ///
+    /// Image/file types are never synced. In favorites-only mode, only
+    /// favorite items trigger sync cycles.
+    pub fn should_mark_sync_dirty(&self, item: &ClipboardItem) -> bool {
+        if matches!(item.content_type, ContentType::Image | ContentType::File) {
+            return false;
+        }
+        if self.settings.sync_favorites_only && !item.is_favorite {
+            return false;
+        }
+        true
+    }
+
     /// Reload items from database with current filters.
     pub fn reload_items(&mut self) {
         match self
@@ -313,14 +327,39 @@ impl AppState {
 
     pub fn save_edited_item(&mut self, id: i64, text: &str, editor_type: &str) -> bool {
         let (content_type, meta_type, rich_data) = Self::storage_for_editor_type(editor_type, text);
+        // Pre-flight: is the item in sync scope? Check before DB write.
+        let mark_dirty = self
+            .items
+            .iter()
+            .find(|it| it.id == id)
+            .is_some_and(|item| self.should_mark_sync_dirty(item));
         match self
             .db
             .update_content_with_rich_data(id, text, content_type, meta_type, &rich_data)
         {
             Ok(_) => {
-                self.sync_dirty.store(true, Ordering::SeqCst);
+                if mark_dirty {
+                    self.sync_dirty.store(true, Ordering::SeqCst);
+                }
                 self.cancel_edit_item();
-                self.reload_items();
+                // Incremental update: preserve scroll position (consistent with
+                // update_note / toggle_favorite). The item keeps its current
+                // position; re-sort happens on next window open via reload_items().
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.full_text = text.to_string();
+                    item.content_type = ContentType::from_str(content_type);
+                    item.meta_type = meta_type.to_string();
+                    item.rich_data = rich_data;
+                    item.image_path.clear();
+                    item.file_data.clear();
+                    item.image_width = 0;
+                    item.image_height = 0;
+                    item.size = text.chars().count() as i64;
+                    item.updated_at = chrono::Utc::now();
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&text, &mut hasher);
+                    item.content_hash = std::hash::Hasher::finish(&hasher);
+                }
                 true
             }
             Err(e) => {
@@ -361,11 +400,12 @@ impl AppState {
     }
 
     pub fn toggle_item_tag(&mut self, item_id: i64, tag_id: i64) {
-        let has_tag = self
-            .items
-            .iter()
-            .find(|item| item.id == item_id)
-            .is_some_and(|item| item.tags.iter().any(|tag| tag.id == tag_id));
+        let item = match self.items.iter().find(|item| item.id == item_id) {
+            Some(item) => item,
+            None => return,
+        };
+        let mark_dirty = self.should_mark_sync_dirty(item);
+        let has_tag = item.tags.iter().any(|tag| tag.id == tag_id);
         let result = if has_tag {
             self.db.remove_item_tag(item_id, tag_id)
         } else {
@@ -375,47 +415,117 @@ impl AppState {
             log::error!("toggle_item_tag({item_id}, {tag_id}): {e}");
             return;
         }
-        self.sync_dirty.store(true, Ordering::SeqCst);
-        self.reload_items();
+        if mark_dirty {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
+        // Incremental update: re-fetch tags for the affected item instead of
+        // reloading all items, so scroll position is preserved.
+        if let Ok(Some(updated)) = self.db.get_by_id_with_tags(item_id) {
+            if let Some(item) = self.items.iter_mut().find(|it| it.id == item_id) {
+                item.tags = updated.tags;
+                item.updated_at = updated.updated_at;
+            }
+        }
     }
 
     pub fn batch_add_tag(&mut self, ids: &[i64], tag_id: i64) {
+        let mark_dirty = ids.iter().any(|&id| {
+            self.items
+                .iter()
+                .find(|it| it.id == id)
+                .is_some_and(|item| self.should_mark_sync_dirty(item))
+        });
         for &id in ids {
             if let Err(e) = self.db.add_item_tag(id, tag_id) {
                 log::error!("batch_add_tag({id}, {tag_id}): {e}");
             }
         }
-        self.sync_dirty.store(true, Ordering::SeqCst);
-        self.reload_items();
+        if mark_dirty {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
+        // Incremental update: re-fetch tags for affected items (preserve scroll position)
+        for &id in ids {
+            if let Ok(Some(updated)) = self.db.get_by_id_with_tags(id) {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.tags = updated.tags;
+                    item.updated_at = updated.updated_at;
+                }
+            }
+        }
     }
 
     pub fn batch_remove_tag(&mut self, ids: &[i64], tag_id: i64) {
+        let mark_dirty = ids.iter().any(|&id| {
+            self.items
+                .iter()
+                .find(|it| it.id == id)
+                .is_some_and(|item| self.should_mark_sync_dirty(item))
+        });
         for &id in ids {
             if let Err(e) = self.db.remove_item_tag(id, tag_id) {
                 log::error!("batch_remove_tag({id}, {tag_id}): {e}");
             }
         }
-        self.sync_dirty.store(true, Ordering::SeqCst);
-        self.reload_items();
+        if mark_dirty {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
+        // Incremental update: re-fetch tags for affected items (preserve scroll position)
+        for &id in ids {
+            if let Ok(Some(updated)) = self.db.get_by_id_with_tags(id) {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.tags = updated.tags;
+                    item.updated_at = updated.updated_at;
+                }
+            }
+        }
     }
 
     pub fn clear_item_tags(&mut self, item_id: i64) {
+        let mark_dirty = self
+            .items
+            .iter()
+            .find(|it| it.id == item_id)
+            .is_some_and(|item| self.should_mark_sync_dirty(item));
         if let Err(e) = self.db.clear_item_tags(item_id) {
             log::error!("clear_item_tags({item_id}): {e}");
             return;
         }
-        self.sync_dirty.store(true, Ordering::SeqCst);
-        self.reload_items();
+        if mark_dirty {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
+        // Incremental update: re-fetch tags for the affected item (preserve scroll position)
+        if let Ok(Some(updated)) = self.db.get_by_id_with_tags(item_id) {
+            if let Some(item) = self.items.iter_mut().find(|it| it.id == item_id) {
+                item.tags = updated.tags;
+                item.updated_at = updated.updated_at;
+            }
+        }
     }
 
     pub fn clear_tags_for_items(&mut self, ids: &[i64]) {
+        let mark_dirty = ids.iter().any(|&id| {
+            self.items
+                .iter()
+                .find(|it| it.id == id)
+                .is_some_and(|item| self.should_mark_sync_dirty(item))
+        });
         for &id in ids {
             if let Err(e) = self.db.clear_item_tags(id) {
                 log::error!("clear_tags_for_items({id}): {e}");
             }
         }
-        self.sync_dirty.store(true, Ordering::SeqCst);
-        self.reload_items();
+        if mark_dirty {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
+        // Incremental update: re-fetch tags for affected items (preserve scroll position)
+        for &id in ids {
+            if let Ok(Some(updated)) = self.db.get_by_id_with_tags(id) {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.tags = updated.tags;
+                    item.updated_at = updated.updated_at;
+                }
+            }
+        }
     }
 
     fn order_by(&self) -> &'static str {
@@ -838,8 +948,16 @@ impl AppState {
     /// Update the note field for a clipboard item.
     /// Writes to DB (includes updated_at) and syncs the in-memory items list.
     pub fn update_note(&mut self, id: i64, note: &str) {
+        let mark_dirty = self
+            .items
+            .iter()
+            .find(|it| it.id == id)
+            .is_some_and(|item| self.should_mark_sync_dirty(item));
         match self.db.update_note(id, note) {
             Ok(_) => {
+                if mark_dirty {
+                    self.sync_dirty.store(true, Ordering::SeqCst);
+                }
                 if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
                     item.note = note.to_string();
                     item.updated_at = chrono::Utc::now();
@@ -1099,5 +1217,300 @@ fn reveal_file_location(path: &str) {
         if let Some(parent) = std::path::Path::new(path).parent() {
             let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db::Database;
+    use crate::core::filters::ClipboardFilters;
+    use crate::core::settings::AppSettings;
+    use crate::core::types::{ClipboardItem, ContentType};
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    fn make_item(id: i64, content_type: ContentType, is_favorite: bool, full_text: &str) -> ClipboardItem {
+        ClipboardItem {
+            id,
+            content_type,
+            full_text: full_text.to_string(),
+            content_hash: 0x100 + id as u64,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rich_data: String::new(),
+            file_data: String::new(),
+            is_favorite,
+            note: String::new(),
+            source_app_name: String::new(),
+            source_app_icon: String::new(),
+            size: full_text.len() as i64,
+            tags: Vec::new(),
+            meta_type: String::new(),
+        }
+    }
+
+    fn test_state() -> (AppState, Arc<AtomicBool>) {
+        let db = Database::open(":memory:").unwrap();
+        let dirty = Arc::new(AtomicBool::new(false));
+        let mut settings = AppSettings::default();
+        settings.db_path = ":memory:".to_string();
+        let state = AppState {
+            settings,
+            db,
+            items: Vec::new(),
+            tags: Vec::new(),
+            filters: ClipboardFilters::default(),
+            selected_ids: Vec::new(),
+            editing_tag_id: -1,
+            editing_tag_name: String::new(),
+            editing_tag_color: "#3B82F6".into(),
+            editing_item_id: -1,
+            editing_item: None,
+            batch_pasting: Arc::new(AtomicBool::new(false)),
+            skip_next: Arc::new(AtomicBool::new(false)),
+            sync_dirty: dirty.clone(),
+            toast_message: None,
+            foreground_app_name: String::new(),
+            foreground_window_title: String::new(),
+            foreground_app_icon_base64: String::new(),
+            hotkey_recording: false,
+            sync: SyncState::default(),
+        };
+        (state, dirty)
+    }
+
+    // ── should_mark_sync_dirty ──────────────────────────────────────
+
+    #[test]
+    fn dirty_image_type_always_false() {
+        let (state, _dirty) = test_state();
+        let item = make_item(1, ContentType::Image, false, "img.png");
+        assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn dirty_file_type_always_false() {
+        let (state, _dirty) = test_state();
+        let item = make_item(1, ContentType::File, false, "doc.pdf");
+        assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn dirty_favorites_only_non_fav_false() {
+        let (mut state, _dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn dirty_favorites_only_fav_true() {
+        let (mut state, _dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, true, "hello");
+        assert!(state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn dirty_normal_mode_non_fav_true() {
+        let (mut state, _dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        assert!(state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn dirty_image_favorite_still_false() {
+        let (mut state, _dirty) = test_state();
+        // Image is never synced, regardless of favorite status or sync mode
+        state.settings.sync_favorites_only = false;
+        let item = make_item(1, ContentType::Image, true, "img.png");
+        assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    // ── save_edited_item sync_dirty ────────────────────────────────
+
+    #[test]
+    fn save_edited_item_sets_dirty_in_normal_mode() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        // Insert item into DB and in-memory list
+        let item = make_item(1, ContentType::PlainText, false, "original");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        let ok = state.save_edited_item(1, "edited", "plain");
+        assert!(ok);
+        assert!(dirty.load(Ordering::SeqCst), "normal mode: should set dirty");
+    }
+
+    #[test]
+    fn save_edited_item_sets_dirty_for_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, true, "original");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        let ok = state.save_edited_item(1, "edited", "plain");
+        assert!(ok);
+        assert!(dirty.load(Ordering::SeqCst), "favorite item in fav-only mode: should set dirty");
+    }
+
+    #[test]
+    fn save_edited_item_skips_dirty_for_non_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, false, "original");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        let ok = state.save_edited_item(1, "edited", "plain");
+        assert!(ok);
+        assert!(!dirty.load(Ordering::SeqCst), "non-favorite item in fav-only mode: should NOT set dirty");
+    }
+
+    // ── toggle_item_tag sync_dirty ─────────────────────────────────
+
+    fn setup_tag(state: &mut AppState) -> i64 {
+        // Create a tag
+        state.db.create_tag("test-tag", "#FF0000").unwrap()
+    }
+
+    #[test]
+    fn toggle_item_tag_sets_dirty_normal_mode() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.toggle_item_tag(1, tag_id);
+        assert!(dirty.load(Ordering::SeqCst), "normal mode: should set dirty");
+    }
+
+    #[test]
+    fn toggle_item_tag_sets_dirty_for_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, true, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.toggle_item_tag(1, tag_id);
+        assert!(dirty.load(Ordering::SeqCst), "favorite item in fav-only mode: should set dirty");
+    }
+
+    #[test]
+    fn toggle_item_tag_skips_dirty_for_non_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.toggle_item_tag(1, tag_id);
+        assert!(!dirty.load(Ordering::SeqCst), "non-favorite item in fav-only mode: should NOT set dirty");
+    }
+
+    // ── clear_item_tags sync_dirty ─────────────────────────────────
+
+    #[test]
+    fn clear_item_tags_skips_dirty_for_non_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.db.add_item_tag(1, tag_id).unwrap();
+        state.items.push(item);
+
+        state.clear_item_tags(1);
+        assert!(!dirty.load(Ordering::SeqCst), "non-favorite item in fav-only mode: should NOT set dirty");
+    }
+
+    #[test]
+    fn clear_item_tags_sets_dirty_for_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, true, "hello");
+        state.db.upsert(&item).unwrap();
+        state.db.add_item_tag(1, tag_id).unwrap();
+        state.items.push(item);
+
+        state.clear_item_tags(1);
+        assert!(dirty.load(Ordering::SeqCst), "favorite item in fav-only mode: should set dirty");
+    }
+
+    // ── toggle_favorite ALWAYS sets dirty ──────────────────────────
+
+    #[test]
+    fn toggle_favorite_always_sets_dirty_even_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.toggle_favorite(1);
+        assert!(dirty.load(Ordering::SeqCst), "toggle_favorite should always set dirty (tombstones)");
+    }
+
+    #[test]
+    fn delete_item_always_sets_dirty() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.delete_item(1);
+        assert!(dirty.load(Ordering::SeqCst), "delete should always set dirty (tombstones)");
+    }
+
+    // ── update_note sync_dirty ─────────────────────────────────────
+
+    #[test]
+    fn update_note_sets_dirty_in_normal_mode() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        let item = make_item(1, ContentType::PlainText, true, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.update_note(1, "new note");
+        assert!(dirty.load(Ordering::SeqCst), "normal mode: should set dirty");
+    }
+
+    #[test]
+    fn update_note_skips_dirty_for_non_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.update_note(1, "new note");
+        assert!(!dirty.load(Ordering::SeqCst), "non-favorite in fav-only: should NOT set dirty");
+    }
+
+    #[test]
+    fn update_note_sets_dirty_for_favorite_in_favorites_only() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let item = make_item(1, ContentType::PlainText, true, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.update_note(1, "new note");
+        assert!(dirty.load(Ordering::SeqCst), "favorite in fav-only: should set dirty");
     }
 }
