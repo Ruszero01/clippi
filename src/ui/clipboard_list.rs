@@ -75,6 +75,9 @@ pub struct ClipboardListView {
     tag_create_input: Entity<InputState>,
     /// Active confirmation dialog (None = hidden).
     confirm_dialog: Option<ConfirmDialogState>,
+    /// Persisted last-selected item ID — survives across set_items calls
+    /// (including the empty-item clear during window hide).
+    last_selected_id: i64,
     theme: ClippiTheme,
 }
 
@@ -114,17 +117,20 @@ impl ClipboardListView {
             note_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::ListNotePlaceholder.text())),
             tag_create_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())),
             confirm_dialog: None,
+            last_selected_id: -1,
             theme,
         }
     }
 
     pub fn set_items(&mut self, items: Vec<ClipboardItem>, cx: &mut Context<Self>) {
         self.item_sizes = Rc::new(Self::compute_sizes(&items, &self.card_height_mode));
-        // --- Save previous selection before swapping items ---
-        let prev_id = self
-            .selected_index
-            .and_then(|idx| self.items.get(idx))
-            .map(|item| item.id);
+        // --- Persist current selection before swap (survives empty-item clears ---
+        // --- during window hide, when hide() emits ClipboardChanged).         ---
+        if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                self.last_selected_id = item.id;
+            }
+        }
         self.items = items;
         self.selected_ids.clear();
         self.selected_index = None;
@@ -133,7 +139,6 @@ impl ClipboardListView {
         self.hovered_index = None;
         let scroll_to_latest = self.state.read(cx).settings.auto_scroll_to_top;
         if scroll_to_latest && !self.items.is_empty() {
-            // --- Scroll to latest: select the most recently updated item ---
             let latest_idx = self
                 .items
                 .iter()
@@ -144,9 +149,13 @@ impl ClipboardListView {
             self.select_index_without_scroll(latest_idx, cx);
             self.scroll_handle
                 .scroll_to_item(latest_idx, ScrollStrategy::Top);
-        } else if let Some(id) = prev_id {
-            // --- Keep position: restore the previously selected item ---
-            if let Some(idx) = self.items.iter().position(|item| item.id == id) {
+        } else if self.last_selected_id > 0 {
+            // --- Keep position: restore the previously selected item by persisted ID ---
+            if let Some(idx) = self
+                .items
+                .iter()
+                .position(|item| item.id == self.last_selected_id)
+            {
                 self.select_index_without_scroll(idx, cx);
                 self.scroll_handle
                     .scroll_to_item(idx, ScrollStrategy::Top);
