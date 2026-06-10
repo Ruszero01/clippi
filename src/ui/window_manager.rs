@@ -320,6 +320,11 @@ impl WindowManager {
                 self.show_and_focus(cx);
             }
             Some(TrayAction::OpenSettings) => {
+                // --- If the window is hidden, show it first — otherwise ---
+                // --- the settings view switch happens off-screen. ---
+                if !self.visible {
+                    self.show_and_focus(cx);
+                }
                 cx.emit(WindowManagerEvent::OpenSettings);
             }
             Some(TrayAction::Restart) => {

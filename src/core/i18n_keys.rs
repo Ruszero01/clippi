@@ -335,6 +335,8 @@ define_i18n! {
     CardTypePath:           ("路径", "Path"),
     CardTypeFiles:          ("{0} 个文件", "{0} Files"),
     CardImageSize:          ("{0} × {1}", "{0} × {1}"),
+    CardChars:              ("{0} 字符", "{0} chars"),
+    CardFilesCount:         ("{0} 个文件", "{0} files"),
 
     // ─── Clipboard list ───
     ListNoItems:            ("暂无条目", "No items yet"),

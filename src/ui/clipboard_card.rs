@@ -172,6 +172,21 @@ fn cached_source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
 
 /// Get a cached file system icon for a given file path.
 /// Icons are cached by extension (or "folder" for dirs) in `images_dir()/file_icons/`.
+/// Check if a favicon is cached for a URL's domain.
+/// Only checks the local cache — no network fetch during rendering.
+/// Format a file size in bytes to a human-readable string.
+fn format_file_size(bytes: i64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
 fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std::path::PathBuf> {
     use std::path::Path;
     let cache_key = if is_dir {
@@ -762,6 +777,69 @@ impl RenderOnce for ClipboardCard {
                             ),
                     )
             }
+            ContentType::Link => {
+                // --- Favicon priority: cache → source app icon → type icon ---
+                // --- Only checks local cache — network fetch happens async ---
+                // --- in the clipboard detection thread (ensure_favicon_cached). ---
+                let domain = url_domain(&full_text);
+                let favicon_path = if domain.is_empty() {
+                    None
+                } else {
+                    crate::platform::favicon::favicon_cache_path(&domain)
+                        .map(std::path::PathBuf::from)
+                };
+                // --- Source app icon only when the setting is enabled ---
+                let app_icon = if show_source {
+                    source_icon_path
+                } else {
+                    None
+                };
+                let effective_icon = favicon_path.or(app_icon);
+                div()
+                    .w(px(36.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .w(px(36.))
+                            .h(px(28.))
+                            .rounded(px(6.))
+                            .bg(tag_bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if let Some(path) = effective_icon {
+                                gpui::img(path).w(px(20.)).h(px(20.)).into_any_element()
+                            } else {
+                                div()
+                                    .text_size(px(18.))
+                                    .font_family("iconfont")
+                                    .text_color(tag_text)
+                                    .child(icon.to_string())
+                                    .into_any_element()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w(px(36.))
+                            .h(px(14.))
+                            .rounded(px(3.))
+                            .bg(tag_bg)
+                            .px(px(3.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(tag_text)
+                                    .truncate()
+                                    .child(label.to_string()),
+                            ),
+                    )
+            }
             _ => div()
                 .w(px(36.))
                 .flex()
@@ -1072,7 +1150,38 @@ impl RenderOnce for ClipboardCard {
             }
         };
 
-        // --- Bottom info row ---
+        // --- Size label for types that have measurable content ---
+        let size_label: Option<String> = match content_type {
+            ContentType::PlainText | ContentType::RichText => {
+                let count = item.size.max(0) as u64;
+                if count > 0 {
+                    Some(I18nKey::CardChars.fmt(&[&count.to_string()]))
+                } else {
+                    None
+                }
+            }
+            ContentType::Image => {
+                if img_w > 0 && img_h > 0 {
+                    Some(format!("{}×{}", img_w, img_h))
+                } else {
+                    None
+                }
+            }
+            ContentType::File => {
+                let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
+                let count = fd.files.len();
+                if count > 1 {
+                    Some(I18nKey::CardFilesCount.fmt(&[&count.to_string()]))
+                } else if item.size > 0 {
+                    Some(format_file_size(item.size))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        // --- Bottom info row: tags → size label → time ---
         let bottom_info = div()
             .absolute()
             .right(px(10.))
@@ -1100,6 +1209,25 @@ impl RenderOnce for ClipboardCard {
                             .child(tag.name.clone()),
                     )
             }))
+            .when_some(size_label, |el, label| {
+                el.child(
+                    div()
+                        .h(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(pill_border)
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(text_2)
+                                .child(label),
+                        ),
+                )
+            })
             .child(
                 div()
                     .h(px(18.))

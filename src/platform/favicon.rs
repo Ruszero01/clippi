@@ -26,6 +26,17 @@ fn cache_path(domain: &str) -> PathBuf {
         .join(format!("favicon_{}.png", sanitize_domain(domain)))
 }
 
+/// Check if a favicon is cached locally for the given domain.
+/// Returns the file path if it exists — no network request.
+pub fn favicon_cache_path(domain: &str) -> Option<String> {
+    let path = cache_path(domain);
+    if path.exists() {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 /// Try to fetch a favicon from Google's service and cache it to disk.
 /// Returns the disk path if already cached or successfully fetched.
 /// Returns `None` on any failure (network, non-200, disk write).
