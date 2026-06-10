@@ -147,10 +147,9 @@ impl SettingsPanel {
                             })
                             .child(
                                 div()
-                                    .font_family("iconfont")
-                                    .text_size(px(13.))
+                                    .text_size(px(14.))
                                     .text_color(accent)
-                                    .child("\u{e6df}"),
+                                    .child("+"),
                             )
                             .child(
                                 div()
