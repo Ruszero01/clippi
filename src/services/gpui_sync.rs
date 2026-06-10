@@ -20,11 +20,16 @@ use crate::state::sync::{service_label, BackendStatus as UiBackendStatus, SyncSt
 #[derive(Debug, Clone)]
 struct BackendSyncResult {
     backend_id: String,
+    cycle: SyncCycleResult,
+}
+
+#[derive(Debug, Clone)]
+struct SyncCycleResult {
     success: bool,
     message: String,
     stats: MergeStats,
-    pushed_items: u32,
-    pushed_tags: u32,
+    snapshot_counts: Option<(u32, u32)>,
+    did_push: bool,
 }
 
 struct BackendRuntime {
@@ -236,32 +241,26 @@ impl GpuiSyncService {
         let favorites_only = self.favorites_only;
 
         std::thread::spawn(move || {
-            let (success, message, stats, pushed_items, pushed_tags) = run_sync_cycle_for_backend(
+            let cycle = run_sync_cycle_for_backend(
                 backend.as_ref(),
                 &db,
                 &cancel,
                 favorites_only,
                 force_push,
             );
-            *pending.lock().expect("sync result lock poisoned") = Some(BackendSyncResult {
-                backend_id,
-                success,
-                message,
-                stats,
-                pushed_items,
-                pushed_tags,
-            });
+            *pending.lock().expect("sync result lock poisoned") =
+                Some(BackendSyncResult { backend_id, cycle });
             running.store(false, Ordering::SeqCst);
         });
     }
 
     fn apply_result(&mut self, result: BackendSyncResult, app: &mut AppState) -> bool {
-        let has_merge = result.stats.items_added > 0
-            || result.stats.items_updated > 0
-            || result.stats.items_deleted > 0
-            || result.stats.tags_added > 0
-            || result.stats.tags_deleted > 0;
-        self.last_message = result.message.clone();
+        let has_merge = result.cycle.stats.items_added > 0
+            || result.cycle.stats.items_updated > 0
+            || result.cycle.stats.items_deleted > 0
+            || result.cycle.stats.tags_added > 0
+            || result.cycle.stats.tags_deleted > 0;
+        self.last_message = result.cycle.message.clone();
 
         let Some(runtime) = self
             .backends
@@ -271,18 +270,13 @@ impl GpuiSyncService {
             return has_merge;
         };
 
-        if result.success {
+        if result.cycle.success {
             runtime.status = BackendStatus::Online;
             runtime.status_message.clear();
-            let has_changes = has_merge || result.pushed_items > 0 || result.pushed_tags > 0;
-            if has_changes {
-                runtime.config.last_sync_at = chrono::Utc::now().to_rfc3339();
-                runtime.config.last_item_count = result.pushed_items;
-                runtime.config.last_tag_count = result.pushed_tags;
-            }
+            update_backend_sync_metadata(&mut runtime.config, &result.cycle, has_merge);
         } else {
-            runtime.status = BackendStatus::Error(result.message.clone());
-            runtime.status_message = result.message;
+            runtime.status = BackendStatus::Error(result.cycle.message.clone());
+            runtime.status_message = result.cycle.message;
         }
 
         if let Some(config) = app
@@ -326,6 +320,20 @@ impl GpuiSyncService {
             favorites_only: self.favorites_only,
             last_message: self.last_message.clone(),
         }
+    }
+}
+
+fn update_backend_sync_metadata(
+    config: &mut BackendConfig,
+    cycle: &SyncCycleResult,
+    has_merge: bool,
+) {
+    if let Some((items, tags)) = cycle.snapshot_counts {
+        config.last_item_count = items;
+        config.last_tag_count = tags;
+    }
+    if has_merge || cycle.did_push {
+        config.last_sync_at = chrono::Utc::now().to_rfc3339();
     }
 }
 
@@ -384,7 +392,7 @@ fn run_sync_cycle_for_backend(
     cancel: &AtomicBool,
     favorites_only: bool,
     force_push: bool,
-) -> (bool, String, MergeStats, u32, u32) {
+) -> SyncCycleResult {
     let local_device = crate::services::backends::local_folder::hostname();
     let mut stats = MergeStats::default();
     let mut remote_hash = None;
@@ -396,57 +404,190 @@ fn run_sync_cycle_for_backend(
             match sync::merge_remote_into_local(db, &mut remote, &local_device) {
                 Ok(merge_stats) => stats = merge_stats,
                 Err(error) => {
-                    return (false, format!("Remote merge failed: {error}"), stats, 0, 0);
+                    return SyncCycleResult {
+                        success: false,
+                        message: format!("Remote merge failed: {error}"),
+                        stats,
+                        snapshot_counts: None,
+                        did_push: false,
+                    };
                 }
             }
         }
         Err(error) if error == "@@unchanged" => remote_unchanged = true,
         Err(error) if error.contains("not found") || error.contains("不存在") => {}
-        Err(error) => return (false, format!("Pull failed: {error}"), stats, 0, 0),
+        Err(error) => {
+            return SyncCycleResult {
+                success: false,
+                message: format!("Pull failed: {error}"),
+                stats,
+                snapshot_counts: None,
+                did_push: false,
+            };
+        }
     }
 
     if cancel.load(Ordering::Relaxed) {
-        return (false, "Sync cancelled".into(), stats, 0, 0);
+        return SyncCycleResult {
+            success: false,
+            message: "Sync cancelled".into(),
+            stats,
+            snapshot_counts: None,
+            did_push: false,
+        };
     }
     if !force_push && remote_unchanged && stats.is_empty() {
-        return (true, "Up to date".into(), stats, 0, 0);
+        return SyncCycleResult {
+            success: true,
+            message: "Up to date".into(),
+            stats,
+            snapshot_counts: None,
+            did_push: false,
+        };
     }
 
     let payload = match sync::build_snapshot(db, backend.name(), favorites_only) {
         Ok(payload) => payload,
         Err(error) => {
-            return (
-                false,
-                format!("Snapshot build failed: {error}"),
+            return SyncCycleResult {
+                success: false,
+                message: format!("Snapshot build failed: {error}"),
                 stats,
-                0,
-                0,
-            );
+                snapshot_counts: None,
+                did_push: false,
+            };
         }
     };
-    let pushed_items = payload.items.len() as u32;
-    let pushed_tags = payload.tags.len() as u32;
+    let snapshot_counts = (payload.items.len() as u32, payload.tags.len() as u32);
 
     if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
-        // Snapshot unchanged — nothing was actually pushed.
-        return (true, "Up to date".into(), stats, 0, 0);
+        return SyncCycleResult {
+            success: true,
+            message: "Up to date".into(),
+            stats,
+            snapshot_counts: Some(snapshot_counts),
+            did_push: false,
+        };
     }
     if let Err(error) = backend.push(&payload) {
-        return (
-            false,
-            format!("Push failed: {error}"),
+        return SyncCycleResult {
+            success: false,
+            message: format!("Push failed: {error}"),
             stats,
-            pushed_items,
-            pushed_tags,
-        );
+            snapshot_counts: Some(snapshot_counts),
+            did_push: false,
+        };
     }
     let _ = backend.post_push_cleanup();
 
-    (
-        true,
-        format!("Sync complete: {pushed_items} items, {pushed_tags} tags"),
+    SyncCycleResult {
+        success: true,
+        message: format!(
+            "Sync complete: {} items, {} tags",
+            snapshot_counts.0, snapshot_counts.1
+        ),
         stats,
-        pushed_items,
-        pushed_tags,
-    )
+        snapshot_counts: Some(snapshot_counts),
+        did_push: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::settings::BackendConfig;
+    use crate::core::sync::{SyncItem, SyncPayload};
+    use std::sync::atomic::AtomicUsize;
+
+    struct MemoryBackend {
+        payload: SyncPayload,
+        pushes: AtomicUsize,
+    }
+
+    impl SyncBackend for MemoryBackend {
+        fn name(&self) -> &str {
+            "test-backend"
+        }
+
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
+            Ok(self.payload.clone())
+        }
+
+        fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
+            self.pushes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+    }
+
+    #[test]
+    fn unchanged_snapshot_reports_backend_counts() {
+        let db = Database::open(":memory:").expect("open in-memory database");
+        db.insert_sync_item_raw(&SyncItem {
+            content_type: "plain_text".into(),
+            full_text: "same on both devices".into(),
+            content_hash: 42,
+            created_at: "2026-06-10T08:00:00Z".into(),
+            updated_at: "2026-06-10T08:00:00Z".into(),
+            rich_data: String::new(),
+            is_favorite: true,
+            note: String::new(),
+            size: 20,
+            tags: vec![],
+            meta_type: String::new(),
+        })
+        .expect("insert sync item");
+        let db = Mutex::new(db);
+        let remote = sync::build_snapshot(&db, "remote-device", true).expect("build remote");
+        let backend = MemoryBackend {
+            payload: remote,
+            pushes: AtomicUsize::new(0),
+        };
+
+        let result = run_sync_cycle_for_backend(&backend, &db, &AtomicBool::new(false), true, true);
+
+        assert!(result.success);
+        assert_eq!(result.snapshot_counts, Some((1, 0)));
+        assert!(!result.did_push);
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn unchanged_sync_refreshes_counts_without_refreshing_timestamp() {
+        let mut config = BackendConfig {
+            id: "backend".into(),
+            enabled: true,
+            backend_type: "local_folder".into(),
+            name: "OneDrive".into(),
+            folder_path: String::new(),
+            device_name: String::new(),
+            last_sync_at: "2026-06-09T08:00:00Z".into(),
+            last_item_count: 6,
+            last_tag_count: 0,
+            sync_interval_secs: Some(60),
+            webdav_url: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        };
+        let result = SyncCycleResult {
+            success: true,
+            message: "Up to date".into(),
+            stats: MergeStats::default(),
+            snapshot_counts: Some((7, 2)),
+            did_push: false,
+        };
+
+        update_backend_sync_metadata(&mut config, &result, false);
+
+        assert_eq!(config.last_item_count, 7);
+        assert_eq!(config.last_tag_count, 2);
+        assert_eq!(config.last_sync_at, "2026-06-09T08:00:00Z");
+    }
 }
