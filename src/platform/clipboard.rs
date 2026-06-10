@@ -505,17 +505,17 @@ impl ClipboardListener for PollingClipboardListener {
 
                 if let Ok(ctx) = ClipboardContext::new() {
                     if let Some(item) = detect_clipboard_content(&ctx) {
-                        let changed = {
+                        // --- Update the hash tracker so external consumers can see ---
+                        // --- the latest hash. We intentionally push even when the ---
+                        // --- hash matches last round — a re-copy of the same content ---
+                        // --- should refresh updated_at and bump the item to the top. ---
+                        // --- The sequence-number fast-path above already skips ---
+                        // --- no-change cycles efficiently. ---
+                        {
                             let mut last = last_hash.lock().unwrap();
-                            if item.content_hash != *last {
-                                *last = item.content_hash;
-                                true
-                            } else {
-                                false
-                            }
-                        };
-
-                        if changed && startup_done {
+                            *last = item.content_hash;
+                        }
+                        if startup_done {
                             pending.lock().unwrap().push(item);
                         }
                     }

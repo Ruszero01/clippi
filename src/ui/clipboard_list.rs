@@ -126,6 +126,22 @@ impl ClipboardListView {
         self.anchor_index = None;
         self.selected_count = 0;
         self.hovered_index = None;
+        // --- Auto-select the most recently updated item and scroll to it. ---
+        // --- When sorted by updated_at DESC, index 0 is always correct. ---
+        // --- When sorted by created_at DESC, a re-copied duplicate keeps its ---
+        // --- old created_at, so we scan for the newest updated_at instead. ---
+        if !self.items.is_empty() {
+            let latest_idx = self
+                .items
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, item)| &item.updated_at)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.select_index_without_scroll(latest_idx, cx);
+            self.scroll_handle
+                .scroll_to_item(latest_idx, ScrollStrategy::Top);
+        }
         cx.notify();
     }
 
@@ -382,6 +398,7 @@ impl ClipboardListView {
     }
 
     pub fn toggle_picker_tag(&mut self, tag_id: i64, state: TagState, cx: &mut Context<Self>) {
+        let target_id = self.tag_picker_item_id;
         if self.tag_picker_is_batch {
             let ids = self.selected_ids.clone();
             if state == TagState::None {
@@ -391,12 +408,14 @@ impl ClipboardListView {
                 self.state
                     .update(cx, |s, _cx| s.batch_remove_tag(&ids, tag_id));
             }
-        } else if self.tag_picker_item_id > 0 {
-            let item_id = self.tag_picker_item_id;
+        } else if target_id > 0 {
             self.state
-                .update(cx, |s, _cx| s.toggle_item_tag(item_id, tag_id));
+                .update(cx, |s, _cx| s.toggle_item_tag(target_id, tag_id));
         }
         self.sync_items_from_state(cx);
+        // --- After tag change the item may have sorted to a new position ---
+        // --- (updated_at changed). Scroll to keep it visible. ---
+        self.scroll_to_item_if_visible(target_id, cx);
     }
 
     pub fn create_tag_from_picker(&mut self, name: &str, cx: &mut Context<Self>) {
@@ -405,15 +424,30 @@ impl ClipboardListView {
     }
 
     pub fn clear_picker_tags(&mut self, cx: &mut Context<Self>) {
+        let target_id = self.tag_picker_item_id;
         if self.tag_picker_is_batch {
             let ids = self.selected_ids.clone();
             self.state.update(cx, |s, _cx| s.clear_tags_for_items(&ids));
             self.hide_tag_picker(cx);
-        } else if self.tag_picker_item_id > 0 {
-            let item_id = self.tag_picker_item_id;
-            self.state.update(cx, |s, _cx| s.clear_item_tags(item_id));
+        } else if target_id > 0 {
+            self.state.update(cx, |s, _cx| s.clear_item_tags(target_id));
         }
         self.sync_items_from_state(cx);
+        self.scroll_to_item_if_visible(target_id, cx);
+    }
+
+    /// After a tag operation changes `updated_at`, the item may sort to a
+    /// different position in the list. Find its new index and scroll to it
+    /// so the user doesn't lose sight of the item they were editing.
+    fn scroll_to_item_if_visible(&mut self, item_id: i64, cx: &mut Context<Self>) {
+        if item_id <= 0 {
+            return;
+        }
+        if let Some(new_index) = self.items.iter().position(|item| item.id == item_id) {
+            self.select_index_without_scroll(new_index, cx);
+            self.scroll_handle
+                .scroll_to_item(new_index, ScrollStrategy::Top);
+        }
     }
 
     /// Start editing the note for an item.
