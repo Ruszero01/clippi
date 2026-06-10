@@ -146,6 +146,11 @@ impl Render for TagFilterPanel {
         let input_bg = theme.panel_input_bg;
         let sep_line = theme.panel_sep_line;
         let btn_hover = theme.btn_hover;
+        let accent_hover_bg = if is_dark {
+            rgba(0x7ecba335)
+        } else {
+            rgba(0x6ab89035)
+        };
         let panel_border = if is_dark {
             rgba(0xffffff14)
         } else {
@@ -266,13 +271,12 @@ impl Render for TagFilterPanel {
                             .items_center()
                             .justify_center()
                             .cursor(CursorStyle::PointingHand)
-                            .hover(|style| style.bg(accent))
+                            .hover(move |style| style.bg(accent_hover_bg))
                             .child(
                                 div()
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(accent)
-                                    .hover(|style| style.text_color(rgb(0xffffff)))
                                     .child(I18nKey::TagFilterAdd.text()),
                             )
                             .on_mouse_down(MouseButton::Left, {
