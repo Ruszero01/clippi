@@ -19,7 +19,7 @@ use gpui_component::text::{TextView, TextViewStyle};
 use crate::core::color::detect_color;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
-    format_relative_time, is_email, is_markdown_like, is_phone,
+    format_relative_time, is_email, is_phone,
     mask_sensitive_preview, parse_hex_color, url_domain, url_path, ClipboardItem, ContentType,
     FileData, FileInfo, RichData,
 };
@@ -55,40 +55,25 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
 
 /// Get a content type display label.
 fn type_label(item: &ClipboardItem) -> String {
-    if item.meta_type == "email" {
-        return I18nKey::CardTypeEmail.text().into();
-    }
-    if item.meta_type == "phone" {
-        return I18nKey::CardTypePhone.text().into();
-    }
+    use crate::core::types::DisplayKind;
+
+    // QR code is a special sub-type detected from rich_data, not the main kind
     if has_qr_code(item) {
         return I18nKey::CardTypeQr.text().into();
     }
-    match item.content_type {
-        ContentType::PlainText => I18nKey::CardTypeText.text().into(),
-        ContentType::RichText => {
-            if item.meta_type == "markdown" {
-                return I18nKey::CardTypeMd.text().into();
-            }
-            if item.meta_type == "html" {
-                return I18nKey::CardTypeHtml.text().into();
-            }
-            let rich = RichData::from_json(&item.rich_data);
-            if rich
-                .html
-                .as_deref()
-                .is_some_and(|html| !html.trim().is_empty())
-            {
-                I18nKey::CardTypeHtml.text().into()
-            } else {
-                I18nKey::CardTypeRtf.text().into()
-            }
-        }
-        ContentType::Image => I18nKey::CardTypeImage.text().into(),
-        ContentType::File => {
+
+    match item.display_kind() {
+        DisplayKind::Html => I18nKey::CardTypeHtml.text().into(),
+        DisplayKind::Markdown => I18nKey::CardTypeMd.text().into(),
+        DisplayKind::Rtf => I18nKey::CardTypeRtf.text().into(),
+        DisplayKind::Email => I18nKey::CardTypeEmail.text().into(),
+        DisplayKind::Phone => I18nKey::CardTypePhone.text().into(),
+        DisplayKind::Link => I18nKey::CardTypeUrl.text().into(),
+        DisplayKind::Path => I18nKey::CardTypePath.text().into(),
+        DisplayKind::Color => I18nKey::CardTypeColor.text().into(),
+        DisplayKind::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
             if fd.files.len() <= 1 {
-                // --- Single file: show "文件" or "文件夹" ---
                 let is_dir = fd.files.first().is_some_and(|f| f.is_dir);
                 if is_dir {
                     I18nKey::CardTypeFolder.text().into()
@@ -99,9 +84,8 @@ fn type_label(item: &ClipboardItem) -> String {
                 I18nKey::CardTypeFiles.fmt(&[&fd.files.len().to_string()])
             }
         }
-        ContentType::Link => I18nKey::CardTypeUrl.text().into(),
-        ContentType::Path => I18nKey::CardTypePath.text().into(),
-        ContentType::Color => I18nKey::CardTypeColor.text().into(),
+        DisplayKind::Image => I18nKey::CardTypeImage.text().into(),
+        DisplayKind::PlainText => I18nKey::CardTypeText.text().into(),
     }
 }
 
@@ -219,34 +203,31 @@ enum RichPreview {
 }
 
 fn rich_preview(item: &ClipboardItem) -> RichPreview {
-    if item.content_type == ContentType::RichText {
-        let rich = RichData::from_json(&item.rich_data);
-        if item.meta_type == "markdown" {
-            return RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text));
-        }
-        if item.meta_type == "html" {
+    use crate::core::types::DisplayKind;
+
+    match item.display_kind() {
+        DisplayKind::Html => {
+            let rich = RichData::from_json(&item.rich_data);
             let html = rich.html.unwrap_or_else(|| item.full_text.clone());
-            let html = rich_preview::normalize_clipboard_html_for_render(&html);
-            return RichPreview::Html(rich_preview::strip_html_links(&html));
-        }
-        if let Some(html) = rich.html.filter(|html| !html.trim().is_empty()) {
             let html = rich_preview::normalize_clipboard_html_for_render(&html);
             if let Some(lines) = rich_preview::parse_styled_html_lines(&html) {
                 return RichPreview::StyledHtml(lines);
             }
-            return RichPreview::Html(rich_preview::strip_html_links(&html));
+            RichPreview::Html(rich_preview::strip_html_links(&html))
         }
-        if is_markdown_like(&item.full_text) {
-            return RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text));
+        DisplayKind::Markdown => {
+            RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text))
         }
-        if let Some(rtf) = rich.rtf.filter(|rtf| !rtf.trim().is_empty()) {
-            return RichPreview::Markdown(rtf_to_plain_text(&rtf));
+        DisplayKind::Rtf => {
+            let rich = RichData::from_json(&item.rich_data);
+            if let Some(rtf) = rich.rtf.filter(|r| !r.trim().is_empty()) {
+                RichPreview::Markdown(rtf_to_plain_text(&rtf))
+            } else {
+                RichPreview::Plain(item.full_text.chars().take(300).collect())
+            }
         }
-    } else if is_markdown_like(&item.full_text) {
-        return RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text));
+        _ => RichPreview::Plain(item.full_text.chars().take(300).collect()),
     }
-
-    RichPreview::Plain(item.full_text.chars().take(300).collect())
 }
 
 fn rtf_to_plain_text(rtf: &str) -> String {

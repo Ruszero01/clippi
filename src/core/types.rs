@@ -43,6 +43,26 @@ impl ContentType {
     }
 }
 
+/// Unified content display classification.
+///
+/// Single source of truth for UI components to decide how to render or edit
+/// clipboard content. Derived from `content_type`, `meta_type`, and `rich_data`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayKind {
+    Html,
+    Markdown,
+    Rtf,
+    Email,
+    Phone,
+    Link,
+    Path,
+    Color,
+    File,
+    Image,
+    PlainText,
+}
+
+
 /// Source application info extracted when clipboard content is first captured
 #[derive(Debug, Clone)]
 pub struct SourceAppInfo {
@@ -335,6 +355,50 @@ impl ClipboardItem {
             size,
             tags: Vec::new(),
             meta_type: String::new(),
+        }
+    }
+
+    /// Unified content classification for UI rendering decisions.
+    ///
+    /// Single source of truth — card preview, type tag, and edit panel all
+    /// use this method to determine how to display or edit content.
+    pub fn display_kind(&self) -> DisplayKind {
+        // ── meta_type takes priority (explicit subtype from detection) ──
+        match self.meta_type.as_str() {
+            "markdown" => return DisplayKind::Markdown,
+            "html" => return DisplayKind::Html,
+            "email" => return DisplayKind::Email,
+            "phone" => return DisplayKind::Phone,
+            _ => {}
+        }
+        // ── Fall back to content_type + rich_data inspection ──
+        match self.content_type {
+            ContentType::RichText => {
+                let rich = RichData::from_json(&self.rich_data);
+                if rich
+                    .html
+                    .as_deref()
+                    .is_some_and(|html| !html.trim().is_empty())
+                {
+                    DisplayKind::Html
+                } else if rich
+                    .rtf
+                    .as_deref()
+                    .is_some_and(|rtf| !rtf.trim().is_empty())
+                {
+                    DisplayKind::Rtf
+                } else if is_markdown_like(&self.full_text) {
+                    DisplayKind::Markdown
+                } else {
+                    DisplayKind::PlainText
+                }
+            }
+            ContentType::Link => DisplayKind::Link,
+            ContentType::Path => DisplayKind::Path,
+            ContentType::Color => DisplayKind::Color,
+            ContentType::File => DisplayKind::File,
+            ContentType::Image => DisplayKind::Image,
+            _ => DisplayKind::PlainText,
         }
     }
 }

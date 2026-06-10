@@ -32,15 +32,20 @@ pub struct MenuItemContext {
 
 impl MenuItemContext {
     pub fn from_item(item: &crate::core::types::ClipboardItem) -> Self {
-        use crate::core::types::ContentType;
+        use crate::core::types::{ContentType, DisplayKind};
         let is_color = item.content_type == ContentType::Color;
         // --- is_hex = true → show "Paste as RGB" (convert FROM hex) ---
         let is_hex = is_color && crate::core::color::is_hex_format(&item.full_text);
+        // Only show "paste as plain text" when item has actual rich formatting
+        let is_rich_text = matches!(
+            item.display_kind(),
+            DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf
+        );
         Self {
             is_image: item.content_type == ContentType::Image,
             is_file: item.content_type == ContentType::File,
             is_color,
-            is_rich_text: item.content_type == ContentType::RichText,
+            is_rich_text,
             is_hex,
             is_favorite: item.is_favorite,
         }

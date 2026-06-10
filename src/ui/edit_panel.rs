@@ -9,7 +9,7 @@ use gpui_component::text::{TextView, TextViewStyle};
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
 
-use crate::core::types::{ClipboardItem, ContentType, RichData};
+use crate::core::types::{ClipboardItem, RichData};
 use crate::state::app::AppState;
 use crate::core::i18n_keys::I18nKey;
 
@@ -533,29 +533,18 @@ fn text_button(
 }
 
 fn editor_type_from_item(item: &ClipboardItem) -> &'static str {
-    match item.meta_type.as_str() {
-        "markdown" => "markdown",
-        "html" => "html",
-        "email" => "email",
-        "phone" => "phone",
-        _ => match item.content_type {
-            ContentType::RichText => {
-                let rich = RichData::from_json(&item.rich_data);
-                if rich
-                    .html
-                    .as_deref()
-                    .is_some_and(|html| !html.trim().is_empty())
-                {
-                    "html"
-                } else {
-                    "plain_text"
-                }
-            }
-            ContentType::Link => "link",
-            ContentType::Path => "path",
-            ContentType::Color => "color",
-            _ => "plain_text",
-        },
+    use crate::core::types::DisplayKind;
+
+    match item.display_kind() {
+        DisplayKind::Html => "html",
+        DisplayKind::Markdown => "markdown",
+        DisplayKind::Rtf => "plain_text",
+        DisplayKind::Email => "email",
+        DisplayKind::Phone => "phone",
+        DisplayKind::Link => "link",
+        DisplayKind::Path => "path",
+        DisplayKind::Color => "color",
+        _ => "plain_text",
     }
 }
 

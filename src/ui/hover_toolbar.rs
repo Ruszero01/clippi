@@ -19,6 +19,7 @@ use super::theme::ClippiTheme;
 /// Properties that determine which toolbar buttons to show.
 pub struct HoverToolbarProps {
     pub content_type: ContentType,
+    pub has_rich_content: bool,
     pub has_qr_code: bool,
     pub is_favorite: bool,
     pub selected_count: usize,
@@ -34,6 +35,12 @@ impl HoverToolbarProps {
     ) -> Self {
         Self {
             content_type: item.content_type,
+            has_rich_content: matches!(
+                item.display_kind(),
+                crate::core::types::DisplayKind::Html
+                    | crate::core::types::DisplayKind::Markdown
+                    | crate::core::types::DisplayKind::Rtf
+            ),
             has_qr_code: {
                 let rich = RichData::from_json(&item.rich_data);
                 rich.qr_text.is_some()
@@ -118,8 +125,8 @@ impl RenderOnce for HoverToolbar {
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
-            // --- Paste Plain Text (rich text only) ---
-            if props.content_type == ContentType::RichText {
+            // --- Paste Plain Text (only when item has actual rich formatting) ---
+            if props.has_rich_content {
                 buttons.push((
                     "\u{e60e}",
                     "paste_plain",

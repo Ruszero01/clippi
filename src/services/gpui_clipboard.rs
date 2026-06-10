@@ -132,6 +132,23 @@ impl GpuiClipboardService {
                 }
             }
 
+            // ── Pre-upsert: carry over rich_data from existing DB record ──
+            // When paste-as-plain-text writes plain text to the clipboard,
+            // the listener detects a PlainText item with empty rich_data. If
+            // the content_hash matches an existing RichText record, carry over
+            // rich_data so it isn't overwritten by the upsert below.
+            if item.rich_data.is_empty() {
+                if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
+                    if !existing.rich_data.is_empty() {
+                        item.rich_data = existing.rich_data.clone();
+                        item.meta_type = existing.meta_type.clone();
+                        if existing.content_type == ContentType::RichText {
+                            item.content_type = ContentType::RichText;
+                        }
+                    }
+                }
+            }
+
             if let Err(err) = state.db.upsert(&item) {
                 log::error!("Failed to upsert clipboard item: {err}");
                 continue;

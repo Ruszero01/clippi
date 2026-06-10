@@ -1048,11 +1048,8 @@ impl Render for ClipboardListView {
                                                         let list_for_dbl = list_entity.clone();
                                                         Rc::new(move |idx, _window, cx| {
                                                             list_for_dbl.update(cx, |this, cx| {
-                                                                let plain = this
-                                                                    .state
-                                                                    .read(cx)
-                                                                    .settings
-                                                                    .copy_as_plain_text;
+                                                                // Double-click always pastes with full formatting —
+                                                                // user chose this specific item deliberately.
                                                                 if this.selected_count > 1 {
                                                                     let ids =
                                                                         this.selected_ids.clone();
@@ -1060,7 +1057,7 @@ impl Render for ClipboardListView {
                                                                         cx,
                                                                         |s, _cx| {
                                                                             s.batch_paste(
-                                                                                &ids, plain,
+                                                                                &ids, false,
                                                                             );
                                                                         },
                                                                     );
@@ -1072,7 +1069,7 @@ impl Render for ClipboardListView {
                                                                         cx,
                                                                         |s, _cx| {
                                                                             s.paste_item(
-                                                                                item_id, plain,
+                                                                                item_id, false,
                                                                             );
                                                                         },
                                                                     );
