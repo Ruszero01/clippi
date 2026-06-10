@@ -948,6 +948,7 @@ impl RenderOnce for ClipboardCard {
                             if let Some(ref handler) = commit {
                                 handler(window, cx);
                             }
+                            cx.stop_propagation();
                         }
                     }
                 })

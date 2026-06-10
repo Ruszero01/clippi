@@ -327,6 +327,15 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    /// Check whether any floating panel or inline editing is active.
+    /// When true, Enter key should NOT trigger paste.
+    fn has_any_panel_or_editing(&self) -> bool {
+        self.context_menu_visible
+            || self.tag_picker_visible
+            || self.confirm_dialog.is_some()
+            || self.editing_note_id > 0
+    }
+
     pub fn tag_picker_visible(&self) -> bool {
         self.tag_picker_visible
     }
@@ -813,21 +822,26 @@ impl Render for ClipboardListView {
                         cx.stop_propagation();
                     }
                     "enter" => {
-                        this.dismiss_all_panels(cx);
-                        let plain = this.state.read(cx).settings.copy_as_plain_text;
-                        if this.selected_count > 1 {
-                            let ids = this.selected_ids.clone();
-                            this.state.update(cx, |s, _cx| {
-                                s.batch_paste(&ids, plain);
-                            });
+                        // --- Only paste when no floating panel or inline editing is active ---
+                        if this.has_any_panel_or_editing() {
+                            this.dismiss_all_panels(cx);
                             cx.stop_propagation();
-                        } else if let Some(idx) = this.selected_index {
-                            if let Some(item) = this.items.get(idx) {
-                                let item_id = item.id;
+                        } else {
+                            let plain = this.state.read(cx).settings.copy_as_plain_text;
+                            if this.selected_count > 1 {
+                                let ids = this.selected_ids.clone();
                                 this.state.update(cx, |s, _cx| {
-                                    s.paste_item(item_id, plain);
+                                    s.batch_paste(&ids, plain);
                                 });
                                 cx.stop_propagation();
+                            } else if let Some(idx) = this.selected_index {
+                                if let Some(item) = this.items.get(idx) {
+                                    let item_id = item.id;
+                                    this.state.update(cx, |s, _cx| {
+                                        s.paste_item(item_id, plain);
+                                    });
+                                    cx.stop_propagation();
+                                }
                             }
                         }
                     }
