@@ -75,7 +75,7 @@
 
 ### 窗口与交互
 
-![hotkey](docs\images\hotkey.png)
+![hotkey](./docs/images/hotkey.png)
 
 - 全局快捷键呼出（默认 `Alt+V`，支持录制自定义）
 - 窗口置顶（固定）模式
@@ -86,7 +86,7 @@
 
 ### 显示选项
 
-![display](docs\images\display.png)
+![display](./docs/images/display.png)
 
 - 来源应用信息显示（剪贴板来源程序名称和图标）
 - 卡片高度模式：高 / 中 / 低 / 自适应
