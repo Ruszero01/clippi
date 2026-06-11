@@ -35,6 +35,7 @@ pub struct EditPanel {
     last_item_id: i64,
     preview_generation: u64,
     theme: ClippiTheme,
+    last_lang_version: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,6 +78,7 @@ impl EditPanel {
             last_item_id: -1,
             preview_generation: 0,
             theme,
+            last_lang_version: crate::core::i18n::lang_version(),
             _subscriptions,
         }
     }
@@ -142,6 +144,15 @@ impl EditPanel {
 
 impl Render for EditPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 语言切换时刷新 InputState placeholder
+        let current = crate::core::i18n::lang_version();
+        if self.last_lang_version != current {
+            self.last_lang_version = current;
+            self.content_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::EditContentPlaceholder.text(), window, cx);
+            });
+        }
+
         let item = self.state.read(cx).editing_item.clone();
         if let Some(ref item) = item {
             if item.id != self.last_item_id {

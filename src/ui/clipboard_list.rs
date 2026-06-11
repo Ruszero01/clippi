@@ -79,6 +79,7 @@ pub struct ClipboardListView {
     /// (including the empty-item clear during window hide).
     last_selected_id: i64,
     theme: ClippiTheme,
+    last_lang_version: u64,
 }
 
 impl ClipboardListView {
@@ -119,6 +120,7 @@ impl ClipboardListView {
             confirm_dialog: None,
             last_selected_id: -1,
             theme,
+            last_lang_version: crate::core::i18n::lang_version(),
         }
     }
 
@@ -786,6 +788,18 @@ impl ClipboardListView {
 impl Render for ClipboardListView {
     #[allow(refining_impl_trait_reachable)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // 语言切换时刷新 InputState placeholder
+        let current = crate::core::i18n::lang_version();
+        if self.last_lang_version != current {
+            self.last_lang_version = current;
+            self.note_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::ListNotePlaceholder.text(), window, cx);
+            });
+            self.tag_create_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::TagCreatePlaceholder.text(), window, cx);
+            });
+        }
+
         let item_sizes = self.item_sizes.clone();
         let items_count = self.item_sizes.len();
         let view = cx.entity();

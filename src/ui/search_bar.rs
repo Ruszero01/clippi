@@ -66,6 +66,7 @@ pub struct SearchBar {
     list_view: Entity<ClipboardListView>,
     tag_panel_open: bool,
     theme: ClippiTheme,
+    last_lang_version: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -102,6 +103,7 @@ impl SearchBar {
             list_view,
             tag_panel_open: false,
             theme,
+            last_lang_version: crate::core::i18n::lang_version(),
             _subscriptions,
         }
     }
@@ -136,6 +138,15 @@ impl SearchBar {
 
 impl Render for SearchBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 语言切换时刷新 InputState.placeholder
+        let current = crate::core::i18n::lang_version();
+        if self.last_lang_version != current {
+            self.last_lang_version = current;
+            self.input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::SearchPlaceholderFull.text(), window, cx);
+            });
+        }
+
         let theme = &self.theme;
         let accent = theme.accent;
         let text_2 = theme.text_2;

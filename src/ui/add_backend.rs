@@ -35,6 +35,7 @@ pub struct AddBackendPanel {
     test_ok: bool,
     test_error: String,
     _test_task: Option<Task<()>>,
+    last_lang_version: u64,
 }
 
 impl AddBackendPanel {
@@ -65,6 +66,7 @@ impl AddBackendPanel {
             test_ok: false,
             test_error: String::new(),
             _test_task: None,
+            last_lang_version: crate::core::i18n::lang_version(),
         }
     }
 
@@ -488,7 +490,28 @@ impl AddBackendPanel {
 }
 
 impl Render for AddBackendPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 语言切换时刷新 InputState placeholder
+        let current = crate::core::i18n::lang_version();
+        if self.last_lang_version != current {
+            self.last_lang_version = current;
+            self.name_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::BackendPhName.text(), window, cx);
+            });
+            self.folder_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::BackendPhFolder.text(), window, cx);
+            });
+            self.url_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::BackendPhUrl.text(), window, cx);
+            });
+            self.username_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::BackendPhUser.text(), window, cx);
+            });
+            self.password_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::BackendPhPass.text(), window, cx);
+            });
+        }
+
         if !self.visible {
             return div().into_any_element();
         }

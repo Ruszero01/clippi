@@ -5,13 +5,23 @@
 //!
 //! Translation keys are defined in `i18n_keys.rs` via the `define_i18n!` macro.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static IS_ENGLISH: AtomicBool = AtomicBool::new(false);
+static LANG_VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// Set the current language. Call once at startup and on every language switch.
 pub fn set_language(lang: &str) {
     IS_ENGLISH.store(lang == "en", Ordering::Relaxed);
+    LANG_VERSION.fetch_add(1, Ordering::Release);
+}
+
+/// Returns a monotonically increasing version number that changes
+/// every time [`set_language`] is called. Components can compare
+/// this against a cached value to know when to refresh i18n text.
+#[inline]
+pub fn lang_version() -> u64 {
+    LANG_VERSION.load(Ordering::Acquire)
 }
 
 /// Check if the current language is English.

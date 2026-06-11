@@ -28,6 +28,7 @@ pub struct TagFilterPanel {
     create_input: Entity<InputState>,
     edit_name_input: Entity<InputState>,
     last_edit_tag_id: i64,
+    last_lang_version: u64,
 }
 
 impl TagFilterPanel {
@@ -39,7 +40,7 @@ impl TagFilterPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let create_input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text()));
-        let edit_name_input = cx.new(|cx| InputState::new(window, cx));
+        let edit_name_input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text()));
 
         Self {
             state,
@@ -48,6 +49,7 @@ impl TagFilterPanel {
             create_input,
             edit_name_input,
             last_edit_tag_id: -1,
+            last_lang_version: crate::core::i18n::lang_version(),
         }
     }
 
@@ -126,6 +128,18 @@ impl TagFilterPanel {
 
 impl Render for TagFilterPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 语言切换时刷新 InputState placeholder
+        let current = crate::core::i18n::lang_version();
+        if self.last_lang_version != current {
+            self.last_lang_version = current;
+            self.create_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::TagCreatePlaceholder.text(), window, cx);
+            });
+            self.edit_name_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::TagCreatePlaceholder.text(), window, cx);
+            });
+        }
+
         let app_state = self.state.read(cx);
         let tags: Vec<(TagInfo, bool)> = app_state
             .tags
