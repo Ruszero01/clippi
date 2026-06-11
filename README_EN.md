@@ -177,3 +177,27 @@ cargo run
 | Image QR Code Detection | ✅ | ✅ |
 | Sensitive Info Preview Masking | ✅ | ✅ |
 | Interface Language (zh_CN / en) | ✅ | ✅ |
+
+---
+
+## macOS Users Notice
+
+Clippi is not signed with an Apple Developer certificate (not enrolled in Apple Developer Program). On first launch or after each update, macOS Gatekeeper will block the app from running. Please follow the steps below:
+
+### First Install / After Update
+
+1. After downloading the `.dmg`, drag Clippi into the `Applications` folder
+2. **Do NOT double-click to open.** Right-click (or Ctrl+click) the Clippi icon → select **"Open"**
+3. Click **"Open"** in the dialog (this only needs to be done once per update)
+
+> Alternatively, go to **System Settings → Privacy & Security**, scroll to the bottom where you'll see a message about Clippi being blocked, and click **"Open Anyway"**.
+
+### Grant Accessibility Permission (Required for Quick Paste)
+
+Clippi's quick paste feature requires Accessibility permission to simulate keystrokes:
+
+1. Open **System Settings → Privacy & Security → Accessibility**
+2. Find **Clippi** in the list and enable the toggle
+3. If Clippi is not in the list, click the `+` button and add it manually from `/Applications/Clippi.app`
+
+> Without Accessibility permission, quick paste (double-click card / Enter key paste) will not work, but you can still copy and paste manually via the right-click menu.
