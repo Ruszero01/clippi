@@ -9,7 +9,7 @@
 - **多端同步条目统计不一致** — 同步卡片此前记录各设备最后一次实际推送的条目数，云端快照未变化时不会刷新，导致 macOS 与 Windows 使用同一后端仍可能长期显示不同数量。现已分离最终快照统计与实际推送状态，每次成功同步均按最终快照更新条目/标签数量，仅在发生合并或实际写入时刷新最后同步时间
 - **备注更新无法同步** — `update_note` 缺少同步脏位标记，修改备注后不会触发同步推送，其他设备无法收到备注变更。现已补充条件性脏位（遵循同上过滤规则）
 - **NSIS 安装包不提示关闭运行中的程序** — GPUI 迁移后窗口 `TitlebarOptions` 未设置 `title` 字段，导致窗口标题为空，NSIS `FindWindow` 无法通过标题匹配检测到正在运行的 Clippi 进程，安装程序直接覆盖安装而不提示用户关闭程序。修复为在 `TitlebarOptions` 中设置 `title: Some("Clippi".into())`
-- **浏览文件夹按钮闪退** — `rfd::pick_folder()` 在 GPUI 主线程调用 Windows COM `IFileOpenDialog` 时可能触发 `STATUS_STACK_BUFFER_OVERRUN`；改为独立线程调用文件对话框，避免与主线程 COM apartment 模式冲突
+- **浏览文件夹/文件对话框闪退** — `rfd` 在 GPUI 主线程调用 Windows COM 文件对话框（`pick_folder` / `save_file`）时可能触发 `STATUS_STACK_BUFFER_OVERRUN`；改为独立线程调用，避免与主线程 COM apartment 模式冲突。影响范围：添加后端 → 浏览文件夹、设置 → 数据 → 更改数据库路径
 
 ### 优化
 

@@ -156,10 +156,16 @@ impl SettingsPanel {
                                     .cursor(CursorStyle::PointingHand)
                                     .hover(move |s| s.opacity(0.85))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
-                                        let result = rfd::FileDialog::new()
-                                            .set_file_name("clippi.db")
-                                            .save_file();
-                                        if let Some(new_path) = result {
+                                        // Run native dialog on a separate thread to avoid
+                                        // COM apartment conflicts with GPUI's main thread.
+                                        let (tx, rx) = std::sync::mpsc::channel();
+                                        std::thread::spawn(move || {
+                                            let result = rfd::FileDialog::new()
+                                                .set_file_name("clippi.db")
+                                                .save_file();
+                                            let _ = tx.send(result);
+                                        });
+                                        if let Ok(Some(new_path)) = rx.recv() {
                                             let path_str = new_path.to_string_lossy().to_string();
                                             let old = state.read(_cx).settings.resolve_db_path();
                                             if old == new_path {
