@@ -266,6 +266,7 @@ fn main() {
         let mut window_options = WindowOptions {
             window_background: WindowBackgroundAppearance::Transparent,
             titlebar: Some(TitlebarOptions {
+                title: Some("Clippi".into()),
                 appears_transparent: true,
                 ..Default::default()
             }),
