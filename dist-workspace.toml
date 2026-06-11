@@ -10,6 +10,6 @@ ci = "github"
 # The installers to generate for each app
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]
 # Allow customized CI workflow
 allow-dirty = ["ci"]

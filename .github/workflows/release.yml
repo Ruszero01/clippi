@@ -178,8 +178,11 @@ jobs:
       - name: Build macOS .dmg
         if: runner.os == 'macOS'
         run: |
+          # Extract architecture label from target triple (e.g. aarch64-apple-darwin → aarch64)
+          TARGET="${{ matrix.targets[0] }}"
+          ARCH="${TARGET%%-*}"
           VERSION="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "clippi") | .version')"
-          BIN_PATH="target/aarch64-apple-darwin/dist/clippi"
+          BIN_PATH="target/${TARGET}/dist/clippi"
           APP_DIR="target/Clippi.app"
           mkdir -p "$APP_DIR/Contents/MacOS"
           mkdir -p "$APP_DIR/Contents/Resources"
@@ -234,7 +237,7 @@ jobs:
           codesign -v -R='identifier "com.clippi.app"' "$APP_DIR"
           # Create staging directory with .app + Applications symlink
           STAGING="target/dmg-staging"
-          DMG_PATH="target/distrib/Clippi_aarch64.dmg"
+          DMG_PATH="target/distrib/Clippi_${ARCH}.dmg"
           mkdir -p target/distrib
           rm -rf "$STAGING"
           mkdir -p "$STAGING"
@@ -254,10 +257,8 @@ jobs:
           if [ -f target/distrib/Clippi_*_x64-setup.exe ]; then
             ls target/distrib/Clippi_*_x64-setup.exe target/distrib/Clippi_*_x64-setup.exe.sha256 >> "$GITHUB_OUTPUT" 2>/dev/null || true
           fi
-          if [ -f target/distrib/Clippi_aarch64.dmg ]; then
-            echo "target/distrib/Clippi_aarch64.dmg" >> "$GITHUB_OUTPUT"
-            echo "target/distrib/Clippi_aarch64.dmg.sha256" >> "$GITHUB_OUTPUT"
-          fi
+          # Include macOS DMGs in upload paths
+          ls target/distrib/Clippi_*.dmg target/distrib/Clippi_*.dmg.sha256 >> "$GITHUB_OUTPUT" 2>/dev/null || true
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
@@ -391,10 +392,24 @@ jobs:
           TAG: "${{ needs.plan.outputs.tag }}"
         run: |
           VERSION="${TAG#v}"
-          DMG_FILE="Clippi_aarch64.dmg"
-          DMG_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}"
-          DMG_CHECK_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}.sha256"
-          DMG_ROW="| [${DMG_FILE}](${DMG_URL}) | Apple Silicon macOS (DMG) | [checksum](${DMG_CHECK_URL}) |"
+          # Generate DMG rows for any macOS architectures found in artifacts
+          DMG_ROWS=""
+          for dmg in artifacts/Clippi_*.dmg; do
+            [ -f "$dmg" ] || continue
+            DMG_FILE="$(basename "$dmg")"
+            DMG_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}"
+            DMG_CHECK_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${DMG_FILE}.sha256"
+            # Derive human-readable arch label from filename
+            case "$DMG_FILE" in
+              Clippi_aarch64.dmg)
+                LABEL="Apple Silicon macOS (DMG)" ;;
+              Clippi_x86_64.dmg)
+                LABEL="Intel macOS (DMG)" ;;
+              *)
+                LABEL="macOS (DMG)" ;;
+            esac
+            DMG_ROWS="${DMG_ROWS}| [${DMG_FILE}](${DMG_URL}) | ${LABEL} | [checksum](${DMG_CHECK_URL}) |"$'\n'
+          done
 
           NSIS_FILE="Clippi_${VERSION}_x64-setup.exe"
           NSIS_URL="https://github.com/Ruszero01/clippi/releases/download/${TAG}/${NSIS_FILE}"
@@ -402,7 +417,7 @@ jobs:
           NSIS_ROW="| [${NSIS_FILE}](${NSIS_URL}) | x64 Windows (NSIS) | [checksum](${NSIS_CHECK_URL}) |"
 
           BODY=$(gh release view "$TAG" --json body -q '.body')
-          printf '%s\n%s\n%s\n' "$BODY" "$DMG_ROW" "$NSIS_ROW" > "$RUNNER_TEMP/notes.txt"
+          printf '%s\n%s\n%s\n' "$BODY" "$DMG_ROWS" "$NSIS_ROW" > "$RUNNER_TEMP/notes.txt"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.txt"
 
   announce:
