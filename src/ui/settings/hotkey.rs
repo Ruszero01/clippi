@@ -96,14 +96,14 @@ impl SettingsPanel {
                                     theme.text_3
                                 };
                                 let desc_text = if recording {
-                                    "Press new hotkey..."
+                                    I18nKey::HotkeyPressToRecord.text()
                                 } else {
-                                    "Click to start recording"
+                                    I18nKey::HotkeyRecordingIdle.text()
                                 };
                                 div()
                                     .text_size(px(10.))
                                     .text_color(desc_color)
-                                    .child(desc_text.to_string())
+                                    .child(desc_text)
                             }),
                     )
                     // --- Right: hotkey button (80×28) ---
@@ -389,14 +389,14 @@ impl SettingsPanel {
                                 .justify_center()
                                 .child({
                                     let msg = if fg_app_name.is_empty() {
-                                        "No blacklisted apps"
+                                        I18nKey::HotkeyBlacklistEmpty.text()
                                     } else {
-                                        "No blacklisted apps. Click  to add current app"
+                                        I18nKey::HotkeyBlacklistEmptyHint.text()
                                     };
                                     div()
                                         .text_size(px(11.))
                                         .text_color(theme.text_3)
-                                        .child(msg.to_string())
+                                        .child(msg)
                                 }),
                         )
                     }),

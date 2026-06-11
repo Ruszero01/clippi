@@ -301,13 +301,18 @@ impl AddBackendPanel {
                                     folder_input
                                         .update(cx, |input, cx| input.set_value(&path, window, cx));
                                 })
-                                .child(
+                                .child({
+                                    let icon = match name.as_str() {
+                                        "OneDrive" => "\u{e601}",
+                                        "iCloud" => "\u{ebc8}",
+                                        _ => "\u{e60a}",
+                                    };
                                     div()
                                         .font_family("iconfont")
                                         .text_size(px(14.))
                                         .text_color(text_2)
-                                        .child("\u{e60a}"),
-                                )
+                                        .child(icon)
+                                })
                                 .child(
                                     div()
                                         .text_size(px(12.))

@@ -282,6 +282,9 @@ define_i18n! {
     HotkeyTabTitle:         ("快捷键", "Hotkey"),
     HotkeyNoForeground:     ("无前台应用", "No foreground app"),
     HotkeyPressToRecord:    ("按下新快捷键进行录制", "Press new hotkey to record"),
+    HotkeyRecordingIdle:    ("点击开始录制", "Click to start recording"),
+    HotkeyBlacklistEmpty:   ("未添加黑名单应用", "No blacklisted apps"),
+    HotkeyBlacklistEmptyHint:("将当前应用加入黑名单", "Click  to add current app"),
     HotkeyConfirmAddTitle:  ("确认添加黑名单", "Confirm Add to Blacklist"),
     HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
     HotkeyConfirmRemoveTitle:("确认移除黑名单", "Confirm Remove from Blacklist"),
@@ -293,6 +296,8 @@ define_i18n! {
     SyncInterval1m:         ("1分钟", "1m"),
     SyncInterval10m:        ("10分钟", "10m"),
     SyncInterval30m:        ("30分钟", "30m"),
+    SyncStatsItems:         ("条目", "items"),
+    SyncStatsTags:          ("标签", "tags"),
 
     // ─── Tag filter ───
     TagFilterTitle:         ("标签筛选", "Tag filter"),

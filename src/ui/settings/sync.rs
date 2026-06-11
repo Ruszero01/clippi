@@ -134,9 +134,11 @@ impl SettingsPanel {
                     .child(
                         div()
                             .h(px(40.))
-                            .px(px(14.))
+                            .rounded(px(10.))
+                            .bg(self.theme.titlebar_bg)
                             .flex()
                             .items_center()
+                            .justify_center()
                             .gap(px(6.))
                             .cursor(CursorStyle::PointingHand)
                             .hover(move |style| style.bg(accent_soft))
@@ -159,7 +161,7 @@ impl SettingsPanel {
                             ),
                     )
                     .when(!backend_cards.is_empty(), |card| {
-                        card.child(div().h(px(1.)).bg(divider)).child(
+                        card.child(
                             div()
                                 .max_h(px(270.))
                                 .overflow_y_scrollbar()
@@ -261,10 +263,12 @@ impl SettingsPanel {
             }
         });
         let stats = format!(
-            "{} · {} items · {} tags",
+            "{} · {} {} · {} {}",
             format_last_sync(&backend.config.last_sync_at),
             backend.config.last_item_count,
-            backend.config.last_tag_count
+            I18nKey::SyncStatsItems.text(),
+            backend.config.last_tag_count,
+            I18nKey::SyncStatsTags.text()
         );
 
         div()
