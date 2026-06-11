@@ -187,10 +187,8 @@ Clippi is not signed with an Apple Developer certificate (not enrolled in Apple 
 ### First Install / After Update
 
 1. After downloading the `.dmg`, drag Clippi into the `Applications` folder
-2. **Do NOT double-click to open.** Right-click (or Ctrl+click) the Clippi icon → select **"Open"**
-3. Click **"Open"** in the dialog (this only needs to be done once per update)
-
-> Alternatively, go to **System Settings → Privacy & Security**, scroll to the bottom where you'll see a message about Clippi being blocked, and click **"Open Anyway"**.
+2. Double-click Clippi to open, then select **"Keep"** in the security dialog
+3. Go to **System Settings → Privacy & Security**, scroll to the bottom and click **"Open Anyway"** (required once per update)
 
 ### Grant Accessibility Permission (Required for Quick Paste)
 
