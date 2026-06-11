@@ -25,7 +25,7 @@
   </p>
 </div>
 
-![UI](docs\images\UI.png)
+![UI](./docs/images/UI.png)
 
 ---
 
@@ -39,7 +39,7 @@
 
 ### Clipboard Monitoring
 
-![clipboard](docs\images\clipboard.png)
+![clipboard](./docs/images/clipboard.png)
 
 - Multi-format content detection: Plain text, Rich text, Files, Images, Links, Paths, Colors, Phone numbers, Email addresses
 - Content hash deduplication: Re-copying the same content updates the timestamp without creating duplicate entries
@@ -51,7 +51,7 @@
 
 ### Content Management
 
-![content1](docs\images\content.png)
+![content1](./docs/images/content.png)
 
 - Double-click cards for quick paste
 - Multi-type entry editing
@@ -64,7 +64,7 @@
 
 ### Tag System
 
-![tags](docs\images\tags.png)
+![tags](./docs/images/tags.png)
 
 - Create / Edit / Delete tags, 12 preset colors
 - Tag association with clipboard entries (many-to-many)
@@ -75,7 +75,7 @@
 
 ### Window & Interaction
 
-![hotkey](docs\images\hotkey.png)
+![hotkey](./docs/images/hotkey.png)
 
 - Global hotkey to show/hide (default `Alt+V`, supports custom recording)
 - Window pin-on-top mode
@@ -86,7 +86,7 @@
 
 ### Display Options
 
-![display](docs\images\display.png)
+![display](./docs/images/display.png)
 
 - Source app info display (clipboard source application name and icon)
 - Card height modes: Tall / Medium / Short / Auto
@@ -95,7 +95,7 @@
 
 ### Cloud Sync
 
-![sync](docs\images\sync.png)
+![sync](./docs/images/sync.png)
 
 - Multi-backend architecture: Supports multiple sync services simultaneously, each with independent toggle and interval
 - Local folder backend: Sync via OneDrive / iCloud folders

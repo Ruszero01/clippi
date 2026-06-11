@@ -25,7 +25,7 @@
   </p>
 </div>
 
-![UI](docs\images\UI.png)
+![UI](./docs/images/UI.png)
 
 ---
 
@@ -39,7 +39,7 @@
 
 ### 剪贴板监控
 
-![clipboard](docs\images\clipboard.png)
+![clipboard](./docs/images/clipboard.png)
 
 - 多格式内容检测：纯文本、富文本、文件、图片、链接、路径、颜色、电话、邮箱
 - 内容哈希去重：相同内容重复复制时更新时间戳，不重复记录
@@ -51,7 +51,7 @@
 
 ### 内容管理
 
-![content1](docs\images\content.png)
+![content1](./docs/images/content.png)
 
 - 双击卡片快速粘贴
 - 多类型条目编辑
@@ -64,7 +64,7 @@
 
 ### 标签系统
 
-![tags](docs\images\tags.png)
+![tags](./docs/images/tags.png)
 
 - 创建/编辑/删除标签、12 种预设颜色
 - 标签关联到剪贴板条目（多对多）
@@ -95,7 +95,7 @@
 
 ### 云同步
 
-![sync](docs\images\sync.png)
+![sync](./docs/images/sync.png)
 
 - 多后端架构：支持同时配置多个同步服务，每个后端独立开关与独立同步间隔
 - 本地文件夹后端：通过 OneDrive / iCloud 云盘同步
