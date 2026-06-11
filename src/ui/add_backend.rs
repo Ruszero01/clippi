@@ -188,9 +188,13 @@ impl AddBackendPanel {
     fn render_type_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let this = cx.entity().clone();
         let accent = self.theme.accent;
-        let accent_soft = self.theme.accent_soft;
         let text_1 = self.theme.text_1;
         let text_3 = self.theme.text_3;
+        let card_bg = if self.theme.bg == rgb(0x191a1b) {
+            rgb(0x2a2b2c)
+        } else {
+            rgb(0xf0f1f5)
+        };
 
         div()
             .flex()
@@ -208,11 +212,10 @@ impl AddBackendPanel {
                     .flex()
                     .gap(px(10.))
                     .child(type_card(
-                        "\u{e60a}",
                         I18nKey::BackendLocalFolder.text(),
                         I18nKey::BackendLocalDesc.text(),
                         accent,
-                        accent_soft,
+                        card_bg,
                         text_1,
                         text_3,
                         {
@@ -226,11 +229,10 @@ impl AddBackendPanel {
                         },
                     ))
                     .child(type_card(
-                        "\u{e7b1}",
                         I18nKey::BackendWebdav.text(),
                         I18nKey::BackendWebdavDesc.text(),
                         accent,
-                        accent_soft,
+                        card_bg,
                         text_1,
                         text_3,
                         move |window, cx| {
@@ -255,6 +257,12 @@ impl AddBackendPanel {
         let accent_soft = self.theme.accent_soft;
         let divider = self.theme.divider;
         let text_2 = self.theme.text_2;
+        let text_1 = self.theme.text_1;
+        let card_bg = if self.theme.bg == rgb(0x191a1b) {
+            rgb(0x2a2b2c)
+        } else {
+            rgb(0xf0f1f5)
+        };
         let this = cx.entity().clone();
 
         div()
@@ -276,7 +284,7 @@ impl AddBackendPanel {
                                 .h(px(34.))
                                 .px(px(12.))
                                 .rounded(px(7.))
-                                .bg(accent_soft)
+                                .bg(card_bg)
                                 .border(px(1.))
                                 .border_color(divider)
                                 .flex()
@@ -297,7 +305,7 @@ impl AddBackendPanel {
                                     div()
                                         .font_family("iconfont")
                                         .text_size(px(14.))
-                                        .text_color(accent)
+                                        .text_color(text_2)
                                         .child("\u{e60a}"),
                                 )
                                 .child(
@@ -328,20 +336,28 @@ impl AddBackendPanel {
                             .w(px(58.))
                             .h(px(30.))
                             .rounded(px(6.))
-                            .bg(accent_soft)
+                            .bg(card_bg)
                             .text_size(px(11.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(accent)
+                            .text_color(text_2)
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.bg(accent).text_color(rgb(0xffffff)))
+                            .hover(move |style| style.bg(divider).text_color(text_1))
                             .on_mouse_down(MouseButton::Left, {
                                 let folder_input = self.folder_input.clone();
                                 move |_ev, window, cx| {
-                                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                        folder_input.update(cx, |input, cx| {
+                                    let input = folder_input.clone();
+                                    // Run the native file dialog on a separate thread to avoid
+                                    // COM apartment conflicts with GPUI's main thread.
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    std::thread::spawn(move || {
+                                        let result = rfd::FileDialog::new().pick_folder();
+                                        let _ = tx.send(result);
+                                    });
+                                    if let Ok(Some(path)) = rx.recv() {
+                                        input.update(cx, |input, cx| {
                                             input.set_value(
                                                 path.to_string_lossy().to_string(),
                                                 window,
@@ -622,9 +638,7 @@ fn input_box(input: &Entity<InputState>, theme: &ClippiTheme, password: bool) ->
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn type_card(
-    icon: &'static str,
     title: &'static str,
     description: &'static str,
     accent: Rgba,
@@ -643,19 +657,13 @@ fn type_card(
         .p(px(10.))
         .flex()
         .flex_col()
+        .justify_center()
         .gap(px(4.))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.border_color(accent))
         .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
             on_click(window, cx);
         })
-        .child(
-            div()
-                .font_family("iconfont")
-                .text_size(px(16.))
-                .text_color(accent)
-                .child(icon),
-        )
         .child(
             div()
                 .text_size(px(12.))
