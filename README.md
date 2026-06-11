@@ -1,6 +1,6 @@
 <div align="center">
   <p>
-    <img src="docs/images/LOGO_notext.png" width="120" alt="Clippi 图标">
+    <img src="assets/LOGO_notext.png" width="120" alt="Clippi 图标">
   </p>
 
   # Clippi

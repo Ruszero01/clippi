@@ -940,15 +940,20 @@ impl RenderOnce for ClipboardCard {
                     }
                 })
         } else if !(note.is_empty() || show_original_on_hover && is_hovered) {
+            // Note present, not hovering → display note text (single line, card at min height)
             div().flex_1().flex().items_center().child(
                 div()
                     .w_full()
                     .text_size(px(12.))
                     .text_color(text_2)
+                    .whitespace_nowrap()
                     .overflow_hidden()
                     .child(note),
             )
         } else {
+            // No note, or note present + hovering with show_original → render full content.
+            // Card height is clamped to 68px by estimate_card_height when note exists,
+            // and overflow_hidden on the base div naturally clips oversized content.
             match content_type {
                 ContentType::Image => {
                     // Show image preview if path is available, otherwise show dimensions

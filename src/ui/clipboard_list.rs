@@ -522,12 +522,9 @@ impl ClipboardListView {
             self.state.update(cx, move |state, _cx| {
                 state.update_note(id, &note_text);
             });
-            // --- Sync local item from AppState (avoids dual-copy drift) ---
-            if let Some(updated) = self.state.read(cx).items.iter().find(|it| it.id == id) {
-                if let Some(local) = self.items.iter_mut().find(|it| it.id == id) {
-                    local.note = updated.note.clone();
-                }
-            }
+            // --- Re-sync from AppState to also recompute card heights ---
+            // --- (note change may switch card between min-height and auto-height) ---
+            self.sync_items_from_state(cx);
         }
         self.editing_note_id = -1;
         cx.notify();
