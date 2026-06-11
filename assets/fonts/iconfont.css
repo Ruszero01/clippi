@@ -1,8 +1,8 @@
 @font-face {
   font-family: "iconfont"; /* Project id 5167546 */
-  src: url('iconfont.woff2?t=1780277527311') format('woff2'),
-       url('iconfont.woff?t=1780277527311') format('woff'),
-       url('iconfont.ttf?t=1780277527311') format('truetype');
+  src: url('iconfont.woff2?t=1781145401426') format('woff2'),
+       url('iconfont.woff?t=1781145401426') format('woff'),
+       url('iconfont.ttf?t=1781145401426') format('truetype');
 }
 
 .iconfont {
@@ -11,6 +11,14 @@
   font-style: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.icon-onedrive:before {
+  content: "\e601";
+}
+
+.icon-icloud:before {
+  content: "\ebc8";
 }
 
 .icon-erweima:before {
