@@ -102,6 +102,8 @@ pub struct AppSettings {
     pub qr_enabled: bool, // image QR auto-detection toggle
     #[serde(default)]
     pub hide_taskbar_icon: bool, // hide taskbar icon when window is shown (Windows only)
+    #[serde(default)]
+    pub block_system_window_behaviors: bool, // block system window behaviors (double-click maximize, Aero Snap)
 }
 
 fn default_qr_enabled() -> bool {
@@ -128,7 +130,7 @@ impl Default for AppSettings {
             window_position_mode: "center".to_string(),
             saved_window_x: -1,
             saved_window_y: -1,
-            card_height_mode: "medium".to_string(),
+            card_height_mode: "auto".to_string(),
             silent_start: true,
             show_source_app: false,
             auto_scroll_to_top: false,
@@ -151,6 +153,7 @@ impl Default for AppSettings {
             ocr_enabled: false,
             qr_enabled: true,
             hide_taskbar_icon: false,
+            block_system_window_behaviors: false,
         }
     }
 }

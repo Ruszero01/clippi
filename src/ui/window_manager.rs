@@ -4,6 +4,8 @@
 //! --- auto-hide on focus loss, and hotkey-triggered show. Replaces the ---
 //! Slint-era `Frontend` + `FocusService` + `HotkeyService` + `Looper` combo.
 
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,6 +29,9 @@ pub type ForegroundAppName = Arc<Mutex<String>>;
 
 /// GitHub releases page for the Clippi project.
 const RELEASES_URL: &str = "https://github.com/Ruszero01/clippi/releases";
+
+#[cfg(target_os = "windows")]
+static BLOCK_SYSTEM_WINDOW_BEHAVIORS: AtomicBool = AtomicBool::new(false);
 
 /// Events emitted by WindowManager for consumption by RootView.
 pub enum WindowManagerEvent {
@@ -1180,6 +1185,66 @@ impl WindowManager {
             self.sync_service.trigger_backend_sync(id);
         }
         cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    /// Apply system window behavior blocking (double-click maximize, snap, etc.).
+    pub fn set_block_system_window_behaviors(&mut self, block: bool, _cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_MAXIMIZEBOX, WS_THICKFRAME,
+            };
+
+            BLOCK_SYSTEM_WINDOW_BEHAVIORS.store(block, Ordering::Release);
+
+            let hwnd = self.hwnd as *mut std::ffi::c_void;
+            if hwnd.is_null() {
+                return;
+            }
+
+            unsafe {
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                let new_style = if block {
+                    style & !(WS_MAXIMIZEBOX as i32 | WS_THICKFRAME as i32)
+                } else {
+                    style | WS_MAXIMIZEBOX as i32 | WS_THICKFRAME as i32
+                };
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::NSWindowCollectionBehavior;
+
+            if self.ns_window == 0 {
+                return;
+            }
+            let window = unsafe { &*(self.ns_window as *const objc2_app_kit::NSWindow) };
+            let mut behavior = window.collectionBehavior();
+            if block {
+                behavior &= !(NSWindowCollectionBehavior::FullScreenPrimary);
+                behavior |= NSWindowCollectionBehavior::FullScreenNone;
+            } else {
+                behavior &= !(NSWindowCollectionBehavior::FullScreenNone);
+                behavior |= NSWindowCollectionBehavior::FullScreenPrimary;
+            }
+            window.setCollectionBehavior(behavior);
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let _ = block;
+            let _ = _cx;
+        }
     }
 
     /// Replace the internal blacklist with the given list (used for sync from settings).

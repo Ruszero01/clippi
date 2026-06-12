@@ -26,6 +26,7 @@ impl SettingsPanel {
         let auto_start = app.settings.auto_start;
         let auto_hide = app.settings.auto_hide;
         let silent_start = app.settings.silent_start;
+        let block_system_behaviors = app.settings.block_system_window_behaviors;
         #[cfg(target_os = "windows")]
         let hide_taskbar_icon = app.settings.hide_taskbar_icon;
         let theme_str = app.settings.theme.clone();
@@ -142,6 +143,31 @@ impl SettingsPanel {
         }
 
         container
+            // --- Block system window behaviors ---
+            .child({
+                let state = state.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                self.setting_row_with_toggle(
+                    I18nKey::SettingBlockSysBehavior.text(),
+                    I18nKey::DescBlockSysBehavior.text(),
+                    block_system_behaviors,
+                    window,
+                    cx,
+                    move |_window, _cx| {
+                        let new_val = state.update(_cx, |s, _cx| {
+                            s.settings.block_system_window_behaviors =
+                                !s.settings.block_system_window_behaviors;
+                            s.settings.save();
+                            s.settings.block_system_window_behaviors
+                        });
+                        wm.update(_cx, |wm, cx| {
+                            wm.set_block_system_window_behaviors(new_val, cx)
+                        });
+                        this.update(_cx, |_panel, cx| cx.notify());
+                    },
+                )
+            })
             // --- Theme ---
             .child({
                 let state = state.clone();

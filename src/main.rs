@@ -402,6 +402,17 @@ fn main() {
                     });
                 }
 
+                // --- Apply system window behaviors blocking based on settings ---
+                {
+                    let block_behaviors =
+                        state.read(cx).settings.block_system_window_behaviors;
+                    if block_behaviors {
+                        window_manager.update(cx, |wm, cx| {
+                            wm.set_block_system_window_behaviors(true, cx);
+                        });
+                    }
+                }
+
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
 
