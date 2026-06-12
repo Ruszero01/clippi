@@ -172,15 +172,11 @@ fn type_label(item: &ClipboardItem) -> String {
         DisplayKind::Color => I18nKey::CardTypeColor.text().into(),
         DisplayKind::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
-            if fd.files.len() <= 1 {
-                let is_dir = fd.files.first().is_some_and(|f| f.is_dir);
-                if is_dir {
-                    I18nKey::CardTypeFolder.text().into()
-                } else {
-                    I18nKey::CardTypeFile.text().into()
-                }
+            let is_dir = fd.files.first().is_some_and(|f| f.is_dir);
+            if fd.files.len() == 1 && is_dir {
+                I18nKey::CardTypeFolder.text().into()
             } else {
-                I18nKey::CardTypeFiles.fmt(&[&fd.files.len().to_string()])
+                I18nKey::CardTypeFile.text().into()
             }
         }
         DisplayKind::Image => I18nKey::CardTypeImage.text().into(),
@@ -1198,13 +1194,15 @@ impl RenderOnce for ClipboardCard {
                         .flex_col()
                         .gap(px(3.))
                         .overflow_hidden()
-                        .children(files.iter().take(3).map(|fi| {
+                        .children(files.iter().take(4).map(|fi| {
                             let (stem, ext) = if fi.is_dir {
                                 (fi.name.clone(), String::new())
                             } else {
                                 split_name_ext(&fi.name)
                             };
-                            let icon = if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
+                            let cached_icon = cached_file_icon_path(&fi.path, fi.is_dir);
+                            let fallback_icon =
+                                if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
                             let row = div()
                                 .rounded(px(4.))
                                 .bg(subtle_row_bg)
@@ -1223,13 +1221,20 @@ impl RenderOnce for ClipboardCard {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .child(
+                                        .child(if let Some(path) = cached_icon {
+                                            gpui::img(path)
+                                                .w(px(14.))
+                                                .h(px(14.))
+                                                .rounded(px(2.))
+                                                .into_any_element()
+                                        } else {
                                             div()
                                                 .font_family("iconfont")
                                                 .text_size(px(12.))
                                                 .text_color(text_3)
-                                                .child(icon),
-                                        ),
+                                                .child(fallback_icon)
+                                                .into_any_element()
+                                        }),
                                 )
                             } else {
                                 row
