@@ -8,6 +8,7 @@
 
 - **备注卡片高度优化** — 条目添加备注后卡片高度自动切换为最低档（68px），避免大面积空白；悬停显示原文时卡片保持最低高度，原文完整渲染溢出裁剪；取消备注后卡片恢复自适应高度
 - **macOS Intel (x86_64) 构建支持** — 新增 x86_64-apple-darwin 编译目标，发布流程分别生成 Apple Silicon 和 Intel 独立 DMG，用户按芯片架构选择对应安装包
+- **窗口首次显示闪烁修复** — 先前 `window_bounds` 仅在 macOS 设置，Windows 以默认尺寸创建窗口后再通过 `SetWindowPos` 调整位置，导致首次显示时短暂闪现默认大小窗口。现统一在所有平台创建窗口时即指定正确的 bounds（主显示器居中），平台定位代码（`SetWindowPos` / `setFrameTopLeftPoint`）在 `show_and_focus` 中再移动到精确的 FollowMouse/Remember 位置，消除闪烁
 
 # Version 0.2.2
 

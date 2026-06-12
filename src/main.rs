@@ -254,46 +254,40 @@ fn main() {
         gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
 
         // Calculate initial position (physical pixels) and size (logical pixels)
-        // before the settings are moved into AppState. We use SetWindowPos on
-        // Windows because GPUI's window_bounds with transparent windows is unreliable.
+        // before the settings are moved into AppState.
         let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
         let (initial_logical_w, initial_logical_h) =
             core::frontend::effective_window_size(&settings);
 
-        // --- window_options is mutated on macOS (window_bounds override) but not on ---
-        // --- Windows, so allow unused_mut to keep the common struct literal. ---
-        #[allow(unused_mut)]
-        let mut window_options = WindowOptions {
+        // --- Set window_bounds on all platforms so the window is created at the ---
+        // --- correct size from the start — avoids a one-frame flash at default ---
+        // --- size before SetWindowPos (Windows) or setFrameTopLeftPoint (macOS) ---
+        // --- adjusts the position during show_and_focus. ---
+        // --- Origin is centered on the primary monitor as a sensible default; ---
+        // --- the platform-specific positioning in show_and_focus will move it ---
+        // --- to the correct FollowMouse / Remember position on first show. ---
+        let window_options = WindowOptions {
             window_background: WindowBackgroundAppearance::Transparent,
             titlebar: Some(TitlebarOptions {
                 title: Some("Clippi".into()),
                 appears_transparent: true,
                 ..Default::default()
             }),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                Bounds::centered(
+                    None,
+                    size(px(initial_logical_w), px(initial_logical_h)),
+                    cx,
+                )
+                .origin,
+                size(px(initial_logical_w), px(initial_logical_h)),
+            ))),
             window_min_size: Some(size(
                 px(core::frontend::MIN_WINDOW_WIDTH),
                 px(core::frontend::MIN_WINDOW_HEIGHT),
             )),
             ..Default::default()
         };
-
-        #[cfg(target_os = "macos")]
-        {
-            let origin = initial_phys_pos
-                .map(|(x, y)| point(px(x as f32), px(y as f32)))
-                .unwrap_or_else(|| {
-                    Bounds::centered(
-                        None,
-                        size(px(initial_logical_w), px(initial_logical_h)),
-                        cx,
-                    )
-                    .origin
-                });
-            window_options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(
-                origin,
-                size(px(initial_logical_w), px(initial_logical_h)),
-            )));
-        }
 
         cx.open_window(
             window_options,
