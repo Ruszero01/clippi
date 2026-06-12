@@ -911,6 +911,58 @@ impl WindowManager {
         self.auto_hide = auto_hide;
     }
 
+    /// Apply taskbar icon visibility based on settings.
+    /// On Windows: toggles WS_EX_TOOLWINDOW extended style.
+    /// On macOS: no-op (tray apps with LSUIElement already hide from Dock).
+    pub fn apply_taskbar_visibility(&self, hide: bool, _cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_APPWINDOW,
+                WS_EX_TOOLWINDOW,
+            };
+
+            let hwnd = self.hwnd as *mut std::ffi::c_void;
+            if hwnd.is_null() {
+                return;
+            }
+
+            unsafe {
+                let mut ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                if hide {
+                    // Remove APPWINDOW (forces taskbar) and add TOOLWINDOW (hides from taskbar)
+                    ex_style &= !(WS_EX_APPWINDOW as i32);
+                    ex_style |= WS_EX_TOOLWINDOW as i32;
+                } else {
+                    // Restore APPWINDOW (show in taskbar) and remove TOOLWINDOW
+                    ex_style |= WS_EX_APPWINDOW as i32;
+                    ex_style &= !(WS_EX_TOOLWINDOW as i32);
+                }
+                SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style);
+                // --- Force Windows to re-evaluate the window's taskbar button ---
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = hide;
+            let _ = _cx;
+        }
+    }
+
+    pub fn set_hide_taskbar_icon(&mut self, hide: bool, cx: &mut Context<Self>) {
+        self.apply_taskbar_visibility(hide, cx);
+    }
+
     /// Update tray menu texts when language changes.
     pub fn update_tray_language(&mut self) {
         if let Some(ref mut tray) = self.tray {

@@ -33,6 +33,8 @@ define_i18n! {
     DescAutoHide:       ("失去焦点时隐藏窗口", "Hide on focus loss"),
     SettingSilentStart: ("静默启动", "Silent start"),
     DescSilentStart:    ("启动后最小化到托盘", "Start silently in tray"),
+    SettingHideTaskbar: ("隐藏任务栏图标", "Hide taskbar icon"),
+    DescHideTaskbar:    ("窗口显示时不在任务栏显示图标", "Hide from taskbar when visible"),
     SettingTheme:       ("主题", "Theme"),
     DescTheme:          ("选择界面主题", "Select theme"),
     SettingPosition:    ("弹出位置", "Position"),

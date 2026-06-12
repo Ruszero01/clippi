@@ -100,6 +100,8 @@ pub struct AppSettings {
     pub ocr_enabled: bool, // image OCR auto-detection toggle
     #[serde(default = "default_qr_enabled")]
     pub qr_enabled: bool, // image QR auto-detection toggle
+    #[serde(default)]
+    pub hide_taskbar_icon: bool, // hide taskbar icon when window is shown (Windows only)
 }
 
 fn default_qr_enabled() -> bool {
@@ -148,6 +150,7 @@ impl Default for AppSettings {
             pinned_tag_ids: Vec::new(),
             ocr_enabled: false,
             qr_enabled: true,
+            hide_taskbar_icon: false,
         }
     }
 }

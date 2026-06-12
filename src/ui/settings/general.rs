@@ -26,6 +26,8 @@ impl SettingsPanel {
         let auto_start = app.settings.auto_start;
         let auto_hide = app.settings.auto_hide;
         let silent_start = app.settings.silent_start;
+        #[cfg(target_os = "windows")]
+        let hide_taskbar_icon = app.settings.hide_taskbar_icon;
         let theme_str = app.settings.theme.clone();
         let position_mode = app.settings.window_position_mode.clone();
         let lang = app.settings.language.clone();
@@ -42,7 +44,7 @@ impl SettingsPanel {
             "remember" => 2,
             _ => 0,
         };
-        div()
+        let mut container = div()
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -111,7 +113,35 @@ impl SettingsPanel {
                         this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
-            })
+            });
+
+        // --- Hide taskbar icon (Windows only — macOS tray apps already hide from Dock) ---
+        #[cfg(target_os = "windows")]
+        {
+            container = container.child({
+                let state = state.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                self.setting_row_with_toggle(
+                    I18nKey::SettingHideTaskbar.text(),
+                    I18nKey::DescHideTaskbar.text(),
+                    hide_taskbar_icon,
+                    window,
+                    cx,
+                    move |_window, _cx| {
+                        let new_val = state.update(_cx, |s, _cx| {
+                            s.settings.hide_taskbar_icon = !s.settings.hide_taskbar_icon;
+                            s.settings.save();
+                            s.settings.hide_taskbar_icon
+                        });
+                        wm.update(_cx, |wm, cx| wm.set_hide_taskbar_icon(new_val, cx));
+                        this.update(_cx, |_panel, cx| cx.notify());
+                    },
+                )
+            });
+        }
+
+        container
             // --- Theme ---
             .child({
                 let state = state.clone();

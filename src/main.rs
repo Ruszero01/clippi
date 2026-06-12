@@ -394,6 +394,14 @@ fn main() {
                     }
                 }
 
+                // --- Apply taskbar icon visibility based on settings ---
+                {
+                    let hide_taskbar = state.read(cx).settings.hide_taskbar_icon;
+                    window_manager.update(cx, |wm, cx| {
+                        wm.apply_taskbar_visibility(hide_taskbar, cx);
+                    });
+                }
+
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
 
