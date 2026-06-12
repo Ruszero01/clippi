@@ -17,6 +17,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
+use crate::core::frontend::PANEL_OFFSET_X;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
     format_relative_time, is_email, is_phone,
@@ -32,6 +33,104 @@ type CardClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
 type CardIndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 type CardActionHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 type CardWindowHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+const INFO_PILL_FONT_SIZE: f32 = 9.0;
+const INFO_PILL_GAP: f32 = 4.0;
+const INFO_PILL_BORDER_WIDTH: f32 = 1.0;
+const INFO_PILL_PADDING_X: f32 = 5.0;
+const TIME_PILL_PADDING_X: f32 = 7.0;
+const PANEL_BORDER_WIDTH: f32 = 1.0;
+const LIST_PADDING_X: f32 = 8.0;
+const CARD_PADDING_X: f32 = 10.0;
+const CARD_ICON_WIDTH: f32 = 36.0;
+const CARD_CONTENT_GAP: f32 = 10.0;
+
+fn info_pill_width(text: &str, padding_x: f32, window: &Window) -> f32 {
+    let text: SharedString = text.to_owned().into();
+    let run = window.text_style().to_run(text.len());
+    let line = window
+        .text_system()
+        .shape_line(text, px(INFO_PILL_FONT_SIZE), &[run], None);
+
+    f32::from(line.width).ceil() + padding_x * 2.0 + INFO_PILL_BORDER_WIDTH * 2.0
+}
+
+fn info_row_width(pill_width_sum: f32, pill_count: usize) -> f32 {
+    pill_width_sum + INFO_PILL_GAP * pill_count.saturating_sub(1) as f32
+}
+
+fn visible_tag_count(
+    tag_widths: &[f32],
+    fixed_widths: &[f32],
+    available_width: f32,
+    mut overflow_width: impl FnMut(usize) -> f32,
+) -> usize {
+    let fixed_width_sum = fixed_widths.iter().sum::<f32>();
+    let all_tag_width_sum = tag_widths.iter().sum::<f32>();
+    let all_pill_count = fixed_widths.len() + tag_widths.len();
+
+    if info_row_width(fixed_width_sum + all_tag_width_sum, all_pill_count) <= available_width {
+        return tag_widths.len();
+    }
+
+    for visible_count in (0..tag_widths.len()).rev() {
+        let hidden_count = tag_widths.len() - visible_count;
+        let visible_width_sum = tag_widths[..visible_count].iter().sum::<f32>();
+        let pill_count = fixed_widths.len() + visible_count + 1;
+        let width = info_row_width(
+            fixed_width_sum + visible_width_sum + overflow_width(hidden_count),
+            pill_count,
+        );
+        if width <= available_width {
+            return visible_count;
+        }
+    }
+
+    0
+}
+
+fn info_row_available_width(window: &Window) -> f32 {
+    let card_width = f32::from(window.viewport_size().width)
+        - PANEL_OFFSET_X
+        - PANEL_BORDER_WIDTH * 2.0
+        - LIST_PADDING_X * 2.0;
+    let content_left = CARD_PADDING_X + CARD_ICON_WIDTH + CARD_CONTENT_GAP;
+    (card_width - content_left - CARD_PADDING_X).max(0.0)
+}
+
+#[cfg(test)]
+mod info_row_tests {
+    use super::visible_tag_count;
+
+    #[test]
+    fn shows_all_tags_when_they_fit() {
+        let tags = [30.0, 40.0];
+        let fixed = [50.0, 60.0];
+
+        assert_eq!(
+            visible_tag_count(&tags, &fixed, 192.0, |_| 24.0),
+            tags.len()
+        );
+    }
+
+    #[test]
+    fn reserves_space_for_the_hidden_tag_count() {
+        let tags = [30.0, 30.0, 30.0];
+        let fixed = [40.0, 50.0];
+        let visible = visible_tag_count(&tags, &fixed, 156.0, |_| 24.0);
+
+        assert_eq!(visible, 1);
+        assert_eq!(tags.len() - visible, 2);
+    }
+
+    #[test]
+    fn keeps_fixed_pills_and_count_when_no_custom_tag_fits() {
+        let tags = [30.0, 30.0];
+        let fixed = [40.0, 50.0];
+
+        assert_eq!(visible_tag_count(&tags, &fixed, 118.0, |_| 20.0), 0);
+    }
+}
 
 /// Get a content type iconfont glyph for display.
 fn type_icon(item: &ClipboardItem) -> &'static str {
@@ -1189,6 +1288,33 @@ impl RenderOnce for ClipboardCard {
         };
 
         // --- Bottom info row: tags → size label → time ---
+        let tag_widths = tags
+            .iter()
+            .map(|tag| info_pill_width(&tag.name, INFO_PILL_PADDING_X, window))
+            .collect::<Vec<_>>();
+        let mut fixed_widths = Vec::with_capacity(2);
+        if let Some(label) = size_label.as_deref() {
+            fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
+        }
+        fixed_widths.push(info_pill_width(
+            &time_str,
+            TIME_PILL_PADDING_X,
+            window,
+        ));
+        let visible_tag_count = visible_tag_count(
+            &tag_widths,
+            &fixed_widths,
+            info_row_available_width(window),
+            |hidden_count| {
+                info_pill_width(
+                    &format!("+{hidden_count}"),
+                    INFO_PILL_PADDING_X,
+                    window,
+                )
+            },
+        );
+        let hidden_tag_count = tags.len() - visible_tag_count;
+
         let bottom_info = div()
             .absolute()
             .right(px(10.))
@@ -1198,7 +1324,26 @@ impl RenderOnce for ClipboardCard {
             .flex_row()
             .gap(px(4.))
             .items_center()
-            .children(tags.iter().take(3).map(|tag| {
+            .when(hidden_tag_count > 0, |el| {
+                el.child(
+                    div()
+                        .h(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(pill_border)
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(text_2)
+                                .child(format!("+{hidden_tag_count}")),
+                        ),
+                )
+            })
+            .children(tags.iter().take(visible_tag_count).map(|tag| {
                 let tag_color = color_from_hex(&tag.color, text_2);
                 div()
                     .h(px(18.))
