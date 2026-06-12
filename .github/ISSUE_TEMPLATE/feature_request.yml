@@ -1,0 +1,56 @@
+name: "✨ 功能建议"
+description: "提出新功能或改进建议"
+title: "[Feature] "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你为 Clippi 提出功能建议！请清晰描述你的使用场景和期望，这样我们能更好地评估。
+
+        提交前请先搜索已有 issue，避免重复提交。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "这个功能要解决什么问题？"
+      description: "描述你当前遇到的不便或无法满足的需求。"
+      placeholder: "例如：我经常需要临时忽略某些应用的剪贴板内容，但目前只能全局开关..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: "你期望的解决方案"
+      description: "描述你希望 Clippi 增加什么功能或做出什么改变。"
+      placeholder: "例如：希望增加「应用白名单/黑名单」设置，可以指定只在某些应用中记录剪贴板..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "考虑过的替代方案"
+      description: "你是否考虑过其他变通方式？这有助于我们理解你的需求。"
+      placeholder: "例如：目前我只能手动关闭/开启剪贴板监控..."
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: "功能范围"
+      description: "你认为这个功能主要影响哪个方面？"
+      options:
+        - 剪贴板监控与捕获
+        - 内容搜索与筛选
+        - 标签系统
+        - 窗口与交互体验
+        - 云同步
+        - 设置与配置
+        - 其他
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: "补充信息"
+      description: "相关的截图、参考其他软件的类似功能、或者其他任何有助于说明的信息。"

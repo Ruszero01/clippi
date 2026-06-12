@@ -1,0 +1,96 @@
+name: "🐛 Bug 反馈"
+description: "报告程序异常、崩溃或不符合预期的行为"
+title: "[Bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你花时间反馈问题！请尽量提供完整信息，帮助我们快速定位和修复。
+
+        提交前请先搜索已有 issue，避免重复提交。
+
+  - type: input
+    id: version
+    attributes:
+      label: "Clippi 版本"
+      description: "你使用的是哪个版本？可在托盘菜单 → 关于 中查看。"
+      placeholder: "例如: 0.2.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: "操作系统"
+      description: "你在哪个系统上遇到了此问题？"
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "问题描述"
+      description: "简要清晰地描述你遇到的问题。"
+      placeholder: "例如：双击卡片粘贴后，窗口没有自动隐藏..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: "复现步骤"
+      description: "请列出能够稳定触发此问题的操作步骤："
+      placeholder: |
+        1. 复制一段富文本
+        2. 打开 Clippi 窗口
+        3. 双击该条目粘贴
+        4. 观察窗口行为...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "预期行为"
+      description: "你期望程序应该如何表现？"
+      placeholder: "粘贴后窗口应该自动隐藏..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: "实际行为"
+      description: "实际发生了什么？"
+      placeholder: "窗口没有隐藏，仍然停留在桌面上..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: "截图或录屏"
+      description: "如果方便，请提供截图或录屏来帮助说明问题（可直接拖拽到输入框）。"
+
+  - type: textarea
+    id: config
+    attributes:
+      label: "相关设置"
+      description: "如果问题与特定设置有关，请说明你的相关设置（如「失焦自动隐藏」是否开启、「窗口位置模式」等）。"
+      placeholder: |
+        - 失焦自动隐藏：是
+        - 窗口位置模式：居中
+        - 自动滚动到顶部：是
+        - ...
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: "补充信息"
+      description: "任何你认为有帮助的其他信息（如是否有其他剪贴板软件同时运行、最近是否更新过系统等）。"
