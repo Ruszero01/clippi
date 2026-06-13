@@ -1222,25 +1222,7 @@ impl WindowManager {
                 );
             }
         }
-        #[cfg(target_os = "macos")]
-        {
-            use objc2_app_kit::NSWindowCollectionBehavior;
-
-            if self.ns_window == 0 {
-                return;
-            }
-            let window = unsafe { &*(self.ns_window as *const objc2_app_kit::NSWindow) };
-            let mut behavior = window.collectionBehavior();
-            if block {
-                behavior &= !(NSWindowCollectionBehavior::FullScreenPrimary);
-                behavior |= NSWindowCollectionBehavior::FullScreenNone;
-            } else {
-                behavior &= !(NSWindowCollectionBehavior::FullScreenNone);
-                behavior |= NSWindowCollectionBehavior::FullScreenPrimary;
-            }
-            window.setCollectionBehavior(behavior);
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(target_os = "windows"))]
         {
             let _ = block;
             let _ = _cx;

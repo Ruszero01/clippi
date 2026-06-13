@@ -26,6 +26,7 @@ impl SettingsPanel {
         let auto_start = app.settings.auto_start;
         let auto_hide = app.settings.auto_hide;
         let silent_start = app.settings.silent_start;
+        #[cfg(target_os = "windows")]
         let block_system_behaviors = app.settings.block_system_window_behaviors;
         #[cfg(target_os = "windows")]
         let hide_taskbar_icon = app.settings.hide_taskbar_icon;
@@ -142,9 +143,10 @@ impl SettingsPanel {
             });
         }
 
-        container
-            // --- Block system window behaviors ---
-            .child({
+        // --- Block system window behaviors (Windows only) ---
+        #[cfg(target_os = "windows")]
+        {
+            container = container.child({
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
@@ -167,7 +169,10 @@ impl SettingsPanel {
                         this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
-            })
+            });
+        }
+
+        container
             // --- Theme ---
             .child({
                 let state = state.clone();
