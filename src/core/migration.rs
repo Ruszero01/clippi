@@ -60,6 +60,14 @@ const DB_MIGRATIONS: &[DbMigration] = &[
         description: "Add meta_type column for email/phone plain-text subtypes",
         sql: "ALTER TABLE clipboard_items ADD COLUMN meta_type TEXT NOT NULL DEFAULT ''",
     },
+    DbMigration {
+        version: 3,
+        description: "Add indexes on content_type and is_favorite for filtered queries",
+        sql: concat!(
+            "CREATE INDEX IF NOT EXISTS idx_content_type ON clipboard_items(content_type);",
+            "CREATE INDEX IF NOT EXISTS idx_is_favorite ON clipboard_items(is_favorite);",
+        ),
+    },
 ];
 
 /// Run all pending database migrations, updating `PRAGMA user_version`.

@@ -98,6 +98,10 @@ impl FocusWatcher {
 
 #[cfg(target_os = "windows")]
 pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
+    // SAFETY: transmuting a fn ptr to `*const ()` and back is sound on all
+    // Windows ABIs (x86/x64/ARM64). The callback signature matches WINEVENTPROC
+    // exactly. If `windows` crate bindings for SetWinEventHook become available
+    // with a safe wrapper, this should be migrated.
     let hook = unsafe {
         let proc: WINEVENTPROC = Some(std::mem::transmute::<
             *const (),

@@ -964,6 +964,7 @@ impl WindowManager {
         }
     }
 
+    #[cfg(target_os = "windows")]
     pub fn set_hide_taskbar_icon(&mut self, hide: bool, cx: &mut Context<Self>) {
         self.apply_taskbar_visibility(hide, cx);
     }

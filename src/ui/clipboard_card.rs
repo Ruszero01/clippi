@@ -865,7 +865,7 @@ impl RenderOnce for ClipboardCard {
                 let favicon_path = if domain.is_empty() {
                     None
                 } else {
-                    crate::platform::favicon::favicon_cache_path(&domain)
+                    crate::services::favicon::favicon_cache_path(&domain)
                         .map(std::path::PathBuf::from)
                 };
                 // --- Source app icon only when the setting is enabled ---

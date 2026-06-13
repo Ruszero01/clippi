@@ -172,11 +172,14 @@ pub struct RichData {
 
 impl RichData {
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        serde_json::to_string(self).expect("RichData should always serialize")
     }
 
     pub fn from_json(s: &str) -> Self {
-        serde_json::from_str(s).unwrap_or_default()
+        serde_json::from_str(s).unwrap_or_else(|e| {
+            log::warn!("Failed to deserialize RichData: {e}");
+            Self::default()
+        })
     }
 }
 
@@ -196,11 +199,14 @@ pub struct FileData {
 
 impl FileData {
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        serde_json::to_string(self).expect("FileData should always serialize")
     }
 
     pub fn from_json(s: &str) -> Self {
-        serde_json::from_str(s).unwrap_or_default()
+        serde_json::from_str(s).unwrap_or_else(|e| {
+            log::warn!("Failed to deserialize FileData: {e}");
+            Self::default()
+        })
     }
 
     pub fn display_text(&self) -> String {

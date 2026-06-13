@@ -2,6 +2,7 @@
 
 pub mod backends;
 pub mod clipboard_ops;
+pub mod favicon;
 pub mod gpui_clipboard;
 pub mod gpui_sync;
 pub mod poll_loop;

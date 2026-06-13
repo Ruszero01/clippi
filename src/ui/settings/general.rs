@@ -46,7 +46,7 @@ impl SettingsPanel {
             "remember" => 2,
             _ => 0,
         };
-        let mut container = div()
+        let container = div()
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -119,8 +119,7 @@ impl SettingsPanel {
 
         // --- Hide taskbar icon (Windows only — macOS tray apps already hide from Dock) ---
         #[cfg(target_os = "windows")]
-        {
-            container = container.child({
+        let container = container.child({
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
@@ -141,12 +140,10 @@ impl SettingsPanel {
                     },
                 )
             });
-        }
 
         // --- Block system window behaviors (Windows only) ---
         #[cfg(target_os = "windows")]
-        {
-            container = container.child({
+        let container = container.child({
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
@@ -170,7 +167,6 @@ impl SettingsPanel {
                     },
                 )
             });
-        }
 
         container
             // --- Theme ---

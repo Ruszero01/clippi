@@ -108,7 +108,7 @@ impl SyncBackend for WebDAVBackend {
 
         // Use If-None-Match for etag-based caching
         if !bypass_cache {
-            if let Some(etag) = self.last_etag.lock().unwrap().as_ref() {
+            if let Some(etag) = self.last_etag.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 req = req.set("If-None-Match", etag);
             }
         }
@@ -117,7 +117,7 @@ impl SyncBackend for WebDAVBackend {
             Ok(resp) => {
                 // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
-                    *self.last_etag.lock().unwrap() = Some(etag.to_string());
+                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) = Some(etag.to_string());
                 }
                 let body = resp.into_string().map_err(|e| {
                     format!(
@@ -162,7 +162,7 @@ impl SyncBackend for WebDAVBackend {
             Ok(resp) => {
                 // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
-                    *self.last_etag.lock().unwrap() = Some(etag.to_string());
+                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) = Some(etag.to_string());
                 }
                 Ok(())
             }

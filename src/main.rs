@@ -194,8 +194,10 @@ fn main() {
                         ) -> bool;
                     }
                     const K_CT_FONT_MANAGER_SCOPE_PROCESS: u32 = 1;
+                    // Retained<T>::as_ptr is the safe way to get the inner
+                    // pointer without transmute.
                     let url_ptr: *const std::ffi::c_void =
-                        unsafe { std::mem::transmute_copy(&url) };
+                        objc2::rc::Retained::as_ptr(&url) as *const std::ffi::c_void;
                     unsafe {
                         CTFontManagerRegisterFontsForURL(
                             url_ptr,
@@ -255,7 +257,7 @@ fn main() {
 
         // Calculate initial position (physical pixels) and size (logical pixels)
         // before the settings are moved into AppState.
-        let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
+        let _initial_phys_pos = core::frontend::calculate_initial_position(&settings);
         let (initial_logical_w, initial_logical_h) =
             core::frontend::effective_window_size(&settings);
 

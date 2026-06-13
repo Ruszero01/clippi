@@ -9,7 +9,7 @@ use crate::core::types::{
     is_email, is_image_extension, is_markdown_like, is_path, is_phone, is_url, ClipboardItem,
     ContentType, FileData, FileInfo, RichData,
 };
-use crate::platform::favicon;
+use crate::services::favicon;
 use crate::platform::source;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::common::RustImageData;
@@ -420,7 +420,7 @@ impl PollingClipboardListener {
     }
 
     fn capture_baseline(&self) -> u64 {
-        *self.startup_end.lock().unwrap() = Some(Instant::now());
+        *self.startup_end.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         with_clipboard_context(detect_clipboard_content)
             .flatten()
             .map_or(0, |item| item.content_hash)
@@ -469,14 +469,14 @@ impl ClipboardListener for PollingClipboardListener {
                         let seq = unsafe {
                             windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
                         };
-                        *last_seq.lock().unwrap() = seq;
+                        *last_seq.lock().unwrap_or_else(|e| e.into_inner()) = seq;
                     }
                     #[cfg(target_os = "macos")]
                     {
                         let cc = with_clipboard_access(|| {
                             NSPasteboard::generalPasteboard().changeCount()
                         });
-                        *last_cc.lock().unwrap() = cc;
+                        *last_cc.lock().unwrap_or_else(|e| e.into_inner()) = cc;
                     }
                     thread::sleep(Duration::from_millis(50));
                     continue;
@@ -489,7 +489,7 @@ impl ClipboardListener for PollingClipboardListener {
                     let seq = unsafe {
                         windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
                     };
-                    let mut last = last_seq.lock().unwrap();
+                    let mut last = last_seq.lock().unwrap_or_else(|e| e.into_inner());
                     if seq == *last {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
@@ -504,7 +504,7 @@ impl ClipboardListener for PollingClipboardListener {
                 {
                     let cc =
                         with_clipboard_access(|| NSPasteboard::generalPasteboard().changeCount());
-                    let mut last = last_cc.lock().unwrap();
+                    let mut last = last_cc.lock().unwrap_or_else(|e| e.into_inner());
                     if cc == *last {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
@@ -526,11 +526,11 @@ impl ClipboardListener for PollingClipboardListener {
                     // --- The sequence-number fast-path above already skips ---
                     // --- no-change cycles efficiently. ---
                     {
-                        let mut last = last_hash.lock().unwrap();
+                        let mut last = last_hash.lock().unwrap_or_else(|e| e.into_inner());
                         *last = item.content_hash;
                     }
                     if startup_done {
-                        pending.lock().unwrap().push(item);
+                        pending.lock().unwrap_or_else(|e| e.into_inner()).push(item);
                     }
                 }
 

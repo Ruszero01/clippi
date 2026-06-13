@@ -46,7 +46,9 @@ impl Database {
                 size INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
-            CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);",
+            CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_content_type ON clipboard_items(content_type);
+            CREATE INDEX IF NOT EXISTS idx_is_favorite ON clipboard_items(is_favorite);",
         )?;
         // --- Tags tables ---
         self.conn.execute_batch(
@@ -133,19 +135,36 @@ impl Database {
         Ok(())
     }
 
+    /// Whitelist allowed sort columns to prevent SQL injection through `order_by`.
+    /// Falls back to `updated_at` for unknown values and logs a warning.
+    fn validate_order_by(order_by: &str) -> &str {
+        const ALLOWED: &[&str] = &[
+            "created_at", "updated_at", "content_type", "is_favorite",
+            "image_width", "image_height", "size",
+        ];
+        if ALLOWED.contains(&order_by) {
+            order_by
+        } else {
+            log::warn!("[db] unexpected order_by value {order_by:?}, falling back to updated_at");
+            "updated_at"
+        }
+    }
+
     /// Load items with unified filter support.
     /// Uses ClipboardFilters to build WHERE clause with AND logic across all filter dimensions.
+    /// `order_by` must be one of the allowed column names — see `validate_order_by`.
     pub fn load_filtered(
         &self,
         filters: &ClipboardFilters,
         limit: usize,
         order_by: &str,
     ) -> SqlResult<Vec<ClipboardItem>> {
+        let order_col = Self::validate_order_by(order_by);
         let (where_clause, mut filter_params) = filters.db_where();
         let query = format!(
             "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size, meta_type
              FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
-            where_clause, order_by
+            where_clause, order_col
         );
         filter_params.push((limit as i64).into());
         let mut stmt = self.conn.prepare(&query)?;
@@ -896,8 +915,14 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         content_type: ContentType::from_str(&ct_str),
         full_text: row.get(2)?,
         content_hash: row.get::<_, i64>(3)? as u64,
-        created_at: created_str.parse().unwrap_or_default(),
-        updated_at: updated_str.parse().unwrap_or_default(),
+        created_at: created_str.parse().unwrap_or_else(|_| {
+            log::warn!("[db] unparseable created_at timestamp: {created_str:?}");
+            chrono::DateTime::UNIX_EPOCH
+        }),
+        updated_at: updated_str.parse().unwrap_or_else(|_| {
+            log::warn!("[db] unparseable updated_at timestamp: {updated_str:?}");
+            chrono::DateTime::UNIX_EPOCH
+        }),
         image_path,
         image_width: image_width as u32,
         image_height: image_height as u32,

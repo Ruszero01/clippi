@@ -770,7 +770,13 @@ fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 fn rfc3339_newer(a: &str, b: &str) -> bool {
     match (parse_rfc3339(a), parse_rfc3339(b)) {
         (Some(ta), Some(tb)) => ta > tb,
-        _ => a > b,
+        _ => {
+            log::warn!(
+                "[sync] unparseable RFC3339 timestamp in LWW comparison — \
+                 falling back to lexical: a={a:?}, b={b:?}"
+            );
+            a > b
+        }
     }
 }
 

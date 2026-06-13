@@ -1256,8 +1256,10 @@ mod tests {
     fn test_state() -> (AppState, Arc<AtomicBool>) {
         let db = Database::open(":memory:").unwrap();
         let dirty = Arc::new(AtomicBool::new(false));
-        let mut settings = AppSettings::default();
-        settings.db_path = ":memory:".to_string();
+        let settings = AppSettings {
+            db_path: ":memory:".to_string(),
+            ..Default::default()
+        };
         let state = AppState {
             settings,
             db,
