@@ -122,7 +122,7 @@ impl RenderOnce for HoverToolbar {
         if is_single {
             // Copy
             buttons.push((
-                "\u{e600}",
+                "\u{e7e1}",
                 "copy",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
@@ -154,13 +154,26 @@ impl RenderOnce for HoverToolbar {
                 ));
             }
 
-            // --- Open location (link / path / file) ---
-            if props.content_type == ContentType::File
-                || props.meta_type == "link"
-                || props.meta_type == "path"
-            {
+            // --- Open in browser (link only) ---
+            if props.meta_type == "link" {
                 buttons.push((
-                    "\u{e6d7}",
+                    "\u{e643}",
+                    "open_location",
+                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                ));
+            }
+            // --- Jump to directory (path only) ---
+            if props.meta_type == "path" {
+                buttons.push((
+                    "\u{e609}",
+                    "open_location",
+                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                ));
+            }
+            // --- Reveal in folder (file only) ---
+            if props.content_type == ContentType::File {
+                buttons.push((
+                    "\u{e609}",
                     "open_location",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));

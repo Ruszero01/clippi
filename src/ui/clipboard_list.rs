@@ -660,6 +660,13 @@ impl ClipboardListView {
                     cx.emit(ClipboardListEvent::OpenEdit(item.id));
                 }
             }
+            "open_location" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let id = item.id;
+                    self.state
+                        .update(cx, |s, _cx| s.open_item_location(id));
+                }
+            }
             _ => {}
         }
         self.hide_context_menu(cx);

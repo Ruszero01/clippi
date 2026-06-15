@@ -28,6 +28,8 @@ pub struct MenuItemContext {
     /// true = current format is HEX → show "Paste as RGB"
     pub is_hex: bool,
     pub is_favorite: bool,
+    pub is_link: bool,
+    pub is_path: bool,
 }
 
 impl MenuItemContext {
@@ -48,6 +50,8 @@ impl MenuItemContext {
             is_rich_text,
             is_hex,
             is_favorite: item.is_favorite,
+            is_link: item.meta_type == "link",
+            is_path: item.meta_type == "path",
         }
     }
 }
@@ -104,7 +108,7 @@ impl ContextMenu {
         items.push(RawMenuItem {
             label: I18nKey::CtxCopy.text().into(),
             action: "copy".into(),
-            icon: "\u{e600}".into(),
+            icon: "\u{e7e1}".into(),
             danger: false,
             fav: false,
         });
@@ -205,6 +209,37 @@ impl ContextMenu {
             danger: false,
             fav: false,
         });
+
+        // --- Open in browser (link only) ---
+        if ctx.is_link {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxOpenLink.text().into(),
+                action: "open_location".into(),
+                icon: "\u{e643}".into(),
+                danger: false,
+                fav: false,
+            });
+        }
+        // --- Jump to directory (path only) ---
+        if ctx.is_path {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxOpenFolder.text().into(),
+                action: "open_location".into(),
+                icon: "\u{e609}".into(),
+                danger: false,
+                fav: false,
+            });
+        }
+        // --- Open folder (file only) ---
+        if ctx.is_file {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxOpenFolder.text().into(),
+                action: "open_location".into(),
+                icon: "\u{e609}".into(),
+                danger: false,
+                fav: false,
+            });
+        }
 
         // --- Separator ---
         items.push(RawMenuItem {
