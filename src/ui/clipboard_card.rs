@@ -1062,22 +1062,39 @@ impl RenderOnce for ClipboardCard {
             // Link and Path rendering (now sub-types of PlainText via meta_type)
             // must be checked before the catch-all PlainText arm below.
             if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
-                let domain = url_domain(&full_text);
-                let path = url_path(&full_text);
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(text_1)
-                            .child(domain),
-                    )
-                    .child(div().text_size(px(13.)).text_color(text_3).child(path))
+                if matches!(content_kind, DisplayKind::Link) {
+                    // URL: bold domain + dimmed path
+                    let domain = url_domain(&full_text);
+                    let path = url_path(&full_text);
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(text_1)
+                                .child(domain),
+                        )
+                        .child(div().text_size(px(13.)).text_color(text_3).child(path))
+                } else {
+                    // File system path: show full text as-is
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(text_1)
+                                .overflow_hidden()
+                                .child(full_text),
+                        )
+                }
             } else if matches!(content_kind, DisplayKind::Color) {
                 div().flex_1().flex().items_center().child(
                     div()
