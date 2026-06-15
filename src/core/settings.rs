@@ -241,10 +241,6 @@ impl AppSettings {
 
     /// Seed or merge type filter config from `BUILTIN_TYPE_KEYS`.
     /// - First run (empty config): seed all built-in types as visible.
-    /// - Config with only built-in keys but wrong order: reorder to match.
-    /// - Config with extra/custom keys: append any new built-in keys.
-    /// Seed or merge type filter config from `BUILTIN_TYPE_KEYS`.
-    /// - First run (empty config): seed all built-in types as visible.
     /// - Subsequent runs: append any new built-in keys that aren't in config yet.
     fn migrate_type_filter_config(&mut self) {
         if self.type_filter_config.is_empty() {

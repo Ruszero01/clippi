@@ -6,8 +6,6 @@
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-#[cfg(not(target_os = "windows"))]
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

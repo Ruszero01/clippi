@@ -287,8 +287,6 @@ define_i18n! {
     FilterContactLabel:     ("信息", "Info"),
     FilterTagsTooltip:      ("标签", "Tags"),
     FilterConfigTitle:      ("筛选类型", "Filter Types"),
-    FilterConfigMoveUp:     ("上移", "Move up"),
-    FilterConfigMoveDown:   ("下移", "Move down"),
     TagTooltipToggleMode:   ("切换筛选模式", "Toggle Filter Mode"),
     TagTooltipClear:        ("清空筛选", "Clear Filters"),
     SearchPlaceholderFull:  ("搜索剪贴板...", "Search clipboard..."),
