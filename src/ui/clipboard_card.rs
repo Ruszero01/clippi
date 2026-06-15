@@ -135,8 +135,11 @@ mod info_row_tests {
 /// Get a content type iconfont glyph for display.
 fn type_icon(item: &ClipboardItem) -> &'static str {
     // Use meta-type specific icons for email and phone
-    if item.meta_type == "email" || item.meta_type == "phone" {
+    if item.meta_type == "email" {
         return "\u{e604}";
+    }
+    if item.meta_type == "phone" {
+        return "\u{e966}";
     }
     if has_qr_code(item) {
         return "\u{e605}";
@@ -149,7 +152,8 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
         DisplayKind::Link => "\u{e6d7}",
         DisplayKind::Path => "\u{e60f}",
         DisplayKind::Color => "\u{e610}",
-        DisplayKind::Email | DisplayKind::Phone => "\u{e604}",
+        DisplayKind::Email => "\u{e604}",
+        DisplayKind::Phone => "\u{e966}",
     }
 }
 
