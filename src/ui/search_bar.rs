@@ -122,6 +122,12 @@ impl SearchBar {
         cx.notify();
     }
 
+    /// Focus the search input. Called when the window opens and
+    /// `auto_focus_search` setting is enabled.
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.focus_handle(cx).focus(window);
+    }
+
     fn apply_type_filter(
         state: &Entity<AppState>,
         list_view: &Entity<ClipboardListView>,

@@ -104,6 +104,8 @@ pub struct AppSettings {
     pub hide_taskbar_icon: bool, // hide taskbar icon when window is shown (Windows only)
     #[serde(default)]
     pub block_system_window_behaviors: bool, // block system window behaviors (double-click maximize, Aero Snap)
+    #[serde(default)]
+    pub auto_focus_search: bool, // auto-focus search bar when the window opens
 }
 
 fn default_qr_enabled() -> bool {
@@ -154,6 +156,7 @@ impl Default for AppSettings {
             qr_enabled: true,
             hide_taskbar_icon: false,
             block_system_window_behaviors: false,
+            auto_focus_search: false,
         }
     }
 }

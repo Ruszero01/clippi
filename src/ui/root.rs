@@ -58,6 +58,8 @@ pub struct RootView {
     toast_generation: u64,
     /// True while the exit animation is playing (toast still rendered but fading out).
     toast_dismissing: bool,
+    /// Set to true on WindowHidden, cleared after auto-focusing the search bar.
+    needs_auto_focus: bool,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
 }
@@ -139,6 +141,7 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::WindowHidden => {
+                    this.needs_auto_focus = true;
                     this.list_view.update(cx, |list, cx| {
                         list.dismiss_all_panels(cx);
                     });
@@ -323,6 +326,7 @@ impl RootView {
             _toast_cleanup: None,
             toast_generation: 0,
             toast_dismissing: false,
+            needs_auto_focus: true,
             _wm_subscription,
             _subscriptions,
         }
@@ -355,6 +359,16 @@ impl Render for RootView {
         let viewport = window.viewport_size();
         let win_w = f32::from(viewport.width);
         let win_h = f32::from(viewport.height);
+
+        // --- Auto-focus search bar when the window opens ---
+        if self.needs_auto_focus && is_clipboard {
+            self.needs_auto_focus = false;
+            if self.state.read(cx).settings.auto_focus_search {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.focus(window, cx);
+                });
+            }
+        }
 
         // --- Toast state machine ---
         // --- Enter: bump generation → new transition (0 → 1 opacity, slide up). ---

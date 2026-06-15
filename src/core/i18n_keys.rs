@@ -87,6 +87,9 @@ define_i18n! {
     SettingQr:              ("自动二维码识别", "Auto QR Detection"),
     DescQrOn:               ("自动识别图片中的二维码", "Auto detect QR in images"),
     DescQrOff:              ("二维码识别已关闭", "QR detection disabled"),
+    SettingAutoFocusSearch: ("自动聚焦搜索框", "Auto-focus search"),
+    DescAutoFocusSearchOn:  ("打开窗口时自动聚焦搜索框", "Auto-focus search bar on open"),
+    DescAutoFocusSearchOff: ("手动点击聚焦搜索框", "Click to focus search bar"),
 
     // ─── Data settings ───
     SettingDbPath:      ("数据库路径", "Database path"),

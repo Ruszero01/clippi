@@ -26,6 +26,7 @@ impl SettingsPanel {
         let show_original_on_hover = app.settings.show_original_on_hover;
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
+        let auto_focus_search = app.settings.auto_focus_search;
         // --- borrow released here — `app` is a &AppState reference ---
 
         div()
@@ -33,6 +34,35 @@ impl SettingsPanel {
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
+            // --- Card height (4-option group) ---
+            .child({
+                let state = state.clone();
+                let this = this.clone();
+                self.setting_row_with_options(
+                    I18nKey::SettingCardHeight.text(),
+                    I18nKey::DescCardHeight.text(),
+                    &[
+                        ("high", I18nKey::CardHeightTall.text()),
+                        ("medium", I18nKey::CardHeightMed.text()),
+                        ("low", I18nKey::CardHeightShort.text()),
+                        ("auto", I18nKey::CardHeightAuto.text()),
+                    ],
+                    &card_height_mode,
+                    move |key, _window, _cx| {
+                        state.update(_cx, |s, _cx| {
+                            s.settings.card_height_mode = key.to_string();
+                            s.settings.save();
+                        });
+                        this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
+                        });
+                    },
+                )
+            })
             // --- Sort by created (dynamic desc) ---
             .child({
                 let state = state.clone();
@@ -63,32 +93,27 @@ impl SettingsPanel {
                     },
                 )
             })
-            // --- Card height (4-option group) ---
+            // --- Auto focus search (dynamic desc) ---
             .child({
                 let state = state.clone();
                 let this = this.clone();
-                self.setting_row_with_options(
-                    I18nKey::SettingCardHeight.text(),
-                    I18nKey::DescCardHeight.text(),
-                    &[
-                        ("high", I18nKey::CardHeightTall.text()),
-                        ("medium", I18nKey::CardHeightMed.text()),
-                        ("low", I18nKey::CardHeightShort.text()),
-                        ("auto", I18nKey::CardHeightAuto.text()),
-                    ],
-                    &card_height_mode,
-                    move |key, _window, _cx| {
+                let desc = if auto_focus_search {
+                    I18nKey::DescAutoFocusSearchOn.text()
+                } else {
+                    I18nKey::DescAutoFocusSearchOff.text()
+                };
+                self.setting_row_with_toggle(
+                    I18nKey::SettingAutoFocusSearch.text(),
+                    desc,
+                    auto_focus_search,
+                    window,
+                    cx,
+                    move |_window, _cx| {
                         state.update(_cx, |s, _cx| {
-                            s.settings.card_height_mode = key.to_string();
+                            s.settings.auto_focus_search = !s.settings.auto_focus_search;
                             s.settings.save();
                         });
-                        this.update(_cx, |_panel, cx| {
-                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
-                                reload_items: false,
-                                scroll_to_top: false,
-                            });
-                            cx.notify();
-                        });
+                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
