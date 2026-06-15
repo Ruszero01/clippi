@@ -258,6 +258,8 @@ fn main() {
         // Calculate initial position (physical pixels) and size (logical pixels)
         // before the settings are moved into AppState.
         let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
+        #[cfg(not(target_os = "windows"))]
+        let _ = &initial_phys_pos; // used only in the Windows cfg block below
         let (initial_logical_w, initial_logical_h) =
             core::frontend::effective_window_size(&settings);
 
