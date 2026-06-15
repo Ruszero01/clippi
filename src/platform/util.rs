@@ -17,6 +17,9 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 /// that are no longer actively used. Safe to call at any time.
 #[cfg(target_os = "windows")]
 pub fn trim_process_working_set() {
+    // SAFETY: `SetProcessWorkingSetSizeEx` with `SIZE_T(-1, -1)` and no-flags
+    // provides a trim hint to the OS on the current process. It can be called
+    // from any thread and never fails in a way that corrupts state.
     unsafe {
         use windows_sys::Win32::System::Memory::SetProcessWorkingSetSizeEx;
         use windows_sys::Win32::System::Threading::GetCurrentProcess;
@@ -60,6 +63,12 @@ pub fn hicon_to_base64_png(
 
     const DI_NORMAL: u32 = 0x0003;
 
+    // SAFETY: GDI drawing calls (`GetDC`, `CreateCompatibleDC`, `CreateDIBSection`,
+    // `DrawIconEx`) are safe when used with valid DCs and properly-initialised
+    // BITMAPINFO. The raw pixel buffer (`pixels`) is owned by the DIB section
+    // and copied via `from_raw_parts` before the DIB/DC are destroyed.
+    // `DestroyIcon` takes ownership of `hicon` and is always called (even on
+    // error paths). The BGRA→RGBA swizzle uses safe Rust slices.
     unsafe {
         let screen_dc = GetDC(std::ptr::null_mut());
         let mem_dc = CreateCompatibleDC(screen_dc);

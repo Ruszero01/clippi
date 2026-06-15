@@ -20,6 +20,9 @@ const FOCUS_TIMEOUT_MS: u64 = 500;
 #[cfg(target_os = "windows")]
 pub fn restore_paste_target() {
     if let Some(hwnd) = crate::platform::focus::get_last_non_clippi_window() {
+        // SAFETY: `IsWindow` only reads window validity; `SetForegroundWindow`
+        // is safe when the HWND is known valid (IsWindow check) and belongs to
+        // a non-Clippi process.
         if unsafe { IsWindow(hwnd) } != 0 {
             unsafe { SetForegroundWindow(hwnd) };
         }
@@ -76,6 +79,11 @@ fn wait_for_focus_and_send_ctrl_v(target_hwnd: Option<usize>) {
         }
     }
 
+    // SAFETY: `SendInput` with a correctly-initialised INPUT array is the standard
+    // Windows API for synthesizing keyboard input. All 4 INPUT structs are fully
+    // initialised via zeroed() + field assignment before the call, and the array
+    // size matches the count parameter. `IsWindow` and `GetForegroundWindow` are
+    // read-only queries that are safe from any thread.
     // --- Send Ctrl+V atomically via SendInput ---
     unsafe {
         let mut inputs: [INPUT; 4] = std::mem::zeroed();

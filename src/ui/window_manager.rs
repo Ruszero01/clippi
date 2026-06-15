@@ -386,6 +386,8 @@ impl WindowManager {
                 right: 0,
                 bottom: 0,
             };
+            // SAFETY: `GetWindowRect` reads our own window's geometry. The HWND
+            // is valid (guarded by `self.hwnd != 0` above) and RECT is stack-allocated.
             let ok = unsafe { GetWindowRect(self.hwnd as *mut std::ffi::c_void, &mut rect) };
             if ok == 0 {
                 return;
@@ -504,6 +506,7 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+            // SAFETY: `GetForegroundWindow` is a read-only query safe from any thread.
             self.hwnd != 0 && unsafe { GetForegroundWindow() } as isize == self.hwnd
         }
         #[cfg(not(target_os = "windows"))]
@@ -667,10 +670,15 @@ impl WindowManager {
             let hwnd = self.hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
                 if let Some((x, y)) = self.calculate_position() {
+                    // SAFETY: HWND is our own window (non-null), coordinates are
+                    // validated by `calculate_position`. SWP_NOSIZE/SWP_NOACTIVATE
+                    // make this a pure positioning call.
                     unsafe {
                         SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
                     }
                 }
+                // SAFETY: HWND is our own window. `ShowWindow(SW_SHOW)` makes it
+                // visible; `SetForegroundWindow` brings it to the foreground.
                 unsafe {
                     ShowWindow(hwnd, SW_SHOW);
                     SetForegroundWindow(hwnd);
@@ -736,6 +744,9 @@ impl WindowManager {
                 use windows_sys::Win32::Foundation::POINT;
                 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
                 let mut pt = POINT { x: 0, y: 0 };
+                // SAFETY: HWND is our own window. `ClientToScreen` translates
+                // the client-origin to screen coordinates, writing into a
+                // stack-allocated POINT.
                 unsafe {
                     ClientToScreen(hwnd, &mut pt);
                 }
@@ -744,6 +755,7 @@ impl WindowManager {
             }
 
             if !hwnd.is_null() {
+                // SAFETY: HWND is our own window. `ShowWindow(SW_HIDE)` hides it.
                 unsafe { ShowWindow(hwnd, SW_HIDE) };
             }
         }
@@ -881,6 +893,8 @@ impl WindowManager {
             let hwnd = self.hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
                 let insert_after = if pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
+                // SAFETY: HWND is our own window. `SetWindowPos` with
+                // SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE only changes Z-order.
                 unsafe {
                     SetWindowPos(
                         hwnd,
@@ -933,6 +947,9 @@ impl WindowManager {
                 return;
             }
 
+            // SAFETY: HWND is our own window. `GetWindowLongW`/`SetWindowLongW`
+            // read/write our own extended style bits. `SetWindowPos` with
+            // SWP_FRAMECHANGED forces a taskbar re-evaluation.
             unsafe {
                 let mut ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
                 if hide {
@@ -1204,6 +1221,9 @@ impl WindowManager {
                 return;
             }
 
+            // SAFETY: HWND is our own window. `GetWindowLongW`/`SetWindowLongW`
+            // read/write our own style bits to toggle MAXIMIZEBOX/THICKFRAME.
+            // `SetWindowPos` with SWP_FRAMECHANGED forces a frame re-evaluation.
             unsafe {
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 let new_style = if block {

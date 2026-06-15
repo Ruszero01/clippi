@@ -77,6 +77,11 @@ pub struct FocusWatcher {
 impl FocusWatcher {
     #[cfg(target_os = "windows")]
     pub fn stop(&mut self) {
+        // SAFETY: `UnhookWinEvent` removes a hook previously registered by
+        // `SetWinEventHook`. `PostThreadMessageW` posts a WM_QUIT to the
+        // message-pump thread identified by `self.thread_id`; the thread
+        // was created in `start_focus_watcher` and is guaranteed alive
+        // until `join()` returns.
         unsafe { UnhookWinEvent(self.hook) };
         unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0) };
         if let Some(t) = self.thread.take() {
@@ -134,10 +139,14 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
     let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(0);
 
     let thread = std::thread::spawn(move || {
+        // SAFETY: `GetCurrentThreadId` returns a constant thread ID; always safe.
         let tid = unsafe { GetCurrentThreadId() };
         let _ = tx.send(tid); // blocks until receiver reads — ensures tid is available
+        // SAFETY: `zeroed()` on a POD struct produces a valid zero-valued MSG.
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
+            // SAFETY: `PeekMessageW` with a stack-allocated MSG and null HWND
+            // retrieves any message for this thread; the output pointer is valid.
             let ret = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
             if ret == 0 {
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -146,6 +155,8 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
             if msg.message == WM_QUIT {
                 break;
             }
+            // SAFETY: `TranslateMessage` and `DispatchMessageW` are standard
+            // message-pump calls on a well-formed MSG obtained from `PeekMessageW`.
             unsafe { TranslateMessage(&msg) };
             unsafe { DispatchMessageW(&msg) };
         }
@@ -285,6 +296,12 @@ pub fn get_foreground_app_info() -> Option<ForegroundAppInfo> {
 
 #[cfg(target_os = "windows")]
 fn windows_foreground_info() -> Option<ForegroundAppInfo> {
+    // SAFETY: `GetForegroundWindow`, `GetWindowThreadProcessId`, `OpenProcess`
+    // (PROCESS_QUERY_LIMITED_INFORMATION), `QueryFullProcessImageNameW`, and
+    // `SHGetFileInfoW` are all read-only or constrained queries. Stack-allocated
+    // buffers (exe_buf, SHFILEINFOW) are properly sized and zeroed. `CloseHandle`
+    // is always called on non-null handles. Icon extraction delegates to
+    // `hicon_to_base64_png` which takes HICON ownership.
     unsafe {
         // --- Use the stored non-Clippi window; fall back to current foreground ---
         let hwnd = get_last_non_clippi_window().or_else(|| {

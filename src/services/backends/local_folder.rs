@@ -101,7 +101,7 @@ impl SyncBackend for LocalFolderBackend {
         if !bypass_cache {
             if let Ok(meta) = std::fs::metadata(&path) {
                 if let Ok(mtime) = meta.modified() {
-                    let mut last = self.last_remote_mtime.lock().unwrap();
+                    let mut last = self.last_remote_mtime.lock().unwrap_or_else(|e| e.into_inner());
                     if *last == Some(mtime) {
                         mtime_changed = false;
                     } else {
@@ -114,7 +114,7 @@ impl SyncBackend for LocalFolderBackend {
             // Still update the mtime cache so the next poll cycle can use it
             if let Ok(meta) = std::fs::metadata(&path) {
                 if let Ok(mtime) = meta.modified() {
-                    *self.last_remote_mtime.lock().unwrap() = Some(mtime);
+                    *self.last_remote_mtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(mtime);
                 }
             }
         }
@@ -207,7 +207,7 @@ impl SyncBackend for LocalFolderBackend {
         // --- detection on the next pull. ---
         if let Ok(meta) = std::fs::metadata(&file_path) {
             if let Ok(mtime) = meta.modified() {
-                *self.last_remote_mtime.lock().unwrap() = Some(mtime);
+                *self.last_remote_mtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(mtime);
             }
         }
         Ok(())

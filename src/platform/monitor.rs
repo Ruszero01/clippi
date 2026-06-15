@@ -33,6 +33,8 @@ pub(crate) fn cocoa_rect_to_top_left(
 
 #[cfg(target_os = "windows")]
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
+    // SAFETY: `GetCursorPos` is safe to call from any thread; the POINT struct
+    // is stack-allocated and properly initialised via zeroed().
     unsafe {
         let mut point = std::mem::zeroed();
         if GetCursorPos(&mut point) != 0 {
@@ -63,6 +65,9 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
 
 #[cfg(target_os = "windows")]
 pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
+    // SAFETY: `MonitorFromPoint` and `GetMonitorInfoW` read system monitor
+    // configuration; both are thread-safe. `MONITORINFOEXW` is stack-allocated
+    // and its cbSize field is initialised before the call.
     unsafe {
         let hmonitor = MonitorFromPoint(
             windows_sys::Win32::Foundation::POINT { x, y },
@@ -133,6 +138,8 @@ pub fn get_monitor_work_area(_x: i32, _y: i32) -> Option<MonitorRect> {
 
 #[cfg(target_os = "windows")]
 pub fn is_point_on_monitor(x: i32, y: i32) -> bool {
+    // SAFETY: `MonitorFromPoint` with `MONITOR_DEFAULTTONULL` is a read-only
+    // query safe to call from any thread.
     unsafe {
         let hmonitor = MonitorFromPoint(
             windows_sys::Win32::Foundation::POINT { x, y },
@@ -191,6 +198,7 @@ pub fn is_point_on_monitor(_x: i32, _y: i32) -> bool {
 #[cfg(target_os = "windows")]
 pub fn get_scale_factor(_x: i32, _y: i32) -> f32 {
     use windows_sys::Win32::UI::HiDpi::GetDpiForSystem;
+    // SAFETY: `GetDpiForSystem` is a read-only query callable from any thread.
     unsafe {
         let dpi = GetDpiForSystem();
         dpi as f32 / 96.0

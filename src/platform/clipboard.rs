@@ -441,9 +441,13 @@ impl ClipboardListener for PollingClipboardListener {
         // Windows: use cheap sequence-number check to avoid opening the clipboard
         // --- and encoding large bitmaps to PNG every 50ms when nothing changed. ---
         #[cfg(target_os = "windows")]
-        let last_seq = Arc::new(Mutex::new(unsafe {
-            windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-        }));
+        let last_seq = Arc::new(Mutex::new(
+            // SAFETY: `GetClipboardSequenceNumber` is a stateless query that
+            // returns a DWORD; callable from any thread at any time.
+            unsafe {
+                windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
+            },
+        ));
 
         // macOS: use NSPasteboard.changeCount for the same fast-path purpose.
         // --- changeCount increments on every pasteboard write, giving an efficient ---
@@ -515,7 +519,7 @@ impl ClipboardListener for PollingClipboardListener {
 
                 let startup_done = startup_end
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .is_none_or(|end| end.elapsed().as_millis() > 500);
 
                 if let Some(item) = with_clipboard_context(detect_clipboard_content).flatten() {

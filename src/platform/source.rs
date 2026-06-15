@@ -26,6 +26,12 @@ mod windows_impl {
     const PROCESS_NAME_WIN32: u32 = 0;
 
     pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
+        // SAFETY: `GetClipboardOwner` reads the current clipboard owner HWND
+        // (query-only, no side effects). `OpenProcess` with
+        // PROCESS_QUERY_LIMITED_INFORMATION is the least-privilege access mode.
+        // `QueryFullProcessImageNameW` writes into a stack-allocated buffer
+        // whose capacity matches the reported `len`. `CloseHandle` is always
+        // called on non-null handles.
         unsafe {
             let hwnd = GetClipboardOwner();
             if hwnd.is_null() {
@@ -76,6 +82,10 @@ mod windows_impl {
     }
 
     fn extract_icon_base64(exe_path: &str) -> Option<String> {
+        // SAFETY: `SHGetFileInfoW` reads file metadata only; the input path
+        // buffer is null-terminated and stack-allocated. `SHFILEINFOW` is
+        // zeroed before the call. The returned `hIcon` is passed to
+        // `hicon_to_base64_png` which takes ownership and calls `DestroyIcon`.
         unsafe {
             let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -104,6 +114,10 @@ mod windows_impl {
         } else {
             FILE_ATTRIBUTE_NORMAL
         };
+        // SAFETY: `SHGetFileInfoW` with `SHGFI_USEFILEATTRIBUTES` does not
+        // access the file system — it returns the icon associated with the
+        // file extension. The input buffer is null-terminated, the output
+        // struct is zeroed, and `hicon_to_base64_png` takes HICON ownership.
         unsafe {
             let wide_path: Vec<u16> =
                 file_path.encode_utf16().chain(std::iter::once(0)).collect();

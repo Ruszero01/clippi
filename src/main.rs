@@ -257,7 +257,7 @@ fn main() {
 
         // Calculate initial position (physical pixels) and size (logical pixels)
         // before the settings are moved into AppState.
-        let _initial_phys_pos = core::frontend::calculate_initial_position(&settings);
+        let initial_phys_pos = core::frontend::calculate_initial_position(&settings);
         let (initial_logical_w, initial_logical_h) =
             core::frontend::effective_window_size(&settings);
 

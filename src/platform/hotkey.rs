@@ -346,6 +346,9 @@ mod platform_input {
 
     pub fn pressed_modifiers() -> Modifiers {
         let mut modifiers = Modifiers::empty();
+        // SAFETY: `GetAsyncKeyState` is a non-blocking poll of the physical key
+        // state; callable from any thread. The key codes (VK_CONTROL, VK_MENU,
+        // VK_SHIFT, VK_LWIN, VK_RWIN) are well-known constants on Windows.
         unsafe {
             if GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 {
                 modifiers |= Modifiers::CONTROL;
@@ -432,6 +435,9 @@ mod platform_input {
             (0xC0, Code::Backquote),    // VK_OEM_3
         ];
 
+        // SAFETY: `GetAsyncKeyState` is a non-blocking poll callable from
+        // any thread. All virtual key codes in `key_map` are well-known
+        // Windows VK_ constants.
         key_map.iter().find_map(|(virtual_key, code)| unsafe {
             if GetAsyncKeyState(*virtual_key) < 0 {
                 Some(*code)
@@ -456,6 +462,8 @@ mod platform_input {
     }
 
     fn is_key_pressed(vk: u16) -> bool {
+        // SAFETY: `CGEventSourceKeyState` with stateID 0 (kCGEventSourceStateCombined)
+        // queries the hardware key state; it is callable from any thread.
         unsafe { CGEventSourceKeyState(0, vk) }
     }
 
