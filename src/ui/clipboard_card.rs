@@ -22,7 +22,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
     format_relative_time, is_email, is_phone,
     mask_sensitive_preview, parse_hex_color, url_domain, url_path, ClipboardItem, ContentType,
-    FileData, FileInfo, RichData,
+    DisplayKind, FileData, FileInfo, RichData,
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
@@ -134,21 +134,22 @@ mod info_row_tests {
 
 /// Get a content type iconfont glyph for display.
 fn type_icon(item: &ClipboardItem) -> &'static str {
-    // Use meta-type specific icons for email
-    if item.meta_type == "email" {
+    // Use meta-type specific icons for email and phone
+    if item.meta_type == "email" || item.meta_type == "phone" {
         return "\u{e604}";
     }
     if has_qr_code(item) {
         return "\u{e605}";
     }
-    match item.content_type {
-        ContentType::PlainText => "\u{e60e}",
-        ContentType::RichText => "\u{e6ae}",
-        ContentType::Image => "\u{e626}",
-        ContentType::File => "\u{e646}",
-        ContentType::Link => "\u{e6d7}",
-        ContentType::Path => "\u{e60f}",
-        ContentType::Color => "\u{e610}",
+    match item.display_kind() {
+        DisplayKind::PlainText => "\u{e60e}",
+        DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf => "\u{e6ae}",
+        DisplayKind::Image => "\u{e626}",
+        DisplayKind::File => "\u{e646}",
+        DisplayKind::Link => "\u{e6d7}",
+        DisplayKind::Path => "\u{e60f}",
+        DisplayKind::Color => "\u{e610}",
+        DisplayKind::Email | DisplayKind::Phone => "\u{e604}",
     }
 }
 
@@ -445,8 +446,11 @@ pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32
                 128.0
             }
         }
-        ContentType::Link | ContentType::Path => 68.0,
         _ => {
+            // Link/Path are compact — check via display_kind
+            if matches!(item.display_kind(), DisplayKind::Link | DisplayKind::Path) {
+                return 68.0;
+            }
             let len = item.full_text.chars().count();
             if len <= 150 {
                 68.0
@@ -691,8 +695,9 @@ impl RenderOnce for ClipboardCard {
         };
 
         // --- Left: icon area (top-aligned with content) ---
-        let icon_area = match content_type {
-            ContentType::Color => div()
+        let icon_kind = item.display_kind();
+        let icon_area = match icon_kind {
+            DisplayKind::Color => div()
                 .w(px(36.))
                 .flex()
                 .flex_col()
@@ -754,7 +759,7 @@ impl RenderOnce for ClipboardCard {
                         )
                         .into_any_element()
                 }),
-            ContentType::Image => div()
+            DisplayKind::Image => div()
                 .w(px(36.))
                 .flex()
                 .flex_col()
@@ -799,7 +804,7 @@ impl RenderOnce for ClipboardCard {
                                 .child(label.to_string()),
                         ),
                 ),
-            ContentType::File => {
+            DisplayKind::File => {
                 // --- Single file: prefer file system icon over source app icon ---
                 let file_icon = serde_json::from_str::<FileData>(&item.file_data)
                     .ok()
@@ -857,7 +862,7 @@ impl RenderOnce for ClipboardCard {
                             ),
                     )
             }
-            ContentType::Link => {
+            DisplayKind::Link => {
                 // --- Favicon priority: cache → source app icon → type icon ---
                 // --- Only checks local cache — network fetch happens async ---
                 // --- in the clipboard detection thread (ensure_favicon_cached). ---
@@ -1049,9 +1054,39 @@ impl RenderOnce for ClipboardCard {
             // No note, or note present + hovering with show_original → render full content.
             // Card height is clamped to 68px by estimate_card_height when note exists,
             // and overflow_hidden on the base div naturally clips oversized content.
-            match content_type {
-                ContentType::Image => {
-                    // Show image preview if path is available, otherwise show dimensions
+            let content_kind = item.display_kind();
+            // Link and Path rendering (now sub-types of PlainText via meta_type)
+            // must be checked before the catch-all PlainText arm below.
+            if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
+                let domain = url_domain(&full_text);
+                let path = url_path(&full_text);
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .child(domain),
+                    )
+                    .child(div().text_size(px(13.)).text_color(text_3).child(path))
+            } else if matches!(content_kind, DisplayKind::Color) {
+                div().flex_1().flex().items_center().child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(text_1)
+                        .overflow_hidden()
+                        .child(full_text),
+                )
+            } else {
+                match content_type {
+                    ContentType::Image => {
+                        // Show image preview if path is available, otherwise show dimensions
                     if !img_path.is_empty() {
                         let object_fit = if has_qr {
                             ObjectFit::Contain
@@ -1157,32 +1192,6 @@ impl RenderOnce for ClipboardCard {
                         }
                     }
                 }
-                ContentType::Link | ContentType::Path => {
-                    let domain = url_domain(&full_text);
-                    let path = url_path(&full_text);
-                    div()
-                        .flex_1()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(text_1)
-                                .child(domain),
-                        )
-                        .child(div().text_size(px(13.)).text_color(text_3).child(path))
-                }
-                ContentType::Color => div().flex_1().flex().items_center().child(
-                    div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(text_1)
-                        .overflow_hidden()
-                        .child(full_text),
-                ),
                 ContentType::File => {
                     let file_data: FileData =
                         serde_json::from_str(&item.file_data).unwrap_or_default();
@@ -1259,6 +1268,7 @@ impl RenderOnce for ClipboardCard {
                         }))
                 }
             }
+            } // closes if-else block
         };
 
         // --- Size label for types that have measurable content ---
@@ -1289,7 +1299,6 @@ impl RenderOnce for ClipboardCard {
                     None
                 }
             }
-            _ => None,
         };
 
         // --- Bottom info row: tags → size label → time ---

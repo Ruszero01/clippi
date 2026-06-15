@@ -33,7 +33,7 @@ pub struct MenuItemContext {
 impl MenuItemContext {
     pub fn from_item(item: &crate::core::types::ClipboardItem) -> Self {
         use crate::core::types::{ContentType, DisplayKind};
-        let is_color = item.content_type == ContentType::Color;
+        let is_color = item.meta_type == "color";
         // --- is_hex = true → show "Paste as RGB" (convert FROM hex) ---
         let is_hex = is_color && crate::core::color::is_hex_format(&item.full_text);
         // Only show "paste as plain text" when item has actual rich formatting

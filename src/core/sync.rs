@@ -76,7 +76,7 @@ pub struct SyncItem {
     /// Tag associations carried on the item.
     #[serde(default)]
     pub tags: Vec<SyncTagRef>,
-    /// Plain-text subtype: "" | "email" | "phone".
+    /// Plain-text subtype: "" | "email" | "phone" | "link" | "path" | "color".
     #[serde(default)]
     pub meta_type: String,
 }

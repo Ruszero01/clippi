@@ -43,13 +43,9 @@ impl TypeFilterConfigPanel {
             {
                 let was_visible = entry.visible;
                 entry.visible = !entry.visible;
-                // If hiding a currently active filter, clear it
+                // If hiding a currently active filter, deactivate it
                 if was_visible && !entry.visible && s.filters.is_type_active(key) {
                     s.filters.toggle_type(key);
-                    // Also handle "file" ↔ "image" coupling
-                    if key == "file" && s.filters.is_type_active("image") {
-                        s.filters.toggle_type("image");
-                    }
                 }
                 s.settings.save();
                 s.reload_items();

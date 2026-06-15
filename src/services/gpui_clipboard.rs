@@ -245,9 +245,13 @@ impl Drop for GpuiClipboardService {
 fn compute_size(item: &ClipboardItem) -> i64 {
     match item.content_type {
         ContentType::File => item.size,
-        ContentType::PlainText | ContentType::RichText | ContentType::Link | ContentType::Path => {
-            item.full_text.chars().count() as i64
+        ContentType::PlainText | ContentType::RichText => {
+            if item.meta_type == "color" {
+                0
+            } else {
+                item.full_text.chars().count() as i64
+            }
         }
-        ContentType::Image | ContentType::Color => 0,
+        ContentType::Image => 0,
     }
 }

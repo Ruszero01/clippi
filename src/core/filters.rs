@@ -9,9 +9,12 @@
 pub const BUILTIN_TYPE_KEYS: &[&str] = &[
     "plain_text",
     "rich_text",
+    "image",
     "file",
     "link",
+    "path",
     "color",
+    "contact",
 ];
 
 /// Unified filter state for clipboard queries.
@@ -120,23 +123,45 @@ impl ClipboardFilters {
             }
         }
 
-        // --- Type filter — expand "link" to also include "path" ---
+        // --- Type filter — each key maps to a specific DB predicate ---
+        // Keys "link", "path", "color", "contact" filter on meta_type;
+        // others filter on content_type (with plain_text excluding sub-types).
         if !self.type_filters.is_empty() {
-            let expanded: Vec<String> = self
-                .type_filters
-                .iter()
-                .flat_map(|t| {
-                    if t == "link" {
-                        vec!["link".to_string(), "path".to_string()]
-                    } else {
-                        vec![t.clone()]
+            let mut type_conditions: Vec<String> = Vec::new();
+            for t in &self.type_filters {
+                match t.as_str() {
+                    "plain_text" => {
+                        type_conditions.push(
+                            "content_type = 'plain_text' AND meta_type NOT IN ('email','phone','link','path','color')"
+                                .to_string(),
+                        );
                     }
-                })
-                .collect();
-            let placeholders: Vec<&str> = expanded.iter().map(|_| "?").collect();
-            conditions.push(format!("content_type IN ({})", placeholders.join(", ")));
-            for t in expanded {
-                params.push(t.into());
+                    "rich_text" => {
+                        type_conditions.push("content_type = 'rich_text'".to_string());
+                    }
+                    "image" => {
+                        type_conditions.push("content_type = 'image'".to_string());
+                    }
+                    "file" => {
+                        type_conditions.push("content_type = 'file'".to_string());
+                    }
+                    "link" => {
+                        type_conditions.push("meta_type = 'link'".to_string());
+                    }
+                    "path" => {
+                        type_conditions.push("meta_type = 'path'".to_string());
+                    }
+                    "color" => {
+                        type_conditions.push("meta_type = 'color'".to_string());
+                    }
+                    "contact" => {
+                        type_conditions.push("meta_type IN ('email','phone')".to_string());
+                    }
+                    _ => {} // ignore unknown keys (e.g. from older configs)
+                }
+            }
+            if !type_conditions.is_empty() {
+                conditions.push(format!("({})", type_conditions.join(" OR ")));
             }
         }
 

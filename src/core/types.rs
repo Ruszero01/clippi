@@ -4,16 +4,16 @@ use chrono::{DateTime, Utc};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-/// Content type of clipboard items
+/// Content type of clipboard items.
+///
+/// There are four primary types. Semantic sub-types (link, path, color, email,
+/// phone, markdown, html) are recorded in the `meta_type` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
     PlainText,
     RichText,
     Image,
-    Link,
-    Color,
     File,
-    Path,
 }
 
 impl ContentType {
@@ -22,23 +22,27 @@ impl ContentType {
             ContentType::PlainText => "plain_text",
             ContentType::RichText => "rich_text",
             ContentType::Image => "image",
-            ContentType::Link => "link",
-            ContentType::Color => "color",
             ContentType::File => "file",
-            ContentType::Path => "path",
         }
     }
 
+    /// Parse a content type string from the database or sync payload.
+    ///
+    /// Legacy values (`"link"`, `"path"`, `"color"`) map to `PlainText` — the
+    /// migration (v4) should have updated those rows. Unknown values fall back
+    /// to `PlainText` with a warning log.
     pub fn from_str(s: &str) -> Self {
         match s {
             "plain_text" | "text" => ContentType::PlainText,
             "rich_text" | "html" => ContentType::RichText,
             "image" => ContentType::Image,
-            "link" => ContentType::Link,
-            "color" => ContentType::Color,
             "file" => ContentType::File,
-            "path" => ContentType::Path,
-            _ => ContentType::PlainText,
+            // Legacy: link/path/color migrated to plain_text + meta_type in v4
+            "link" | "path" | "color" => ContentType::PlainText,
+            other => {
+                log::warn!("Unknown content_type in DB: {other:?}, falling back to plain_text");
+                ContentType::PlainText
+            }
         }
     }
 }
@@ -155,7 +159,7 @@ pub struct ClipboardItem {
     pub source_app_icon: String, // base64-encoded PNG icon
     pub size: i64,               // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
-    pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html"
+    pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html" | "link" | "path" | "color"
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -303,33 +307,6 @@ impl ClipboardItem {
         }
     }
 
-    pub fn new_color(id: i64, text: &str, hash: u64, source: Option<&SourceAppInfo>) -> Self {
-        let now = Utc::now();
-        let (app_name, icon) = source.map_or((String::new(), String::new()), |s| {
-            (s.app_name.clone(), s.icon_base64.clone())
-        });
-        Self {
-            id,
-            content_type: ContentType::Color,
-            full_text: text.to_string(),
-            content_hash: hash,
-            created_at: now,
-            updated_at: now,
-            image_path: String::new(),
-            image_width: 0,
-            image_height: 0,
-            rich_data: String::new(),
-            file_data: String::new(),
-            is_favorite: false,
-            note: String::new(),
-            source_app_name: app_name,
-            source_app_icon: icon,
-            size: 0,
-            tags: Vec::new(),
-            meta_type: String::new(),
-        }
-    }
-
     pub fn new_file(
         id: i64,
         file_data: &FileData,
@@ -375,6 +352,9 @@ impl ClipboardItem {
             "html" => return DisplayKind::Html,
             "email" => return DisplayKind::Email,
             "phone" => return DisplayKind::Phone,
+            "link" => return DisplayKind::Link,
+            "path" => return DisplayKind::Path,
+            "color" => return DisplayKind::Color,
             _ => {}
         }
         // ── Fall back to content_type + rich_data inspection ──
@@ -399,9 +379,6 @@ impl ClipboardItem {
                     DisplayKind::PlainText
                 }
             }
-            ContentType::Link => DisplayKind::Link,
-            ContentType::Path => DisplayKind::Path,
-            ContentType::Color => DisplayKind::Color,
             ContentType::File => DisplayKind::File,
             ContentType::Image => DisplayKind::Image,
             _ => DisplayKind::PlainText,

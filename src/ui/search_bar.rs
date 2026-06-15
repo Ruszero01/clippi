@@ -37,9 +37,14 @@ pub(crate) const FILTER_TYPES: &[FilterDef] = &[
         icon: "\u{e6ae}",
     },
     FilterDef {
+        label_key: I18nKey::FilterImageLabel,
+        key: "image",
+        icon: "\u{e626}",
+    },
+    FilterDef {
         label_key: I18nKey::FilterFilesLabel,
         key: "file",
-        icon: "\u{e646}",
+        icon: "\u{e68a}",
     },
     FilterDef {
         label_key: I18nKey::FilterLinksLabel,
@@ -47,9 +52,19 @@ pub(crate) const FILTER_TYPES: &[FilterDef] = &[
         icon: "\u{e6d7}",
     },
     FilterDef {
+        label_key: I18nKey::FilterPathLabel,
+        key: "path",
+        icon: "\u{e60f}",
+    },
+    FilterDef {
         label_key: I18nKey::FilterColorLabel,
         key: "color",
         icon: "\u{e610}",
+    },
+    FilterDef {
+        label_key: I18nKey::FilterContactLabel,
+        key: "contact",
+        icon: "\u{e604}",
     },
 ];
 const SEARCH_BAR_HORIZONTAL_PADDING: f32 = 16.0;
@@ -288,12 +303,7 @@ impl Render for SearchBar {
                                 let icon = filter_def.icon;
                                 let label = filter_def.label_key.text();
                                 let key = filter_def.key;
-                                let is_active = if key == "file" {
-                                    state_snapshot.filters.is_type_active("file")
-                                        || state_snapshot.filters.is_type_active("image")
-                                } else {
-                                    state_snapshot.filters.is_type_active(key)
-                                };
+                                let is_active = state_snapshot.filters.is_type_active(key);
                                 let filter_bg = if is_active {
                                     theme.accent_overlay()
                                 } else {

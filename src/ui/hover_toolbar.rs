@@ -19,6 +19,7 @@ use super::theme::ClippiTheme;
 /// Properties that determine which toolbar buttons to show.
 pub struct HoverToolbarProps {
     pub content_type: ContentType,
+    pub meta_type: String,
     pub has_rich_content: bool,
     pub has_qr_code: bool,
     pub is_favorite: bool,
@@ -35,6 +36,7 @@ impl HoverToolbarProps {
     ) -> Self {
         Self {
             content_type: item.content_type,
+            meta_type: item.meta_type.clone(),
             has_rich_content: matches!(
                 item.display_kind(),
                 crate::core::types::DisplayKind::Html
@@ -153,9 +155,9 @@ impl RenderOnce for HoverToolbar {
             }
 
             // --- Open location (link / path / file) ---
-            if props.content_type == ContentType::Link
-                || props.content_type == ContentType::Path
-                || props.content_type == ContentType::File
+            if props.content_type == ContentType::File
+                || props.meta_type == "link"
+                || props.meta_type == "path"
             {
                 buttons.push((
                     "\u{e6d7}",

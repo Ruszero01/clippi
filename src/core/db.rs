@@ -474,6 +474,7 @@ impl Database {
     }
 
     /// Insert a full item row (used during sync merge for new remote items).
+    /// Normalizes legacy content_type strings from old peers.
     pub fn insert_sync_item_raw(&self, item: &crate::core::sync::SyncItem) -> SqlResult<i64> {
         let created_at: chrono::DateTime<chrono::Utc> = item
             .created_at
@@ -484,12 +485,20 @@ impl Database {
             .parse()
             .unwrap_or_else(|_| chrono::Utc::now());
 
+        // Normalize legacy content_type from old peers (link/path/color → plain_text).
+        let (content_type, meta_type) = match item.content_type.as_str() {
+            "link" => ("plain_text", if item.meta_type.is_empty() { "link" } else { item.meta_type.as_str() }),
+            "path" => ("plain_text", if item.meta_type.is_empty() { "path" } else { item.meta_type.as_str() }),
+            "color" => ("plain_text", if item.meta_type.is_empty() { "color" } else { item.meta_type.as_str() }),
+            _ => (item.content_type.as_str(), item.meta_type.as_str()),
+        };
+
         self.conn.execute(
             "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at,
              rich_data, is_favorite, note, source_app_name, size, meta_type)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
-                item.content_type,
+                content_type,
                 item.full_text,
                 item.content_hash as i64,
                 created_at.to_rfc3339(),
@@ -499,7 +508,7 @@ impl Database {
                 item.note,
                 "", // source_app_name not in sync payload
                 item.size,
-                item.meta_type,
+                meta_type,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -886,16 +895,14 @@ impl Database {
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let ct_str: String = row.get(1)?;
-    // Lazy reclassification: legacy "link" items that are actually file paths → "path"
-    let ct_str = if ct_str == "link" {
-        let full_text: String = row.get(2)?;
-        if crate::core::types::is_path(&full_text) {
-            "path".to_string()
-        } else {
-            ct_str
-        }
-    } else {
-        ct_str
+    // Lazy reclassification: if migration v4 hasn't been applied yet (legacy DB),
+    // normalize link/path/color content_type to plain_text with the corresponding
+    // meta_type. Only sets meta_type when it's empty to avoid overwriting.
+    let (ct_str, lazy_meta) = match ct_str.as_str() {
+        "link" => ("plain_text".to_string(), Some("link")),
+        "path" => ("plain_text".to_string(), Some("path")),
+        "color" => ("plain_text".to_string(), Some("color")),
+        _ => (ct_str, None),
     };
     let created_str: String = row.get(4)?;
     let updated_str: String = row.get(5)?;
@@ -910,6 +917,11 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
     let image_height: i32 = row.get(14).unwrap_or(0);
     let size: i64 = row.get(15).unwrap_or(0);
     let meta_type: String = row.get(16).unwrap_or_default();
+    let meta_type = if meta_type.is_empty() {
+        lazy_meta.map(|s| s.to_string()).unwrap_or(meta_type)
+    } else {
+        meta_type
+    };
     Ok(ClipboardItem {
         id: row.get(0)?,
         content_type: ContentType::from_str(&ct_str),

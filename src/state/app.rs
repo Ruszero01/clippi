@@ -167,19 +167,9 @@ impl AppState {
     }
 
     /// Toggle a content-type filter and reload visible items.
+    /// Each type filter is now independent (image/file are separate).
     pub fn toggle_type_filter(&mut self, type_name: &str) {
-        if type_name == "file" {
-            let activate =
-                !self.filters.is_type_active("file") && !self.filters.is_type_active("image");
-            for expanded in ["file", "image"] {
-                let is_active = self.filters.is_type_active(expanded);
-                if activate != is_active {
-                    self.filters.toggle_type(expanded);
-                }
-            }
-        } else {
-            self.filters.toggle_type(type_name);
-        }
+        self.filters.toggle_type(type_name);
         self.selected_ids.clear();
         self.reload_items();
     }
@@ -583,7 +573,10 @@ impl AppState {
         };
 
         match item.content_type {
-            ContentType::Link | ContentType::Path if !item.full_text.is_empty() => {
+            ContentType::PlainText
+                if !item.full_text.is_empty()
+                    && (item.meta_type == "link" || item.meta_type == "path") =>
+            {
                 let text = item.full_text.clone();
                 // --- Spawn on a background thread to avoid ShellExecuteW ---
                 // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---

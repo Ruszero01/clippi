@@ -211,23 +211,27 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             // --- Prefetch favicon in background thread (non-critical) ---
             let domain = crate::core::types::url_to_domain(&text);
             let _ = favicon::ensure_favicon_cached(&domain);
-            return Some(ClipboardItem::new_text(
+            let mut item = ClipboardItem::new_text(
                 0,
                 &text,
-                ContentType::Link,
+                ContentType::PlainText,
                 source_info.as_ref(),
                 None,
-            ));
+            );
+            item.meta_type = "link".to_string();
+            return Some(item);
         }
 
         if is_path(&text) {
-            return Some(ClipboardItem::new_text(
+            let mut item = ClipboardItem::new_text(
                 0,
                 &text,
-                ContentType::Path,
+                ContentType::PlainText,
                 source_info.as_ref(),
                 None,
-            ));
+            );
+            item.meta_type = "path".to_string();
+            return Some(item);
         }
 
         // Color detection: hash the normalized color value for dedup
@@ -235,12 +239,17 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             let mut hasher = DefaultHasher::new();
             color.to_hex_normalized().hash(&mut hasher);
             let hash = hasher.finish();
-            return Some(ClipboardItem::new_color(
+            let mut item = ClipboardItem::new_text(
                 0,
                 &text,
-                hash,
+                ContentType::PlainText,
                 source_info.as_ref(),
-            ));
+                None,
+            );
+            // Override the text-based hash with the normalized color hash for dedup
+            item.content_hash = hash;
+            item.meta_type = "color".to_string();
+            return Some(item);
         }
 
         // --- Email / phone detection: record as plain_text with meta_type set ---

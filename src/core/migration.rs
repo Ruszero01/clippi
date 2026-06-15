@@ -25,7 +25,7 @@ use rusqlite::Connection;
 pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 
 /// Current sync protocol version — written into every `SyncPayload` snapshot.
-pub const SYNC_VERSION: u32 = 2;
+pub const SYNC_VERSION: u32 = 3;
 
 /// A registered database migration.
 struct DbMigration {
@@ -66,6 +66,15 @@ const DB_MIGRATIONS: &[DbMigration] = &[
         sql: concat!(
             "CREATE INDEX IF NOT EXISTS idx_content_type ON clipboard_items(content_type);",
             "CREATE INDEX IF NOT EXISTS idx_is_favorite ON clipboard_items(is_favorite);",
+        ),
+    },
+    DbMigration {
+        version: 4,
+        description: "Unify content_type: migrate link/path/color to plain_text with meta_type",
+        sql: concat!(
+            "UPDATE clipboard_items SET meta_type = 'link', content_type = 'plain_text' WHERE content_type = 'link';",
+            "UPDATE clipboard_items SET meta_type = 'path', content_type = 'plain_text' WHERE content_type = 'path';",
+            "UPDATE clipboard_items SET meta_type = 'color', content_type = 'plain_text' WHERE content_type = 'color';",
         ),
     },
 ];
@@ -111,5 +120,22 @@ pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
         // --- v1 → v2: SyncItem.meta_type added with #[serde(default)] — no data ---
         // transform needed since missing field defaults to "" on deserialization.
         payload.version = 2;
+    }
+    if payload.version < 3 {
+        // v2 → v3: normalize legacy content_type strings for link/path/color
+        // to plain_text with meta_type set, matching the DB migration v4.
+        for item in &mut payload.items {
+            let (normalized_ct, normalized_meta) = match item.content_type.as_str() {
+                "link" => ("plain_text", "link"),
+                "path" => ("plain_text", "path"),
+                "color" => ("plain_text", "color"),
+                _ => continue,
+            };
+            item.content_type = normalized_ct.to_string();
+            if item.meta_type.is_empty() {
+                item.meta_type = normalized_meta.to_string();
+            }
+        }
+        payload.version = 3;
     }
 }
