@@ -3,6 +3,17 @@
 //! Each filter dimension (type, keyword, favorites, etc.) is a separate field.
 //! --- Multiple filters combine with AND logic. ---
 
+/// Built-in content type filter keys, in default display order.
+/// New entries added here will automatically appear in the user's type filter
+/// config on the next settings load (appended at the end, visible by default).
+pub const BUILTIN_TYPE_KEYS: &[&str] = &[
+    "plain_text",
+    "rich_text",
+    "file",
+    "link",
+    "color",
+];
+
 /// Unified filter state for clipboard queries.
 ///
 /// All active dimensions combine with AND logic.

@@ -19,13 +19,13 @@ use crate::state::app::AppState;
 use super::clipboard_list::ClipboardListView;
 use super::theme::ClippiTheme;
 
-struct FilterDef {
-    key: &'static str,
-    icon: &'static str,
-    label_key: I18nKey,
+pub(crate) struct FilterDef {
+    pub key: &'static str,
+    pub icon: &'static str,
+    pub label_key: I18nKey,
 }
 
-const FILTER_TYPES: &[FilterDef] = &[
+pub(crate) const FILTER_TYPES: &[FilterDef] = &[
     FilterDef {
         label_key: I18nKey::FilterTextLabel,
         key: "plain_text",
@@ -53,6 +53,14 @@ const FILTER_TYPES: &[FilterDef] = &[
     },
 ];
 const SEARCH_BAR_HORIZONTAL_PADDING: f32 = 16.0;
+
+/// Look up the display icon and label for a built-in filter type key.
+pub(crate) fn filter_type_display(key: &str) -> Option<(&'static str, String)> {
+    FILTER_TYPES
+        .iter()
+        .find(|f| f.key == key)
+        .map(|f| (f.icon, f.label_key.text().to_string()))
+}
 const TOOLBAR_GROUP_GAP: f32 = 6.0;
 const TOOLBAR_DIVIDER_WIDTH: f32 = 1.0;
 const TAG_FILTER_BUTTON_WIDTH: f32 = 24.0;
@@ -65,6 +73,7 @@ pub struct SearchBar {
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
     tag_panel_open: bool,
+    filter_config_open: bool,
     theme: ClippiTheme,
     last_lang_version: u64,
     _subscriptions: Vec<Subscription>,
@@ -102,6 +111,7 @@ impl SearchBar {
             state,
             list_view,
             tag_panel_open: false,
+            filter_config_open: false,
             theme,
             last_lang_version: crate::core::i18n::lang_version(),
             _subscriptions,
@@ -114,6 +124,15 @@ impl SearchBar {
 
     pub fn close_tag_panel(&mut self, cx: &mut Context<Self>) {
         self.tag_panel_open = false;
+        cx.notify();
+    }
+
+    pub fn filter_config_open(&self) -> bool {
+        self.filter_config_open
+    }
+
+    pub fn close_filter_config(&mut self, cx: &mut Context<Self>) {
+        self.filter_config_open = false;
         cx.notify();
     }
 
@@ -165,14 +184,20 @@ impl Render for SearchBar {
         let viewport = window.viewport_size();
         let toolbar_width =
             f32::from(viewport.width) - PANEL_OFFSET_X - SEARCH_BAR_HORIZONTAL_PADDING;
-        let type_count = FILTER_TYPES.len() as f32;
+        let visible_entries: Vec<&crate::core::settings::TypeFilterEntry> = state_snapshot
+            .settings
+            .type_filter_config
+            .iter()
+            .filter(|e| e.visible)
+            .collect();
+        let visible_count = visible_entries.len() as f32;
         let type_toolbar_width = (toolbar_width
             - (TOOLBAR_GROUP_GAP * 2.0)
             - TOOLBAR_DIVIDER_WIDTH
             - TAG_FILTER_BUTTON_WIDTH)
             .max(0.0);
-        let text_gap_total = TYPE_FILTER_TEXT_GAP * (type_count - 1.0).max(0.0);
-        let type_slot_width = (type_toolbar_width - text_gap_total).max(0.0) / type_count.max(1.0);
+        let text_gap_total = TYPE_FILTER_TEXT_GAP * (visible_count - 1.0).max(0.0);
+        let type_slot_width = (type_toolbar_width - text_gap_total).max(0.0) / visible_count.max(1.0);
         let icon_only = type_slot_width < TYPE_FILTER_TEXT_MIN_SLOT_WIDTH;
         let inactive_button_bg = if theme.bg == rgb(0x191a1b) {
             rgba(0xffffff0a)
@@ -235,6 +260,16 @@ impl Render for SearchBar {
                     .gap(px(TOOLBAR_GROUP_GAP))
                     .h(px(22.))
                     .w_full()
+                    .on_mouse_down(MouseButton::Right, {
+                        let this = this.clone();
+                        move |_ev, _window, cx| {
+                            cx.stop_propagation();
+                            this.update(cx, |bar, cx| {
+                                bar.filter_config_open = !bar.filter_config_open;
+                                cx.notify();
+                            });
+                        }
+                    })
                     .child(
                         div()
                             .flex()
@@ -247,12 +282,17 @@ impl Render for SearchBar {
                             } else {
                                 px(TYPE_FILTER_TEXT_GAP)
                             })
-                            .children(FILTER_TYPES.iter().enumerate().map(|(index, f)| {
-                                let is_active = if f.key == "file" {
+                            .children(visible_entries.iter().enumerate().filter_map(|(index, entry)| {
+                                // Look up from FILTER_TYPES; unknown keys are silently skipped
+                                let filter_def = FILTER_TYPES.iter().find(|fd| fd.key == entry.key)?;
+                                let icon = filter_def.icon;
+                                let label = filter_def.label_key.text();
+                                let key = filter_def.key;
+                                let is_active = if key == "file" {
                                     state_snapshot.filters.is_type_active("file")
                                         || state_snapshot.filters.is_type_active("image")
                                 } else {
-                                    state_snapshot.filters.is_type_active(f.key)
+                                    state_snapshot.filters.is_type_active(key)
                                 };
                                 let filter_bg = if is_active {
                                     theme.accent_overlay()
@@ -268,10 +308,9 @@ impl Render for SearchBar {
                                 let state = self.state.clone();
                                 let list_view = self.list_view.clone();
                                 let this = this.clone();
-                                let key = f.key;
-                                let label = f.label_key.text();
 
-                                div()
+                                Some(
+                                    div()
                                     .id(("filter-type", index))
                                     .h(px(22.))
                                     .when(icon_only, |button| {
@@ -293,12 +332,11 @@ impl Render for SearchBar {
                                     .items_center()
                                     .cursor(CursorStyle::PointingHand)
                                     .when(icon_only, move |button| {
-                                        let label_for_tip = label;
                                         button.tooltip(move |window, cx| {
                                             Tooltip::element(move |_window, _cx| {
-                                            div().text_size(px(10.)).child(label_for_tip)
-                                        })
-                                        .build(window, cx)
+                                                div().text_size(px(10.)).child(label)
+                                            })
+                                            .build(window, cx)
                                         })
                                     })
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -310,7 +348,7 @@ impl Render for SearchBar {
                                             .text_size(px(12.))
                                             .font_family("iconfont")
                                             .text_color(filter_text)
-                                            .child(f.icon.to_string()),
+                                            .child(icon.to_string()),
                                     )
                                     .when(!icon_only, |button| {
                                         button.child(
@@ -321,6 +359,7 @@ impl Render for SearchBar {
                                                 .child(label),
                                         )
                                     })
+                                )
                             })),
                     )
                     .child(

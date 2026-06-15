@@ -303,21 +303,11 @@ impl SettingsPanel {
                                     .gap(px(6.))
                                     .child(
                                         div()
-                                            .w(px(12.))
-                                            .h(px(12.))
-                                            .rounded(px(6.))
-                                            .border(px(1.))
-                                            .border_color(status_color)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                div()
-                                                    .w(px(5.))
-                                                    .h(px(5.))
-                                                    .rounded(px(3.))
-                                                    .bg(status_color),
-                                            ),
+                                            .text_size(px(12.))
+                                            .font_family("iconfont")
+                                            .text_color(status_color)
+                                            .flex_shrink_0()
+                                            .child("\u{e61f}"),
                                     )
                                     .child(
                                         div()

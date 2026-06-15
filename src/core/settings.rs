@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
+use super::filters::BUILTIN_TYPE_KEYS;
 use super::i18n_keys::I18nKey;
 
 #[cfg(target_os = "windows")]
@@ -43,6 +44,14 @@ pub struct BackendConfig {
     pub webdav_username: String,
     #[serde(default)]
     pub webdav_password: String,
+}
+
+/// User-configurable entry for a single content-type filter button.
+/// Order in the Vec determines display order in the filter bar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeFilterEntry {
+    pub key: String,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +115,8 @@ pub struct AppSettings {
     pub block_system_window_behaviors: bool, // block system window behaviors (double-click maximize, Aero Snap)
     #[serde(default)]
     pub auto_focus_search: bool, // auto-focus search bar when the window opens
+    #[serde(default)]
+    pub type_filter_config: Vec<TypeFilterEntry>, // custom type filter visibility & order
 }
 
 fn default_qr_enabled() -> bool {
@@ -157,6 +168,7 @@ impl Default for AppSettings {
             hide_taskbar_icon: false,
             block_system_window_behaviors: false,
             auto_focus_search: false,
+            type_filter_config: Vec::new(),
         }
     }
 }
@@ -187,6 +199,8 @@ impl AppSettings {
         };
         // --- Migrate old flat sync fields → BackendConfig list ---
         settings.migrate_sync_fields();
+        // --- Migrate type filter config (seed from BUILTIN_TYPE_KEYS) ---
+        settings.migrate_type_filter_config();
         settings
     }
 
@@ -221,6 +235,42 @@ impl AppSettings {
             self.sync_device_name.clear();
             self.sync_last_at.clear();
             // --- Save migrated state ---
+            self.save();
+        }
+    }
+
+    /// Seed or merge type filter config from `BUILTIN_TYPE_KEYS`.
+    /// - First run (empty config): seed all built-in types as visible.
+    /// - Subsequent runs: append any new built-in keys that aren't in config yet.
+    fn migrate_type_filter_config(&mut self) {
+        if self.type_filter_config.is_empty() {
+            // First run: seed from BUILTIN_TYPE_KEYS, all visible
+            for key in BUILTIN_TYPE_KEYS {
+                self.type_filter_config.push(TypeFilterEntry {
+                    key: key.to_string(),
+                    visible: true,
+                });
+            }
+            self.save();
+            return;
+        }
+        // Merge: append new built-in keys not yet in config
+        let known_keys: Vec<String> = self
+            .type_filter_config
+            .iter()
+            .map(|e| e.key.clone())
+            .collect();
+        let mut changed = false;
+        for key in BUILTIN_TYPE_KEYS {
+            if !known_keys.iter().any(|k| k == key) {
+                self.type_filter_config.push(TypeFilterEntry {
+                    key: key.to_string(),
+                    visible: true,
+                });
+                changed = true;
+            }
+        }
+        if changed {
             self.save();
         }
     }

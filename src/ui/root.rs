@@ -32,6 +32,7 @@ use super::tag_filter::{render_edit_panel, TagFilterPanel};
 use super::tag_picker::TagPickerPanel;
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
+use super::type_filter_config::TypeFilterConfigPanel;
 
 pub struct RootView {
     state: Entity<AppState>,
@@ -43,6 +44,7 @@ pub struct RootView {
     edit_panel: Entity<EditPanel>,
     sidebar: Entity<Sidebar>,
     tag_filter_panel: Entity<TagFilterPanel>,
+    type_filter_config_panel: Entity<TypeFilterConfigPanel>,
     current_view: String,
     pinned: bool,
     theme: ClippiTheme,
@@ -100,6 +102,9 @@ impl RootView {
                 window,
                 cx,
             )
+        });
+        let type_filter_config_panel = cx.new(|cx| {
+            TypeFilterConfigPanel::new(state.clone(), search_bar.clone(), window, cx)
         });
 
         // Subscribe to WindowManager events for clipboard changes and pin state.
@@ -160,6 +165,9 @@ impl RootView {
                 cx.notify();
             }),
             cx.observe(&tag_filter_panel, |_this, _, cx| {
+                cx.notify();
+            }),
+            cx.observe(&type_filter_config_panel, |_this, _, cx| {
                 cx.notify();
             }),
             cx.observe(&backend_panel, |_this, _, cx| {
@@ -317,6 +325,7 @@ impl RootView {
             edit_panel,
             sidebar,
             tag_filter_panel,
+            type_filter_config_panel,
             current_view: "clipboard".into(),
             pinned: false,
             theme,
@@ -459,6 +468,32 @@ impl Render for RootView {
                         ),
                 )
             })
+            // --- Type filter config panel — same backdrop pattern as tag filter ---
+            .when(
+                self.search_bar.read(cx).filter_config_open() && is_clipboard,
+                |root| {
+                    let search_for_backdrop = search_bar.clone();
+                    let config_panel = self.type_filter_config_panel.clone();
+                    root.child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                cx.stop_propagation();
+                                search_for_backdrop
+                                    .update(cx, |bar, cx| bar.close_filter_config(cx));
+                            })
+                            .child(
+                                div()
+                                    .absolute()
+                                    .right(px(8.))
+                                    .top(px(106.))
+                                    .occlude()
+                                    .child(config_panel),
+                            ),
+                    )
+                },
+            )
             // --- Tag edit overlay — centered in main panel area (left:36px) ---
             .when(
                 {
