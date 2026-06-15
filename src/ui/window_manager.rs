@@ -5,6 +5,8 @@
 //! Slint-era `Frontend` + `FocusService` + `HotkeyService` + `Looper` combo.
 
 #[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+#[cfg(not(target_os = "windows"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,6 +34,63 @@ const RELEASES_URL: &str = "https://github.com/Ruszero01/clippi/releases";
 
 #[cfg(target_os = "windows")]
 static BLOCK_SYSTEM_WINDOW_BEHAVIORS: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
+#[cfg(target_os = "windows")]
+static IN_MOVE_OPERATION: AtomicBool = AtomicBool::new(false);
+
+/// Window subclass procedure that intercepts system behaviors while preserving
+/// manual resize. Only active when `BLOCK_SYSTEM_WINDOW_BEHAVIORS` is true.
+///
+/// Handles:
+/// - `WM_NCLBUTTONDBLCLK` on `HTCAPTION` → suppress double-click maximize
+/// - `WM_WINDOWPOSCHANGING` during move → set `SWP_NOSIZE` to prevent Aero Snap
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn clippi_subclass_proc(
+    hwnd: *mut std::ffi::c_void,
+    msg: u32,
+    w_param: usize,
+    l_param: isize,
+) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HTCAPTION, SWP_NOSIZE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCLBUTTONDBLCLK,
+        WM_WINDOWPOSCHANGING, WINDOWPOS,
+    };
+
+    let original = ORIGINAL_WNDPROC.load(Ordering::Acquire);
+
+    if BLOCK_SYSTEM_WINDOW_BEHAVIORS.load(Ordering::Acquire) {
+        match msg {
+            // Suppress double-click maximize on the title bar
+            WM_NCLBUTTONDBLCLK if w_param == HTCAPTION as usize => {
+                return 0;
+            }
+            // Track whether we're in a move operation (started from title bar drag)
+            WM_ENTERSIZEMOVE => {
+                IN_MOVE_OPERATION.store(w_param == HTCAPTION as usize, Ordering::Release);
+            }
+            WM_EXITSIZEMOVE => {
+                IN_MOVE_OPERATION.store(false, Ordering::Release);
+            }
+            // Prevent Aero Snap during move operations — during a pure move
+            // (title bar drag), any size change indicates snap, which we block.
+            WM_WINDOWPOSCHANGING if IN_MOVE_OPERATION.load(Ordering::Acquire) => {
+                let wp = &mut *(l_param as *mut WINDOWPOS);
+                wp.flags |= SWP_NOSIZE;
+            }
+            _ => {}
+        }
+    }
+
+    // Forward to original window procedure
+    let orig_fn: unsafe extern "system" fn(
+        *mut std::ffi::c_void,
+        u32,
+        usize,
+        isize,
+    ) -> isize = std::mem::transmute(original);
+    orig_fn(hwnd, msg, w_param, l_param)
+}
 
 /// Events emitted by WindowManager for consumption by RootView.
 pub enum WindowManagerEvent {
@@ -1205,13 +1264,21 @@ impl WindowManager {
         cx.emit(WindowManagerEvent::SyncChanged);
     }
 
-    /// Apply system window behavior blocking (double-click maximize, snap, etc.).
+    /// Apply system window behavior blocking (double-click maximize, Aero Snap, etc.)
+    /// while preserving manual window resize.
+    ///
+    /// On Windows:
+    /// - Removes `WS_MAXIMIZEBOX` to disable maximize button + double-click maximize.
+    /// - Keeps `WS_THICKFRAME` so manual resize handles remain functional.
+    /// - Installs a window subclass that intercepts `WM_WINDOWPOSCHANGING` during
+    ///   title-bar drags to prevent Aero Snap (edge-triggered auto-resize).
     pub fn set_block_system_window_behaviors(&mut self, block: bool, _cx: &mut Context<Self>) {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_MAXIMIZEBOX, WS_THICKFRAME,
+                GetWindowLongW, SetWindowLongPtrW, SetWindowLongW, SetWindowPos, GWLP_WNDPROC,
+                GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                WS_MAXIMIZEBOX,
             };
 
             BLOCK_SYSTEM_WINDOW_BEHAVIORS.store(block, Ordering::Release);
@@ -1222,14 +1289,16 @@ impl WindowManager {
             }
 
             // SAFETY: HWND is our own window. `GetWindowLongW`/`SetWindowLongW`
-            // read/write our own style bits to toggle MAXIMIZEBOX/THICKFRAME.
-            // `SetWindowPos` with SWP_FRAMECHANGED forces a frame re-evaluation.
+            // read/write our own style bits. We only toggle MAXIMIZEBOX —
+            // THICKFRAME (resize handles) is intentionally left untouched so
+            // manual resize still works.
             unsafe {
+                // --- Toggle WS_MAXIMIZEBOX window style ---
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 let new_style = if block {
-                    style & !(WS_MAXIMIZEBOX as i32 | WS_THICKFRAME as i32)
+                    style & !(WS_MAXIMIZEBOX as i32)
                 } else {
-                    style | WS_MAXIMIZEBOX as i32 | WS_THICKFRAME as i32
+                    style | WS_MAXIMIZEBOX as i32
                 };
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
                 SetWindowPos(
@@ -1241,6 +1310,18 @@ impl WindowManager {
                     0,
                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+
+                // --- Install window subclass to intercept Aero Snap ---
+                // We replace the window procedure once; the subclass proc checks
+                // the BLOCK_SYSTEM_WINDOW_BEHAVIORS flag on every message.
+                if block && ORIGINAL_WNDPROC.load(Ordering::Acquire) == 0 {
+                    let old_proc = SetWindowLongPtrW(
+                        hwnd,
+                        GWLP_WNDPROC,
+                        clippi_subclass_proc as *const () as isize,
+                    );
+                    ORIGINAL_WNDPROC.store(old_proc, Ordering::Release);
+                }
             }
         }
         #[cfg(not(target_os = "windows"))]
