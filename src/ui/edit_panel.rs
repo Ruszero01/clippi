@@ -1,11 +1,12 @@
 //! GPUI edit panel for clipboard text and rich-text items.
 
 use base64::Engine;
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::text::{TextView, TextViewStyle};
+use gpui_component::tooltip::Tooltip;
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
 
@@ -197,7 +198,7 @@ impl Render for EditPanel {
                     .items_center()
                     .gap(px(8.))
                     .h(px(36.))
-                    .child(icon_button("\u{e62b}", text_2, accent, hover_bg, {
+                    .child(icon_button("\u{e62b}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipBack.text()), {
                         let this = this.clone();
                         move |_window, cx| {
                             this.update(cx, |_panel, cx| {
@@ -248,7 +249,7 @@ impl Render for EditPanel {
                             ),
                     )
                     .child(div().flex_1())
-                    .child(icon_button("\u{e6da}", text_2, accent, hover_bg, {
+                    .child(icon_button("\u{e6da}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipUrlDecode.text()), {
                         let input = content_input.clone();
                         move |window, cx| {
                             EditPanel::apply_content_transform(&input, window, cx, |text| {
@@ -259,19 +260,19 @@ impl Render for EditPanel {
                             });
                         }
                     }))
-                    .child(icon_button("\u{e66e}", text_2, accent, hover_bg, {
+                    .child(icon_button("\u{e66e}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipBase64Decode.text()), {
                         let input = content_input.clone();
                         move |window, cx| {
                             EditPanel::apply_content_transform(&input, window, cx, decode_base64);
                         }
                     }))
-                    .child(icon_button("\u{e819}", text_2, accent, hover_bg, {
+                    .child(icon_button("\u{e819}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipJsonFormat.text()), {
                         let input = content_input.clone();
                         move |window, cx| {
                             EditPanel::apply_content_transform(&input, window, cx, json_format);
                         }
                     }))
-                    .child(icon_button("\u{e6db}", text_2, accent, hover_bg, {
+                    .child(icon_button("\u{e6db}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipTrim.text()), {
                         let input = content_input.clone();
                         move |window, cx| {
                             EditPanel::apply_content_transform(&input, window, cx, trim_text);
@@ -491,9 +492,11 @@ fn icon_button(
     normal: Rgba,
     hover: Rgba,
     hover_bg: Rgba,
+    tooltip: Option<&'static str>,
     handler: impl Fn(&mut Window, &mut App) + 'static,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id(icon)
         .w(px(22.))
         .h(px(22.))
         .rounded(px(4.))
@@ -502,6 +505,14 @@ fn icon_button(
         .justify_center()
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(hover_bg))
+        .when_some(tooltip, |button, tip| {
+            button.tooltip(move |window, cx| {
+                Tooltip::element(move |_window, _cx| {
+                    div().text_size(px(10.)).child(tip)
+                })
+                .build(window, cx)
+            })
+        })
         .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
             handler(window, cx)
         })

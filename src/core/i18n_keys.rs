@@ -327,6 +327,11 @@ define_i18n! {
     EditTypePath:           ("路径", "Path"),
     EditTypeEmail:          ("邮件", "Email"),
     EditTypePhone:          ("电话", "Phone"),
+    EditTooltipBack:        ("返回", "Back"),
+    EditTooltipUrlDecode:   ("URL解码", "URL Decode"),
+    EditTooltipBase64Decode:("Base64解码", "Base64 Decode"),
+    EditTooltipJsonFormat:  ("JSON格式化", "Format JSON"),
+    EditTooltipTrim:        ("文本修剪", "Trim Text"),
 
     // ─── Add backend (additional from settings/sync) ───
     BackendAddLabel:        ("添加后端", "Add backend"),

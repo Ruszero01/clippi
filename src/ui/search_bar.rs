@@ -295,7 +295,10 @@ impl Render for SearchBar {
                                     .when(icon_only, move |button| {
                                         let label_for_tip = label;
                                         button.tooltip(move |window, cx| {
-                                            Tooltip::new(label_for_tip).build(window, cx)
+                                            Tooltip::element(move |_window, _cx| {
+                                            div().text_size(px(10.)).child(label_for_tip)
+                                        })
+                                        .build(window, cx)
                                         })
                                     })
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -344,7 +347,13 @@ impl Render for SearchBar {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .tooltip(|window, cx| Tooltip::new(I18nKey::FilterTagsTooltip.text()).build(window, cx))
+                                    .tooltip(|window, cx| {
+                                    let label = I18nKey::FilterTagsTooltip.text();
+                                    Tooltip::element(move |_window, _cx| {
+                                        div().text_size(px(10.)).child(label)
+                                    })
+                                    .build(window, cx)
+                                })
                                     .bg(if has_tag_filter {
                                         theme.accent_overlay()
                                     } else {
