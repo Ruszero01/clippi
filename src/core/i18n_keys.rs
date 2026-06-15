@@ -283,6 +283,8 @@ define_i18n! {
     FilterLinksLabel:       ("链接", "Links"),
     FilterColorLabel:       ("颜色", "Color"),
     FilterTagsTooltip:      ("标签", "Tags"),
+    TagTooltipToggleMode:   ("切换筛选模式", "Toggle Filter Mode"),
+    TagTooltipClear:        ("清空筛选", "Clear Filters"),
     SearchPlaceholderFull:  ("搜索剪贴板...", "Search clipboard..."),
 
     // ─── Hotkey settings ───

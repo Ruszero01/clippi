@@ -9,9 +9,10 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
+use gpui_component::tooltip::Tooltip;
 
 use crate::core::types::{tag_preset_colors, TagInfo};
 use crate::state::app::AppState;
@@ -213,18 +214,19 @@ impl Render for TagFilterPanel {
                         "\u{e61e}",
                         if tag_match_all { accent } else { text_2 },
                         btn_hover,
+                        Some(I18nKey::TagTooltipToggleMode.text()),
                         {
                             let this = this.clone();
                             move |_, cx| this.update(cx, |panel, cx| panel.toggle_mode(cx))
                         },
                     ))
                     .when(has_tag_filter, |el| {
-                        el.child(icon_btn("\u{e607}", text_2, btn_hover, {
+                        el.child(icon_btn("\u{e62e}", text_2, btn_hover, Some(I18nKey::TagTooltipClear.text()), {
                             let this = this.clone();
                             move |_, cx| this.update(cx, |panel, cx| panel.clear_filters(cx))
                         }))
                     })
-                    .child(icon_btn("\u{e7b7}", text_2, btn_hover, {
+                    .child(icon_btn("\u{e7b7}", text_2, btn_hover, None, {
                         let this = this.clone();
                         move |_, cx| this.update(cx, |panel, cx| panel.close(cx))
                     }))
@@ -605,9 +607,11 @@ fn icon_btn(
     icon: &'static str,
     color: Rgba,
     hover_bg: Rgba,
+    tooltip: Option<&'static str>,
     handler: impl Fn(&mut Window, &mut App) + 'static,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id(icon)
         .w(px(22.))
         .h(px(22.))
         .rounded(px(5.))
@@ -616,6 +620,14 @@ fn icon_btn(
         .justify_center()
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(hover_bg))
+        .when_some(tooltip, |button, tip| {
+            button.tooltip(move |window, cx| {
+                Tooltip::element(move |_window, _cx| {
+                    div().text_size(px(10.)).child(tip)
+                })
+                .build(window, cx)
+            })
+        })
         .child(
             div()
                 .font_family("iconfont")

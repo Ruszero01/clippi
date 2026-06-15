@@ -6,8 +6,9 @@ type TagToggleHandler = Rc<dyn Fn(i64, TagState, &mut gpui::Window, &mut gpui::A
 type PanelHandler = Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
 type CreateTagHandler = Rc<dyn Fn(String, &mut gpui::Window, &mut gpui::App)>;
 
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
+use gpui_component::tooltip::Tooltip;
 use gpui_component::input::{Input, InputState};
 
 use crate::core::i18n_keys::I18nKey;
@@ -144,8 +145,8 @@ impl RenderOnce for TagPickerPanel {
                             .child(if is_batch { I18nKey::CtxBatchTag.text() } else { I18nKey::CtxTag.text() }),
                     )
                     .child(div().flex_1())
-                    .child(icon_button("\u{e607}", text_2, btn_hover, on_clear))
-                    .child(icon_button("\u{e7b7}", text_2, btn_hover, on_close)),
+                    .child(icon_button("\u{e62e}", text_2, btn_hover, Some(I18nKey::TagTooltipClear.text()), on_clear))
+                    .child(icon_button("\u{e7b7}", text_2, btn_hover, None, on_close)),
             )
             .child(div().h(px(1.)).w_full().bg(sep_line))
             // --- Create tag row ---
@@ -274,9 +275,11 @@ fn icon_button(
     icon: &'static str,
     color: Rgba,
     hover_bg: Rgba,
+    tooltip: Option<&'static str>,
     handler: Option<PanelHandler>,
-) -> Div {
+) -> Stateful<Div> {
     let button = div()
+        .id(icon)
         .w(px(22.))
         .h(px(22.))
         .rounded(px(5.))
@@ -285,6 +288,14 @@ fn icon_button(
         .justify_center()
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(hover_bg))
+        .when_some(tooltip, |button, tip| {
+            button.tooltip(move |window, cx| {
+                Tooltip::element(move |_window, _cx| {
+                    div().text_size(px(10.)).child(tip)
+                })
+                .build(window, cx)
+            })
+        })
         .child(
             div()
                 .font_family("iconfont")

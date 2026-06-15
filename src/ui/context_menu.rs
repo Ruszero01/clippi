@@ -112,7 +112,7 @@ impl ContextMenu {
         items.push(RawMenuItem {
             label: I18nKey::CtxPaste.text().into(),
             action: "paste".into(),
-            icon: "\u{e600}".into(),
+            icon: "\u{e63f}".into(),
             danger: false,
             fav: false,
         });
@@ -184,7 +184,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteOcr.text().into(),
                 action: "paste_ocr".into(),
-                icon: "\u{e648}".into(),
+                icon: "\u{e6a5}".into(),
                 danger: false,
                 fav: false,
             });
@@ -247,7 +247,7 @@ impl ContextMenu {
             RawMenuItem {
                 label: I18nKey::CtxBatchPasteN.fmt(&[&selected_count.to_string()]),
                 action: "batch_paste".into(),
-                icon: "\u{e600}".into(),
+                icon: "\u{e63f}".into(),
                 danger: false,
                 fav: false,
             },
