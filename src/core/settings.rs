@@ -54,6 +54,15 @@ pub struct TypeFilterEntry {
     pub visible: bool,
 }
 
+/// Per-process paste shortcut mapping entry.
+/// When the foreground app matches `app_name`, use `shortcut` instead of Ctrl+V.
+/// Example: `PasteShortcutEntry { app_name: "WindowsTerminal".into(), shortcut: "Shift+Insert".into() }`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasteShortcutEntry {
+    pub app_name: String,
+    pub shortcut: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub theme: String,
@@ -117,6 +126,8 @@ pub struct AppSettings {
     pub auto_focus_search: bool, // auto-focus search bar when the window opens
     #[serde(default)]
     pub type_filter_config: Vec<TypeFilterEntry>, // custom type filter visibility & order
+    #[serde(default)]
+    pub paste_shortcuts: Vec<PasteShortcutEntry>,
 }
 
 fn default_qr_enabled() -> bool {
@@ -169,6 +180,7 @@ impl Default for AppSettings {
             block_system_window_behaviors: false,
             auto_focus_search: false,
             type_filter_config: Vec::new(),
+            paste_shortcuts: Vec::new(),
         }
     }
 }
