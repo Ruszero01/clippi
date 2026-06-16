@@ -239,6 +239,18 @@ fn is_clippi_window(hwnd: HWND) -> bool {
     our_hwnd != 0 && hwnd as usize == our_hwnd
 }
 
+/// Check if an HWND belongs to our own process.
+/// This catches popup menus, dialogs, and other windows created by Clippi
+/// that have a different HWND than the main window (so `is_clippi_window`
+/// alone would miss them).
+#[cfg(target_os = "windows")]
+fn is_own_process_window(hwnd: HWND) -> bool {
+    let mut pid: u32 = 0;
+    // SAFETY: GetWindowThreadProcessId is a read-only query. Returns 0 on failure.
+    let tid = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+    tid != 0 && pid == std::process::id()
+}
+
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn win_event_proc(
     _event: u32,
@@ -253,7 +265,7 @@ unsafe extern "system" fn win_event_proc(
         return;
     }
 
-    let is_clippi_now = is_clippi_window(current_fg);
+    let is_clippi_now = is_clippi_window(current_fg) || is_own_process_window(current_fg);
 
     if is_clippi_now {
         // --- LAST_NON_CLIPPI_WINDOW already holds the correct paste target from ---
@@ -306,7 +318,7 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
         // --- Use the stored non-Clippi window; fall back to current foreground ---
         let hwnd = get_last_non_clippi_window().or_else(|| {
             let fg = GetForegroundWindow();
-            if fg.is_null() || is_clippi_window(fg) {
+            if fg.is_null() || is_clippi_window(fg) || is_own_process_window(fg) {
                 None
             } else {
                 Some(fg)
@@ -324,12 +336,11 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
         // --- Get PID ---
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == 0 {
-            return Some(ForegroundAppInfo {
-                app_name: String::new(),
-                window_title,
-                icon_base64: String::new(),
-            });
+        if pid == 0 || pid == std::process::id() {
+            // pid == 0: window is invalid / closed
+            // pid == self: window belongs to Clippi (popup menu, dialog, etc.)
+            // In either case, return None so the UI shows the last known non-Clippi app.
+            return None;
         }
 
         // --- Get exe path ---
