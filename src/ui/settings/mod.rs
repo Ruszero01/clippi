@@ -44,6 +44,10 @@ pub enum SettingsEvent {
     },
     /// User clicked add/remove blacklist — RootView should show a ConfirmDialog.
     ShowHotkeyConfirm(HotkeyConfirmAction),
+    /// User confirmed add/remove paste shortcut — RootView should apply changes.
+    HotkeyPasteShortcut {
+        action: HotkeyConfirmAction,
+    },
     /// Data settings error — RootView should show a toast.
     DataError(String),
 }
@@ -63,6 +67,10 @@ pub struct SettingsPanel {
     backend_panel: Entity<AddBackendPanel>,
     /// Pending hotkey blacklist confirmation (consumed by RootView).
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
+    /// Whether we are currently recording a paste shortcut for an app (Some(app_name)).
+    pub recording_paste_shortcut: Option<String>,
+    /// The recorded paste shortcut string before confirmation (app_name, shortcut).
+    pub pending_paste_shortcut: Option<(String, String)>,
     /// Reset-data-directory dialog state (portable mode only).
     pub reset_data_dialog: Option<ResetDataDirState>,
     /// Whether the max-items field is in editing mode.
@@ -130,6 +138,8 @@ impl SettingsPanel {
             backend_collapse_states: HashMap::new(),
             backend_panel,
             hotkey_confirm: None,
+            recording_paste_shortcut: None,
+            pending_paste_shortcut: None,
             reset_data_dialog: None,
             editing_max_items: false,
             max_items_input,
@@ -488,6 +498,13 @@ impl SettingsPanel {
     /// Clear pending hotkey confirm dialog.
     pub fn clear_hotkey_confirm(&mut self, cx: &mut Context<Self>) {
         self.hotkey_confirm = None;
+        cx.notify();
+    }
+
+    /// Clear pending paste shortcut recording state.
+    pub fn clear_paste_shortcut_state(&mut self, cx: &mut Context<Self>) {
+        self.recording_paste_shortcut = None;
+        self.pending_paste_shortcut = None;
         cx.notify();
     }
 }
