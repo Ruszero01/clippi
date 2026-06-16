@@ -1,14 +1,19 @@
-//! Hotkey settings tab — recording + blacklist management.
+//! Hotkey settings tab — recording + blacklist management + paste shortcuts.
 //!
-//! --- Matches the original Slint `SettingsTabHotkey.slint` layout: ---
+//! --- Layout (top to bottom): ---
 //! --- - Hotkey recording card (66px): label + current hotkey button ---
-//! --- - Blacklist section: foreground app info bar + scrollable blacklist ---
+//! --- - Foreground app info bar (44px): icon + app name + title + paste/blacklist buttons ---
+//! --- - Blacklist section: label + scrollable list box ---
+//! --- - Paste shortcut section: label + scrollable list box ---
+
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 
 use crate::core::i18n_keys::I18nKey;
+use crate::ui::theme::ClippiTheme;
 use super::SettingsPanel;
 
 /// Confirm action for hotkey settings operations.
@@ -25,7 +30,319 @@ pub enum HotkeyConfirmAction {
     RemovePasteShortcut { app_name: String },
 }
 
+/// Entry in a per-app list (blacklist or paste shortcut).
+struct AppListEntry {
+    app_name: String,
+    /// For paste shortcut entries, the recorded shortcut string.
+    shortcut: Option<String>,
+    /// Delete callback: emits remove event.
+    on_delete: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// For paste shortcut entries: callback when shortcut label is clicked (re-record).
+    on_shortcut_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+}
+
+impl AppListEntry {
+    fn render(&self, theme: &ClippiTheme) -> impl IntoElement {
+        let icon_path = crate::core::paths::app_icon_path(&self.app_name);
+
+        div()
+            .h(px(32.))
+            .rounded(px(6.))
+            .bg(theme.titlebar_bg)
+            .px(px(8.))
+            .pr(px(4.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            // Left: icon + app name
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(6.))
+                    .items_center()
+                    .overflow_hidden()
+                    .flex_1()
+                    .child(
+                        gpui::img(std::path::Path::new(&icon_path))
+                            .w(px(18.))
+                            .h(px(18.)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.text_1)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(self.app_name.clone()),
+                    ),
+            )
+            // Right: shortcut label (paste entries only) + delete button
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.))
+                    .items_center()
+                    .when_some(self.shortcut.as_ref(), |d, sc| {
+                        let sc = sc.clone();
+                        let on_click = self.on_shortcut_click.clone();
+                        d.child(
+                            div()
+                                .h(px(22.))
+                                .rounded(px(5.))
+                                .px(px(6.))
+                                .bg(theme.accent_soft)
+                                .flex()
+                                .items_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.opacity(0.8))
+                                .when_some(on_click, |d, cb| {
+                                    d.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                        cb(window, cx);
+                                    })
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.accent)
+                                        .child(sc),
+                                ),
+                        )
+                    })
+                    .child({
+                        let on_delete = self.on_delete.clone();
+                        div()
+                            .w(px(24.))
+                            .h(px(24.))
+                            .rounded(px(5.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(|style| style.bg(theme.danger).opacity(0.12))
+                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                on_delete(window, cx);
+                            })
+                            .child(
+                                div()
+                                    .font_family("iconfont")
+                                    .text_size(px(14.))
+                                    .text_color(theme.text_2)
+                                    .child("\u{e8b6}"),
+                            )
+                    }),
+            )
+    }
+}
+
 impl SettingsPanel {
+    /// Render the shared foreground app info bar.
+    ///
+    /// Layout: [app icon] AppName — WindowTitle [⊞ paste btn] [⊘ blacklist btn]
+    fn render_foreground_app_bar(
+        fg_app_name: &str,
+        fg_window_title: &str,
+        theme: &ClippiTheme,
+        has_app: bool,
+        on_paste_shortcut: impl Fn(&mut Window, &mut App) + 'static,
+        on_blacklist: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let icon_path = if has_app {
+            Some(crate::core::paths::app_icon_path(fg_app_name))
+        } else {
+            None
+        };
+
+        div()
+            .h(px(44.))
+            .rounded(px(10.))
+            .bg(theme.surface)
+            .border(px(1.))
+            .border_color(theme.divider)
+            .px(px(12.))
+            .pr(px(6.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            // Left: icon + app name + window title
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .items_center()
+                    .flex_1()
+                    .overflow_hidden()
+                    .when(has_app, |d| {
+                        if let Some(ref path) = icon_path {
+                            d.child(
+                                gpui::img(std::path::Path::new(path))
+                                    .w(px(20.))
+                                    .h(px(20.)),
+                            )
+                        } else {
+                            d
+                        }
+                    })
+                    .when(has_app, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(0.))
+                                .items_center()
+                                .overflow_hidden()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_1)
+                                        .child(fg_app_name.to_string()),
+                                )
+                                .when(!fg_window_title.is_empty(), |d| {
+                                    d.child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(theme.text_3)
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .flex_1()
+                                            .child(format!(" \u{2014} {}", fg_window_title)),
+                                    )
+                                }),
+                        )
+                    })
+                    .when(!has_app, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(theme.text_3)
+                                .child(I18nKey::HotkeyNoForeground.text()),
+                        )
+                    }),
+            )
+            // Right: two buttons
+            .when(has_app, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(4.))
+                        .items_center()
+                        // Paste shortcut button
+                        .child({
+                            let on_ps = Rc::new(on_paste_shortcut);
+                            div()
+                                .w(px(26.))
+                                .h(px(26.))
+                                .rounded(px(6.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(theme.accent).opacity(0.12))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let on_ps = on_ps.clone();
+                                    move |_ev, window, cx| on_ps(window, cx)
+                                })
+                                .child(
+                                    div()
+                                        .font_family("iconfont")
+                                        .text_size(px(14.))
+                                        .text_color(theme.accent)
+                                        .child("\u{e623}"),
+                                )
+                        })
+                        // Blacklist button
+                        .child({
+                            let on_bl = Rc::new(on_blacklist);
+                            div()
+                                .w(px(26.))
+                                .h(px(26.))
+                                .rounded(px(6.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(theme.danger).opacity(0.12))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let on_bl = on_bl.clone();
+                                    move |_ev, window, cx| on_bl(window, cx)
+                                })
+                                .child(
+                                    div()
+                                        .font_family("iconfont")
+                                        .text_size(px(14.))
+                                        .text_color(theme.text_2)
+                                        .child("\u{e6a7}"),
+                                )
+                        }),
+                )
+            })
+    }
+
+    /// Render a labeled list section with dynamic-height scrollable list box.
+    fn render_per_app_list_section(
+        title: &str,
+        empty_hint: &str,
+        entries: &[AppListEntry],
+        theme: &ClippiTheme,
+    ) -> impl IntoElement {
+        let has_entries = !entries.is_empty();
+        let list_height = if has_entries {
+            (entries.len() as f32 * 38.0 + 8.0).min(160.0)
+        } else {
+            40.0
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            // Section label
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_3)
+                    .px(px(2.))
+                    .child(title.to_string()),
+            )
+            // List box
+            .child(
+                div()
+                    .h(px(list_height))
+                    .rounded(px(8.))
+                    .bg(theme.surface)
+                    .border(px(1.))
+                    .border_color(theme.divider)
+                    .overflow_y_scrollbar()
+                    .when(has_entries, |d| {
+                        d.p(px(4.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .children(entries.iter().map(|e| e.render(theme)))
+                    })
+                    .when(!has_entries, |d| {
+                        d.flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme.text_3)
+                                    .child(empty_hint.to_string()),
+                            )
+                    }),
+            )
+    }
+
     pub fn render_hotkey_tab(
         &mut self,
         _window: &mut Window,
@@ -35,20 +352,23 @@ impl SettingsPanel {
         let wm = self.window_manager.clone();
         let this = cx.entity().clone();
 
-        // --- Snapshot current values from AppState ---
+        // Snapshot current values from AppState
         let app = self.state.read(cx);
         let hotkey_display = app.settings.hotkey.clone();
         let recording = app.hotkey_recording;
+        let is_recording_paste = self.recording_paste_shortcut.is_some();
         let fg_app_name = app.foreground_app_name.clone();
         let fg_window_title = app.foreground_window_title.clone();
-        let _fg_icon_base64 = app.foreground_app_icon_base64.clone();
         let blacklist = app.settings.hotkey_blacklist.clone();
-        // --- borrow released — `app` goes out of scope here ---
+        let paste_shortcuts = app.settings.paste_shortcuts.clone();
+        // borrow released
 
         let theme = &self.theme;
+        let has_fg = !fg_app_name.is_empty();
+        let is_any_recording = recording || is_recording_paste;
 
-        // --- Recording state colours ---
-        let recording_border = if recording {
+        // Recording state colors
+        let recording_border = if is_any_recording {
             theme.accent
         } else {
             theme.divider
@@ -69,7 +389,7 @@ impl SettingsPanel {
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // --- 1. Hotkey recording card (66px) ---
+            // 1. Hotkey recording card (66px)
             .child(
                 div()
                     .h(px(66.))
@@ -82,7 +402,6 @@ impl SettingsPanel {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    // --- Left: label + description ---
                     .child(
                         div()
                             .flex()
@@ -96,12 +415,14 @@ impl SettingsPanel {
                                     .child(I18nKey::HotkeyTabTitle.text()),
                             )
                             .child({
-                                let desc_color = if recording {
+                                let desc_color = if is_any_recording {
                                     theme.accent
                                 } else {
                                     theme.text_3
                                 };
-                                let desc_text = if recording {
+                                let desc_text = if is_recording_paste {
+                                    I18nKey::HotkeyPasteShortcutRecording.text()
+                                } else if recording {
                                     I18nKey::HotkeyPressToRecord.text()
                                 } else {
                                     I18nKey::HotkeyRecordingIdle.text()
@@ -112,7 +433,6 @@ impl SettingsPanel {
                                     .child(desc_text)
                             }),
                     )
-                    // --- Right: hotkey button (80×28) ---
                     .child({
                         let state = state.clone();
                         let wm = wm.clone();
@@ -125,15 +445,14 @@ impl SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .when(!recording, |d| {
+                            .when(!is_any_recording, |d| {
                                 d.cursor(CursorStyle::PointingHand)
                                     .hover(move |style| style.opacity(0.85))
                             })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                if recording {
+                                if is_any_recording {
                                     return;
                                 }
-                                // --- Start recording via WindowManager ---
                                 wm.update(cx, |wm, _cx| {
                                     wm.start_hotkey_recording();
                                 });
@@ -151,261 +470,115 @@ impl SettingsPanel {
                             )
                     }),
             )
-            // --- 2. Blacklist section ---
-            .child(
-                div()
-                    .rounded(px(10.))
-                    .bg(theme.surface)
-                    .border(px(1.))
-                    .border_color(theme.divider)
-                    .flex()
-                    .flex_col()
-                    .gap(px(0.))
-                    // --- 2a. Foreground app info bar (44px) ---
-                    .child({
-                        let has_app = !fg_app_name.is_empty();
-                        let icon_path = if has_app {
-                            Some(crate::core::paths::app_icon_path(&fg_app_name))
-                        } else {
-                            None
-                        };
-
-                        div()
-                            .h(px(44.))
-                            .rounded(px(10.))
-                            .bg(theme.titlebar_bg)
-                            .px(px(12.))
-                            .pr(px(6.))
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            // --- Left: icon + app name + window title ---
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap(px(8.))
-                                    .items_center()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    // --- App icon (20×20) ---
-                                    .when(has_app, |d| {
-                                        if let Some(ref path) = icon_path {
-                                            d.child(
-                                                gpui::img(std::path::Path::new(path))
-                                                    .w(px(20.))
-                                                    .h(px(20.)),
-                                            )
-                                        } else {
-                                            d
-                                        }
-                                    })
-                                    // --- App name + window title ---
-                                    .when(has_app, |d| {
-                                        d.child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .gap(px(0.))
-                                                .items_center()
-                                                .overflow_hidden()
-                                                .flex_1()
-                                                .child(
-                                                    div()
-                                                        .text_size(px(12.))
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(theme.text_1)
-                                                        .child(fg_app_name.clone()),
-                                                )
-                                                .when(!fg_window_title.is_empty(), |d| {
-                                                    d.child(
-                                                        div()
-                                                            .text_size(px(11.))
-                                                            .text_color(theme.text_3)
-                                                            .overflow_hidden()
-                                                            .text_ellipsis()
-                                                            .flex_1()
-                                                            .child(format!(
-                                                                " \u{2014} {}",
-                                                                fg_window_title
-                                                            )),
-                                                    )
-                                                }),
-                                        )
-                                    })
-                                    // --- No foreground app ---
-                                    .when(!has_app, |d| {
-                                        d.child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(theme.text_3)
-                                                .child(I18nKey::HotkeyNoForeground.text()),
-                                        )
-                                    }),
-                            )
-                            // --- Right: block button (26×26) ---
-                            .when(has_app, |d| {
-                                let app_name = fg_app_name.clone();
-                                let this = this.clone();
-                                d.child(
-                                    div()
-                                        .w(px(26.))
-                                        .h(px(26.))
-                                        .rounded(px(6.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(|style| style.bg(theme.danger).opacity(0.12))
-                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                            this.update(cx, |_panel, cx| {
-                                                cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                    HotkeyConfirmAction::AddBlacklist {
-                                                        app_name: app_name.clone(),
-                                                    },
-                                                ));
-                                            });
-                                        })
-                                        .child(
-                                            div()
-                                                .font_family("iconfont")
-                                                .text_size(px(14.))
-                                                .text_color(theme.text_2)
-                                                .child("\u{e6a7}"),
-                                        ),
-                                )
-                            })
+            // 2. Shared foreground app info bar
+            .child({
+                let app_name_ps = fg_app_name.clone();
+                let app_name_bl = fg_app_name.clone();
+                let this_ps = this.clone();
+                let this_bl = this.clone();
+                Self::render_foreground_app_bar(
+                    &fg_app_name,
+                    &fg_window_title,
+                    theme,
+                    has_fg,
+                    // on_paste_shortcut: start paste shortcut recording
+                    move |_window, cx| {
+                        this_ps.update(cx, |panel, cx| {
+                            panel.recording_paste_shortcut = Some(app_name_ps.clone());
+                            panel.window_manager.update(cx, |wm, _cx| {
+                                wm.start_hotkey_recording();
+                            });
+                            cx.notify();
+                        });
+                    },
+                    // on_blacklist: emit confirm dialog
+                    move |_window, cx| {
+                        this_bl.update(cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                HotkeyConfirmAction::AddBlacklist {
+                                    app_name: app_name_bl.clone(),
+                                },
+                            ));
+                        });
+                    },
+                )
+            })
+            // 3. Blacklist section
+            .child({
+                let this = this.clone();
+                let entries: Vec<AppListEntry> = blacklist
+                    .iter()
+                    .map(|name| {
+                        let name_clone = name.clone();
+                        let this_clone = this.clone();
+                        AppListEntry {
+                            app_name: name.clone(),
+                            shortcut: None,
+                            on_delete: Rc::new(move |_window, cx| {
+                                this_clone.update(cx, |_panel, cx| {
+                                    cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                        HotkeyConfirmAction::RemoveBlacklist {
+                                            app_name: name_clone.clone(),
+                                        },
+                                    ));
+                                });
+                            }),
+                            on_shortcut_click: None,
+                        }
                     })
-                    // --- Divider (only when blacklist is non-empty) ---
-                    .when(!blacklist.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .w_full()
-                                .h(px(1.))
-                                .bg(theme.divider),
-                        )
+                    .collect();
+                let blacklist_title = I18nKey::HotkeyBlacklist.text();
+                let blacklist_hint = I18nKey::HotkeyBlacklistEmptyHint.text();
+                Self::render_per_app_list_section(
+                    &blacklist_title,
+                    &blacklist_hint,
+                    &entries,
+                    theme,
+                )
+            })
+            // 4. Paste shortcut section
+            .child({
+                let this = this.clone();
+                let entries: Vec<AppListEntry> = paste_shortcuts
+                    .iter()
+                    .map(|entry| {
+                        let name = entry.app_name.clone();
+                        let sc = entry.shortcut.clone();
+                        let this_del = this.clone();
+                        let this_re = this.clone();
+                        let name_re = name.clone();
+                        AppListEntry {
+                            app_name: name.clone(),
+                            shortcut: Some(sc.clone()),
+                            on_delete: Rc::new(move |_window, cx| {
+                                this_del.update(cx, |_panel, cx| {
+                                    cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                        HotkeyConfirmAction::RemovePasteShortcut {
+                                            app_name: name.clone(),
+                                        },
+                                    ));
+                                });
+                            }),
+                            on_shortcut_click: Some(Rc::new(move |_window, cx| {
+                                this_re.update(cx, |panel, cx| {
+                                    panel.recording_paste_shortcut = Some(name_re.clone());
+                                    panel.window_manager.update(cx, |wm, _cx| {
+                                        wm.start_hotkey_recording();
+                                    });
+                                    cx.notify();
+                                });
+                            })),
+                        }
                     })
-                    // --- 2b. Blacklist entries (scrollable, 160px max) ---
-                    .when(!blacklist.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .max_h(px(160.))
-                                .w_full()
-                                .overflow_y_scrollbar()
-                                .p(px(8.))
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.))
-                                .children(blacklist.iter().map(|app_name| {
-                                    let icon_path =
-                                        crate::core::paths::app_icon_path(app_name);
-                                    let name = app_name.clone();
-                                    let this = this.clone();
-
-                                    div()
-                                        .h(px(36.))
-                                        .rounded(px(8.))
-                                        .bg(theme.titlebar_bg)
-                                        .border(px(1.))
-                                        .border_color(theme.divider)
-                                        .px(px(10.))
-                                        .pr(px(6.))
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .justify_between()
-                                        // --- Left: icon + app name ---
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .gap(px(8.))
-                                                .items_center()
-                                                .overflow_hidden()
-                                                .flex_1()
-                                                .child(
-                                                    gpui::img(std::path::Path::new(
-                                                        &icon_path,
-                                                    ))
-                                                    .w(px(20.))
-                                                    .h(px(20.)),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(12.))
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(theme.text_1)
-                                                        .overflow_hidden()
-                                                        .text_ellipsis()
-                                                        .child(name.clone()),
-                                                ),
-                                        )
-                                        // --- Right: delete button (24×24) ---
-                                        .child(
-                                            div()
-                                                .w(px(24.))
-                                                .h(px(24.))
-                                                .rounded(px(5.))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .hover(|style| {
-                                                    style.bg(theme.danger).opacity(0.12)
-                                                })
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    {
-                                                        let name = name.clone();
-                                                        let this = this.clone();
-                                                        move |_ev, _window, cx| {
-                                                            this.update(
-                                                                cx,
-                                                                |_panel, cx| {
-                                                                    cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                                        HotkeyConfirmAction::RemoveBlacklist {
-                                                                            app_name: name
-                                                                                .clone(),
-                                                                        },
-                                                                    ));
-                                                                },
-                                                            );
-                                                        }
-                                                    },
-                                                )
-                                                .child(
-                                                    div()
-                                                        .font_family("iconfont")
-                                                        .text_size(px(14.))
-                                                        .text_color(theme.text_2)
-                                                        .child("\u{e8b6}"),
-                                                ),
-                                        )
-                                })),
-                        )
-                    })
-                    // --- 2c. Empty state ---
-                    .when(blacklist.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .h(px(40.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child({
-                                    let msg = if fg_app_name.is_empty() {
-                                        I18nKey::HotkeyBlacklistEmpty.text()
-                                    } else {
-                                        I18nKey::HotkeyBlacklistEmptyHint.text()
-                                    };
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(theme.text_3)
-                                        .child(msg)
-                                }),
-                        )
-                    }),
-            )
+                    .collect();
+                let ps_title = I18nKey::HotkeyPasteShortcut.text();
+                let ps_hint = I18nKey::HotkeyPasteShortcutEmptyHint.text();
+                Self::render_per_app_list_section(
+                    &ps_title,
+                    &ps_hint,
+                    &entries,
+                    theme,
+                )
+            })
     }
 }

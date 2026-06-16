@@ -303,6 +303,39 @@ impl RootView {
                         });
                         cx.notify();
                     }
+                    SettingsEvent::HotkeyPasteShortcut { ref action } => {
+                        match action {
+                            hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut } => {
+                                let mut list = this.state.read(cx).settings.paste_shortcuts.clone();
+                                // Remove existing entry for same app (overwrite)
+                                list.retain(|e| e.app_name != *app_name);
+                                list.push(crate::core::settings::PasteShortcutEntry {
+                                    app_name: app_name.clone(),
+                                    shortcut: shortcut.clone(),
+                                });
+                                this.state.update(cx, |s, _cx| {
+                                    s.settings.paste_shortcuts = list;
+                                    s.settings.save();
+                                });
+                                this.settings_panel.update(cx, |panel, cx| {
+                                    panel.clear_paste_shortcut_state(cx);
+                                });
+                            }
+                            hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name } => {
+                                let mut list = this.state.read(cx).settings.paste_shortcuts.clone();
+                                list.retain(|e| e.app_name != *app_name);
+                                this.state.update(cx, |s, _cx| {
+                                    s.settings.paste_shortcuts = list;
+                                    s.settings.save();
+                                });
+                                this.settings_panel.update(cx, |panel, cx| {
+                                    panel.clear_paste_shortcut_state(cx);
+                                });
+                            }
+                            _ => {}
+                        }
+                        cx.notify();
+                    }
                     SettingsEvent::DataError(msg) => {
                         this.state.update(cx, |s, _cx| {
                             s.toast_message = Some(format!(
@@ -782,7 +815,7 @@ impl Render for RootView {
 
                     let action = settings.read(cx).hotkey_confirm.clone();
                     let dialog_element: AnyElement = match action {
-                        Some(hotkey::HotkeyConfirmAction::Add { app_name }) => {
+                        Some(hotkey::HotkeyConfirmAction::AddBlacklist { app_name }) => {
                             ConfirmDialog::add_blacklist(&app_name)
                                 .theme(self.theme.clone())
                                 .on_confirm({
@@ -819,7 +852,7 @@ impl Render for RootView {
                                 })
                                 .into_any_element()
                         }
-                        Some(hotkey::HotkeyConfirmAction::Remove { app_name }) => {
+                        Some(hotkey::HotkeyConfirmAction::RemoveBlacklist { app_name }) => {
                             ConfirmDialog::remove_blacklist(&app_name)
                                 .theme(self.theme.clone())
                                 .on_confirm({
@@ -848,6 +881,60 @@ impl Render for RootView {
                                     move |_window, cx| {
                                         settings.update(cx, |panel, cx| {
                                             panel.clear_hotkey_confirm(cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                        Some(hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut }) => {
+                            ConfirmDialog::add_paste_shortcut(&app_name, &shortcut)
+                                .theme(self.theme.clone())
+                                .on_confirm({
+                                    let settings = settings.clone();
+                                    let app_name = app_name.clone();
+                                    let shortcut = shortcut.clone();
+                                    move |_window, cx| {
+                                        settings.update(cx, |_panel, cx| {
+                                            cx.emit(SettingsEvent::HotkeyPasteShortcut {
+                                                action: hotkey::HotkeyConfirmAction::AddPasteShortcut {
+                                                    app_name: app_name.clone(),
+                                                    shortcut: shortcut.clone(),
+                                                },
+                                            });
+                                        });
+                                    }
+                                })
+                                .on_cancel({
+                                    let settings = settings.clone();
+                                    move |_window, cx| {
+                                        settings.update(cx, |_panel, cx| {
+                                            _panel.clear_paste_shortcut_state(cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                        Some(hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name }) => {
+                            ConfirmDialog::remove_paste_shortcut(&app_name)
+                                .theme(self.theme.clone())
+                                .on_confirm({
+                                    let settings = settings.clone();
+                                    let app_name = app_name.clone();
+                                    move |_window, cx| {
+                                        settings.update(cx, |_panel, cx| {
+                                            cx.emit(SettingsEvent::HotkeyPasteShortcut {
+                                                action: hotkey::HotkeyConfirmAction::RemovePasteShortcut {
+                                                    app_name: app_name.clone(),
+                                                },
+                                            });
+                                        });
+                                    }
+                                })
+                                .on_cancel({
+                                    let settings = settings.clone();
+                                    move |_window, cx| {
+                                        settings.update(cx, |_panel, cx| {
+                                            _panel.clear_paste_shortcut_state(cx);
                                         });
                                     }
                                 })

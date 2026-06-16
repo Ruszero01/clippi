@@ -720,7 +720,8 @@ impl AppState {
             self.skip_next.store(true, Ordering::SeqCst);
             crate::services::clipboard_ops::write_text_to_clipboard(&text);
             crate::platform::paste::restore_paste_target();
-            crate::platform::paste::paste_after_delay();
+            let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+            crate::platform::paste::paste_after_delay(shortcuts);
         } else {
             self.show_toast("No OCR text detected");
         }
@@ -787,7 +788,8 @@ impl AppState {
         }
 
         restore_paste_target();
-        paste_after_delay();
+        let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+        paste_after_delay(shortcuts);
     }
 
     /// Paste a single item as plain text: write plain text to clipboard, restore focus, simulate Ctrl+V.
@@ -814,7 +816,8 @@ impl AppState {
         }
 
         restore_paste_target();
-        paste_after_delay();
+        let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+        paste_after_delay(shortcuts);
     }
 
     /// Convert a color item from HEX to RGB and paste.
@@ -835,7 +838,8 @@ impl AppState {
             crate::services::clipboard_ops::write_text_to_clipboard(&rgb_text);
             crate::services::clipboard_ops::verify_clipboard_content(&rgb_text, 200);
             restore_paste_target();
-            paste_after_delay();
+            let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+            paste_after_delay(shortcuts);
         }
     }
 
@@ -857,7 +861,8 @@ impl AppState {
             crate::services::clipboard_ops::write_text_to_clipboard(&hex_text);
             crate::services::clipboard_ops::verify_clipboard_content(&hex_text, 200);
             restore_paste_target();
-            paste_after_delay();
+            let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+            paste_after_delay(shortcuts);
         }
     }
 
@@ -883,7 +888,8 @@ impl AppState {
                 crate::services::clipboard_ops::write_text_to_clipboard("\n");
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 restore_paste_target();
-                paste_sync();
+                let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+                paste_sync(shortcuts);
                 std::thread::sleep(std::time::Duration::from_millis(60));
             }
 
@@ -918,7 +924,8 @@ impl AppState {
             restore_paste_target();
 
             if i < n - 1 {
-                paste_sync();
+                let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+                paste_sync(shortcuts);
                 let delay = if item.content_type == ContentType::Image {
                     let file_size = std::fs::metadata(&item.image_path)
                         .map(|m| m.len())
@@ -930,7 +937,8 @@ impl AppState {
                 };
                 std::thread::sleep(std::time::Duration::from_millis(delay));
             } else {
-                paste_after_delay();
+                let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+                paste_after_delay(shortcuts);
             }
         }
         // --- Restore clipboard recording — batch paste is complete. ---
