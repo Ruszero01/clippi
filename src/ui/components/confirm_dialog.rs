@@ -124,6 +124,24 @@ impl ConfirmDialog {
             .confirm_label(I18nKey::ConfirmAddLabel.text())
             .danger(false)
     }
+
+    /// Add paste shortcut confirmation.
+    pub fn add_paste_shortcut(app_name: &str, shortcut: &str) -> Self {
+        Self::new()
+            .title(I18nKey::HotkeyPasteShortcutConfirmAddTitle.text())
+            .message(I18nKey::HotkeyPasteShortcutConfirmAddMsg.fmt(&[app_name, shortcut]))
+            .confirm_label(I18nKey::ConfirmAddLabel.text())
+            .danger(false)
+    }
+
+    /// Remove paste shortcut confirmation.
+    pub fn remove_paste_shortcut(app_name: &str) -> Self {
+        Self::new()
+            .title(I18nKey::HotkeyPasteShortcutConfirmRemoveTitle.text())
+            .message(I18nKey::HotkeyPasteShortcutConfirmRemoveMsg.fmt(&[app_name]))
+            .confirm_label(I18nKey::ConfirmRemoveLabel.text())
+            .danger(false)
+    }
 }
 
 impl RenderOnce for ConfirmDialog {
