@@ -68,6 +68,20 @@ impl ClipboardFilters {
         self.favorites_only
     }
 
+    /// Check if keyword is pure ASCII — used to decide whether to apply
+    /// pinyin post-filter in Rust vs SQL LIKE matching.
+    pub fn is_keyword_ascii(&self) -> bool {
+        self.keyword
+            .as_ref()
+            .map(|kw| kw.is_ascii())
+            .unwrap_or(false)
+    }
+
+    /// Get the current keyword string, if any.
+    pub fn keyword(&self) -> Option<&str> {
+        self.keyword.as_deref()
+    }
+
     /// Toggle a tag filter on/off
     pub fn toggle_tag(&mut self, tag_id: i64) {
         if let Some(pos) = self.tag_ids.iter().position(|&t| t == tag_id) {
@@ -165,19 +179,24 @@ impl ClipboardFilters {
             }
         }
 
-        // Keyword filter — also matches tag names and OCR text in rich_data (image items only)
-        if let Some(ref kw) = self.keyword {
-            conditions.push(
-                "(full_text LIKE ? OR (content_type = 'image' AND rich_data LIKE ?) OR id IN (\
-                 SELECT item_id FROM item_tags it \
-                 INNER JOIN tags t ON it.tag_id = t.id \
-                 WHERE t.name LIKE ?))"
-                    .to_string(),
-            );
-            let pattern = format!("%{}%", kw);
-            params.push(pattern.clone().into());
-            params.push(pattern.clone().into());
-            params.push(pattern.into());
+        // Keyword filter — also matches tag names and OCR text in rich_data (image items only).
+        // For pure ASCII keywords (potential pinyin), skip SQL keyword matching — the
+        // Rust-side pinyin post-filter in reload_items() handles full-text + pinyin matching.
+        // Non-ASCII keywords (e.g. Chinese characters) still use SQL LIKE as before.
+        if !self.is_keyword_ascii() {
+            if let Some(ref kw) = self.keyword {
+                conditions.push(
+                    "(full_text LIKE ? OR (content_type = 'image' AND rich_data LIKE ?) OR id IN (\
+                     SELECT item_id FROM item_tags it \
+                     INNER JOIN tags t ON it.tag_id = t.id \
+                     WHERE t.name LIKE ?))"
+                        .to_string(),
+                );
+                let pattern = format!("%{}%", kw);
+                params.push(pattern.clone().into());
+                params.push(pattern.clone().into());
+                params.push(pattern.into());
+            }
         }
 
         if conditions.is_empty() {

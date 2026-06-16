@@ -14,6 +14,7 @@ use crate::core::types::FileData;
 use crate::core::types::RichData;
 use crate::core::types::TagInfo;
 use crate::state::sync::SyncState;
+use pinyin::ToPinyin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -67,6 +68,40 @@ pub struct AppState {
     pub hotkey_recording: bool,
     /// GPUI-facing sync status and backend snapshots.
     pub sync: SyncState,
+}
+
+/// Pinyin-aware full-text matching for ASCII keywords.
+///
+/// When the search keyword is pure ASCII (potential pinyin), this function
+/// checks three forms in order:
+/// 1. Direct lowercase substring match (covers English text)
+/// 2. Full pinyin match — "zhongguo" matches "中国"
+/// 3. Pinyin initial match — "zg" matches "中国"
+fn pinyin_match(text: &str, keyword: &str) -> bool {
+    let kw = keyword.to_lowercase();
+
+    // 1. Direct text match — covers English, numbers, symbols
+    if text.to_lowercase().contains(&kw) {
+        return true;
+    }
+
+    // 2. Full pinyin match
+    let full_py: String = text
+        .to_pinyin()
+        .flatten()
+        .map(|p| p.plain())
+        .collect();
+    if full_py.contains(&kw) {
+        return true;
+    }
+
+    // 3. Pinyin initials match
+    let initials: String = text
+        .to_pinyin()
+        .flatten()
+        .filter_map(|p| p.plain().chars().next())
+        .collect();
+    initials.contains(&kw)
 }
 
 impl AppState {
@@ -146,7 +181,18 @@ impl AppState {
             .db
             .load_filtered_with_tags(&self.filters, self.query_limit(), self.order_by())
         {
-            Ok(items) => self.items = items,
+            Ok(mut items) => {
+                // Pinyin post-filter: for ASCII keywords (potential pinyin),
+                // apply pinyin-aware matching in Rust. SQL keyword matching is
+                // skipped for ASCII keywords in db_where(), so we get a broader
+                // result set here and narrow it down with pinyin_match.
+                if self.filters.is_keyword_ascii() {
+                    if let Some(kw) = self.filters.keyword() {
+                        items.retain(|item| pinyin_match(&item.full_text, kw));
+                    }
+                }
+                self.items = items;
+            }
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
     }
