@@ -20,8 +20,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId,
-    IsWindow, SetForegroundWindow,
+    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
 };
 
 #[cfg(target_os = "windows")]
@@ -365,10 +364,7 @@ pub fn paste_sync(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutE
 }
 
 #[cfg(target_os = "windows")]
-fn wait_for_focus_and_send_paste(
-    target_hwnd: Option<usize>,
-    shortcut: PasteShortcut,
-) {
+fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShortcut) {
     // Initial delay for SetForegroundWindow to take effect
     std::thread::sleep(std::time::Duration::from_millis(BASE_DELAY_MS));
 

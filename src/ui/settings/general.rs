@@ -120,53 +120,53 @@ impl SettingsPanel {
         // --- Hide taskbar icon (Windows only — macOS tray apps already hide from Dock) ---
         #[cfg(target_os = "windows")]
         let container = container.child({
-                let state = state.clone();
-                let wm = wm.clone();
-                let this = this.clone();
-                self.setting_row_with_toggle(
-                    I18nKey::SettingHideTaskbar.text(),
-                    I18nKey::DescHideTaskbar.text(),
-                    hide_taskbar_icon,
-                    window,
-                    cx,
-                    move |_window, _cx| {
-                        let new_val = state.update(_cx, |s, _cx| {
-                            s.settings.hide_taskbar_icon = !s.settings.hide_taskbar_icon;
-                            s.settings.save();
-                            s.settings.hide_taskbar_icon
-                        });
-                        wm.update(_cx, |wm, cx| wm.set_hide_taskbar_icon(new_val, cx));
-                        this.update(_cx, |_panel, cx| cx.notify());
-                    },
-                )
-            });
+            let state = state.clone();
+            let wm = wm.clone();
+            let this = this.clone();
+            self.setting_row_with_toggle(
+                I18nKey::SettingHideTaskbar.text(),
+                I18nKey::DescHideTaskbar.text(),
+                hide_taskbar_icon,
+                window,
+                cx,
+                move |_window, _cx| {
+                    let new_val = state.update(_cx, |s, _cx| {
+                        s.settings.hide_taskbar_icon = !s.settings.hide_taskbar_icon;
+                        s.settings.save();
+                        s.settings.hide_taskbar_icon
+                    });
+                    wm.update(_cx, |wm, cx| wm.set_hide_taskbar_icon(new_val, cx));
+                    this.update(_cx, |_panel, cx| cx.notify());
+                },
+            )
+        });
 
         // --- Block system window behaviors (Windows only) ---
         #[cfg(target_os = "windows")]
         let container = container.child({
-                let state = state.clone();
-                let wm = wm.clone();
-                let this = this.clone();
-                self.setting_row_with_toggle(
-                    I18nKey::SettingBlockSysBehavior.text(),
-                    I18nKey::DescBlockSysBehavior.text(),
-                    block_system_behaviors,
-                    window,
-                    cx,
-                    move |_window, _cx| {
-                        let new_val = state.update(_cx, |s, _cx| {
-                            s.settings.block_system_window_behaviors =
-                                !s.settings.block_system_window_behaviors;
-                            s.settings.save();
-                            s.settings.block_system_window_behaviors
-                        });
-                        wm.update(_cx, |wm, cx| {
-                            wm.set_block_system_window_behaviors(new_val, cx)
-                        });
-                        this.update(_cx, |_panel, cx| cx.notify());
-                    },
-                )
-            });
+            let state = state.clone();
+            let wm = wm.clone();
+            let this = this.clone();
+            self.setting_row_with_toggle(
+                I18nKey::SettingBlockSysBehavior.text(),
+                I18nKey::DescBlockSysBehavior.text(),
+                block_system_behaviors,
+                window,
+                cx,
+                move |_window, _cx| {
+                    let new_val = state.update(_cx, |s, _cx| {
+                        s.settings.block_system_window_behaviors =
+                            !s.settings.block_system_window_behaviors;
+                        s.settings.save();
+                        s.settings.block_system_window_behaviors
+                    });
+                    wm.update(_cx, |wm, cx| {
+                        wm.set_block_system_window_behaviors(new_val, cx)
+                    });
+                    this.update(_cx, |_panel, cx| cx.notify());
+                },
+            )
+        });
 
         container
             // --- Theme ---
@@ -214,7 +214,11 @@ impl SettingsPanel {
                     ],
                     if lang.is_empty() { "system" } else { &lang },
                     move |key, _window, _cx| {
-                        let new_lang = if key == "system" { String::new() } else { key.to_string() };
+                        let new_lang = if key == "system" {
+                            String::new()
+                        } else {
+                            key.to_string()
+                        };
                         let effective = if new_lang.is_empty() {
                             core::settings::detect_system_language()
                         } else {

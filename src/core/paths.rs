@@ -331,7 +331,10 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
 
 fn copy_dir_recursive_missing(src: &Path, dst: &Path) {
     if let Err(e) = fs::create_dir_all(dst) {
-        log::warn!("failed to create migration directory {}: {e}", dst.display());
+        log::warn!(
+            "failed to create migration directory {}: {e}",
+            dst.display()
+        );
         return;
     }
     let entries = match fs::read_dir(src) {
@@ -356,11 +359,9 @@ fn copy_dir_recursive_missing(src: &Path, dst: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        migrate_legacy_files_from, CONFIG_FILE, DB_FILE,
-    };
     #[cfg(target_os = "macos")]
     use super::portable_mode_allowed;
+    use super::{migrate_legacy_files_from, CONFIG_FILE, DB_FILE};
     #[cfg(target_os = "macos")]
     use std::path::Path;
 

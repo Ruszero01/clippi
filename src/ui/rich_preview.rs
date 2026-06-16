@@ -107,11 +107,7 @@ pub fn strip_markdown_links(md: &str) -> String {
                 j += 1;
             }
 
-            if !is_image
-                && depth == 0
-                && j < len
-                && chars[j] == '('
-            {
+            if !is_image && depth == 0 && j < len && chars[j] == '(' {
                 // Build the URL string to check if it looks like a real URL
                 let url_str: String = chars[j + 1..].iter().collect();
                 if looks_like_url(&url_str) {
@@ -220,10 +216,7 @@ fn tag_is_a(chars: &[char], i: usize) -> bool {
 /// Check if chars starting at `i` form `</a` (case-insensitive).
 fn tag_is_close_a(chars: &[char], i: usize) -> bool {
     chars.get(i..).is_some_and(|rest| {
-        rest.len() >= 3
-            && rest[0] == '<'
-            && rest[1] == '/'
-            && rest[2].eq_ignore_ascii_case(&'a')
+        rest.len() >= 3 && rest[0] == '<' && rest[1] == '/' && rest[2].eq_ignore_ascii_case(&'a')
     })
 }
 
@@ -390,9 +383,9 @@ fn parse_css_color(value: &str) -> Option<Rgba> {
         .filter_map(|part| part.trim().parse::<u8>().ok())
         .collect();
     if channels.len() == 3 {
-        Some(rgb(
-            ((channels[0] as u32) << 16) | ((channels[1] as u32) << 8) | channels[2] as u32,
-        ))
+        Some(rgb(((channels[0] as u32) << 16)
+            | ((channels[1] as u32) << 8)
+            | channels[2] as u32))
     } else {
         None
     }
@@ -419,5 +412,5 @@ fn looks_like_url(after_paren: &str) -> bool {
         || s.starts_with("//")  // protocol-relative
         || s.starts_with('#')   // anchor
         || s.starts_with('/')   // absolute path
-        || s.contains("://")    // any other protocol
+        || s.contains("://") // any other protocol
 }

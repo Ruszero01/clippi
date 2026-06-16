@@ -20,8 +20,8 @@ use windows_sys::Win32::UI::Accessibility::{
 use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
-    PeekMessageW, PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
+    DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
+    PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
     WINEVENT_OUTOFCONTEXT, WM_QUIT,
 };
 
@@ -142,7 +142,7 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
         // SAFETY: `GetCurrentThreadId` returns a constant thread ID; always safe.
         let tid = unsafe { GetCurrentThreadId() };
         let _ = tx.send(tid); // blocks until receiver reads — ensures tid is available
-        // SAFETY: `zeroed()` on a POD struct produces a valid zero-valued MSG.
+                              // SAFETY: `zeroed()` on a POD struct produces a valid zero-valued MSG.
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
             // SAFETY: `PeekMessageW` with a stack-allocated MSG and null HWND

@@ -52,8 +52,7 @@ impl TrayManager {
         let sep = PredefinedMenuItem::separator();
 
         // Check for updates button
-        let check_update_item =
-            MenuItem::new(I18nKey::TrayCheckUpdate.text(), true, None);
+        let check_update_item = MenuItem::new(I18nKey::TrayCheckUpdate.text(), true, None);
         let check_update_id = check_update_item.id().clone();
 
         // --- Existing functional menu items ---
@@ -133,7 +132,8 @@ impl TrayManager {
     /// Update all menu item texts when language changes.
     /// muda supports live text updates — no tray recreation needed.
     pub fn update_language(&mut self) {
-        self._check_update_item.set_text(I18nKey::TrayCheckUpdate.text());
+        self._check_update_item
+            .set_text(I18nKey::TrayCheckUpdate.text());
         self._items[0].set_text(I18nKey::TrayShow.text());
         self._items[1].set_text(I18nKey::TraySettings.text());
         self._items[2].set_text(I18nKey::TrayRestart.text());

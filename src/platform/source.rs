@@ -119,8 +119,7 @@ mod windows_impl {
         // file extension. The input buffer is null-terminated, the output
         // struct is zeroed, and `hicon_to_base64_png` takes HICON ownership.
         unsafe {
-            let wide_path: Vec<u16> =
-                file_path.encode_utf16().chain(std::iter::once(0)).collect();
+            let wide_path: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
 
             let mut shfi: SHFILEINFOW = std::mem::zeroed();
             let result = SHGetFileInfoW(

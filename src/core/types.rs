@@ -66,7 +66,6 @@ pub enum DisplayKind {
     PlainText,
 }
 
-
 /// Source application info extracted when clipboard content is first captured
 #[derive(Debug, Clone)]
 pub struct SourceAppInfo {

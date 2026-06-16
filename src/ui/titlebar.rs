@@ -101,9 +101,7 @@ impl Render for Titlebar {
                     .gap(px(7.))
                     .window_control_area(WindowControlArea::Drag)
                     // --- Logo (20x20, loaded from assets) ---
-                    .child(
-                        gpui::img(logo).w(px(20.)).h(px(20.)),
-                    )
+                    .child(gpui::img(logo).w(px(20.)).h(px(20.)))
                     // --- App name ---
                     .child(
                         div()

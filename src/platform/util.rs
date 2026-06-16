@@ -233,8 +233,7 @@ pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, _size: i32) -> Opti
         use objc2::rc::Retained;
 
         // --- 1. TIFF → NSBitmapImageRep (thread-safe, no lockFocus needed) ---
-        let tiff: Option<Retained<objc2::runtime::NSObject>> =
-            msg_send![image, TIFFRepresentation];
+        let tiff: Option<Retained<objc2::runtime::NSObject>> = msg_send![image, TIFFRepresentation];
         let tiff = tiff?;
         let rep: Retained<objc2::runtime::NSObject> = msg_send![
             msg_send![class!(NSBitmapImageRep), alloc],

@@ -15,9 +15,9 @@
 
 use std::rc::Rc;
 
+use crate::core::i18n_keys::I18nKey;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use crate::core::i18n_keys::I18nKey;
 
 use crate::ui::theme::ClippiTheme;
 

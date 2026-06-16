@@ -68,15 +68,6 @@ impl ClipboardFilters {
         self.favorites_only
     }
 
-    /// Check if keyword is pure ASCII — used to decide whether to apply
-    /// pinyin post-filter in Rust vs SQL LIKE matching.
-    pub fn is_keyword_ascii(&self) -> bool {
-        self.keyword
-            .as_ref()
-            .map(|kw| kw.is_ascii())
-            .unwrap_or(false)
-    }
-
     /// Get the current keyword string, if any.
     pub fn keyword(&self) -> Option<&str> {
         self.keyword.as_deref()
@@ -184,25 +175,8 @@ impl ClipboardFilters {
             }
         }
 
-        // Keyword filter — also matches tag names and OCR text in rich_data (image items only).
-        // For pure ASCII keywords (potential pinyin), skip SQL keyword matching — the
-        // Rust-side pinyin post-filter in reload_items() handles full-text + pinyin matching.
-        // Non-ASCII keywords (e.g. Chinese characters) still use SQL LIKE as before.
-        if !self.is_keyword_ascii() {
-            if let Some(ref kw) = self.keyword {
-                conditions.push(
-                    "(full_text LIKE ? OR (content_type = 'image' AND rich_data LIKE ?) OR id IN (\
-                     SELECT item_id FROM item_tags it \
-                     INNER JOIN tags t ON it.tag_id = t.id \
-                     WHERE t.name LIKE ?))"
-                        .to_string(),
-                );
-                let pattern = format!("%{}%", kw);
-                params.push(pattern.clone().into());
-                params.push(pattern.clone().into());
-                params.push(pattern.into());
-            }
-        }
+        // Keyword matching is handled in AppState after DB loading so pinyin,
+        // rich text, OCR/QR text, and tag names all share one matching path.
 
         if conditions.is_empty() {
             (String::new(), params)

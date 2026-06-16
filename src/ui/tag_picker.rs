@@ -8,8 +8,8 @@ type CreateTagHandler = Rc<dyn Fn(String, &mut gpui::Window, &mut gpui::App)>;
 
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::tooltip::Tooltip;
 use gpui_component::input::{Input, InputState};
+use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 
@@ -73,10 +73,7 @@ impl TagPickerPanel {
         self
     }
 
-    pub fn on_create(
-        mut self,
-        handler: impl Fn(String, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_create(mut self, handler: impl Fn(String, &mut Window, &mut App) + 'static) -> Self {
         self.on_create = Some(Rc::new(handler));
         self
     }
@@ -142,10 +139,20 @@ impl RenderOnce for TagPickerPanel {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(text_1)
-                            .child(if is_batch { I18nKey::CtxBatchTag.text() } else { I18nKey::CtxTag.text() }),
+                            .child(if is_batch {
+                                I18nKey::CtxBatchTag.text()
+                            } else {
+                                I18nKey::CtxTag.text()
+                            }),
                     )
                     .child(div().flex_1())
-                    .child(icon_button("\u{e62e}", text_2, btn_hover, Some(I18nKey::TagTooltipClear.text()), on_clear))
+                    .child(icon_button(
+                        "\u{e62e}",
+                        text_2,
+                        btn_hover,
+                        Some(I18nKey::TagTooltipClear.text()),
+                        on_clear,
+                    ))
                     .child(icon_button("\u{e7b7}", text_2, btn_hover, None, on_close)),
             )
             .child(div().h(px(1.)).w_full().bg(sep_line))
@@ -290,10 +297,8 @@ fn icon_button(
         .hover(move |style| style.bg(hover_bg))
         .when_some(tooltip, |button, tip| {
             button.tooltip(move |window, cx| {
-                Tooltip::element(move |_window, _cx| {
-                    div().text_size(px(10.)).child(tip)
-                })
-                .build(window, cx)
+                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tip))
+                    .build(window, cx)
             })
         })
         .child(

@@ -88,11 +88,7 @@ fn pinyin_match(text: &str, keyword: &str) -> bool {
     }
 
     // 2. Full pinyin match
-    let full_py: String = text
-        .to_pinyin()
-        .flatten()
-        .map(|p| p.plain())
-        .collect();
+    let full_py: String = text.to_pinyin().flatten().map(|p| p.plain()).collect();
     if full_py.contains(&kw) {
         return true;
     }
@@ -128,9 +124,7 @@ fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str)
         }
     }
 
-    item.tags
-        .iter()
-        .any(|tag| pinyin_match(&tag.name, keyword))
+    item.tags.iter().any(|tag| pinyin_match(&tag.name, keyword))
 }
 
 impl AppState {
@@ -1305,7 +1299,12 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    fn make_item(id: i64, content_type: ContentType, is_favorite: bool, full_text: &str) -> ClipboardItem {
+    fn make_item(
+        id: i64,
+        content_type: ContentType,
+        is_favorite: bool,
+        full_text: &str,
+    ) -> ClipboardItem {
         ClipboardItem {
             id,
             content_type,
@@ -1422,7 +1421,10 @@ mod tests {
 
         let ok = state.save_edited_item(1, "edited", "plain");
         assert!(ok);
-        assert!(dirty.load(Ordering::SeqCst), "normal mode: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "normal mode: should set dirty"
+        );
     }
 
     #[test]
@@ -1435,7 +1437,10 @@ mod tests {
 
         let ok = state.save_edited_item(1, "edited", "plain");
         assert!(ok);
-        assert!(dirty.load(Ordering::SeqCst), "favorite item in fav-only mode: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "favorite item in fav-only mode: should set dirty"
+        );
     }
 
     #[test]
@@ -1448,7 +1453,10 @@ mod tests {
 
         let ok = state.save_edited_item(1, "edited", "plain");
         assert!(ok);
-        assert!(!dirty.load(Ordering::SeqCst), "non-favorite item in fav-only mode: should NOT set dirty");
+        assert!(
+            !dirty.load(Ordering::SeqCst),
+            "non-favorite item in fav-only mode: should NOT set dirty"
+        );
     }
 
     // ── toggle_item_tag sync_dirty ─────────────────────────────────
@@ -1501,10 +1509,32 @@ mod tests {
         state.filters.set_keyword("buried");
         state.reload_items();
 
-        let texts: Vec<&str> = state.items.iter().map(|item| item.full_text.as_str()).collect();
+        let texts: Vec<&str> = state
+            .items
+            .iter()
+            .map(|item| item.full_text.as_str())
+            .collect();
         assert!(texts.contains(&"buried plain match"));
         assert!(texts.contains(&"screenshot"));
         assert!(texts.contains(&"tagged item"));
+    }
+
+    #[test]
+    fn keyword_search_matches_non_ascii_rich_text_outside_full_text() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(1, ContentType::RichText, false, "plain preview");
+        item.rich_data = RichData {
+            html: Some("<p>富文本命中</p>".to_string()),
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("富文本");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].full_text, "plain preview");
     }
 
     #[test]
@@ -1517,7 +1547,10 @@ mod tests {
         state.items.push(item);
 
         state.toggle_item_tag(1, tag_id);
-        assert!(dirty.load(Ordering::SeqCst), "normal mode: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "normal mode: should set dirty"
+        );
     }
 
     #[test]
@@ -1530,7 +1563,10 @@ mod tests {
         state.items.push(item);
 
         state.toggle_item_tag(1, tag_id);
-        assert!(dirty.load(Ordering::SeqCst), "favorite item in fav-only mode: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "favorite item in fav-only mode: should set dirty"
+        );
     }
 
     #[test]
@@ -1543,7 +1579,10 @@ mod tests {
         state.items.push(item);
 
         state.toggle_item_tag(1, tag_id);
-        assert!(!dirty.load(Ordering::SeqCst), "non-favorite item in fav-only mode: should NOT set dirty");
+        assert!(
+            !dirty.load(Ordering::SeqCst),
+            "non-favorite item in fav-only mode: should NOT set dirty"
+        );
     }
 
     // ── clear_item_tags sync_dirty ─────────────────────────────────
@@ -1559,7 +1598,10 @@ mod tests {
         state.items.push(item);
 
         state.clear_item_tags(1);
-        assert!(!dirty.load(Ordering::SeqCst), "non-favorite item in fav-only mode: should NOT set dirty");
+        assert!(
+            !dirty.load(Ordering::SeqCst),
+            "non-favorite item in fav-only mode: should NOT set dirty"
+        );
     }
 
     #[test]
@@ -1573,7 +1615,10 @@ mod tests {
         state.items.push(item);
 
         state.clear_item_tags(1);
-        assert!(dirty.load(Ordering::SeqCst), "favorite item in fav-only mode: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "favorite item in fav-only mode: should set dirty"
+        );
     }
 
     // ── toggle_favorite ALWAYS sets dirty ──────────────────────────
@@ -1587,7 +1632,10 @@ mod tests {
         state.items.push(item);
 
         state.toggle_favorite(1);
-        assert!(dirty.load(Ordering::SeqCst), "toggle_favorite should always set dirty (tombstones)");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "toggle_favorite should always set dirty (tombstones)"
+        );
     }
 
     #[test]
@@ -1599,7 +1647,10 @@ mod tests {
         state.items.push(item);
 
         state.delete_item(1);
-        assert!(dirty.load(Ordering::SeqCst), "delete should always set dirty (tombstones)");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "delete should always set dirty (tombstones)"
+        );
     }
 
     // ── update_note sync_dirty ─────────────────────────────────────
@@ -1613,7 +1664,10 @@ mod tests {
         state.items.push(item);
 
         state.update_note(1, "new note");
-        assert!(dirty.load(Ordering::SeqCst), "normal mode: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "normal mode: should set dirty"
+        );
     }
 
     #[test]
@@ -1625,7 +1679,10 @@ mod tests {
         state.items.push(item);
 
         state.update_note(1, "new note");
-        assert!(!dirty.load(Ordering::SeqCst), "non-favorite in fav-only: should NOT set dirty");
+        assert!(
+            !dirty.load(Ordering::SeqCst),
+            "non-favorite in fav-only: should NOT set dirty"
+        );
     }
 
     #[test]
@@ -1637,6 +1694,9 @@ mod tests {
         state.items.push(item);
 
         state.update_note(1, "new note");
-        assert!(dirty.load(Ordering::SeqCst), "favorite in fav-only: should set dirty");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "favorite in fav-only: should set dirty"
+        );
     }
 }

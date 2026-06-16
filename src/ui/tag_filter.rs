@@ -14,9 +14,9 @@ use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::tooltip::Tooltip;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{tag_preset_colors, TagInfo};
 use crate::state::app::AppState;
-use crate::core::i18n_keys::I18nKey;
 
 use super::clipboard_list::ClipboardListView;
 use super::search_bar::SearchBar;
@@ -40,8 +40,12 @@ impl TagFilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let create_input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text()));
-        let edit_name_input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text()));
+        let create_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())
+        });
+        let edit_name_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())
+        });
 
         Self {
             state,
@@ -221,10 +225,16 @@ impl Render for TagFilterPanel {
                         },
                     ))
                     .when(has_tag_filter, |el| {
-                        el.child(icon_btn("\u{e62e}", text_2, btn_hover, Some(I18nKey::TagTooltipClear.text()), {
-                            let this = this.clone();
-                            move |_, cx| this.update(cx, |panel, cx| panel.clear_filters(cx))
-                        }))
+                        el.child(icon_btn(
+                            "\u{e62e}",
+                            text_2,
+                            btn_hover,
+                            Some(I18nKey::TagTooltipClear.text()),
+                            {
+                                let this = this.clone();
+                                move |_, cx| this.update(cx, |panel, cx| panel.clear_filters(cx))
+                            },
+                        ))
                     })
                     .child(icon_btn("\u{e7b7}", text_2, btn_hover, None, {
                         let this = this.clone();
@@ -486,7 +496,12 @@ pub fn render_edit_panel(
                 .child(I18nKey::TagEditTitle.text()),
         )
         .child(div().h(px(1.)).w_full().bg(sep_line))
-        .child(div().text_size(px(11.)).text_color(text_2).child(I18nKey::TagNameLabel.text()))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(text_2)
+                .child(I18nKey::TagNameLabel.text()),
+        )
         .child(
             div()
                 .h(px(26.))
@@ -508,7 +523,12 @@ pub fn render_edit_panel(
                 ),
         )
         .child(div().h(px(1.)).w_full().bg(sep_line))
-        .child(div().text_size(px(11.)).text_color(text_2).child(I18nKey::TagColor.text()))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(text_2)
+                .child(I18nKey::TagColor.text()),
+        )
         .child(
             div()
                 .flex()
@@ -622,10 +642,8 @@ fn icon_btn(
         .hover(move |style| style.bg(hover_bg))
         .when_some(tooltip, |button, tip| {
             button.tooltip(move |window, cx| {
-                Tooltip::element(move |_window, _cx| {
-                    div().text_size(px(10.)).child(tip)
-                })
-                .build(window, cx)
+                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tip))
+                    .build(window, cx)
             })
         })
         .child(

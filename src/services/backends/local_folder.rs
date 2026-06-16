@@ -80,9 +80,7 @@ impl SyncBackend for LocalFolderBackend {
             return BackendStatus::Offline;
         }
         if !dir.is_dir() {
-            return BackendStatus::Error(
-                I18nKey::SyncErrNotDir.text().into(),
-            );
+            return BackendStatus::Error(I18nKey::SyncErrNotDir.text().into());
         }
         BackendStatus::Online
     }
@@ -101,7 +99,10 @@ impl SyncBackend for LocalFolderBackend {
         if !bypass_cache {
             if let Ok(meta) = std::fs::metadata(&path) {
                 if let Ok(mtime) = meta.modified() {
-                    let mut last = self.last_remote_mtime.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut last = self
+                        .last_remote_mtime
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if *last == Some(mtime) {
                         mtime_changed = false;
                     } else {
@@ -114,25 +115,20 @@ impl SyncBackend for LocalFolderBackend {
             // Still update the mtime cache so the next poll cycle can use it
             if let Ok(meta) = std::fs::metadata(&path) {
                 if let Ok(mtime) = meta.modified() {
-                    *self.last_remote_mtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(mtime);
+                    *self
+                        .last_remote_mtime
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(mtime);
                 }
             }
         }
 
         // --- Read main payload ---
         let mut payload = if mtime_changed {
-            let content = std::fs::read_to_string(&path).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::SyncErrRead.text()
-                )
-            })?;
-            serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::SyncErrParse.text()
-                )
-            })?
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrRead.text()))?;
+            serde_json::from_str::<SyncPayload>(&content)
+                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))?
         } else {
             // Main file unchanged — return early only if no conflicts either
             let conflicts = self.find_conflicts();
@@ -140,18 +136,10 @@ impl SyncBackend for LocalFolderBackend {
                 return Err("@@unchanged".into());
             }
             // --- Re-read main payload to merge with conflicts ---
-            let content = std::fs::read_to_string(&path).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::SyncErrRead.text()
-                )
-            })?;
-            serde_json::from_str::<SyncPayload>(&content).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::SyncErrParse.text()
-                )
-            })?
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrRead.text()))?;
+            serde_json::from_str::<SyncPayload>(&content)
+                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))?
         };
 
         // --- Merge conflict files ---
@@ -177,12 +165,8 @@ impl SyncBackend for LocalFolderBackend {
 
     fn push(&self, payload: &SyncPayload) -> Result<(), String> {
         let dir = PathBuf::from(&self.config.folder_path);
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrCreateDir.text()
-            )
-        })?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrCreateDir.text()))?;
 
         let file_path = self.file_path();
         let json = serde_json::to_string_pretty(payload)
@@ -190,24 +174,20 @@ impl SyncBackend for LocalFolderBackend {
 
         // --- Atomic write: temp file + rename ---
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
-        std::fs::write(&tmp_path, &json).map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::SyncErrWriteTemp.text()
-            )
-        })?;
+        std::fs::write(&tmp_path, &json)
+            .map_err(|e| format!("{}: {e}", I18nKey::SyncErrWriteTemp.text()))?;
         std::fs::rename(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
-            format!(
-                "{}: {e}",
-                I18nKey::SyncErrReplace.text()
-            )
+            format!("{}: {e}", I18nKey::SyncErrReplace.text())
         })?;
         // --- Cache new mtime so our own push doesn't trigger a changed-file ---
         // --- detection on the next pull. ---
         if let Ok(meta) = std::fs::metadata(&file_path) {
             if let Ok(mtime) = meta.modified() {
-                *self.last_remote_mtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(mtime);
+                *self
+                    .last_remote_mtime
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(mtime);
             }
         }
         Ok(())

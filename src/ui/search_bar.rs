@@ -102,7 +102,9 @@ impl SearchBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::SearchPlaceholderFull.text()));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(I18nKey::SearchPlaceholderFull.text())
+        });
         let state_for_input = state.clone();
         let list_for_input = list_view.clone();
         let input_for_read = input.clone();
@@ -212,7 +214,8 @@ impl Render for SearchBar {
             - TAG_FILTER_BUTTON_WIDTH)
             .max(0.0);
         let text_gap_total = TYPE_FILTER_TEXT_GAP * (visible_count - 1.0).max(0.0);
-        let type_slot_width = (type_toolbar_width - text_gap_total).max(0.0) / visible_count.max(1.0);
+        let type_slot_width =
+            (type_toolbar_width - text_gap_total).max(0.0) / visible_count.max(1.0);
         let icon_only = type_slot_width < TYPE_FILTER_TEXT_MIN_SLOT_WIDTH;
         let inactive_button_bg = if theme.bg == rgb(0x191a1b) {
             rgba(0xffffff0a)
@@ -297,80 +300,88 @@ impl Render for SearchBar {
                             } else {
                                 px(TYPE_FILTER_TEXT_GAP)
                             })
-                            .children(visible_entries.iter().enumerate().filter_map(|(index, entry)| {
-                                // Look up from FILTER_TYPES; unknown keys are silently skipped
-                                let filter_def = FILTER_TYPES.iter().find(|fd| fd.key == entry.key)?;
-                                let icon = filter_def.icon;
-                                let label = filter_def.label_key.text();
-                                let key = filter_def.key;
-                                let is_active = state_snapshot.filters.is_type_active(key);
-                                let filter_bg = if is_active {
-                                    theme.accent_overlay()
-                                } else {
-                                    inactive_button_bg
-                                };
-                                let filter_text = if is_active { accent } else { text_2 };
-                                let filter_weight = if is_active {
-                                    FontWeight::BOLD
-                                } else {
-                                    FontWeight::default()
-                                };
-                                let state = self.state.clone();
-                                let list_view = self.list_view.clone();
-                                let this = this.clone();
+                            .children(visible_entries.iter().enumerate().filter_map(
+                                |(index, entry)| {
+                                    // Look up from FILTER_TYPES; unknown keys are silently skipped
+                                    let filter_def =
+                                        FILTER_TYPES.iter().find(|fd| fd.key == entry.key)?;
+                                    let icon = filter_def.icon;
+                                    let label = filter_def.label_key.text();
+                                    let key = filter_def.key;
+                                    let is_active = state_snapshot.filters.is_type_active(key);
+                                    let filter_bg = if is_active {
+                                        theme.accent_overlay()
+                                    } else {
+                                        inactive_button_bg
+                                    };
+                                    let filter_text = if is_active { accent } else { text_2 };
+                                    let filter_weight = if is_active {
+                                        FontWeight::BOLD
+                                    } else {
+                                        FontWeight::default()
+                                    };
+                                    let state = self.state.clone();
+                                    let list_view = self.list_view.clone();
+                                    let this = this.clone();
 
-                                Some(
-                                    div()
-                                    .id(("filter-type", index))
-                                    .h(px(22.))
-                                    .when(icon_only, |button| {
-                                        button.flex_1().min_w(px(0.)).justify_center()
-                                    })
-                                    .when(!icon_only, |button| {
-                                        button
-                                            .flex_1()
-                                            .min_w(px(0.))
-                                            .justify_center()
-                                            .px(px(5.))
-                                            .gap(px(2.))
-                                    })
-                                    .flex_shrink_0()
-                                    .rounded(px(5.))
-                                    .bg(filter_bg)
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .cursor(CursorStyle::PointingHand)
-                                    .when(icon_only, move |button| {
-                                        button.tooltip(move |window, cx| {
-                                            Tooltip::element(move |_window, _cx| {
-                                                div().text_size(px(10.)).child(label)
-                                            })
-                                            .build(window, cx)
-                                        })
-                                    })
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        Self::apply_type_filter(&state, &list_view, key, cx);
-                                        this.update(cx, |_bar, cx| cx.notify());
-                                    })
-                                    .child(
+                                    Some(
                                         div()
-                                            .text_size(px(12.))
-                                            .font_family("iconfont")
-                                            .text_color(filter_text)
-                                            .child(icon.to_string()),
+                                            .id(("filter-type", index))
+                                            .h(px(22.))
+                                            .when(icon_only, |button| {
+                                                button.flex_1().min_w(px(0.)).justify_center()
+                                            })
+                                            .when(!icon_only, |button| {
+                                                button
+                                                    .flex_1()
+                                                    .min_w(px(0.))
+                                                    .justify_center()
+                                                    .px(px(5.))
+                                                    .gap(px(2.))
+                                            })
+                                            .flex_shrink_0()
+                                            .rounded(px(5.))
+                                            .bg(filter_bg)
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .cursor(CursorStyle::PointingHand)
+                                            .when(icon_only, move |button| {
+                                                button.tooltip(move |window, cx| {
+                                                    Tooltip::element(move |_window, _cx| {
+                                                        div().text_size(px(10.)).child(label)
+                                                    })
+                                                    .build(window, cx)
+                                                })
+                                            })
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_ev, _window, cx| {
+                                                    Self::apply_type_filter(
+                                                        &state, &list_view, key, cx,
+                                                    );
+                                                    this.update(cx, |_bar, cx| cx.notify());
+                                                },
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .font_family("iconfont")
+                                                    .text_color(filter_text)
+                                                    .child(icon.to_string()),
+                                            )
+                                            .when(!icon_only, |button| {
+                                                button.child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .font_weight(filter_weight)
+                                                        .text_color(filter_text)
+                                                        .child(label),
+                                                )
+                                            }),
                                     )
-                                    .when(!icon_only, |button| {
-                                        button.child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .font_weight(filter_weight)
-                                                .text_color(filter_text)
-                                                .child(label),
-                                        )
-                                    })
-                                )
-                            })),
+                                },
+                            )),
                     )
                     .child(
                         div()
@@ -397,12 +408,12 @@ impl Render for SearchBar {
                                     .items_center()
                                     .justify_center()
                                     .tooltip(|window, cx| {
-                                    let label = I18nKey::FilterTagsTooltip.text();
-                                    Tooltip::element(move |_window, _cx| {
-                                        div().text_size(px(10.)).child(label)
+                                        let label = I18nKey::FilterTagsTooltip.text();
+                                        Tooltip::element(move |_window, _cx| {
+                                            div().text_size(px(10.)).child(label)
+                                        })
+                                        .build(window, cx)
                                     })
-                                    .build(window, cx)
-                                })
                                     .bg(if has_tag_filter {
                                         theme.accent_overlay()
                                     } else {

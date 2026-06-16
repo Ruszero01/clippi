@@ -5,8 +5,8 @@ use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
 
-use crate::core::settings::BackendConfig;
 use crate::core::i18n_keys::I18nKey;
+use crate::core::settings::BackendConfig;
 use crate::services::backends::local_folder::detect_presets;
 use crate::services::gpui_sync::test_webdav_connection;
 use crate::ui::theme::ClippiTheme;
@@ -52,11 +52,14 @@ impl AddBackendPanel {
             theme,
             window_manager,
             presets: detect_presets(),
-            name_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhName.text())),
-            folder_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhFolder.text())),
+            name_input: cx
+                .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhName.text())),
+            folder_input: cx
+                .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhFolder.text())),
             url_input: cx
                 .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUrl.text())),
-            username_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUser.text())),
+            username_input: cx
+                .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUser.text())),
             password_input: cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder(I18nKey::BackendPhPass.text())
@@ -272,11 +275,9 @@ impl AddBackendPanel {
             .flex_col()
             .gap(px(8.))
             .when(!editing && !self.presets.is_empty(), |form| {
-                form.child(field_label(I18nKey::BackendQuickAdd.text(), text_2)).child(
-                    div()
-                        .flex()
-                        .gap(px(8.))
-                        .children(self.presets.iter().map(|(name, path)| {
+                form.child(field_label(I18nKey::BackendQuickAdd.text(), text_2))
+                    .child(div().flex().gap(px(8.)).children(self.presets.iter().map(
+                        |(name, path)| {
                             let name = (*name).to_string();
                             let input_name = name.clone();
                             let path = path.clone();
@@ -322,8 +323,8 @@ impl AddBackendPanel {
                                         .text_color(self.theme.text_1)
                                         .child(name.clone()),
                                 )
-                        })),
-                )
+                        },
+                    )))
             })
             .when(!editing, |form| form.child(div().h(px(1.)).bg(divider)))
             .child(field_label(I18nKey::BackendName.text(), text_2))
@@ -378,7 +379,11 @@ impl AddBackendPanel {
                     ),
             )
             .child(primary_button(
-                if editing { I18nKey::BackendSave.text() } else { I18nKey::BackendAddTitle.text() },
+                if editing {
+                    I18nKey::BackendSave.text()
+                } else {
+                    I18nKey::BackendAddTitle.text()
+                },
                 accent,
                 accent_soft,
                 {
@@ -455,7 +460,11 @@ impl AddBackendPanel {
             })
             .when(self.test_ok, |form| {
                 form.child(primary_button(
-                    if editing { I18nKey::BackendSave.text() } else { I18nKey::BackendAddTitle.text() },
+                    if editing {
+                        I18nKey::BackendSave.text()
+                    } else {
+                        I18nKey::BackendAddTitle.text()
+                    },
                     rgb(0x4caf50),
                     accent_soft,
                     {

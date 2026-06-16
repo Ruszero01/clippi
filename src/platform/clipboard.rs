@@ -9,8 +9,8 @@ use crate::core::types::{
     is_email, is_image_extension, is_markdown_like, is_path, is_phone, is_url, ClipboardItem,
     ContentType, FileData, FileInfo, RichData,
 };
-use crate::services::favicon;
 use crate::platform::source;
+use crate::services::favicon;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::common::RustImageData;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
@@ -453,9 +453,7 @@ impl ClipboardListener for PollingClipboardListener {
         let last_seq = Arc::new(Mutex::new(
             // SAFETY: `GetClipboardSequenceNumber` is a stateless query that
             // returns a DWORD; callable from any thread at any time.
-            unsafe {
-                windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-            },
+            unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() },
         ));
 
         // macOS: use NSPasteboard.changeCount for the same fast-path purpose.

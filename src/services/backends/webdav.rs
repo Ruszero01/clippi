@@ -93,10 +93,7 @@ impl SyncBackend for WebDAVBackend {
                     BackendStatus::Error(format!("HTTP {code}"))
                 }
             }
-            Err(e) => BackendStatus::Error(format!(
-                "{}: {e}",
-                I18nKey::SyncErrConnect.text()
-            )),
+            Err(e) => BackendStatus::Error(format!("{}: {e}", I18nKey::SyncErrConnect.text())),
         }
     }
 
@@ -108,7 +105,12 @@ impl SyncBackend for WebDAVBackend {
 
         // Use If-None-Match for etag-based caching
         if !bypass_cache {
-            if let Some(etag) = self.last_etag.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Some(etag) = self
+                .last_etag
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
                 req = req.set("If-None-Match", etag);
             }
         }
@@ -117,32 +119,21 @@ impl SyncBackend for WebDAVBackend {
             Ok(resp) => {
                 // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
-                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) = Some(etag.to_string());
+                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(etag.to_string());
                 }
-                let body = resp.into_string().map_err(|e| {
-                    format!(
-                        "{}: {e}",
-                        I18nKey::SyncErrReadResp.text()
-                    )
-                })?;
-                serde_json::from_str::<SyncPayload>(&body).map_err(|e| {
-                    format!(
-                        "{}: {e}",
-                        I18nKey::SyncErrParse.text()
-                    )
-                })
+                let body = resp
+                    .into_string()
+                    .map_err(|e| format!("{}: {e}", I18nKey::SyncErrReadResp.text()))?;
+                serde_json::from_str::<SyncPayload>(&body)
+                    .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))
             }
             Err(ureq::Error::Status(304, _)) => {
                 // --- Not Modified — no changes ---
                 Err("@@unchanged".into())
             }
-            Err(ureq::Error::Status(404, _)) => {
-                Err(I18nKey::SyncErrNotFound.text().into())
-            }
-            Err(e) => Err(format!(
-                "{}: {e}",
-                I18nKey::SyncErrPull.text()
-            )),
+            Err(ureq::Error::Status(404, _)) => Err(I18nKey::SyncErrNotFound.text().into()),
+            Err(e) => Err(format!("{}: {e}", I18nKey::SyncErrPull.text())),
         }
     }
 
@@ -162,14 +153,12 @@ impl SyncBackend for WebDAVBackend {
             Ok(resp) => {
                 // --- Cache the new ETag ---
                 if let Some(etag) = resp.header("ETag") {
-                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) = Some(etag.to_string());
+                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(etag.to_string());
                 }
                 Ok(())
             }
-            Err(e) => Err(format!(
-                "{}: {e}",
-                I18nKey::SyncErrPush.text()
-            )),
+            Err(e) => Err(format!("{}: {e}", I18nKey::SyncErrPush.text())),
         }
     }
 }

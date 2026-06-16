@@ -20,9 +20,8 @@ use crate::core::color::detect_color;
 use crate::core::frontend::PANEL_OFFSET_X;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
-    format_relative_time, is_email, is_phone,
-    mask_sensitive_preview, parse_hex_color, url_domain, url_path, ClipboardItem, ContentType,
-    DisplayKind, FileData, FileInfo, RichData,
+    format_relative_time, is_email, is_phone, mask_sensitive_preview, parse_hex_color, url_domain,
+    url_path, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, RichData,
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
@@ -718,7 +717,11 @@ impl RenderOnce for ClipboardCard {
                         .items_center()
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
-                            gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
+                            gpui::img(path)
+                                .w(px(20.))
+                                .h(px(20.))
+                                .rounded(px(4.))
+                                .into_any_element()
                         } else {
                             div()
                                 .w(px(20.))
@@ -780,7 +783,11 @@ impl RenderOnce for ClipboardCard {
                         .items_center()
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
-                            gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
+                            gpui::img(path)
+                                .w(px(20.))
+                                .h(px(20.))
+                                .rounded(px(4.))
+                                .into_any_element()
                         } else {
                             div()
                                 .text_size(px(18.))
@@ -814,7 +821,9 @@ impl RenderOnce for ClipboardCard {
                     .ok()
                     .and_then(|fd| {
                         if fd.files.len() == 1 {
-                            fd.files.first().and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
+                            fd.files
+                                .first()
+                                .and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
                         } else {
                             None
                         }
@@ -837,7 +846,11 @@ impl RenderOnce for ClipboardCard {
                             .items_center()
                             .justify_center()
                             .child(if let Some(path) = effective_icon {
-                                gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
+                                gpui::img(path)
+                                    .w(px(20.))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .into_any_element()
                             } else {
                                 div()
                                     .text_size(px(18.))
@@ -878,11 +891,7 @@ impl RenderOnce for ClipboardCard {
                         .map(std::path::PathBuf::from)
                 };
                 // --- Source app icon only when the setting is enabled ---
-                let app_icon = if show_source {
-                    source_icon_path
-                } else {
-                    None
-                };
+                let app_icon = if show_source { source_icon_path } else { None };
                 let effective_icon = favicon_path.or(app_icon);
                 div()
                     .w(px(36.))
@@ -901,7 +910,11 @@ impl RenderOnce for ClipboardCard {
                             .items_center()
                             .justify_center()
                             .child(if let Some(path) = effective_icon {
-                                gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
+                                gpui::img(path)
+                                    .w(px(20.))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .into_any_element()
                             } else {
                                 div()
                                     .text_size(px(18.))
@@ -947,7 +960,11 @@ impl RenderOnce for ClipboardCard {
                         .items_center()
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
-                            gpui::img(path).w(px(20.)).h(px(20.)).rounded(px(4.)).into_any_element()
+                            gpui::img(path)
+                                .w(px(20.))
+                                .h(px(20.))
+                                .rounded(px(4.))
+                                .into_any_element()
                         } else {
                             div()
                                 .text_size(px(18.))
@@ -1082,18 +1099,14 @@ impl RenderOnce for ClipboardCard {
                         .child(div().text_size(px(13.)).text_color(text_3).child(path))
                 } else {
                     // File system path: show full text as-is
-                    div()
-                        .flex_1()
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(text_1)
-                                .overflow_hidden()
-                                .child(full_text),
-                        )
+                    div().flex_1().flex().items_center().child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .overflow_hidden()
+                            .child(full_text),
+                    )
                 }
             } else if matches!(content_kind, DisplayKind::Color) {
                 div().flex_1().flex().items_center().child(
@@ -1108,187 +1121,185 @@ impl RenderOnce for ClipboardCard {
                 match content_type {
                     ContentType::Image => {
                         // Show image preview if path is available, otherwise show dimensions
-                    if !img_path.is_empty() {
-                        let object_fit = if has_qr {
-                            ObjectFit::Contain
+                        if !img_path.is_empty() {
+                            let object_fit = if has_qr {
+                                ObjectFit::Contain
+                            } else {
+                                ObjectFit::Cover
+                            };
+                            div()
+                                .relative()
+                                .flex_1()
+                                .w_full()
+                                .h_full()
+                                .rounded(px(8.))
+                                .overflow_hidden()
+                                .bg(tag_bg)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    gpui::img(std::path::Path::new(&img_path))
+                                        .w_full()
+                                        .h_full()
+                                        .rounded(px(8.))
+                                        .object_fit(object_fit),
+                                )
+                                .child(
+                                    // --- Rounded border overlay — masks sharp image corners ---
+                                    // --- since GPUI overflow_hidden does not clip img elements ---
+                                    // --- Negative inset makes the overlay extend outward so the ---
+                                    // --- border (which draws inward) covers the image corners.  ---
+                                    div()
+                                        .absolute()
+                                        .inset(px(-3.))
+                                        .rounded(px(11.))
+                                        .border(px(4.))
+                                        .border_color(surface),
+                                )
                         } else {
-                            ObjectFit::Cover
-                        };
-                        div()
-                            .relative()
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .text_size(px(22.))
+                                        .font_family("iconfont")
+                                        .text_color(text_2)
+                                        .child("\u{e626}"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(text_3)
+                                        .child(format!("{} × {}", img_w, img_h)),
+                                )
+                        }
+                    }
+                    ContentType::PlainText | ContentType::RichText => {
+                        // Mask sensitive data for email/phone
+                        let content_box = div()
                             .flex_1()
                             .w_full()
-                            .h_full()
-                            .rounded(px(8.))
-                            .overflow_hidden()
-                            .bg(tag_bg)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                gpui::img(std::path::Path::new(&img_path))
-                                    .w_full()
-                                    .h_full()
-                                    .rounded(px(8.))
-                                    .object_fit(object_fit),
-                            )
-                            .child(
-                                // --- Rounded border overlay — masks sharp image corners ---
-                                // --- since GPUI overflow_hidden does not clip img elements ---
-                                // --- Negative inset makes the overlay extend outward so the ---
-                                // --- border (which draws inward) covers the image corners.  ---
-                                div()
-                                    .absolute()
-                                    .inset(px(-3.))
-                                    .rounded(px(11.))
-                                    .border(px(4.))
-                                    .border_color(surface),
-                            )
-                    } else {
+                            .text_size(px(12.))
+                            .text_color(text_1)
+                            .line_height(px(18.))
+                            .overflow_hidden();
+
+                        if is_email(&full_text) || is_phone(&full_text) {
+                            content_box.child(mask_sensitive_preview(&full_text, &meta_type))
+                        } else {
+                            let style = TextViewStyle::default()
+                                .paragraph_gap(rems(0.25))
+                                .heading_font_size(|_level, base| base);
+                            match rich_preview(&item) {
+                                RichPreview::Html(html) => content_box.child(
+                                    TextView::html(
+                                        ("clipboard-card-html", item.content_hash),
+                                        html,
+                                        window,
+                                        cx,
+                                    )
+                                    .style(style)
+                                    .selectable(false),
+                                ),
+                                RichPreview::Markdown(markdown) => content_box.child(
+                                    TextView::markdown(
+                                        ("clipboard-card-markdown", item.content_hash),
+                                        markdown,
+                                        window,
+                                        cx,
+                                    )
+                                    .style(style)
+                                    .selectable(false),
+                                ),
+                                RichPreview::StyledHtml(lines) => content_box
+                                    .child(rich_preview::render_styled_html_lines(lines, text_1)),
+                                RichPreview::Plain(preview) => content_box.child(preview),
+                            }
+                        }
+                    }
+                    ContentType::File => {
+                        let file_data: FileData =
+                            serde_json::from_str(&item.file_data).unwrap_or_default();
+                        let files: Vec<FileInfo> = file_data.files;
+                        let multi = files.len() > 1;
                         div()
                             .flex_1()
                             .flex()
                             .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .text_size(px(22.))
-                                    .font_family("iconfont")
-                                    .text_color(text_2)
-                                    .child("\u{e626}"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(text_3)
-                                    .child(format!("{} × {}", img_w, img_h)),
-                            )
-                    }
-                }
-                ContentType::PlainText | ContentType::RichText => {
-                    // Mask sensitive data for email/phone
-                    let content_box = div()
-                        .flex_1()
-                        .w_full()
-                        .text_size(px(12.))
-                        .text_color(text_1)
-                        .line_height(px(18.))
-                        .overflow_hidden();
-
-                    if is_email(&full_text) || is_phone(&full_text) {
-                        content_box.child(mask_sensitive_preview(&full_text, &meta_type))
-                    } else {
-                        let style = TextViewStyle::default()
-                            .paragraph_gap(rems(0.25))
-                            .heading_font_size(|_level, base| base);
-                        match rich_preview(&item) {
-                            RichPreview::Html(html) => content_box.child(
-                                TextView::html(
-                                    ("clipboard-card-html", item.content_hash),
-                                    html,
-                                    window,
-                                    cx,
-                                )
-                                .style(style)
-                                .selectable(false),
-                            ),
-                            RichPreview::Markdown(markdown) => content_box.child(
-                                TextView::markdown(
-                                    ("clipboard-card-markdown", item.content_hash),
-                                    markdown,
-                                    window,
-                                    cx,
-                                )
-                                .style(style)
-                                .selectable(false),
-                            ),
-                            RichPreview::StyledHtml(lines) => {
-                                content_box.child(
-                                    rich_preview::render_styled_html_lines(lines, text_1),
-                                )
-                            }
-                            RichPreview::Plain(preview) => content_box.child(preview),
-                        }
-                    }
-                }
-                ContentType::File => {
-                    let file_data: FileData =
-                        serde_json::from_str(&item.file_data).unwrap_or_default();
-                    let files: Vec<FileInfo> = file_data.files;
-                    let multi = files.len() > 1;
-                    div()
-                        .flex_1()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.))
-                        .overflow_hidden()
-                        .children(files.iter().take(4).map(|fi| {
-                            let (stem, ext) = if fi.is_dir {
-                                (fi.name.clone(), String::new())
-                            } else {
-                                split_name_ext(&fi.name)
-                            };
-                            let cached_icon = cached_file_icon_path(&fi.path, fi.is_dir);
-                            let fallback_icon =
-                                if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
-                            let row = div()
-                                .rounded(px(4.))
-                                .bg(subtle_row_bg)
-                                .px(px(6.))
-                                .py(px(4.))
-                                .flex()
-                                .flex_row()
-                                .gap(px(4.))
-                                .items_center()
-                                .overflow_hidden();
-                            let row = if multi {
-                                row.child(
-                                    div()
-                                        .w(px(14.))
-                                        .h(px(14.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(if let Some(path) = cached_icon {
-                                            gpui::img(path)
-                                                .w(px(14.))
-                                                .h(px(14.))
-                                                .rounded(px(2.))
-                                                .into_any_element()
-                                        } else {
-                                            div()
-                                                .font_family("iconfont")
-                                                .text_size(px(12.))
-                                                .text_color(text_3)
-                                                .child(fallback_icon)
-                                                .into_any_element()
-                                        }),
-                                )
-                            } else {
-                                row
-                            };
-                            row.child(
-                                div()
-                                    .flex_1()
+                            .gap(px(3.))
+                            .overflow_hidden()
+                            .children(files.iter().take(4).map(|fi| {
+                                let (stem, ext) = if fi.is_dir {
+                                    (fi.name.clone(), String::new())
+                                } else {
+                                    split_name_ext(&fi.name)
+                                };
+                                let cached_icon = cached_file_icon_path(&fi.path, fi.is_dir);
+                                let fallback_icon = if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
+                                let row = div()
+                                    .rounded(px(4.))
+                                    .bg(subtle_row_bg)
+                                    .px(px(6.))
+                                    .py(px(4.))
                                     .flex()
                                     .flex_row()
-                                    .gap(px(0.))
-                                    .overflow_hidden()
-                                    .child(
+                                    .gap(px(4.))
+                                    .items_center()
+                                    .overflow_hidden();
+                                let row = if multi {
+                                    row.child(
                                         div()
-                                            .text_size(px(10.))
-                                            .text_color(text_1)
-                                            .whitespace_nowrap()
-                                            .overflow_hidden()
-                                            .child(stem),
+                                            .w(px(14.))
+                                            .h(px(14.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(if let Some(path) = cached_icon {
+                                                gpui::img(path)
+                                                    .w(px(14.))
+                                                    .h(px(14.))
+                                                    .rounded(px(2.))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .font_family("iconfont")
+                                                    .text_size(px(12.))
+                                                    .text_color(text_3)
+                                                    .child(fallback_icon)
+                                                    .into_any_element()
+                                            }),
                                     )
-                                    .child(div().text_size(px(10.)).text_color(text_2).child(ext)),
-                            )
-                        }))
+                                } else {
+                                    row
+                                };
+                                row.child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(0.))
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .text_color(text_1)
+                                                .whitespace_nowrap()
+                                                .overflow_hidden()
+                                                .child(stem),
+                                        )
+                                        .child(
+                                            div().text_size(px(10.)).text_color(text_2).child(ext),
+                                        ),
+                                )
+                            }))
+                    }
                 }
-            }
             } // closes if-else block
         };
 
@@ -1331,21 +1342,13 @@ impl RenderOnce for ClipboardCard {
         if let Some(label) = size_label.as_deref() {
             fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
         }
-        fixed_widths.push(info_pill_width(
-            &time_str,
-            TIME_PILL_PADDING_X,
-            window,
-        ));
+        fixed_widths.push(info_pill_width(&time_str, TIME_PILL_PADDING_X, window));
         let visible_tag_count = visible_tag_count(
             &tag_widths,
             &fixed_widths,
             info_row_available_width(window),
             |hidden_count| {
-                info_pill_width(
-                    &format!("+{hidden_count}"),
-                    INFO_PILL_PADDING_X,
-                    window,
-                )
+                info_pill_width(&format!("+{hidden_count}"), INFO_PILL_PADDING_X, window)
             },
         );
         let hidden_tag_count = tags.len() - visible_tag_count;
@@ -1407,12 +1410,7 @@ impl RenderOnce for ClipboardCard {
                         .px(px(5.))
                         .flex()
                         .items_center()
-                        .child(
-                            div()
-                                .text_size(px(9.))
-                                .text_color(text_2)
-                                .child(label),
-                        ),
+                        .child(div().text_size(px(9.)).text_color(text_2).child(label)),
                 )
             })
             .child(

@@ -10,9 +10,9 @@ use gpui_component::tooltip::Tooltip;
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{ClipboardItem, RichData};
 use crate::state::app::AppState;
-use crate::core::i18n_keys::I18nKey;
 
 use super::rich_preview;
 use super::theme::ClippiTheme;
@@ -207,14 +207,21 @@ impl Render for EditPanel {
                     .items_center()
                     .gap(px(8.))
                     .h(px(36.))
-                    .child(icon_button("\u{e62b}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipBack.text()), {
-                        let this = this.clone();
-                        move |_window, cx| {
-                            this.update(cx, |_panel, cx| {
-                                cx.emit(EditPanelEvent::Back);
-                            });
-                        }
-                    }))
+                    .child(icon_button(
+                        "\u{e62b}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditTooltipBack.text()),
+                        {
+                            let this = this.clone();
+                            move |_window, cx| {
+                                this.update(cx, |_panel, cx| {
+                                    cx.emit(EditPanelEvent::Back);
+                                });
+                            }
+                        },
+                    ))
                     .child(
                         div()
                             .text_size(px(14.))
@@ -258,35 +265,68 @@ impl Render for EditPanel {
                             ),
                     )
                     .child(div().flex_1())
-                    .child(icon_button("\u{e6da}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipUrlDecode.text()), {
-                        let input = content_input.clone();
-                        move |window, cx| {
-                            EditPanel::apply_content_transform(&input, window, cx, |text| {
-                                percent_decode_str(text)
-                                    .decode_utf8()
-                                    .unwrap_or(Cow::Borrowed(text))
-                                    .into_owned()
-                            });
-                        }
-                    }))
-                    .child(icon_button("\u{e66e}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipBase64Decode.text()), {
-                        let input = content_input.clone();
-                        move |window, cx| {
-                            EditPanel::apply_content_transform(&input, window, cx, decode_base64);
-                        }
-                    }))
-                    .child(icon_button("\u{e819}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipJsonFormat.text()), {
-                        let input = content_input.clone();
-                        move |window, cx| {
-                            EditPanel::apply_content_transform(&input, window, cx, json_format);
-                        }
-                    }))
-                    .child(icon_button("\u{e6db}", text_2, accent, hover_bg, Some(I18nKey::EditTooltipTrim.text()), {
-                        let input = content_input.clone();
-                        move |window, cx| {
-                            EditPanel::apply_content_transform(&input, window, cx, trim_text);
-                        }
-                    })),
+                    .child(icon_button(
+                        "\u{e6da}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditTooltipUrlDecode.text()),
+                        {
+                            let input = content_input.clone();
+                            move |window, cx| {
+                                EditPanel::apply_content_transform(&input, window, cx, |text| {
+                                    percent_decode_str(text)
+                                        .decode_utf8()
+                                        .unwrap_or(Cow::Borrowed(text))
+                                        .into_owned()
+                                });
+                            }
+                        },
+                    ))
+                    .child(icon_button(
+                        "\u{e66e}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditTooltipBase64Decode.text()),
+                        {
+                            let input = content_input.clone();
+                            move |window, cx| {
+                                EditPanel::apply_content_transform(
+                                    &input,
+                                    window,
+                                    cx,
+                                    decode_base64,
+                                );
+                            }
+                        },
+                    ))
+                    .child(icon_button(
+                        "\u{e819}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditTooltipJsonFormat.text()),
+                        {
+                            let input = content_input.clone();
+                            move |window, cx| {
+                                EditPanel::apply_content_transform(&input, window, cx, json_format);
+                            }
+                        },
+                    ))
+                    .child(icon_button(
+                        "\u{e6db}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditTooltipTrim.text()),
+                        {
+                            let input = content_input.clone();
+                            move |window, cx| {
+                                EditPanel::apply_content_transform(&input, window, cx, trim_text);
+                            }
+                        },
+                    )),
             )
             .child({
                 let split_ratio = self.split_ratio;
@@ -304,12 +344,15 @@ impl Render for EditPanel {
                             move |ev, window, cx| {
                                 this.update(cx, |panel, cx| {
                                     if let Some(start_y) = panel.split_dragging {
-                                        let delta = f32::from(ev.position.y)
-                                            - f32::from(start_y);
+                                        let delta = f32::from(ev.position.y) - f32::from(start_y);
                                         // 从窗口高度估算内容区高度（减去 header/toolbar/button/gap/padding ≈ 132px）
-                                        let content_h = (f32::from(window.viewport_size().height) - 132.0).max(200.0);
+                                        let content_h = (f32::from(window.viewport_size().height)
+                                            - 132.0)
+                                            .max(200.0);
                                         let delta_ratio = delta / content_h;
-                                        let new_ratio = (panel.split_drag_start_ratio + delta_ratio).clamp(0.15, 0.85);
+                                        let new_ratio = (panel.split_drag_start_ratio
+                                            + delta_ratio)
+                                            .clamp(0.15, 0.85);
                                         panel.split_ratio = new_ratio;
                                         cx.notify();
                                     }
@@ -347,10 +390,8 @@ impl Render for EditPanel {
                                     let this = this.clone();
                                     move |ev, _window, cx| {
                                         this.update(cx, |panel, cx| {
-                                            panel.split_dragging =
-                                                Some(ev.position.y);
-                                            panel.split_drag_start_ratio =
-                                                panel.split_ratio;
+                                            panel.split_dragging = Some(ev.position.y);
+                                            panel.split_drag_start_ratio = panel.split_ratio;
                                             cx.notify();
                                         });
                                     }
@@ -384,12 +425,8 @@ impl Render for EditPanel {
                                 .bg(surface)
                                 .overflow_y_scrollbar()
                                 .child(
-                                    div()
-                                        .pt(px(10.))
-                                        .pb(px(10.))
-                                        .pl(px(10.))
-                                        .pr(px(18.))
-                                        .child(render_rich_preview(
+                                    div().pt(px(10.)).pb(px(10.)).pl(px(10.)).pr(px(18.)).child(
+                                        render_rich_preview(
                                             &selected_type,
                                             &content_text,
                                             self.last_item_id,
@@ -397,7 +434,8 @@ impl Render for EditPanel {
                                             text_1,
                                             window,
                                             cx,
-                                        )),
+                                        ),
+                                    ),
                                 ),
                         )
                     })
@@ -410,20 +448,32 @@ impl Render for EditPanel {
                     .justify_end()
                     .items_center()
                     .gap(px(8.))
-                    .child(text_button(I18nKey::BtnCancel.text(), text_2, divider, rgba(0x00000000), {
-                        let this = this.clone();
-                        move |_window, cx| {
-                            this.update(cx, |_panel, cx| {
-                                cx.emit(EditPanelEvent::Back);
-                            });
-                        }
-                    }))
-                    .child(text_button(I18nKey::EditSave.text(), rgb(0xffffff), accent, accent, {
-                        let this = this.clone();
-                        move |window, cx| {
-                            this.update(cx, |panel, cx| panel.save(window, cx));
-                        }
-                    })),
+                    .child(text_button(
+                        I18nKey::BtnCancel.text(),
+                        text_2,
+                        divider,
+                        rgba(0x00000000),
+                        {
+                            let this = this.clone();
+                            move |_window, cx| {
+                                this.update(cx, |_panel, cx| {
+                                    cx.emit(EditPanelEvent::Back);
+                                });
+                            }
+                        },
+                    ))
+                    .child(text_button(
+                        I18nKey::EditSave.text(),
+                        rgb(0xffffff),
+                        accent,
+                        accent,
+                        {
+                            let this = this.clone();
+                            move |window, cx| {
+                                this.update(cx, |panel, cx| panel.save(window, cx));
+                            }
+                        },
+                    )),
             )
             .when(self.type_menu_open, |panel| {
                 panel
@@ -545,18 +595,16 @@ fn render_rich_preview(
         let stripped = rich_preview::strip_html_links(&normalized);
         if let Some(lines) = rich_preview::parse_styled_html_lines(&stripped) {
             return div()
-                .child(rich_preview::render_styled_html_lines(lines, fallback_color))
+                .child(rich_preview::render_styled_html_lines(
+                    lines,
+                    fallback_color,
+                ))
                 .into_any_element();
         }
-        TextView::html(
-            ("edit-html-preview", preview_key),
-            stripped,
-            window,
-            cx,
-        )
-        .style(style)
-        .selectable(false)
-        .into_any_element()
+        TextView::html(("edit-html-preview", preview_key), stripped, window, cx)
+            .style(style)
+            .selectable(false)
+            .into_any_element()
     } else {
         TextView::markdown(
             ("edit-markdown-preview", preview_key),
@@ -590,10 +638,8 @@ fn icon_button(
         .hover(move |style| style.bg(hover_bg))
         .when_some(tooltip, |button, tip| {
             button.tooltip(move |window, cx| {
-                Tooltip::element(move |_window, _cx| {
-                    div().text_size(px(10.)).child(tip)
-                })
-                .build(window, cx)
+                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tip))
+                    .build(window, cx)
             })
         })
         .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {

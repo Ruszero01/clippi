@@ -12,9 +12,9 @@ use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
-use crate::core::i18n_keys::I18nKey;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
 use super::tag_picker::TagState;
@@ -115,8 +115,12 @@ impl ClipboardListView {
             tag_picker_is_batch: false,
             selected_count: 0,
             editing_note_id: -1,
-            note_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::ListNotePlaceholder.text())),
-            tag_create_input: cx.new(|cx| InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())),
+            note_input: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(I18nKey::ListNotePlaceholder.text())
+            }),
+            tag_create_input: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())
+            }),
             confirm_dialog: None,
             last_selected_id: -1,
             theme,
@@ -159,8 +163,7 @@ impl ClipboardListView {
                 .position(|item| item.id == self.last_selected_id)
             {
                 self.select_index_without_scroll(idx, cx);
-                self.scroll_handle
-                    .scroll_to_item(idx, ScrollStrategy::Top);
+                self.scroll_handle.scroll_to_item(idx, ScrollStrategy::Top);
             }
         }
         // --- Fallback: select first item when nothing else matched ---
@@ -663,8 +666,7 @@ impl ClipboardListView {
             "open_location" => {
                 if let Some(ref item) = self.context_menu_item {
                     let id = item.id;
-                    self.state
-                        .update(cx, |s, _cx| s.open_item_location(id));
+                    self.state.update(cx, |s, _cx| s.open_item_location(id));
                 }
             }
             _ => {}

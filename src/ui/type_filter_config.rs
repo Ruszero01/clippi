@@ -243,8 +243,9 @@ impl Render for TypeFilterConfigPanel {
                                     .cursor(CursorStyle::PointingHand)
                                     .when(is_first, |el| el.opacity(0.2))
                                     .when(!is_first, |el| {
-                                        el.hover(|el| el.bg(arrow_hover))
-                                            .on_mouse_down(MouseButton::Left, {
+                                        el.hover(|el| el.bg(arrow_hover)).on_mouse_down(
+                                            MouseButton::Left,
+                                            {
                                                 let this = this.clone();
                                                 move |_ev, _window, cx| {
                                                     cx.stop_propagation();
@@ -252,7 +253,8 @@ impl Render for TypeFilterConfigPanel {
                                                         panel.move_up(i, cx);
                                                     });
                                                 }
-                                            })
+                                            },
+                                        )
                                     })
                                     .child(
                                         div()
@@ -277,8 +279,9 @@ impl Render for TypeFilterConfigPanel {
                                     .cursor(CursorStyle::PointingHand)
                                     .when(is_last, |el| el.opacity(0.2))
                                     .when(!is_last, |el| {
-                                        el.hover(|el| el.bg(arrow_hover))
-                                            .on_mouse_down(MouseButton::Left, {
+                                        el.hover(|el| el.bg(arrow_hover)).on_mouse_down(
+                                            MouseButton::Left,
+                                            {
                                                 let this = this.clone();
                                                 move |_ev, _window, cx| {
                                                     cx.stop_propagation();
@@ -286,7 +289,8 @@ impl Render for TypeFilterConfigPanel {
                                                         panel.move_down(i, cx);
                                                     });
                                                 }
-                                            })
+                                            },
+                                        )
                                     })
                                     .child(
                                         div()

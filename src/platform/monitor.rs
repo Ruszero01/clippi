@@ -110,11 +110,7 @@ pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
             frame.size.width,
             frame.size.height,
         );
-        if x >= frame.x
-            && x < frame.x + frame.width
-            && y >= frame.y
-            && y < frame.y + frame.height
-        {
+        if x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height {
             target_screen = Some(screen);
             break;
         }
@@ -172,11 +168,7 @@ pub fn is_point_on_monitor(x: i32, y: i32) -> bool {
             frame.size.width,
             frame.size.height,
         );
-        if x >= frame.x
-            && x < frame.x + frame.width
-            && y >= frame.y
-            && y < frame.y + frame.height
-        {
+        if x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height {
             return true;
         }
     }

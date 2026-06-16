@@ -25,8 +25,8 @@ mod sync;
 use data::ResetDataDirState;
 use hotkey::HotkeyConfirmAction;
 
-use crate::state::app::AppState;
 use crate::core::i18n_keys::I18nKey;
+use crate::state::app::AppState;
 use crate::ui::add_backend::AddBackendPanel;
 use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};
 use crate::ui::theme::ClippiTheme;
@@ -45,9 +45,7 @@ pub enum SettingsEvent {
     /// User clicked add/remove blacklist — RootView should show a ConfirmDialog.
     ShowHotkeyConfirm(HotkeyConfirmAction),
     /// User confirmed add/remove paste shortcut — RootView should apply changes.
-    HotkeyPasteShortcut {
-        action: HotkeyConfirmAction,
-    },
+    HotkeyPasteShortcut { action: HotkeyConfirmAction },
     /// Data settings error — RootView should show a toast.
     DataError(String),
 }

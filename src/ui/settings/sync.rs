@@ -7,8 +7,8 @@ use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 use gpui_transitions::WindowUseTransition;
 
-use crate::services::gpui_sync::format_last_sync;
 use crate::core::i18n_keys::I18nKey;
+use crate::services::gpui_sync::format_last_sync;
 use crate::state::sync::BackendStatus;
 use crate::ui::components::toggle::{render_toggle, ToggleColors};
 
@@ -147,12 +147,7 @@ impl SettingsPanel {
                                     panel.open_add(_window, cx);
                                 });
                             })
-                            .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .text_color(accent)
-                                    .child("+"),
-                            )
+                            .child(div().text_size(px(14.)).text_color(accent).child("+"))
                             .child(
                                 div()
                                     .text_size(px(12.))
@@ -407,38 +402,43 @@ impl SettingsPanel {
                     .items_center()
                     .gap(px(4.))
                     .children(
-                        [(30, I18nKey::SyncInterval30s.text()), (60, I18nKey::SyncInterval1m.text()), (600, I18nKey::SyncInterval10m.text()), (1800, I18nKey::SyncInterval30m.text())]
-                            .into_iter()
-                            .map(|(secs, label)| {
-                                let selected = interval == secs;
-                                let id = id.clone();
-                                let wm = wm.clone();
-                                div()
-                                    .flex_1()
-                                    .h(px(20.))
-                                    .rounded(px(6.))
-                                    .bg(if selected { accent } else { rgba(0x00000000) })
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(if selected { rgb(0xffffff) } else { text_2 })
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor(CursorStyle::PointingHand)
-                                    .hover(move |style| {
-                                        if selected {
-                                            style.opacity(0.88)
-                                        } else {
-                                            style.bg(accent_soft)
-                                        }
-                                    })
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        wm.update(cx, |wm, cx| {
-                                            wm.set_backend_sync_interval(&id, secs, cx);
-                                        });
-                                    })
-                                    .child(label)
-                            }),
+                        [
+                            (30, I18nKey::SyncInterval30s.text()),
+                            (60, I18nKey::SyncInterval1m.text()),
+                            (600, I18nKey::SyncInterval10m.text()),
+                            (1800, I18nKey::SyncInterval30m.text()),
+                        ]
+                        .into_iter()
+                        .map(|(secs, label)| {
+                            let selected = interval == secs;
+                            let id = id.clone();
+                            let wm = wm.clone();
+                            div()
+                                .flex_1()
+                                .h(px(20.))
+                                .rounded(px(6.))
+                                .bg(if selected { accent } else { rgba(0x00000000) })
+                                .text_size(px(10.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(if selected { rgb(0xffffff) } else { text_2 })
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |style| {
+                                    if selected {
+                                        style.opacity(0.88)
+                                    } else {
+                                        style.bg(accent_soft)
+                                    }
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                    wm.update(cx, |wm, cx| {
+                                        wm.set_backend_sync_interval(&id, secs, cx);
+                                    });
+                                })
+                                .child(label)
+                        }),
                     )
                     .child(
                         div()

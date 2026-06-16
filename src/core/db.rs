@@ -139,8 +139,13 @@ impl Database {
     /// Falls back to `updated_at` for unknown values and logs a warning.
     fn validate_order_by(order_by: &str) -> &str {
         const ALLOWED: &[&str] = &[
-            "created_at", "updated_at", "content_type", "is_favorite",
-            "image_width", "image_height", "size",
+            "created_at",
+            "updated_at",
+            "content_type",
+            "is_favorite",
+            "image_width",
+            "image_height",
+            "size",
         ];
         if ALLOWED.contains(&order_by) {
             order_by
@@ -527,9 +532,30 @@ impl Database {
 
         // Normalize legacy content_type from old peers (link/path/color → plain_text).
         let (content_type, meta_type) = match item.content_type.as_str() {
-            "link" => ("plain_text", if item.meta_type.is_empty() { "link" } else { item.meta_type.as_str() }),
-            "path" => ("plain_text", if item.meta_type.is_empty() { "path" } else { item.meta_type.as_str() }),
-            "color" => ("plain_text", if item.meta_type.is_empty() { "color" } else { item.meta_type.as_str() }),
+            "link" => (
+                "plain_text",
+                if item.meta_type.is_empty() {
+                    "link"
+                } else {
+                    item.meta_type.as_str()
+                },
+            ),
+            "path" => (
+                "plain_text",
+                if item.meta_type.is_empty() {
+                    "path"
+                } else {
+                    item.meta_type.as_str()
+                },
+            ),
+            "color" => (
+                "plain_text",
+                if item.meta_type.is_empty() {
+                    "color"
+                } else {
+                    item.meta_type.as_str()
+                },
+            ),
             _ => (item.content_type.as_str(), item.meta_type.as_str()),
         };
 

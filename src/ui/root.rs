@@ -103,9 +103,8 @@ impl RootView {
                 cx,
             )
         });
-        let type_filter_config_panel = cx.new(|cx| {
-            TypeFilterConfigPanel::new(state.clone(), search_bar.clone(), window, cx)
-        });
+        let type_filter_config_panel =
+            cx.new(|cx| TypeFilterConfigPanel::new(state.clone(), search_bar.clone(), window, cx));
 
         // Subscribe to WindowManager events for clipboard changes and pin state.
         let _wm_subscription = cx.subscribe(
@@ -317,7 +316,10 @@ impl RootView {
                     }
                     SettingsEvent::HotkeyPasteShortcut { ref action } => {
                         match action {
-                            hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut } => {
+                            hotkey::HotkeyConfirmAction::AddPasteShortcut {
+                                app_name,
+                                shortcut,
+                            } => {
                                 let mut list = this.state.read(cx).settings.paste_shortcuts.clone();
                                 // Remove existing entry for same app (overwrite)
                                 list.retain(|e| e.app_name != *app_name);
@@ -352,10 +354,7 @@ impl RootView {
                     }
                     SettingsEvent::DataError(msg) => {
                         this.state.update(cx, |s, _cx| {
-                            s.toast_message = Some(format!(
-                                "{}: {msg}",
-                                I18nKey::ErrDataOp.text()
-                            ));
+                            s.toast_message = Some(format!("{}: {msg}", I18nKey::ErrDataOp.text()));
                         });
                         cx.notify();
                     }

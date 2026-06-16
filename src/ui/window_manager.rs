@@ -51,8 +51,8 @@ unsafe extern "system" fn clippi_subclass_proc(
     l_param: isize,
 ) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        HTCAPTION, SWP_NOSIZE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCLBUTTONDBLCLK,
-        WM_WINDOWPOSCHANGING, WINDOWPOS,
+        HTCAPTION, SWP_NOSIZE, WINDOWPOS, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCLBUTTONDBLCLK,
+        WM_WINDOWPOSCHANGING,
     };
 
     let original = ORIGINAL_WNDPROC.load(Ordering::Acquire);
@@ -81,12 +81,8 @@ unsafe extern "system" fn clippi_subclass_proc(
     }
 
     // Forward to original window procedure
-    let orig_fn: unsafe extern "system" fn(
-        *mut std::ffi::c_void,
-        u32,
-        usize,
-        isize,
-    ) -> isize = std::mem::transmute(original);
+    let orig_fn: unsafe extern "system" fn(*mut std::ffi::c_void, u32, usize, isize) -> isize =
+        std::mem::transmute(original);
     orig_fn(hwnd, msg, w_param, l_param)
 }
 
@@ -105,10 +101,7 @@ pub enum WindowManagerEvent {
     /// Sync backend status or settings changed.
     SyncChanged,
     /// Paste shortcut recording completed for an app.
-    PasteShortcutRecorded {
-        app_name: String,
-        shortcut: String,
-    },
+    PasteShortcutRecorded { app_name: String, shortcut: String },
     /// Window was hidden — RootView should dismiss all floating panels.
     WindowHidden,
 }

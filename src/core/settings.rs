@@ -375,27 +375,13 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_WRITE)
-        .map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrRegistryOpen.text()
-            )
-        })?;
+        .map_err(|e| format!("{}: {e}", I18nKey::ErrRegistryOpen.text()))?;
 
     if enable {
-        let exe_path = std::env::current_exe().map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrGetExePath.text()
-            )
-        })?;
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrGetExePath.text()))?;
         key.set_value(APP_NAME, &exe_path.to_string_lossy().as_ref())
-            .map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::ErrRegistryWrite.text()
-                )
-            })?;
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrRegistryWrite.text()))?;
     } else {
         let _ = key.delete_value(APP_NAME);
     }
@@ -415,21 +401,13 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
     let plist_path = launch_agent_plist_path().ok_or(I18nKey::ErrLaunchAgentsPath.text())?;
 
     if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrCreateLaunchAgents.text()
-            )
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrCreateLaunchAgents.text()))?;
     }
 
     if enable {
-        let exe_path = std::env::current_exe().map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrGetExePath.text()
-            )
-        })?;
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrGetExePath.text()))?;
         let exe_str = exe_path.to_string_lossy();
 
         let plist_content = format!(
@@ -451,20 +429,12 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
 </plist>"#
         );
 
-        std::fs::write(&plist_path, plist_content).map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrWritePlist.text()
-            )
-        })?;
+        std::fs::write(&plist_path, plist_content)
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrWritePlist.text()))?;
     } else {
         if plist_path.exists() {
-            std::fs::remove_file(&plist_path).map_err(|e| {
-                format!(
-                    "{}: {e}",
-                    I18nKey::ErrDeletePlist.text()
-                )
-            })?;
+            std::fs::remove_file(&plist_path)
+                .map_err(|e| format!("{}: {e}", I18nKey::ErrDeletePlist.text()))?;
         }
     }
 
@@ -497,20 +467,11 @@ pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), St
     }
 
     if let Some(parent) = new_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "{}: {e}",
-                I18nKey::ErrCreateDir.text()
-            )
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("{}: {e}", I18nKey::ErrCreateDir.text()))?;
     }
 
-    std::fs::copy(old_path, new_path).map_err(|e| {
-        format!(
-            "{}: {e}",
-            I18nKey::ErrCopyDb.text()
-        )
-    })?;
+    std::fs::copy(old_path, new_path).map_err(|e| format!("{}: {e}", I18nKey::ErrCopyDb.text()))?;
 
     Ok(())
 }

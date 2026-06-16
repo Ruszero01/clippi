@@ -92,4 +92,3 @@ macro_rules! define_i18n {
         }
     };
 }
-

@@ -13,9 +13,9 @@ use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::tooltip::Tooltip;
 
+use super::SettingsPanel;
 use crate::core::i18n_keys::I18nKey;
 use crate::ui::theme::ClippiTheme;
-use super::SettingsPanel;
 
 /// Confirm action for hotkey settings operations.
 /// Emitted by SettingsPanel, handled by RootView to show ConfirmDialog.
@@ -53,7 +53,11 @@ impl AppListEntry {
     fn render(&self, theme: &ClippiTheme) -> impl IntoElement {
         let icon_path = crate::core::paths::app_icon_path(&self.app_name);
 
-        let entry_border = if self.is_recording_target { theme.accent } else { theme.divider };
+        let entry_border = if self.is_recording_target {
+            theme.accent
+        } else {
+            theme.divider
+        };
         div()
             .h(px(32.))
             .rounded(px(6.))
@@ -111,7 +115,9 @@ impl AppListEntry {
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(|style| style.bg(theme.danger).opacity(0.12))
                                 .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                                    if let Some(ref cb) = on_cancel { cb(window, cx); }
+                                    if let Some(ref cb) = on_cancel {
+                                        cb(window, cx);
+                                    }
                                 })
                                 .child(
                                     div()
@@ -138,9 +144,12 @@ impl AppListEntry {
                                     .cursor(CursorStyle::PointingHand)
                                     .hover(|style| style.opacity(0.8))
                                     .when_some(on_click, |d, cb| {
-                                        d.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                                            cb(window, cx);
-                                        })
+                                        d.on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, window, cx| {
+                                                cb(window, cx);
+                                            },
+                                        )
                                     })
                                     .child(
                                         div()
@@ -199,7 +208,11 @@ impl SettingsPanel {
             None
         };
         let card_h = if is_recording_paste { px(52.) } else { px(44.) };
-        let card_border = if is_recording_paste { theme.accent } else { theme.divider };
+        let card_border = if is_recording_paste {
+            theme.accent
+        } else {
+            theme.divider
+        };
 
         div()
             .h(card_h)
@@ -224,11 +237,7 @@ impl SettingsPanel {
                     .overflow_hidden()
                     .when(has_app, |d| {
                         if let Some(ref path) = icon_path {
-                            d.child(
-                                gpui::img(std::path::Path::new(path))
-                                    .w(px(20.))
-                                    .h(px(20.)),
-                            )
+                            d.child(gpui::img(std::path::Path::new(path)).w(px(20.)).h(px(20.)))
                         } else {
                             d
                         }
@@ -335,41 +344,44 @@ impl SettingsPanel {
                             )
                         })
                         // Paste shortcut button (Windows only; macOS uses Cmd+V consistently).
-                        .when(cfg!(target_os = "windows") && !is_recording_paste, |buttons| {
-                            let on_ps = Rc::new(on_paste_shortcut);
-                            let ps_color = theme.text_2;
-                            buttons.child(
-                                div()
-                                    .id("paste-shortcut-btn")
-                                    .w(px(22.))
-                                    .h(px(22.))
-                                    .rounded(px(5.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor(CursorStyle::PointingHand)
-                                    .hover(|style| style.bg(theme.accent).opacity(0.12))
-                                    .on_mouse_down(MouseButton::Left, {
-                                        let on_ps = on_ps.clone();
-                                        move |_ev, window, cx| on_ps(window, cx)
-                                    })
-                                .tooltip(move |window, cx| {
-                                    Tooltip::element(move |_window, _cx| {
-                                        div()
-                                            .text_size(px(10.))
-                                            .child(I18nKey::HotkeyPasteShortcutEmptyHint.text())
-                                    })
-                                    .build(window, cx)
-                                })
-                                .child(
+                        .when(
+                            cfg!(target_os = "windows") && !is_recording_paste,
+                            |buttons| {
+                                let on_ps = Rc::new(on_paste_shortcut);
+                                let ps_color = theme.text_2;
+                                buttons.child(
                                     div()
-                                        .font_family("iconfont")
-                                        .text_size(px(13.))
-                                        .text_color(ps_color)
-                                        .child("\u{e66b}"),
+                                        .id("paste-shortcut-btn")
+                                        .w(px(22.))
+                                        .h(px(22.))
+                                        .rounded(px(5.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(|style| style.bg(theme.accent).opacity(0.12))
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let on_ps = on_ps.clone();
+                                            move |_ev, window, cx| on_ps(window, cx)
+                                        })
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::element(move |_window, _cx| {
+                                                div().text_size(px(10.)).child(
+                                                    I18nKey::HotkeyPasteShortcutEmptyHint.text(),
+                                                )
+                                            })
+                                            .build(window, cx)
+                                        })
+                                        .child(
+                                            div()
+                                                .font_family("iconfont")
+                                                .text_size(px(13.))
+                                                .text_color(ps_color)
+                                                .child("\u{e66b}"),
+                                        ),
                                 )
-                            )
-                        })
+                            },
+                        )
                         // Blacklist button
                         .child({
                             let on_bl = Rc::new(on_blacklist);
@@ -602,7 +614,9 @@ impl SettingsPanel {
                 // When recording was triggered from the bar button, show recording
                 // effect on the bar itself (matches foreground app).
                 let recording_on_bar = is_recording_paste
-                    && self.recording_paste_shortcut.as_deref()
+                    && self
+                        .recording_paste_shortcut
+                        .as_deref()
                         .map(|a| a.eq_ignore_ascii_case(&fg_app_name))
                         .unwrap_or(false);
                 let app_name_ps = fg_app_name.clone();
@@ -685,70 +699,69 @@ impl SettingsPanel {
                 )
             })
             // 4. Paste shortcut section (Windows only)
-            .when(cfg!(target_os = "windows"), |root| root.child({
-                let this = this.clone();
-                let wm_ps = wm.clone();
-                let this_ps_cancel = this.clone();
-                let entries: Vec<AppListEntry> = paste_shortcuts
-                    .iter()
-                    .map(|entry| {
-                        let name = entry.app_name.clone();
-                        let sc = entry.shortcut.clone();
-                        let this_del = this.clone();
-                        let this_re = this.clone();
-                        let name_re = name.clone();
-                        let is_target = is_recording_paste
-                            && self.recording_paste_shortcut.as_deref()
-                                .map(|a| a.eq_ignore_ascii_case(&name))
-                                .unwrap_or(false);
-                        let wm_c = wm_ps.clone();
-                        let this_c = this_ps_cancel.clone();
-                        AppListEntry {
-                            app_name: name.clone(),
-                            shortcut: Some(sc.clone()),
-                            is_recording_target: is_target,
-                            on_cancel_recording: if is_target {
-                                Some(Rc::new(move |_window, cx| {
-                                    wm_c.update(cx, |wm, _cx| {
-                                        wm.cancel_paste_shortcut_recording();
+            .when(cfg!(target_os = "windows"), |root| {
+                root.child({
+                    let this = this.clone();
+                    let wm_ps = wm.clone();
+                    let this_ps_cancel = this.clone();
+                    let entries: Vec<AppListEntry> = paste_shortcuts
+                        .iter()
+                        .map(|entry| {
+                            let name = entry.app_name.clone();
+                            let sc = entry.shortcut.clone();
+                            let this_del = this.clone();
+                            let this_re = this.clone();
+                            let name_re = name.clone();
+                            let is_target = is_recording_paste
+                                && self
+                                    .recording_paste_shortcut
+                                    .as_deref()
+                                    .map(|a| a.eq_ignore_ascii_case(&name))
+                                    .unwrap_or(false);
+                            let wm_c = wm_ps.clone();
+                            let this_c = this_ps_cancel.clone();
+                            AppListEntry {
+                                app_name: name.clone(),
+                                shortcut: Some(sc.clone()),
+                                is_recording_target: is_target,
+                                on_cancel_recording: if is_target {
+                                    Some(Rc::new(move |_window, cx| {
+                                        wm_c.update(cx, |wm, _cx| {
+                                            wm.cancel_paste_shortcut_recording();
+                                        });
+                                        this_c.update(cx, |panel, cx| {
+                                            panel.clear_paste_shortcut_state(cx);
+                                        });
+                                    }))
+                                } else {
+                                    None
+                                },
+                                on_delete: Rc::new(move |_window, cx| {
+                                    this_del.update(cx, |_panel, cx| {
+                                        cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                            HotkeyConfirmAction::RemovePasteShortcut {
+                                                app_name: name.clone(),
+                                            },
+                                        ));
                                     });
-                                    this_c.update(cx, |panel, cx| {
-                                        panel.clear_paste_shortcut_state(cx);
+                                }),
+                                on_shortcut_click: Some(Rc::new(move |_window, cx| {
+                                    this_re.update(cx, |panel, cx| {
+                                        panel.recording_paste_shortcut = Some(name_re.clone());
+                                        panel.window_manager.update(cx, |wm, _cx| {
+                                            wm.start_paste_shortcut_recording(name_re.clone());
+                                        });
+                                        cx.notify();
                                     });
-                                }))
-                            } else {
-                                None
-                            },
-                            on_delete: Rc::new(move |_window, cx| {
-                                this_del.update(cx, |_panel, cx| {
-                                    cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                        HotkeyConfirmAction::RemovePasteShortcut {
-                                            app_name: name.clone(),
-                                        },
-                                    ));
-                                });
-                            }),
-                            on_shortcut_click: Some(Rc::new(move |_window, cx| {
-                                this_re.update(cx, |panel, cx| {
-                                    panel.recording_paste_shortcut = Some(name_re.clone());
-                                    panel.window_manager.update(cx, |wm, _cx| {
-                                        wm.start_paste_shortcut_recording(name_re.clone());
-                                    });
-                                    cx.notify();
-                                });
-                            })),
-                        }
-                    })
-                    .collect();
-                let ps_title = I18nKey::HotkeyPasteShortcut.text();
-                let ps_hint = I18nKey::HotkeyPasteShortcutEmptyHint.text();
-                #[allow(clippy::needless_borrow)]
-                Self::render_per_app_list_section(
-                    &ps_title,
-                    &ps_hint,
-                    &entries,
-                    theme,
-                )
-            }))
+                                })),
+                            }
+                        })
+                        .collect();
+                    let ps_title = I18nKey::HotkeyPasteShortcut.text();
+                    let ps_hint = I18nKey::HotkeyPasteShortcutEmptyHint.text();
+                    #[allow(clippy::needless_borrow)]
+                    Self::render_per_app_list_section(&ps_title, &ps_hint, &entries, theme)
+                })
+            })
     }
 }

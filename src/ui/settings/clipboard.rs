@@ -4,8 +4,8 @@
 
 use gpui::*;
 
-use crate::core::i18n_keys::I18nKey;
 use super::SettingsPanel;
+use crate::core::i18n_keys::I18nKey;
 
 impl SettingsPanel {
     pub fn render_clipboard_tab(
