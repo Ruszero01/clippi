@@ -52,13 +52,21 @@ fn init_logging() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredStartupAction {
     InitializeHotkey,
-    HideWindow,
+    /// Release items list + checkpoint + trim working set.
+    /// Used when the window starts hidden (silent_start) to keep
+    /// memory low without calling hide() (which would be redundant).
+    ReleaseMemory,
 }
 
 fn deferred_startup_actions(silent_start: bool) -> Vec<DeferredStartupAction> {
     let mut actions = vec![DeferredStartupAction::InitializeHotkey];
     if silent_start {
-        actions.push(DeferredStartupAction::HideWindow);
+        // Window is created hidden via WindowOptions { show: false }.
+        // release_memory() drops the in-memory items list, checkpoints
+        // the WAL, and trims the process working set — same cleanup
+        // that hide() normally does, but without the platform show/hide
+        // call (the window is already hidden).
+        actions.push(DeferredStartupAction::ReleaseMemory);
     }
     actions
 }
@@ -270,6 +278,11 @@ fn main() {
         // --- Origin is centered on the primary monitor as a sensible default; ---
         // --- the platform-specific positioning in show_and_focus will move it ---
         // --- to the correct FollowMouse / Remember position on first show. ---
+        // --- When silent_start is enabled, create the window hidden ---
+        // --- (show: false, focus: false) to avoid a one-frame flash ---
+        // --- of the window outline and taskbar icon before the deferred ---
+        // --- hide takes effect.  The window is shown later via ---
+        // --- WindowManager::show_and_focus() (hotkey / tray). ---
         let window_options = WindowOptions {
             window_background: WindowBackgroundAppearance::Transparent,
             titlebar: Some(TitlebarOptions {
@@ -290,6 +303,8 @@ fn main() {
                 px(core::frontend::MIN_WINDOW_WIDTH),
                 px(core::frontend::MIN_WINDOW_HEIGHT),
             )),
+            show: !settings.silent_start,
+            focus: !settings.silent_start,
             ..Default::default()
         };
 
@@ -429,8 +444,8 @@ fn main() {
                         DeferredStartupAction::InitializeHotkey => {
                             wm.update(cx, |wm, cx| wm.init_hotkey(cx));
                         }
-                        DeferredStartupAction::HideWindow => {
-                            wm.update(cx, |wm, cx| wm.hide(cx));
+                        DeferredStartupAction::ReleaseMemory => {
+                            wm.update(cx, |wm, cx| wm.release_memory(cx));
                         }
                     });
                 }
@@ -457,15 +472,19 @@ mod tests {
 
     #[test]
     fn startup_always_initializes_hotkey_after_window_setup() {
+        // When silent_start is false: only InitializeHotkey is deferred.
         assert_eq!(
             deferred_startup_actions(false),
             vec![DeferredStartupAction::InitializeHotkey]
         );
+        // When silent_start is true: ReleaseMemory follows InitializeHotkey
+        // (the window starts hidden via WindowOptions { show: false }, so
+        // we release the in-memory items without a redundant hide() call).
         assert_eq!(
             deferred_startup_actions(true),
             vec![
                 DeferredStartupAction::InitializeHotkey,
-                DeferredStartupAction::HideWindow,
+                DeferredStartupAction::ReleaseMemory,
             ]
         );
     }

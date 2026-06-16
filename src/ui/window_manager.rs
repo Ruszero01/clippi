@@ -185,7 +185,9 @@ impl WindowManager {
             position_mode: PositionMode::from_str(&settings.window_position_mode),
             pinned: false,
             auto_hide: settings.auto_hide,
-            visible: true,
+            // When silent_start is true the window is created hidden
+            // (WindowOptions { show: false }), so `visible` starts false.
+            visible: !settings.silent_start,
             suppress_until: Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS)),
             hotkey: None,
             focus_watcher,
@@ -790,20 +792,29 @@ impl WindowManager {
         };
     }
 
+    /// Release memory without changing window visibility.
+    ///
+    /// Used when the window starts hidden (silent_start via
+    /// `WindowOptions { show: false }`) — drops the in-memory items list,
+    /// checkpoints the WAL, and trims the process working set.  This is
+    /// the same cleanup that `hide()` does, but without the platform
+    /// show/hide call.
+    pub fn release_memory(&mut self, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, _cx| state.clear_items());
+        cx.emit(WindowManagerEvent::ClipboardChanged);
+        self.state.update(cx, |state, _cx| {
+            let _ = state.db.checkpoint();
+        });
+        crate::platform::util::trim_process_working_set();
+    }
+
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
         self.dismiss_ui(cx);
         cx.emit(WindowManagerEvent::WindowHidden);
 
-        //  Release memory: clear items list (mirrors Slint release_model_resources)
-        self.state.update(cx, |state, _cx| state.clear_items());
-        cx.emit(WindowManagerEvent::ClipboardChanged);
-
-        // --- Flush WAL and trim working set (mirrors Slint periodic maintenance) ---
-        self.state.update(cx, |state, _cx| {
-            let _ = state.db.checkpoint();
-        });
-        crate::platform::util::trim_process_working_set();
+        // Release memory: clear items, checkpoint, trim (emits ClipboardChanged)
+        self.release_memory(cx);
 
         #[cfg(target_os = "windows")]
         {
