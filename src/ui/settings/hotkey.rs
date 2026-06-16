@@ -30,15 +30,18 @@ pub enum HotkeyConfirmAction {
     RemovePasteShortcut { app_name: String },
 }
 
+/// GPUI callback type alias for per-app list entries.
+type AppCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// Entry in a per-app list (blacklist or paste shortcut).
 struct AppListEntry {
     app_name: String,
     /// For paste shortcut entries, the recorded shortcut string.
     shortcut: Option<String>,
     /// Delete callback: emits remove event.
-    on_delete: Rc<dyn Fn(&mut Window, &mut App)>,
+    on_delete: AppCallback,
     /// For paste shortcut entries: callback when shortcut label is clicked (re-record).
-    on_shortcut_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_shortcut_click: Option<AppCallback>,
 }
 
 impl AppListEntry {
@@ -326,19 +329,24 @@ impl SettingsPanel {
                         d.p(px(4.))
                             .flex()
                             .flex_col()
-                            .gap(px(2.))
+                            .gap(px(4.))
                             .children(entries.iter().map(|e| e.render(theme)))
                     })
                     .when(!has_entries, |d| {
-                        d.flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(theme.text_3)
-                                    .child(empty_hint.to_string()),
-                            )
+                        d.child(
+                            div()
+                                .h(px(list_height))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(theme.text_3)
+                                        .child(empty_hint.to_string()),
+                                ),
+                        )
                     }),
             )
     }
@@ -365,10 +373,10 @@ impl SettingsPanel {
 
         let theme = &self.theme;
         let has_fg = !fg_app_name.is_empty();
-        let is_any_recording = recording || is_recording_paste;
 
-        // Recording state colors
-        let recording_border = if is_any_recording {
+        // Recording state colors — only for global hotkey (paste shortcut
+        // recording has its own dedicated panel below the foreground app bar).
+        let recording_border = if recording {
             theme.accent
         } else {
             theme.divider
@@ -415,14 +423,12 @@ impl SettingsPanel {
                                     .child(I18nKey::HotkeyTabTitle.text()),
                             )
                             .child({
-                                let desc_color = if is_any_recording {
+                                let desc_color = if recording {
                                     theme.accent
                                 } else {
                                     theme.text_3
                                 };
-                                let desc_text = if is_recording_paste {
-                                    I18nKey::HotkeyPasteShortcutRecording.text()
-                                } else if recording {
+                                let desc_text = if recording {
                                     I18nKey::HotkeyPressToRecord.text()
                                 } else {
                                     I18nKey::HotkeyRecordingIdle.text()
@@ -445,12 +451,12 @@ impl SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .when(!is_any_recording, |d| {
+                            .when(!recording, |d| {
                                 d.cursor(CursorStyle::PointingHand)
                                     .hover(move |style| style.opacity(0.85))
                             })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                if is_any_recording {
+                                if recording {
                                     return;
                                 }
                                 wm.update(cx, |wm, _cx| {
@@ -486,7 +492,7 @@ impl SettingsPanel {
                         this_ps.update(cx, |panel, cx| {
                             panel.recording_paste_shortcut = Some(app_name_ps.clone());
                             panel.window_manager.update(cx, |wm, _cx| {
-                                wm.start_hotkey_recording();
+                                wm.start_paste_shortcut_recording(app_name_ps.clone());
                             });
                             cx.notify();
                         });
@@ -501,6 +507,75 @@ impl SettingsPanel {
                             ));
                         });
                     },
+                )
+            })
+            // 2b. Paste shortcut recording panel (only when recording_paste_shortcut is Some)
+            .when(is_recording_paste, |d| {
+                let recording_app = self.recording_paste_shortcut.clone().unwrap_or_default();
+                let wm = wm.clone();
+                let this = this.clone();
+                d.child(
+                    div()
+                        .h(px(44.))
+                        .rounded(px(10.))
+                        .bg(theme.surface)
+                        .border(px(1.))
+                        .border_color(theme.accent)
+                        .px(px(12.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_1)
+                                        .child(format!(
+                                            "{} {}",
+                                            I18nKey::HotkeyPasteShortcutRecording.text(),
+                                            recording_app
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(theme.accent)
+                                        .child(I18nKey::HotkeyPressToRecord.text()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h(px(26.))
+                                .px(px(10.))
+                                .rounded(px(6.))
+                                .bg(theme.titlebar_bg)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(theme.danger).opacity(0.12))
+                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                    wm.update(cx, |wm, _cx| {
+                                        wm.cancel_paste_shortcut_recording();
+                                    });
+                                    this.update(cx, |panel, cx| {
+                                        panel.clear_paste_shortcut_state(cx);
+                                    });
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_2)
+                                        .child(I18nKey::BtnCancel.text()),
+                                ),
+                        ),
                 )
             })
             // 3. Blacklist section
@@ -529,6 +604,7 @@ impl SettingsPanel {
                     .collect();
                 let blacklist_title = I18nKey::HotkeyBlacklist.text();
                 let blacklist_hint = I18nKey::HotkeyBlacklistEmptyHint.text();
+                #[allow(clippy::needless_borrow)]
                 Self::render_per_app_list_section(
                     &blacklist_title,
                     &blacklist_hint,
@@ -563,7 +639,7 @@ impl SettingsPanel {
                                 this_re.update(cx, |panel, cx| {
                                     panel.recording_paste_shortcut = Some(name_re.clone());
                                     panel.window_manager.update(cx, |wm, _cx| {
-                                        wm.start_hotkey_recording();
+                                        wm.start_paste_shortcut_recording(name_re.clone());
                                     });
                                     cx.notify();
                                 });
@@ -573,6 +649,7 @@ impl SettingsPanel {
                     .collect();
                 let ps_title = I18nKey::HotkeyPasteShortcut.text();
                 let ps_hint = I18nKey::HotkeyPasteShortcutEmptyHint.text();
+                #[allow(clippy::needless_borrow)]
                 Self::render_per_app_list_section(
                     &ps_title,
                     &ps_hint,

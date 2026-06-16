@@ -104,6 +104,11 @@ pub enum WindowManagerEvent {
     HotkeyRecordingComplete,
     /// Sync backend status or settings changed.
     SyncChanged,
+    /// Paste shortcut recording completed for an app.
+    PasteShortcutRecorded {
+        app_name: String,
+        shortcut: String,
+    },
     /// Window was hidden — RootView should dismiss all floating panels.
     WindowHidden,
 }
@@ -134,6 +139,9 @@ pub struct WindowManager {
 
     // --- Hotkey blacklist ---
     blacklist: Vec<String>,
+
+    /// When Some(app_name), the current recording is for a paste shortcut (not global hotkey).
+    pub recording_paste_shortcut_app: Option<String>,
 
     // --- Dependencies ---
     state: Entity<AppState>,
@@ -194,6 +202,7 @@ impl WindowManager {
             saved_w: settings.saved_window_width,
             saved_h: settings.saved_window_height,
             blacklist: settings.hotkey_blacklist.clone(),
+            recording_paste_shortcut_app: None,
             state,
             clipboard_service,
             sync_service,
@@ -287,6 +296,19 @@ impl WindowManager {
             // poll_recording_pressed() returns None when not recording —            // it checks the hotkey's internal is_recording flag directly,
             // --- avoiding any AppState synchronization gap. ---
             if let Some(new_hotkey) = hk.poll_recording_pressed() {
+                // Check if recording for paste shortcut
+                if let Some(app_name) = self.recording_paste_shortcut_app.take() {
+                    hk.finish_recording();
+                    hk.register();
+                    if !new_hotkey.is_empty() {
+                        cx.emit(WindowManagerEvent::PasteShortcutRecorded {
+                            app_name,
+                            shortcut: new_hotkey,
+                        });
+                    }
+                    return;
+                }
+
                 if !new_hotkey.is_empty() {
                     match hk.update_hotkey(&new_hotkey) {
                         Ok(()) => {
@@ -1061,6 +1083,22 @@ impl WindowManager {
             // --- session (which would trigger show_and_focus / reposition). ---
             hk.unregister();
             hk.start_recording();
+        }
+    }
+
+    /// Start recording a paste shortcut for the given app.
+    pub fn start_paste_shortcut_recording(&mut self, app_name: String) {
+        self.recording_paste_shortcut_app = Some(app_name);
+        self.start_hotkey_recording(); // reuse recording infra
+    }
+
+    /// Cancel a paste shortcut recording — re-register the global hotkey
+    /// and clear the recording flag.
+    pub fn cancel_paste_shortcut_recording(&mut self) {
+        self.recording_paste_shortcut_app = None;
+        if let Some(ref mut hk) = self.hotkey {
+            hk.finish_recording();
+            hk.register();
         }
     }
 

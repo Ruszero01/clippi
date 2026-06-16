@@ -145,6 +145,18 @@ impl RootView {
                     });
                     cx.notify();
                 }
+                WindowManagerEvent::PasteShortcutRecorded { app_name, shortcut } => {
+                    this.settings_panel.update(cx, |panel, cx| {
+                        panel.recording_paste_shortcut = None;
+                        cx.emit(SettingsEvent::ShowHotkeyConfirm(
+                            hotkey::HotkeyConfirmAction::AddPasteShortcut {
+                                app_name: app_name.clone(),
+                                shortcut: shortcut.clone(),
+                            },
+                        ));
+                    });
+                    cx.notify();
+                }
                 WindowManagerEvent::WindowHidden => {
                     this.needs_auto_focus = true;
                     this.list_view.update(cx, |list, cx| {
@@ -319,6 +331,7 @@ impl RootView {
                                 });
                                 this.settings_panel.update(cx, |panel, cx| {
                                     panel.clear_paste_shortcut_state(cx);
+                                    panel.clear_hotkey_confirm(cx);
                                 });
                             }
                             hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name } => {
@@ -330,6 +343,7 @@ impl RootView {
                                 });
                                 this.settings_panel.update(cx, |panel, cx| {
                                     panel.clear_paste_shortcut_state(cx);
+                                    panel.clear_hotkey_confirm(cx);
                                 });
                             }
                             _ => {}
@@ -907,8 +921,9 @@ impl Render for RootView {
                                 .on_cancel({
                                     let settings = settings.clone();
                                     move |_window, cx| {
-                                        settings.update(cx, |_panel, cx| {
-                                            _panel.clear_paste_shortcut_state(cx);
+                                        settings.update(cx, |panel, cx| {
+                                            panel.clear_paste_shortcut_state(cx);
+                                            panel.clear_hotkey_confirm(cx);
                                         });
                                     }
                                 })
@@ -933,8 +948,9 @@ impl Render for RootView {
                                 .on_cancel({
                                     let settings = settings.clone();
                                     move |_window, cx| {
-                                        settings.update(cx, |_panel, cx| {
-                                            _panel.clear_paste_shortcut_state(cx);
+                                        settings.update(cx, |panel, cx| {
+                                            panel.clear_paste_shortcut_state(cx);
+                                            panel.clear_hotkey_confirm(cx);
                                         });
                                     }
                                 })

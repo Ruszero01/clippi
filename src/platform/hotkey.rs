@@ -90,6 +90,7 @@ pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
         "." | "period" => Some(Code::Period),
         "/" | "slash" => Some(Code::Slash),
         "`" | "backquote" => Some(Code::Backquote),
+        "insert" | "ins" => Some(Code::Insert),
         _ => None,
     }
 }
@@ -161,6 +162,7 @@ pub(crate) fn key_code_to_name(code: Code) -> &'static str {
         Code::Period => ".",
         Code::Slash => "/",
         Code::Backquote => "`",
+        Code::Insert => "Insert",
         _ => "?",
     }
 }
@@ -433,6 +435,7 @@ mod platform_input {
             (0xBE, Code::Period),       // VK_OEM_PERIOD
             (0xBF, Code::Slash),        // VK_OEM_2
             (0xC0, Code::Backquote),    // VK_OEM_3
+            (0x2D, Code::Insert),       // VK_INSERT
         ];
 
         // SAFETY: `GetAsyncKeyState` is a non-blocking poll callable from
