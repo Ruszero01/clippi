@@ -302,6 +302,14 @@ define_i18n! {
     HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
     HotkeyConfirmRemoveTitle:("确认移除黑名单", "Confirm Remove from Blacklist"),
     HotkeyConfirmRemoveMsg: ("将 {0} 从快捷键黑名单中移除？", "Remove {0} from hotkey blacklist?"),
+    HotkeyPasteShortcut:      ("粘贴快捷键", "Paste shortcut"),
+    HotkeyPasteShortcutEmpty:       ("未添加粘贴快捷键", "No paste shortcuts configured"),
+    HotkeyPasteShortcutEmptyHint:   ("点击 + 为当前应用设置粘贴快捷键", "Click + to set paste shortcut for current app"),
+    HotkeyPasteShortcutRecording:   ("按下快捷键进行录制", "Press shortcut to record"),
+    HotkeyPasteShortcutConfirmAddTitle: ("确认添加粘贴快捷键", "Confirm Add Paste Shortcut"),
+    HotkeyPasteShortcutConfirmAddMsg:   ("为 {0} 设置粘贴快捷键 {1}？", "Set paste shortcut {1} for {0}?"),
+    HotkeyPasteShortcutConfirmRemoveTitle: ("确认移除粘贴快捷键", "Confirm Remove Paste Shortcut"),
+    HotkeyPasteShortcutConfirmRemoveMsg:   ("移除 {0} 的粘贴快捷键设置？", "Remove paste shortcut for {0}?"),
 
     // ─── Sync settings (additional) ───
     SyncTabTitle:           ("同步", "Sync"),
