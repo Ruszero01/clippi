@@ -37,6 +37,12 @@ pub struct EditPanel {
     preview_generation: u64,
     theme: ClippiTheme,
     last_lang_version: u64,
+    /// 编辑器区域占内容区的比例（0.0~1.0），默认 0.5 各占一半
+    split_ratio: f32,
+    /// 正在拖拽分隔手柄时的鼠标起始 Y 坐标（窗口坐标）
+    split_dragging: Option<Pixels>,
+    /// 拖拽开始时的 split_ratio
+    split_drag_start_ratio: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -80,6 +86,9 @@ impl EditPanel {
             preview_generation: 0,
             theme,
             last_lang_version: crate::core::i18n::lang_version(),
+            split_ratio: 0.5,
+            split_dragging: None,
+            split_drag_start_ratio: 0.5,
             _subscriptions,
         }
     }
@@ -279,46 +288,120 @@ impl Render for EditPanel {
                         }
                     })),
             )
-            .child(
+            .child({
+                let split_ratio = self.split_ratio;
+                let is_dragging = self.split_dragging.is_some();
                 div()
                     .flex_1()
                     .flex()
                     .flex_col()
                     .gap(px(8.))
+                    .overflow_hidden()
+                    .when(is_dragging, |el| {
+                        // 拖拽时在整个区域监听鼠标移动和释放，防止鼠标移出手柄后丢失跟踪
+                        el.on_mouse_move({
+                            let this = this.clone();
+                            move |ev, window, cx| {
+                                this.update(cx, |panel, cx| {
+                                    if let Some(start_y) = panel.split_dragging {
+                                        let delta = f32::from(ev.position.y)
+                                            - f32::from(start_y);
+                                        // 从窗口高度估算内容区高度（减去 header/toolbar/button/gap/padding ≈ 132px）
+                                        let content_h = (f32::from(window.viewport_size().height) - 132.0).max(200.0);
+                                        let delta_ratio = delta / content_h;
+                                        let new_ratio = (panel.split_drag_start_ratio + delta_ratio).clamp(0.15, 0.85);
+                                        panel.split_ratio = new_ratio;
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        })
+                        .on_mouse_up(MouseButton::Left, {
+                            let this = this.clone();
+                            move |_ev, _window, cx| {
+                                this.update(cx, |panel, cx| {
+                                    panel.split_dragging = None;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                    })
                     .when(!is_rich_editor, |area| {
                         area.child(editor_box(&content_input, surface, divider, px(0.), true))
                     })
                     .when(is_rich_editor, |area| {
-                        area.child(editor_box(&content_input, surface, divider, px(0.), true))
-                            .child(
-                                div()
-                                    .h(px(150.))
-                                    .rounded(px(8.))
-                                    .border(px(1.))
-                                    .border_color(divider)
-                                    .bg(surface)
-                                    .overflow_hidden()
-                                    .child(
-                                        div().size_full().overflow_y_scrollbar().child(
-                                            div()
-                                                .pt(px(10.))
-                                                .pb(px(10.))
-                                                .pl(px(10.))
-                                                .pr(px(18.))
-                                                .child(render_rich_preview(
-                                                    &selected_type,
-                                                    &content_text,
-                                                    self.last_item_id,
-                                                    preview_generation,
-                                                    text_1,
-                                                    window,
-                                                    cx,
-                                                )),
-                                        ),
-                                    ),
-                            )
-                    }),
-            )
+                        area.child(
+                            editor_box(&content_input, surface, divider, px(0.), false)
+                                .h(relative(split_ratio)),
+                        )
+                        .child(
+                            // 分隔拖拽手柄
+                            div()
+                                .h(px(4.))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::ResizeUpDown)
+                                .on_mouse_down(MouseButton::Left, {
+                                    let this = this.clone();
+                                    move |ev, _window, cx| {
+                                        this.update(cx, |panel, cx| {
+                                            panel.split_dragging =
+                                                Some(ev.position.y);
+                                            panel.split_drag_start_ratio =
+                                                panel.split_ratio;
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .on_mouse_up(MouseButton::Left, {
+                                    let this = this.clone();
+                                    move |_ev, _window, cx| {
+                                        this.update(cx, |panel, cx| {
+                                            panel.split_dragging = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .child(
+                                    // 手柄视觉元素 — hover 时高亮
+                                    div()
+                                        .w(px(32.))
+                                        .h(px(3.))
+                                        .rounded(px(2.))
+                                        .bg(divider)
+                                        .hover(|style| style.bg(accent)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h(px(60.))
+                                .rounded(px(8.))
+                                .border(px(1.))
+                                .border_color(divider)
+                                .bg(surface)
+                                .overflow_y_scrollbar()
+                                .child(
+                                    div()
+                                        .pt(px(10.))
+                                        .pb(px(10.))
+                                        .pl(px(10.))
+                                        .pr(px(18.))
+                                        .child(render_rich_preview(
+                                            &selected_type,
+                                            &content_text,
+                                            self.last_item_id,
+                                            preview_generation,
+                                            text_1,
+                                            window,
+                                            cx,
+                                        )),
+                                ),
+                        )
+                    })
+            })
             .child(
                 div()
                     .h(px(32.))
@@ -437,7 +520,7 @@ fn editor_box(
     if fill {
         box_el.flex_1()
     } else {
-        box_el.h(height).min_h(px(220.))
+        box_el.h(height).min_h(px(80.))
     }
 }
 
