@@ -82,6 +82,11 @@ impl ClipboardFilters {
         self.keyword.as_deref()
     }
 
+    /// Whether a keyword filter is active.
+    pub fn has_keyword(&self) -> bool {
+        self.keyword.is_some()
+    }
+
     /// Toggle a tag filter on/off
     pub fn toggle_tag(&mut self, tag_id: i64) {
         if let Some(pos) = self.tag_ids.iter().position(|&t| t == tag_id) {

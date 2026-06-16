@@ -334,8 +334,8 @@ impl SettingsPanel {
                                     ),
                             )
                         })
-                        // Paste shortcut button (only when not recording)
-                        .when(!is_recording_paste, |buttons| {
+                        // Paste shortcut button (Windows only; macOS uses Cmd+V consistently).
+                        .when(cfg!(target_os = "windows") && !is_recording_paste, |buttons| {
                             let on_ps = Rc::new(on_paste_shortcut);
                             let ps_color = theme.text_2;
                             buttons.child(
@@ -684,8 +684,8 @@ impl SettingsPanel {
                     theme,
                 )
             })
-            // 4. Paste shortcut section
-            .child({
+            // 4. Paste shortcut section (Windows only)
+            .when(cfg!(target_os = "windows"), |root| root.child({
                 let this = this.clone();
                 let wm_ps = wm.clone();
                 let this_ps_cancel = this.clone();
@@ -749,6 +749,6 @@ impl SettingsPanel {
                     &entries,
                     theme,
                 )
-            })
+            }))
     }
 }

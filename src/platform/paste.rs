@@ -15,7 +15,7 @@ use windows_sys::Win32::System::Threading::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY,
+    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     VK_CONTROL, VK_INSERT, VK_SHIFT, VK_V,
 };
 #[cfg(target_os = "windows")]
@@ -30,6 +30,34 @@ const BASE_DELAY_MS: u64 = 50;
 const FOCUS_CHECK_INTERVAL_MS: u64 = 10;
 #[cfg(target_os = "windows")]
 const FOCUS_TIMEOUT_MS: u64 = 500;
+#[cfg(target_os = "windows")]
+const VK_MENU_KEY: u16 = 0x12;
+#[cfg(target_os = "windows")]
+const VK_LWIN_KEY: u16 = 0x5B;
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PasteShortcut {
+    modifiers: Vec<u16>,
+    key: u16,
+}
+
+#[cfg(target_os = "windows")]
+impl PasteShortcut {
+    fn ctrl_v() -> Self {
+        Self {
+            modifiers: vec![VK_CONTROL],
+            key: VK_V,
+        }
+    }
+
+    fn shift_insert() -> Self {
+        Self {
+            modifiers: vec![VK_SHIFT],
+            key: VK_INSERT,
+        }
+    }
+}
 
 /// Detect whether a window is a console/terminal window that doesn't support Ctrl+V.
 ///
@@ -101,15 +129,13 @@ fn get_process_name_from_hwnd(hwnd: windows_sys::Win32::Foundation::HWND) -> Opt
 /// 1. User-configured per-process shortcut (highest priority)
 /// 2. Smart detection of console/terminal windows → Shift+Insert
 /// 3. Default: Ctrl+V
-///
-/// Returns true if Shift+Insert should be used, false for Ctrl+V.
 #[cfg(target_os = "windows")]
 fn resolve_paste_shortcut(
     target_hwnd: Option<usize>,
     paste_shortcuts: &[crate::core::settings::PasteShortcutEntry],
-) -> bool {
+) -> PasteShortcut {
     let Some(hwnd) = target_hwnd else {
-        return false;
+        return PasteShortcut::ctrl_v();
     };
     let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
 
@@ -118,8 +144,15 @@ fn resolve_paste_shortcut(
         if let Some(proc_name) = get_process_name_from_hwnd(hwnd) {
             for entry in paste_shortcuts {
                 if entry.app_name.eq_ignore_ascii_case(&proc_name) {
-                    // If shortcut contains "shift" it's likely Shift+Insert
-                    return entry.shortcut.to_lowercase().contains("shift");
+                    if let Some(shortcut) = parse_windows_paste_shortcut(&entry.shortcut) {
+                        return shortcut;
+                    }
+                    log::warn!(
+                        "Invalid paste shortcut {:?} for app {:?}; falling back to default paste",
+                        entry.shortcut,
+                        entry.app_name
+                    );
+                    return PasteShortcut::ctrl_v();
                 }
             }
         }
@@ -127,111 +160,164 @@ fn resolve_paste_shortcut(
 
     // 2. Smart detection: console/terminal → Shift+Insert
     if is_console_window(hwnd) {
-        return true;
+        return PasteShortcut::shift_insert();
     }
 
     // 3. Default: Ctrl+V
-    false
+    PasteShortcut::ctrl_v()
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_paste_shortcut(value: &str) -> Option<PasteShortcut> {
+    let mut modifiers = Vec::new();
+    let mut key = None;
+
+    for part in value.trim().split('+') {
+        let part = part.trim().to_lowercase();
+        match part.as_str() {
+            "ctrl" | "control" => push_unique(&mut modifiers, VK_CONTROL),
+            "alt" | "option" => push_unique(&mut modifiers, VK_MENU_KEY),
+            "shift" => push_unique(&mut modifiers, VK_SHIFT),
+            "win" | "cmd" | "command" | "super" | "meta" => {
+                push_unique(&mut modifiers, VK_LWIN_KEY)
+            }
+            name => key = windows_key_name_to_vk(name),
+        }
+    }
+
+    key.map(|key| PasteShortcut { modifiers, key })
+}
+
+#[cfg(target_os = "windows")]
+fn push_unique(values: &mut Vec<u16>, value: u16) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_key_name_to_vk(name: &str) -> Option<u16> {
+    match name {
+        "a" => Some(0x41),
+        "b" => Some(0x42),
+        "c" => Some(0x43),
+        "d" => Some(0x44),
+        "e" => Some(0x45),
+        "f" => Some(0x46),
+        "g" => Some(0x47),
+        "h" => Some(0x48),
+        "i" => Some(0x49),
+        "j" => Some(0x4A),
+        "k" => Some(0x4B),
+        "l" => Some(0x4C),
+        "m" => Some(0x4D),
+        "n" => Some(0x4E),
+        "o" => Some(0x4F),
+        "p" => Some(0x50),
+        "q" => Some(0x51),
+        "r" => Some(0x52),
+        "s" => Some(0x53),
+        "t" => Some(0x54),
+        "u" => Some(0x55),
+        "v" => Some(VK_V),
+        "w" => Some(0x57),
+        "x" => Some(0x58),
+        "y" => Some(0x59),
+        "z" => Some(0x5A),
+        "0" => Some(0x30),
+        "1" => Some(0x31),
+        "2" => Some(0x32),
+        "3" => Some(0x33),
+        "4" => Some(0x34),
+        "5" => Some(0x35),
+        "6" => Some(0x36),
+        "7" => Some(0x37),
+        "8" => Some(0x38),
+        "9" => Some(0x39),
+        "f1" => Some(0x70),
+        "f2" => Some(0x71),
+        "f3" => Some(0x72),
+        "f4" => Some(0x73),
+        "f5" => Some(0x74),
+        "f6" => Some(0x75),
+        "f7" => Some(0x76),
+        "f8" => Some(0x77),
+        "f9" => Some(0x78),
+        "f10" => Some(0x79),
+        "f11" => Some(0x7A),
+        "f12" => Some(0x7B),
+        "space" => Some(0x20),
+        "tab" => Some(0x09),
+        "enter" | "return" => Some(0x0D),
+        "esc" | "escape" => Some(0x1B),
+        "backspace" => Some(0x08),
+        "=" | "equal" => Some(0xBB),
+        "-" | "minus" => Some(0xBD),
+        "[" | "bracketleft" => Some(0xDB),
+        "]" | "bracketright" => Some(0xDD),
+        "'" | "quote" => Some(0xDE),
+        ";" | "semicolon" => Some(0xBA),
+        "\\" | "backslash" => Some(0xDC),
+        "," | "comma" => Some(0xBC),
+        "." | "period" => Some(0xBE),
+        "/" | "slash" => Some(0xBF),
+        "`" | "backquote" => Some(0xC0),
+        "insert" | "ins" => Some(VK_INSERT),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_extended_key(vk: u16) -> bool {
+    vk == VK_INSERT || vk == VK_LWIN_KEY
 }
 
 /// Send the paste keystroke via SendInput.
-/// When `use_shift_insert` is true, sends Shift+Insert instead of Ctrl+V.
 #[cfg(target_os = "windows")]
-fn send_paste_keystroke(use_shift_insert: bool) {
+fn send_paste_keystroke(shortcut: &PasteShortcut) {
     // SAFETY: `SendInput` with a correctly-initialised INPUT array is the standard
     // Windows API for synthesizing keyboard input. All INPUT structs are fully
     // initialised via zeroed() + field assignment before the call, and the array
     // size matches the count parameter.
     unsafe {
-        if use_shift_insert {
-            let mut inputs: [INPUT; 4] = std::mem::zeroed();
+        let input_count = (shortcut.modifiers.len() + 1) * 2;
+        let mut inputs: Vec<INPUT> = (0..input_count).map(|_| std::mem::zeroed()).collect();
+        let mut idx = 0;
 
-            // Shift down
-            inputs[0].r#type = INPUT_KEYBOARD;
-            inputs[0].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_SHIFT,
-                wScan: 0,
-                dwFlags: 0,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            // Insert down (extended key)
-            inputs[1].r#type = INPUT_KEYBOARD;
-            inputs[1].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_INSERT,
-                wScan: 0,
-                dwFlags: KEYEVENTF_EXTENDEDKEY,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            // Insert up (extended key)
-            inputs[2].r#type = INPUT_KEYBOARD;
-            inputs[2].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_INSERT,
-                wScan: 0,
-                dwFlags: KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            // Shift up
-            inputs[3].r#type = INPUT_KEYBOARD;
-            inputs[3].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_SHIFT,
-                wScan: 0,
-                dwFlags: KEYEVENTF_KEYUP,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
-        } else {
-            let mut inputs: [INPUT; 4] = std::mem::zeroed();
-
-            // Ctrl down
-            inputs[0].r#type = INPUT_KEYBOARD;
-            inputs[0].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_CONTROL,
-                wScan: 0,
-                dwFlags: 0,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            // V down
-            inputs[1].r#type = INPUT_KEYBOARD;
-            inputs[1].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_V,
-                wScan: 0,
-                dwFlags: 0,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            // V up
-            inputs[2].r#type = INPUT_KEYBOARD;
-            inputs[2].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_V,
-                wScan: 0,
-                dwFlags: KEYEVENTF_KEYUP,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            // Ctrl up
-            inputs[3].r#type = INPUT_KEYBOARD;
-            inputs[3].Anonymous.ki = KEYBDINPUT {
-                wVk: VK_CONTROL,
-                wScan: 0,
-                dwFlags: KEYEVENTF_KEYUP,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-
-            SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+        for &vk in &shortcut.modifiers {
+            set_key_input(&mut inputs[idx], vk, false);
+            idx += 1;
         }
+        set_key_input(&mut inputs[idx], shortcut.key, false);
+        idx += 1;
+        set_key_input(&mut inputs[idx], shortcut.key, true);
+        idx += 1;
+        for &vk in shortcut.modifiers.iter().rev() {
+            set_key_input(&mut inputs[idx], vk, true);
+            idx += 1;
+        }
+
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_key_input(input: &mut INPUT, vk: u16, key_up: bool) {
+    input.r#type = INPUT_KEYBOARD;
+    let mut flags = if key_up { KEYEVENTF_KEYUP } else { 0 };
+    if is_extended_key(vk) {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    input.Anonymous.ki = KEYBDINPUT {
+        wVk: vk,
+        wScan: 0,
+        dwFlags: flags,
+        time: 0,
+        dwExtraInfo: 0,
     }
 }
 
@@ -258,10 +344,10 @@ pub fn paste_after_delay(paste_shortcuts: Arc<Vec<crate::core::settings::PasteSh
     let target_hwnd: Option<usize> =
         crate::platform::focus::get_last_non_clippi_window().map(|h| h as usize);
 
-    let use_shift_insert = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
+    let shortcut = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
 
     std::thread::spawn(move || {
-        wait_for_focus_and_send_paste(target_hwnd, use_shift_insert);
+        wait_for_focus_and_send_paste(target_hwnd, shortcut);
     });
 }
 
@@ -274,14 +360,14 @@ pub fn paste_after_delay(paste_shortcuts: Arc<Vec<crate::core::settings::PasteSh
 pub fn paste_sync(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {
     let target_hwnd: Option<usize> =
         crate::platform::focus::get_last_non_clippi_window().map(|h| h as usize);
-    let use_shift_insert = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
-    wait_for_focus_and_send_paste(target_hwnd, use_shift_insert);
+    let shortcut = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
+    wait_for_focus_and_send_paste(target_hwnd, shortcut);
 }
 
 #[cfg(target_os = "windows")]
 fn wait_for_focus_and_send_paste(
     target_hwnd: Option<usize>,
-    use_shift_insert: bool,
+    shortcut: PasteShortcut,
 ) {
     // Initial delay for SetForegroundWindow to take effect
     std::thread::sleep(std::time::Duration::from_millis(BASE_DELAY_MS));
@@ -307,7 +393,7 @@ fn wait_for_focus_and_send_paste(
         }
     }
 
-    send_paste_keystroke(use_shift_insert);
+    send_paste_keystroke(&shortcut);
 }
 
 #[cfg(any(target_os = "macos", test))]

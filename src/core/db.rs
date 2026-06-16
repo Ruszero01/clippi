@@ -159,14 +159,38 @@ impl Database {
         limit: usize,
         order_by: &str,
     ) -> SqlResult<Vec<ClipboardItem>> {
+        self.load_filtered_inner(filters, Some(limit), order_by)
+    }
+
+    /// Load every item matching the current filters, without a display limit.
+    ///
+    /// Used by keyword search so Rust-side pinyin/rich-data/tag matching can
+    /// inspect the full candidate set before narrowing results.
+    pub fn load_filtered_unlimited(
+        &self,
+        filters: &ClipboardFilters,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        self.load_filtered_inner(filters, None, order_by)
+    }
+
+    fn load_filtered_inner(
+        &self,
+        filters: &ClipboardFilters,
+        limit: Option<usize>,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
         let order_col = Self::validate_order_by(order_by);
         let (where_clause, mut filter_params) = filters.db_where();
+        let limit_clause = if limit.is_some() { " LIMIT ?" } else { "" };
         let query = format!(
             "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size, meta_type
-             FROM clipboard_items {} ORDER BY {} DESC LIMIT ?",
-            where_clause, order_col
+             FROM clipboard_items {} ORDER BY {} DESC{}",
+            where_clause, order_col, limit_clause
         );
-        filter_params.push((limit as i64).into());
+        if let Some(limit) = limit {
+            filter_params.push((limit as i64).into());
+        }
         let mut stmt = self.conn.prepare(&query)?;
         let items = stmt.query_map(rusqlite::params_from_iter(filter_params), row_to_item)?;
         items.collect()
@@ -430,14 +454,30 @@ impl Database {
         order_by: &str,
     ) -> SqlResult<Vec<ClipboardItem>> {
         let mut items = self.load_filtered(filters, limit, order_by)?;
+        self.fill_tags(&mut items)?;
+        Ok(items)
+    }
+
+    /// Load all matching items with tags pre-filled.
+    pub fn load_filtered_unlimited_with_tags(
+        &self,
+        filters: &ClipboardFilters,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        let mut items = self.load_filtered_unlimited(filters, order_by)?;
+        self.fill_tags(&mut items)?;
+        Ok(items)
+    }
+
+    fn fill_tags(&self, items: &mut [ClipboardItem]) -> SqlResult<()> {
         if !items.is_empty() {
             let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
             let tag_map = self.get_tags_for_items(&ids)?;
-            for item in &mut items {
+            for item in items {
                 item.tags = tag_map.get(&item.id).cloned().unwrap_or_default();
             }
         }
-        Ok(items)
+        Ok(())
     }
 
     pub fn get_by_id_with_tags(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {

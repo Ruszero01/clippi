@@ -70,14 +70,16 @@ pub struct AppState {
     pub sync: SyncState,
 }
 
-/// Pinyin-aware full-text matching for ASCII keywords.
+/// Pinyin-aware text matching.
 ///
-/// When the search keyword is pure ASCII (potential pinyin), this function
-/// checks three forms in order:
+/// This function checks three forms in order:
 /// 1. Direct lowercase substring match (covers English text)
 /// 2. Full pinyin match — "zhongguo" matches "中国"
 /// 3. Pinyin initial match — "zg" matches "中国"
 fn pinyin_match(text: &str, keyword: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
     let kw = keyword.to_lowercase();
 
     // 1. Direct text match — covers English, numbers, symbols
@@ -102,6 +104,33 @@ fn pinyin_match(text: &str, keyword: &str) -> bool {
         .filter_map(|p| p.plain().chars().next())
         .collect();
     initials.contains(&kw)
+}
+
+fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str) -> bool {
+    if pinyin_match(&item.full_text, keyword) {
+        return true;
+    }
+
+    if !item.rich_data.is_empty() {
+        let rich = RichData::from_json(&item.rich_data);
+        let rich_texts = [
+            rich.html.as_deref(),
+            rich.rtf.as_deref(),
+            rich.ocr_text.as_deref(),
+            rich.qr_text.as_deref(),
+        ];
+        if rich_texts
+            .into_iter()
+            .flatten()
+            .any(|text| pinyin_match(text, keyword))
+        {
+            return true;
+        }
+    }
+
+    item.tags
+        .iter()
+        .any(|tag| pinyin_match(&tag.name, keyword))
 }
 
 impl AppState {
@@ -177,19 +206,18 @@ impl AppState {
 
     /// Reload items from database with current filters.
     pub fn reload_items(&mut self) {
-        match self
-            .db
-            .load_filtered_with_tags(&self.filters, self.query_limit(), self.order_by())
-        {
+        let result = if self.filters.has_keyword() {
+            self.db
+                .load_filtered_unlimited_with_tags(&self.filters, self.order_by())
+        } else {
+            self.db
+                .load_filtered_with_tags(&self.filters, self.query_limit(), self.order_by())
+        };
+
+        match result {
             Ok(mut items) => {
-                // Pinyin post-filter: for ASCII keywords (potential pinyin),
-                // apply pinyin-aware matching in Rust. SQL keyword matching is
-                // skipped for ASCII keywords in db_where(), so we get a broader
-                // result set here and narrow it down with pinyin_match.
-                if self.filters.is_keyword_ascii() {
-                    if let Some(kw) = self.filters.keyword() {
-                        items.retain(|item| pinyin_match(&item.full_text, kw));
-                    }
+                if let Some(kw) = self.filters.keyword() {
+                    items.retain(|item| item_matches_keyword(item, kw));
                 }
                 self.items = items;
             }
@@ -1273,7 +1301,7 @@ mod tests {
     use crate::core::db::Database;
     use crate::core::filters::ClipboardFilters;
     use crate::core::settings::AppSettings;
-    use crate::core::types::{ClipboardItem, ContentType};
+    use crate::core::types::{ClipboardItem, ContentType, RichData};
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
@@ -1428,6 +1456,55 @@ mod tests {
     fn setup_tag(state: &mut AppState) -> i64 {
         // Create a tag
         state.db.create_tag("test-tag", "#FF0000").unwrap()
+    }
+
+    #[test]
+    fn keyword_search_scans_all_records_and_matches_rich_data_and_tags() {
+        let (mut state, _dirty) = test_state();
+        let now = chrono::Utc::now();
+
+        for i in 0..205 {
+            let mut item = make_item(i + 1, ContentType::PlainText, false, &format!("noise {i}"));
+            item.created_at = now - chrono::Duration::seconds(i);
+            item.updated_at = item.created_at;
+            state.db.upsert(&item).unwrap();
+        }
+
+        let mut text_item = make_item(300, ContentType::PlainText, false, "buried plain match");
+        text_item.created_at = now - chrono::Duration::days(10);
+        text_item.updated_at = text_item.created_at;
+        state.db.upsert(&text_item).unwrap();
+
+        let mut ocr_item = make_item(301, ContentType::Image, false, "screenshot");
+        ocr_item.rich_data = RichData {
+            ocr_text: Some("buried ocr match".to_string()),
+            ..Default::default()
+        }
+        .to_json();
+        ocr_item.created_at = now - chrono::Duration::days(11);
+        ocr_item.updated_at = ocr_item.created_at;
+        state.db.upsert(&ocr_item).unwrap();
+
+        let mut tagged_item = make_item(302, ContentType::PlainText, false, "tagged item");
+        tagged_item.created_at = now - chrono::Duration::days(12);
+        tagged_item.updated_at = tagged_item.created_at;
+        state.db.upsert(&tagged_item).unwrap();
+        let tagged_id = state
+            .db
+            .get_by_hash(tagged_item.content_hash)
+            .unwrap()
+            .unwrap()
+            .id;
+        let tag_id = state.db.create_tag("buried tag match", "#FF0000").unwrap();
+        state.db.add_item_tag(tagged_id, tag_id).unwrap();
+
+        state.filters.set_keyword("buried");
+        state.reload_items();
+
+        let texts: Vec<&str> = state.items.iter().map(|item| item.full_text.as_str()).collect();
+        assert!(texts.contains(&"buried plain match"));
+        assert!(texts.contains(&"screenshot"));
+        assert!(texts.contains(&"tagged item"));
     }
 
     #[test]
