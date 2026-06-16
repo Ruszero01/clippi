@@ -823,6 +823,7 @@ impl Render for RootView {
             .when(
                 is_settings && self.settings_panel.read(cx).hotkey_confirm.is_some(),
                 |root| {
+                    let dialog_focus = cx.focus_handle();
                     let settings = self.settings_panel.clone();
                     let wm = self.window_manager.clone();
                     let app_state = self.state.clone();
@@ -864,6 +865,7 @@ impl Render for RootView {
                                         });
                                     }
                                 })
+                                .focus_handle(dialog_focus.clone())
                                 .into_any_element()
                         }
                         Some(hotkey::HotkeyConfirmAction::RemoveBlacklist { app_name }) => {
@@ -898,6 +900,7 @@ impl Render for RootView {
                                         });
                                     }
                                 })
+                                .focus_handle(dialog_focus.clone())
                                 .into_any_element()
                         }
                         Some(hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut }) => {
@@ -927,6 +930,7 @@ impl Render for RootView {
                                         });
                                     }
                                 })
+                                .focus_handle(dialog_focus.clone())
                                 .into_any_element()
                         }
                         Some(hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name }) => {
@@ -954,6 +958,7 @@ impl Render for RootView {
                                         });
                                     }
                                 })
+                                .focus_handle(dialog_focus.clone())
                                 .into_any_element()
                         }
                         None => div().into_any_element(),

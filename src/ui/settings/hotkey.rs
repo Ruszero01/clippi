@@ -11,6 +11,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::ui::theme::ClippiTheme;
@@ -42,16 +43,23 @@ struct AppListEntry {
     on_delete: AppCallback,
     /// For paste shortcut entries: callback when shortcut label is clicked (re-record).
     on_shortcut_click: Option<AppCallback>,
+    /// Cancel callback shown when this entry is the recording target.
+    on_cancel_recording: Option<AppCallback>,
+    /// Whether this entry is currently the recording target (accent border).
+    is_recording_target: bool,
 }
 
 impl AppListEntry {
     fn render(&self, theme: &ClippiTheme) -> impl IntoElement {
         let icon_path = crate::core::paths::app_icon_path(&self.app_name);
 
+        let entry_border = if self.is_recording_target { theme.accent } else { theme.divider };
         div()
             .h(px(32.))
             .rounded(px(6.))
             .bg(theme.titlebar_bg)
+            .border(px(1.))
+            .border_color(entry_border)
             .px(px(8.))
             .pr(px(4.))
             .flex()
@@ -81,39 +89,68 @@ impl AppListEntry {
                             .child(self.app_name.clone()),
                     ),
             )
-            // Right: shortcut label (paste entries only) + delete button
+            // Right: shortcut label or cancel button (when recording) + delete button
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .gap(px(4.))
                     .items_center()
-                    .when_some(self.shortcut.as_ref(), |d, sc| {
-                        let sc = sc.clone();
-                        let on_click = self.on_shortcut_click.clone();
+                    // Recording cancel button (replaces shortcut label)
+                    .when(self.is_recording_target, |d| {
+                        let on_cancel = self.on_cancel_recording.clone();
                         d.child(
                             div()
+                                .id("entry-cancel-btn")
+                                .w(px(22.))
                                 .h(px(22.))
                                 .rounded(px(5.))
-                                .px(px(6.))
-                                .bg(theme.accent_soft)
                                 .flex()
                                 .items_center()
+                                .justify_center()
                                 .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.opacity(0.8))
-                                .when_some(on_click, |d, cb| {
-                                    d.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                                        cb(window, cx);
-                                    })
+                                .hover(|style| style.bg(theme.danger).opacity(0.12))
+                                .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                    if let Some(ref cb) = on_cancel { cb(window, cx); }
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.accent)
-                                        .child(sc),
+                                        .font_family("iconfont")
+                                        .text_size(px(13.))
+                                        .text_color(theme.danger)
+                                        .child("\u{e7b7}"),
                                 ),
                         )
+                    })
+                    // Shortcut label (not recording)
+                    .when(!self.is_recording_target, |d| {
+                        d.when_some(self.shortcut.as_ref(), |d, sc| {
+                            let sc = sc.clone();
+                            let on_click = self.on_shortcut_click.clone();
+                            d.child(
+                                div()
+                                    .h(px(22.))
+                                    .rounded(px(5.))
+                                    .px(px(6.))
+                                    .bg(theme.accent_soft)
+                                    .flex()
+                                    .items_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|style| style.opacity(0.8))
+                                    .when_some(on_click, |d, cb| {
+                                        d.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                            cb(window, cx);
+                                        })
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.accent)
+                                            .child(sc),
+                                    ),
+                            )
+                        })
                     })
                     .child({
                         let on_delete = self.on_delete.clone();
@@ -145,12 +182,15 @@ impl SettingsPanel {
     /// Render the shared foreground app info bar.
     ///
     /// Layout: [app icon] AppName — WindowTitle [⊞ paste btn] [⊘ blacklist btn]
+    #[allow(clippy::too_many_arguments)]
     fn render_foreground_app_bar(
         fg_app_name: &str,
         fg_window_title: &str,
         theme: &ClippiTheme,
         has_app: bool,
+        is_recording_paste: bool,
         on_paste_shortcut: impl Fn(&mut Window, &mut App) + 'static,
+        on_cancel_recording: impl Fn(&mut Window, &mut App) + 'static,
         on_blacklist: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         let icon_path = if has_app {
@@ -158,20 +198,22 @@ impl SettingsPanel {
         } else {
             None
         };
+        let card_h = if is_recording_paste { px(52.) } else { px(44.) };
+        let card_border = if is_recording_paste { theme.accent } else { theme.divider };
 
         div()
-            .h(px(44.))
+            .h(card_h)
             .rounded(px(10.))
             .bg(theme.surface)
             .border(px(1.))
-            .border_color(theme.divider)
+            .border_color(card_border)
             .px(px(12.))
             .pr(px(6.))
             .flex()
             .flex_row()
             .items_center()
             .justify_between()
-            // Left: icon + app name + window title
+            // Left: icon + text block (flex_col when recording for second line)
             .child(
                 div()
                     .flex()
@@ -195,27 +237,47 @@ impl SettingsPanel {
                         d.child(
                             div()
                                 .flex()
-                                .flex_row()
-                                .gap(px(0.))
-                                .items_center()
+                                .flex_col()
+                                .gap(px(1.))
                                 .overflow_hidden()
                                 .flex_1()
+                                // Row 1: app name + window title
                                 .child(
                                     div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_1)
-                                        .child(fg_app_name.to_string()),
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(0.))
+                                        .items_center()
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.text_1)
+                                                .child(fg_app_name.to_string()),
+                                        )
+                                        .when(!fg_window_title.is_empty(), |d| {
+                                            d.child(
+                                                div()
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.text_3)
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .flex_1()
+                                                    .child(format!(
+                                                        " \u{2014} {}",
+                                                        fg_window_title
+                                                    )),
+                                            )
+                                        }),
                                 )
-                                .when(!fg_window_title.is_empty(), |d| {
+                                // Row 2: recording hint (only when recording)
+                                .when(is_recording_paste, |d| {
                                     d.child(
                                         div()
-                                            .text_size(px(11.))
-                                            .text_color(theme.text_3)
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .flex_1()
-                                            .child(format!(" \u{2014} {}", fg_window_title)),
+                                            .text_size(px(10.))
+                                            .text_color(theme.accent)
+                                            .child(I18nKey::HotkeyPasteShortcutRecording.text()),
                                     )
                                 }),
                         )
@@ -229,45 +291,93 @@ impl SettingsPanel {
                         )
                     }),
             )
-            // Right: two buttons
+            // Right: buttons
             .when(has_app, |d| {
                 d.child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap(px(4.))
+                        .gap(px(2.))
                         .items_center()
-                        // Paste shortcut button
-                        .child({
+                        // Cancel button (replaces paste shortcut button when recording)
+                        .when(is_recording_paste, |buttons| {
+                            let on_cancel = Rc::new(on_cancel_recording);
+                            buttons.child(
+                                div()
+                                    .id("cancel-recording-btn")
+                                    .w(px(22.))
+                                    .h(px(22.))
+                                    .rounded(px(5.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|style| style.bg(theme.danger).opacity(0.12))
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let on_cancel = on_cancel.clone();
+                                        move |_ev, window, cx| on_cancel(window, cx)
+                                    })
+                                    .tooltip(move |window, cx| {
+                                        Tooltip::element(move |_window, _cx| {
+                                            div()
+                                                .text_size(px(10.))
+                                                .child(I18nKey::BtnCancel.text())
+                                        })
+                                        .build(window, cx)
+                                    })
+                                    .child(
+                                        div()
+                                            .font_family("iconfont")
+                                            .text_size(px(13.))
+                                            .text_color(theme.danger)
+                                            .child("\u{e7b7}"),
+                                    ),
+                            )
+                        })
+                        // Paste shortcut button (only when not recording)
+                        .when(!is_recording_paste, |buttons| {
                             let on_ps = Rc::new(on_paste_shortcut);
-                            div()
-                                .w(px(26.))
-                                .h(px(26.))
-                                .rounded(px(6.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.bg(theme.accent).opacity(0.12))
-                                .on_mouse_down(MouseButton::Left, {
-                                    let on_ps = on_ps.clone();
-                                    move |_ev, window, cx| on_ps(window, cx)
+                            let ps_color = theme.text_2;
+                            buttons.child(
+                                div()
+                                    .id("paste-shortcut-btn")
+                                    .w(px(22.))
+                                    .h(px(22.))
+                                    .rounded(px(5.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|style| style.bg(theme.accent).opacity(0.12))
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let on_ps = on_ps.clone();
+                                        move |_ev, window, cx| on_ps(window, cx)
+                                    })
+                                .tooltip(move |window, cx| {
+                                    Tooltip::element(move |_window, _cx| {
+                                        div()
+                                            .text_size(px(10.))
+                                            .child(I18nKey::HotkeyPasteShortcutEmptyHint.text())
+                                    })
+                                    .build(window, cx)
                                 })
                                 .child(
                                     div()
                                         .font_family("iconfont")
-                                        .text_size(px(14.))
-                                        .text_color(theme.accent)
-                                        .child("\u{e623}"),
+                                        .text_size(px(13.))
+                                        .text_color(ps_color)
+                                        .child("\u{e66b}"),
                                 )
+                            )
                         })
                         // Blacklist button
                         .child({
                             let on_bl = Rc::new(on_blacklist);
                             div()
-                                .w(px(26.))
-                                .h(px(26.))
-                                .rounded(px(6.))
+                                .id("blacklist-btn")
+                                .w(px(22.))
+                                .h(px(22.))
+                                .rounded(px(5.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -277,10 +387,18 @@ impl SettingsPanel {
                                     let on_bl = on_bl.clone();
                                     move |_ev, window, cx| on_bl(window, cx)
                                 })
+                                .tooltip(move |window, cx| {
+                                    Tooltip::element(move |_window, _cx| {
+                                        div()
+                                            .text_size(px(10.))
+                                            .child(I18nKey::HotkeyBlacklistEmptyHint.text())
+                                    })
+                                    .build(window, cx)
+                                })
                                 .child(
                                     div()
                                         .font_family("iconfont")
-                                        .text_size(px(14.))
+                                        .text_size(px(13.))
                                         .text_color(theme.text_2)
                                         .child("\u{e6a7}"),
                                 )
@@ -326,11 +444,14 @@ impl SettingsPanel {
                     .border_color(theme.divider)
                     .overflow_y_scrollbar()
                     .when(has_entries, |d| {
-                        d.p(px(4.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .children(entries.iter().map(|e| e.render(theme)))
+                        d.child(
+                            div()
+                                .p(px(4.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .children(entries.iter().map(|e| e.render(theme))),
+                        )
                     })
                     .when(!has_entries, |d| {
                         d.child(
@@ -476,17 +597,26 @@ impl SettingsPanel {
                             )
                     }),
             )
-            // 2. Shared foreground app info bar
+            // 2. Shared foreground app info bar (always shows current foreground)
             .child({
+                // When recording was triggered from the bar button, show recording
+                // effect on the bar itself (matches foreground app).
+                let recording_on_bar = is_recording_paste
+                    && self.recording_paste_shortcut.as_deref()
+                        .map(|a| a.eq_ignore_ascii_case(&fg_app_name))
+                        .unwrap_or(false);
                 let app_name_ps = fg_app_name.clone();
                 let app_name_bl = fg_app_name.clone();
                 let this_ps = this.clone();
+                let this_cancel = this.clone();
                 let this_bl = this.clone();
+                let wm_cancel = wm.clone();
                 Self::render_foreground_app_bar(
                     &fg_app_name,
                     &fg_window_title,
                     theme,
                     has_fg,
+                    recording_on_bar,
                     // on_paste_shortcut: start paste shortcut recording
                     move |_window, cx| {
                         this_ps.update(cx, |panel, cx| {
@@ -495,6 +625,15 @@ impl SettingsPanel {
                                 wm.start_paste_shortcut_recording(app_name_ps.clone());
                             });
                             cx.notify();
+                        });
+                    },
+                    // on_cancel_recording
+                    move |_window, cx| {
+                        wm_cancel.update(cx, |wm, _cx| {
+                            wm.cancel_paste_shortcut_recording();
+                        });
+                        this_cancel.update(cx, |panel, cx| {
+                            panel.clear_paste_shortcut_state(cx);
                         });
                     },
                     // on_blacklist: emit confirm dialog
@@ -509,75 +648,6 @@ impl SettingsPanel {
                     },
                 )
             })
-            // 2b. Paste shortcut recording panel (only when recording_paste_shortcut is Some)
-            .when(is_recording_paste, |d| {
-                let recording_app = self.recording_paste_shortcut.clone().unwrap_or_default();
-                let wm = wm.clone();
-                let this = this.clone();
-                d.child(
-                    div()
-                        .h(px(44.))
-                        .rounded(px(10.))
-                        .bg(theme.surface)
-                        .border(px(1.))
-                        .border_color(theme.accent)
-                        .px(px(12.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_1)
-                                        .child(format!(
-                                            "{} {}",
-                                            I18nKey::HotkeyPasteShortcutRecording.text(),
-                                            recording_app
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .text_color(theme.accent)
-                                        .child(I18nKey::HotkeyPressToRecord.text()),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .h(px(26.))
-                                .px(px(10.))
-                                .rounded(px(6.))
-                                .bg(theme.titlebar_bg)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.bg(theme.danger).opacity(0.12))
-                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                    wm.update(cx, |wm, _cx| {
-                                        wm.cancel_paste_shortcut_recording();
-                                    });
-                                    this.update(cx, |panel, cx| {
-                                        panel.clear_paste_shortcut_state(cx);
-                                    });
-                                })
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_2)
-                                        .child(I18nKey::BtnCancel.text()),
-                                ),
-                        ),
-                )
-            })
             // 3. Blacklist section
             .child({
                 let this = this.clone();
@@ -589,6 +659,8 @@ impl SettingsPanel {
                         AppListEntry {
                             app_name: name.clone(),
                             shortcut: None,
+                            on_cancel_recording: None,
+                            is_recording_target: false,
                             on_delete: Rc::new(move |_window, cx| {
                                 this_clone.update(cx, |_panel, cx| {
                                     cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
@@ -615,6 +687,8 @@ impl SettingsPanel {
             // 4. Paste shortcut section
             .child({
                 let this = this.clone();
+                let wm_ps = wm.clone();
+                let this_ps_cancel = this.clone();
                 let entries: Vec<AppListEntry> = paste_shortcuts
                     .iter()
                     .map(|entry| {
@@ -623,9 +697,28 @@ impl SettingsPanel {
                         let this_del = this.clone();
                         let this_re = this.clone();
                         let name_re = name.clone();
+                        let is_target = is_recording_paste
+                            && self.recording_paste_shortcut.as_deref()
+                                .map(|a| a.eq_ignore_ascii_case(&name))
+                                .unwrap_or(false);
+                        let wm_c = wm_ps.clone();
+                        let this_c = this_ps_cancel.clone();
                         AppListEntry {
                             app_name: name.clone(),
                             shortcut: Some(sc.clone()),
+                            is_recording_target: is_target,
+                            on_cancel_recording: if is_target {
+                                Some(Rc::new(move |_window, cx| {
+                                    wm_c.update(cx, |wm, _cx| {
+                                        wm.cancel_paste_shortcut_recording();
+                                    });
+                                    this_c.update(cx, |panel, cx| {
+                                        panel.clear_paste_shortcut_state(cx);
+                                    });
+                                }))
+                            } else {
+                                None
+                            },
                             on_delete: Rc::new(move |_window, cx| {
                                 this_del.update(cx, |_panel, cx| {
                                     cx.emit(super::SettingsEvent::ShowHotkeyConfirm(

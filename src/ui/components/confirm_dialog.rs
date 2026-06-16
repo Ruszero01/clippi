@@ -15,6 +15,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use crate::core::i18n_keys::I18nKey;
 
@@ -34,6 +35,7 @@ pub struct ConfirmDialog {
     theme: ClippiTheme,
     on_confirm: Option<DialogHandler>,
     on_cancel: Option<DialogHandler>,
+    focus_handle: Option<FocusHandle>,
 }
 
 impl ConfirmDialog {
@@ -47,6 +49,7 @@ impl ConfirmDialog {
             theme: ClippiTheme::dark(),
             on_confirm: None,
             on_cancel: None,
+            focus_handle: None,
         }
     }
 
@@ -84,6 +87,12 @@ impl ConfirmDialog {
 
     pub fn on_cancel(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(handler));
+        self
+    }
+
+    /// Set a focus handle so keyboard events (Enter/Esc) reach the dialog.
+    pub fn focus_handle(mut self, handle: FocusHandle) -> Self {
+        self.focus_handle = Some(handle);
         self
     }
 
@@ -155,6 +164,7 @@ impl RenderOnce for ConfirmDialog {
             theme,
             on_confirm,
             on_cancel,
+            focus_handle,
         } = self;
 
         let confirm_color = if is_danger {
@@ -166,12 +176,17 @@ impl RenderOnce for ConfirmDialog {
         // --- Transparent overlay (covers parent) + centered modal card. ---
         // --- Backdrop is fully transparent — the user sees through to the ---
         // --- panel content below. Clicking the backdrop cancels the dialog. ---
+        // --- Auto-focus the backdrop so it receives keyboard events (Enter/Esc). ---
+        if let Some(ref handle) = focus_handle {
+            handle.focus(_window);
+        }
         div()
             .absolute()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
+            .when_some(focus_handle.as_ref(), |d, handle| d.track_focus(handle))
             .on_key_down({
                 let on_confirm = on_confirm.clone();
                 let on_cancel = on_cancel.clone();
