@@ -11,12 +11,18 @@ use gpui_component::scroll::ScrollableElement;
 use crate::core::i18n_keys::I18nKey;
 use super::SettingsPanel;
 
-/// Confirm action for hotkey blacklist operations.
+/// Confirm action for hotkey settings operations.
 /// Emitted by SettingsPanel, handled by RootView to show ConfirmDialog.
 #[derive(Debug, Clone)]
 pub enum HotkeyConfirmAction {
-    Add { app_name: String },
-    Remove { app_name: String },
+    /// Add app to hotkey blacklist.
+    AddBlacklist { app_name: String },
+    /// Remove app from hotkey blacklist.
+    RemoveBlacklist { app_name: String },
+    /// Add/update paste shortcut for an app.
+    AddPasteShortcut { app_name: String, shortcut: String },
+    /// Remove paste shortcut for an app.
+    RemovePasteShortcut { app_name: String },
 }
 
 impl SettingsPanel {
@@ -255,7 +261,7 @@ impl SettingsPanel {
                                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                             this.update(cx, |_panel, cx| {
                                                 cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                    HotkeyConfirmAction::Add {
+                                                    HotkeyConfirmAction::AddBlacklist {
                                                         app_name: app_name.clone(),
                                                     },
                                                 ));
@@ -358,7 +364,7 @@ impl SettingsPanel {
                                                                 cx,
                                                                 |_panel, cx| {
                                                                     cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                                        HotkeyConfirmAction::Remove {
+                                                                        HotkeyConfirmAction::RemoveBlacklist {
                                                                             app_name: name
                                                                                 .clone(),
                                                                         },
