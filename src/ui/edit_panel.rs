@@ -43,6 +43,9 @@ pub struct EditPanel {
     split_dragging: Option<Pixels>,
     /// 拖拽开始时的 split_ratio
     split_drag_start_ratio: f32,
+    /// 当从富文本类型切换到纯文本类型时，缓存原始富文本和提取的纯文本，
+    /// 以便切回富文本时能将纯文本编辑同步回 HTML 标签中。
+    rich_cache: Option<RichTextCache>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -89,6 +92,7 @@ impl EditPanel {
             split_ratio: 0.5,
             split_dragging: None,
             split_drag_start_ratio: 0.5,
+            rich_cache: None,
             _subscriptions,
         }
     }
@@ -108,6 +112,7 @@ impl EditPanel {
         let item_type = editor_type_from_item(item);
         self.selected_type = item_type.to_string();
         self.type_menu_open = false;
+        self.rich_cache = None;
         self.preview_generation = self.preview_generation.wrapping_add(1);
 
         // --- For HTML items, load the raw HTML from rich_data so the ---
@@ -147,6 +152,7 @@ impl EditPanel {
             state.save_edited_item(item_id, &text, &editor_type)
         });
         if saved {
+            self.rich_cache = None;
             cx.emit(EditPanelEvent::Saved);
         }
     }
@@ -183,7 +189,7 @@ impl Render for EditPanel {
         } else {
             rgba(0x0000000a)
         };
-        let is_rich_editor = matches!(self.selected_type.as_str(), "markdown" | "html");
+        let is_rich_editor = is_rich_editor_type(&self.selected_type);
         let selected_label = type_label(&self.selected_type);
         let content_input = self.content_input.clone();
         let content_text = self.content_input.read(cx).value().to_string();
@@ -520,7 +526,71 @@ impl Render for EditPanel {
                                     .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
                                         let key = key.clone();
                                         this.update(cx, |panel, cx| {
-                                            panel.selected_type = key;
+                                            let old_type = panel.selected_type.clone();
+                                            let new_type = key.clone();
+
+                                            // 富文本 → 纯文本：提取纯文本 + 记录文本段，缓存完整 HTML
+                                            if is_rich_editor_type(&old_type)
+                                                && is_plain_editor_type(&new_type)
+                                            {
+                                                let current = panel
+                                                    .content_input
+                                                    .read(cx)
+                                                    .value()
+                                                    .to_string();
+                                                let (plain, segments) =
+                                                    extract_text_and_segments(&current);
+                                                panel.rich_cache = Some(RichTextCache {
+                                                    html: current,
+                                                    plain: plain.clone(),
+                                                    segments,
+                                                });
+                                                panel.content_input.update(
+                                                    cx,
+                                                    |input, cx| {
+                                                        input.set_value(
+                                                            SharedString::from(plain),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                );
+                                            }
+                                            // 纯文本 → 富文本：将编辑后的纯文本同步回 HTML
+                                            else if is_plain_editor_type(&old_type)
+                                                && is_rich_editor_type(&new_type)
+                                            {
+                                                if let Some(cache) = panel.rich_cache.take() {
+                                                    let current_plain = panel
+                                                        .content_input
+                                                        .read(cx)
+                                                        .value()
+                                                        .to_string();
+                                                    let restored = if current_plain == cache.plain {
+                                                        // 未编辑 → 直接还原
+                                                        cache.html
+                                                    } else {
+                                                        // 有编辑 → 尝试同步文本回 HTML
+                                                        replace_text_in_html(
+                                                            &cache.html,
+                                                            &current_plain,
+                                                            &cache.segments,
+                                                        )
+                                                    };
+                                                    panel.content_input.update(
+                                                        cx,
+                                                        |input, cx| {
+                                                            input.set_value(
+                                                                SharedString::from(restored),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    );
+                                                }
+                                            }
+
+                                            panel.selected_type = new_type;
                                             panel.type_menu_open = false;
                                             panel.preview_generation =
                                                 panel.preview_generation.wrapping_add(1);
@@ -758,4 +828,183 @@ fn decode_base64(text: &str) -> String {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(_) => text.to_string(),
     }
+}
+
+/// 是否为富文本编辑器类型（带有样式标签，如 HTML、Markdown）
+fn is_rich_editor_type(t: &str) -> bool {
+    matches!(t, "markdown" | "html")
+}
+
+/// 是否为纯文本编辑器类型（无样式标签）
+fn is_plain_editor_type(t: &str) -> bool {
+    matches!(
+        t,
+        "plain_text" | "link" | "path" | "color" | "email" | "phone"
+    )
+}
+
+/// 缓存富文本内容，支持纯文本编辑后同步回 HTML。
+struct RichTextCache {
+    /// 原始 HTML/富文本内容（含完整标签）
+    html: String,
+    /// 从 HTML 中提取的纯文本（规范化后，无多余空行）
+    plain: String,
+    /// 提取时记录的各文本段（顺序与 HTML 中 `>text<` 一致）
+    segments: Vec<String>,
+}
+
+/// 从 HTML 提取纯文本的同时记录各文本段（用于反向同步）。
+fn extract_text_and_segments(html: &str) -> (String, Vec<String>) {
+    let mut text = String::with_capacity(html.len());
+    let mut segments: Vec<String> = Vec::new();
+    let mut current_segment = String::new();
+    let mut in_tag = false;
+    let mut last_was_newline = false;
+    let chars: Vec<char> = html.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let ch = chars[i];
+        if ch == '<' {
+            // 结束当前文本段
+            if !current_segment.is_empty() {
+                if !current_segment.chars().all(|c| c.is_whitespace()) {
+                    text.push_str(&current_segment);
+                    segments.push(current_segment.clone());
+                    last_was_newline = false;
+                }
+                current_segment.clear();
+            }
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+            let tag_lower = current_segment.to_lowercase();
+            if is_block_tag(&tag_lower) && !last_was_newline {
+                text.push('\n');
+                last_was_newline = true;
+            }
+            current_segment.clear();
+        } else if in_tag {
+            current_segment.push(ch);
+        } else {
+            // 文本内容
+            if last_was_newline && ch.is_whitespace() && ch != '\n' {
+                // 跳过块级标签后的前导空白
+                continue;
+            }
+            if ch == '\n' {
+                if !last_was_newline {
+                    current_segment.push('\n');
+                }
+            } else {
+                current_segment.push(ch);
+                last_was_newline = false;
+            }
+        }
+        i += 1;
+    }
+
+    // 收尾：最后一个文本段
+    if !current_segment.is_empty() {
+        let trimmed: String = current_segment
+            .chars()
+            .filter(|&c| c != '\n' || !last_was_newline)
+            .collect();
+        if !trimmed.chars().all(|c| c.is_whitespace()) {
+            text.push_str(&trimmed);
+            segments.push(trimmed);
+        }
+    }
+
+    // 规范化：合并连续空行，去除首尾空行
+    let mut result = String::with_capacity(text.len());
+    let mut prev_newline = false;
+    for ch in text.chars() {
+        if ch == '\n' {
+            if !prev_newline {
+                result.push('\n');
+                prev_newline = true;
+            }
+        } else {
+            result.push(ch);
+            prev_newline = false;
+        }
+    }
+    let result = result.trim().to_string();
+
+    // 解码常见 HTML 实体
+    let result = result
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ");
+
+    (result, segments)
+}
+
+/// 是否为块级 HTML 标签（闭合后应换行）
+fn is_block_tag(tag: &str) -> bool {
+    // 匹配闭合标签如 /p, /div 或自闭合/空标签如 br, hr
+    tag == "/p"
+        || tag == "/div"
+        || tag == "/li"
+        || tag == "/tr"
+        || tag == "/h1"
+        || tag == "/h2"
+        || tag == "/h3"
+        || tag == "/h4"
+        || tag == "/h5"
+        || tag == "/h6"
+        || tag == "/table"
+        || tag == "/ul"
+        || tag == "/ol"
+        || tag == "/blockquote"
+        || tag == "/section"
+        || tag == "/article"
+        || tag == "/header"
+        || tag == "/footer"
+        || tag == "/nav"
+        || tag == "/main"
+        || tag == "/pre"
+        || tag == "/figure"
+        || tag == "/figcaption"
+        || tag == "/dl"
+        || tag == "/dt"
+        || tag == "/dd"
+        || tag == "/td"
+        || tag == "/th"
+        || tag == "/hr"
+        || tag.starts_with("br")
+}
+
+/// 将编辑后的纯文本同步回 HTML，替换文本节点。
+///
+/// 策略：
+/// 1. 从原 HTML 中重新提取文本段（`>text<` 模式）
+/// 2. 如果新旧文本段数量一致 → 逐个替换
+/// 3. 否则 → 返回原始 HTML（无法可靠映射）
+fn replace_text_in_html(html: &str, new_plain: &str, old_segments: &[String]) -> String {
+    // 解析新纯文本的段落（按换行拆分）
+    let new_segments: Vec<&str> = new_plain.lines().collect();
+    if new_segments.len() != old_segments.len() {
+        // 行数不匹配，无法可靠替换，返回原始 HTML
+        return html.to_string();
+    }
+
+    let mut result = html.to_string();
+    for (old, new) in old_segments.iter().zip(new_segments.iter()) {
+        if old == new {
+            continue;
+        }
+        // 查找并替换第一个出现在 `>...<` 之间的匹配项
+        let pattern = format!(">{}<", old);
+        if let Some(pos) = result.find(&pattern) {
+            let replacement = format!(">{}<", new);
+            result.replace_range(pos..pos + pattern.len(), &replacement);
+        }
+    }
+    result
 }
