@@ -854,39 +854,54 @@ struct RichTextCache {
 }
 
 /// 从 HTML 提取纯文本的同时记录各文本段（用于反向同步）。
+///
+/// 只跟踪标签名（第一个空格或 `/` 之前的部分），跳过标签属性值，
+/// 避免对 base64 等大数据调用 to_lowercase() 导致 UI 卡死。
 fn extract_text_and_segments(html: &str) -> (String, Vec<String>) {
     let mut text = String::with_capacity(html.len());
     let mut segments: Vec<String> = Vec::new();
-    let mut current_segment = String::new();
+    let mut current_text = String::new(); // 标签外的文本
+    let mut current_tag = String::new(); // 仅标签名（最多几十字节）
     let mut in_tag = false;
+    let mut in_tag_name = true; // 仍在收集标签名（遇到空格或自闭合 / 后停止）
     let mut last_was_newline = false;
-    let chars: Vec<char> = html.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
 
-    while i < len {
-        let ch = chars[i];
+    for ch in html.chars() {
         if ch == '<' {
             // 结束当前文本段
-            if !current_segment.is_empty() {
-                if !current_segment.chars().all(|c| c.is_whitespace()) {
-                    text.push_str(&current_segment);
-                    segments.push(current_segment.clone());
+            if !current_text.is_empty() {
+                if !current_text.chars().all(|c| c.is_whitespace()) {
+                    text.push_str(&current_text);
+                    segments.push(current_text.clone());
                     last_was_newline = false;
                 }
-                current_segment.clear();
+                current_text.clear();
             }
             in_tag = true;
+            in_tag_name = true;
+            current_tag.clear();
         } else if ch == '>' {
             in_tag = false;
-            let tag_lower = current_segment.to_lowercase();
+            in_tag_name = false;
+            let tag_lower = current_tag.to_lowercase(); // 标签名很短，安全
             if is_block_tag(&tag_lower) && !last_was_newline {
                 text.push('\n');
                 last_was_newline = true;
             }
-            current_segment.clear();
+            current_tag.clear();
         } else if in_tag {
-            current_segment.push(ch);
+            if in_tag_name {
+                if current_tag.is_empty() && ch == '/' {
+                    // 闭合标签：</p> → 保留 / 前缀用于 is_block_tag 匹配
+                    current_tag.push(ch);
+                } else if ch == '/' || ch.is_whitespace() {
+                    // 自闭合 <br/> <br /> 或标签名结束 → 停止收集
+                    in_tag_name = false;
+                } else {
+                    current_tag.push(ch);
+                }
+            }
+            // 跳过标签属性值（不累积，避免大内存分配）
         } else {
             // 文本内容
             if last_was_newline && ch.is_whitespace() && ch != '\n' {
@@ -895,19 +910,18 @@ fn extract_text_and_segments(html: &str) -> (String, Vec<String>) {
             }
             if ch == '\n' {
                 if !last_was_newline {
-                    current_segment.push('\n');
+                    current_text.push('\n');
                 }
             } else {
-                current_segment.push(ch);
+                current_text.push(ch);
                 last_was_newline = false;
             }
         }
-        i += 1;
     }
 
     // 收尾：最后一个文本段
-    if !current_segment.is_empty() {
-        let trimmed: String = current_segment
+    if !current_text.is_empty() {
+        let trimmed: String = current_text
             .chars()
             .filter(|&c| c != '\n' || !last_was_newline)
             .collect();
