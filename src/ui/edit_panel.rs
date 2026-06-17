@@ -525,6 +525,13 @@ impl Render for EditPanel {
                                     .hover(move |style| style.bg(hover_bg))
                                     .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
                                         let key = key.clone();
+
+                                        // 提前取出 input handle，避免在 this.update 内部
+                                        // 调用 input.set_value 造成 GPUI re-entrancy
+                                        let input_handle =
+                                            this.read(cx).content_input.clone();
+                                        let mut pending_value: Option<String> = None;
+
                                         this.update(cx, |panel, cx| {
                                             let old_type = panel.selected_type.clone();
                                             let new_type = key.clone();
@@ -545,16 +552,7 @@ impl Render for EditPanel {
                                                     plain: plain.clone(),
                                                     segments,
                                                 });
-                                                panel.content_input.update(
-                                                    cx,
-                                                    |input, cx| {
-                                                        input.set_value(
-                                                            SharedString::from(plain),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    },
-                                                );
+                                                pending_value = Some(plain);
                                             }
                                             // 纯文本 → 富文本：将编辑后的纯文本同步回 HTML
                                             else if is_plain_editor_type(&old_type)
@@ -577,16 +575,7 @@ impl Render for EditPanel {
                                                             &cache.segments,
                                                         )
                                                     };
-                                                    panel.content_input.update(
-                                                        cx,
-                                                        |input, cx| {
-                                                            input.set_value(
-                                                                SharedString::from(restored),
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        },
-                                                    );
+                                                    pending_value = Some(restored);
                                                 }
                                             }
 
@@ -594,10 +583,21 @@ impl Render for EditPanel {
                                             panel.type_menu_open = false;
                                             panel.preview_generation =
                                                 panel.preview_generation.wrapping_add(1);
-                                            panel.content_input.update(cx, |input, cx| {
-                                                input.focus_handle(cx).focus(window);
-                                            });
                                             cx.notify();
+                                        });
+
+                                        // 在 this.update 外部应用编辑器内容，避免重入
+                                        if let Some(val) = pending_value {
+                                            input_handle.update(cx, |input, cx| {
+                                                input.set_value(
+                                                    SharedString::from(val),
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                        input_handle.update(cx, |input, cx| {
+                                            input.focus_handle(cx).focus(window);
                                         });
                                     })
                                     .child(
