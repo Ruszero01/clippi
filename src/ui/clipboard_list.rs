@@ -17,6 +17,7 @@ use crate::core::types::ClipboardItem;
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
+use super::search_bar::SearchBar;
 use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
 
@@ -50,6 +51,9 @@ pub struct ClipboardListView {
     selected_index: Option<usize>,
     anchor_index: Option<usize>,
     state: Entity<AppState>,
+    /// Reference to the search bar for programmatic focus (Ctrl+F).
+    /// Set after construction to resolve circular dependency.
+    pub(crate) search_bar: Option<Entity<SearchBar>>,
     // --- Hover tracking ---
     hovered_index: Option<usize>,
     // --- Context menu state ---
@@ -102,6 +106,7 @@ impl ClipboardListView {
             selected_index: None,
             anchor_index: None,
             state,
+            search_bar: None,
             hovered_index: None,
             context_menu_visible: false,
             context_menu_x: 0.0,
@@ -309,7 +314,7 @@ impl ClipboardListView {
         cx.notify();
     }
 
-    fn select_next(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
+    pub(crate) fn select_next(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
         if self.items.is_empty() {
             return;
         }
@@ -320,7 +325,7 @@ impl ClipboardListView {
         self.select_index(next_index, scroll_strategy, cx);
     }
 
-    fn select_previous(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
+    pub(crate) fn select_previous(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
         if self.items.is_empty() {
             return;
         }
@@ -329,6 +334,83 @@ impl ClipboardListView {
             .map(|index| index.saturating_sub(1))
             .unwrap_or(0);
         self.select_index(previous_index, scroll_strategy, cx);
+    }
+
+    // --- Keyboard-shortcut action helpers (pub(crate) so SearchBar can call them) ---
+
+    /// Paste selected item(s). Called from list key handler and search bar.
+    pub(crate) fn action_paste(&mut self, plain: bool, cx: &mut Context<Self>) {
+        if self.selected_count > 1 {
+            let ids = self.selected_ids.clone();
+            self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
+        } else if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                let id = item.id;
+                if plain {
+                    self.state.update(cx, |s, _cx| s.paste_item_plain(id));
+                } else {
+                    self.state.update(cx, |s, _cx| s.paste_item(id, plain));
+                }
+            }
+        }
+    }
+
+    /// Toggle favorite on selected item(s).
+    pub(crate) fn action_toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        if self.selected_count > 1 {
+            self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
+        } else if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                let id = item.id;
+                self.state.update(cx, |s, _cx| s.toggle_favorite(id));
+            }
+        }
+        self.sync_items_from_state(cx);
+    }
+
+    /// Open the edit panel for the selected item.
+    pub(crate) fn action_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                cx.emit(ClipboardListEvent::OpenEdit(item.id));
+            }
+        }
+    }
+
+    /// Start inline note editing for the selected item.
+    pub(crate) fn action_edit_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                if item.id != self.editing_note_id {
+                    let id = item.id;
+                    let note = item.note.clone();
+                    self.start_note_edit(id, &note, window, cx);
+                }
+            }
+        }
+    }
+
+    /// Show the delete confirmation dialog for selected item(s).
+    pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) {
+        if self.selected_count > 1 {
+            let count = self.selected_ids.len();
+            self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
+        } else if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                self.confirm_dialog =
+                    Some(ConfirmDialogState::DeleteSingle { id: item.id });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Clear the current selection. Called from search bar Escape handler.
+    pub(crate) fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        self.selected_ids.clear();
+        self.selected_count = 0;
+        self.selected_index = None;
+        self.anchor_index = None;
+        cx.notify();
     }
 
     // --- Context menu state accessors ---
@@ -860,46 +942,102 @@ impl Render for ClipboardListView {
             .overflow_hidden()
             .track_focus(&focus_handle)
             .on_key_down(
-                window.listener_for(&view, |this, event: &KeyDownEvent, _window, cx| match event
-                    .keystroke
-                    .key
-                    .as_str()
-                {
-                    "up" => {
-                        this.dismiss_all_panels(cx);
-                        this.select_previous(ScrollStrategy::Top, cx);
-                        cx.stop_propagation();
+                window.listener_for(&view, |this, event: &KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let ctrl = event.keystroke.modifiers.control;
+                    let shift = event.keystroke.modifiers.shift;
+
+                    // --- Ctrl+Key shortcuts ---
+                    if ctrl {
+                        match key {
+                            "f" => {
+                                // Ctrl+F / Cmd+F — focus search bar (always works)
+                                if let Some(ref search_bar) = this.search_bar {
+                                    search_bar.update(cx, |bar, cx| {
+                                        bar.focus(window, cx);
+                                    });
+                                }
+                                cx.stop_propagation();
+                            }
+                            "d" if !this.has_any_panel_or_editing() => {
+                                // Ctrl+D — toggle favorite
+                                this.action_toggle_favorite(cx);
+                                cx.stop_propagation();
+                            }
+                            "e" if !this.has_any_panel_or_editing() => {
+                                // Ctrl+E — open edit panel
+                                this.action_edit(cx);
+                                cx.stop_propagation();
+                            }
+                            _ => {}
+                        }
+                        return;
                     }
-                    "down" => {
-                        this.dismiss_all_panels(cx);
-                        this.select_next(ScrollStrategy::Bottom, cx);
-                        cx.stop_propagation();
-                    }
-                    "enter" => {
-                        // --- Only paste when no floating panel or inline editing is active ---
+
+                    // --- Shift+Enter — paste as plain text ---
+                    if shift && key == "enter" {
                         if this.has_any_panel_or_editing() {
                             this.dismiss_all_panels(cx);
                             cx.stop_propagation();
                         } else {
-                            let plain = this.state.read(cx).settings.copy_as_plain_text;
-                            if this.selected_count > 1 {
-                                let ids = this.selected_ids.clone();
-                                this.state.update(cx, |s, _cx| {
-                                    s.batch_paste(&ids, plain);
-                                });
+                            this.action_paste(true, cx);
+                            cx.stop_propagation();
+                        }
+                        return;
+                    }
+
+                    // --- Modifier-free keys ---
+                    match key {
+                        "up" => {
+                            this.dismiss_all_panels(cx);
+                            this.select_previous(ScrollStrategy::Top, cx);
+                            cx.stop_propagation();
+                        }
+                        "down" => {
+                            this.dismiss_all_panels(cx);
+                            this.select_next(ScrollStrategy::Bottom, cx);
+                            cx.stop_propagation();
+                        }
+                        "enter" => {
+                            // --- Only paste when no floating panel or inline editing is active ---
+                            if this.has_any_panel_or_editing() {
+                                this.dismiss_all_panels(cx);
                                 cx.stop_propagation();
-                            } else if let Some(idx) = this.selected_index {
-                                if let Some(item) = this.items.get(idx) {
-                                    let item_id = item.id;
-                                    this.state.update(cx, |s, _cx| {
-                                        s.paste_item(item_id, plain);
-                                    });
-                                    cx.stop_propagation();
-                                }
+                            } else {
+                                let plain = this.state.read(cx).settings.copy_as_plain_text;
+                                this.action_paste(plain, cx);
+                                cx.stop_propagation();
                             }
                         }
+                        "f2" if !this.has_any_panel_or_editing() => {
+                            // F2 — add/edit note for selected item
+                            this.action_edit_note(window, cx);
+                            cx.stop_propagation();
+                        }
+                        "delete" if !this.has_any_panel_or_editing() => {
+                            // Delete — remove selected item(s)
+                            this.action_delete(cx);
+                            cx.stop_propagation();
+                        }
+                        "escape" => {
+                            // Escape — dismiss panels or clear selection
+                            if this.has_any_panel_or_editing() {
+                                this.dismiss_all_panels(cx);
+                                this.editing_note_id = -1;
+                                this.confirm_dialog = None;
+                                cx.notify();
+                            } else if !this.selected_ids.is_empty() {
+                                this.clear_selection(cx);
+                                // Sync to AppState
+                                let empty: Vec<i64> = Vec::new();
+                                this.state.update(cx, |s, _cx| {
+                                    s.range_select(&empty);
+                                });
+                            }
+                            cx.stop_propagation();
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }),
             )
             .w_full()

@@ -83,6 +83,10 @@ impl RootView {
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
         let search_bar = cx
             .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
+        // Wire up search_bar reference for Ctrl+F keyboard shortcut.
+        list_view.update(cx, |list, _cx| {
+            list.search_bar = Some(search_bar.clone());
+        });
         let settings_panel = cx.new(|cx| {
             SettingsPanel::new(
                 state.clone(),

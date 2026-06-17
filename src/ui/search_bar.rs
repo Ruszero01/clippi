@@ -249,6 +249,104 @@ impl Render for SearchBar {
                     .border_color(divider)
                     .mb(px(6.))
                     .overflow_hidden()
+                    .on_key_down({
+                        let list = self.list_view.clone();
+                        let app_state = self.state.clone();
+                        move |ev: &KeyDownEvent, window, cx| {
+                            let key = ev.keystroke.key.as_str();
+                            let ctrl = ev.keystroke.modifiers.control;
+                            let shift = ev.keystroke.modifiers.shift;
+
+                            // --- Navigation: up/down — keep search focus, move list selection ---
+                            if !ctrl && !shift {
+                                match key {
+                                    "up" => {
+                                        list.update(cx, |list, cx| {
+                                            list.select_previous(
+                                                gpui::ScrollStrategy::Top,
+                                                cx,
+                                            );
+                                        });
+                                        cx.stop_propagation();
+                                        return;
+                                    }
+                                    "down" => {
+                                        list.update(cx, |list, cx| {
+                                            list.select_next(
+                                                gpui::ScrollStrategy::Bottom,
+                                                cx,
+                                            );
+                                        });
+                                        cx.stop_propagation();
+                                        return;
+                                    }
+                                    "escape" => {
+                                        // Clear list selection, keep search focus
+                                        list.update(cx, |list, cx| {
+                                            list.clear_selection(cx);
+                                        });
+                                        cx.stop_propagation();
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            // --- Action shortcuts: focus list + execute action ---
+                            match (ctrl, shift, key) {
+                                // Enter — paste with plain setting
+                                (false, false, "enter") => {
+                                    let plain = app_state.read(cx).settings.copy_as_plain_text;
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_paste(plain, cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
+                                // Shift+Enter — paste as plain text
+                                (false, true, "enter") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_paste(true, cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
+                                // Ctrl+D — toggle favorite
+                                (true, false, "d") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_toggle_favorite(cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
+                                // Ctrl+E — edit
+                                (true, false, "e") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_edit(cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
+                                // F2 — edit note
+                                (false, false, "f2") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_edit_note(window, cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
+                                // Delete — delete item(s)
+                                (false, false, "delete") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_delete(cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
+                                _ => {}
+                            }
+                        }
+                    })
                     .child(
                         Input::new(&self.input)
                             .appearance(false)
