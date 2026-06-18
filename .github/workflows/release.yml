@@ -217,6 +217,16 @@ jobs:
               <string>12.0</string>
               <key>NSHighResolutionCapable</key>
               <true/>
+              <key>NSDesktopFolderUsageDescription</key>
+              <string>Clippi reads and writes only the desktop folder you choose for database storage or local-folder sync.</string>
+              <key>NSDocumentsFolderUsageDescription</key>
+              <string>Clippi reads and writes only the documents folder you choose for database storage or local-folder sync.</string>
+              <key>NSDownloadsFolderUsageDescription</key>
+              <string>Clippi reads and writes only the downloads folder you choose for database storage or local-folder sync.</string>
+              <key>NSNetworkVolumesUsageDescription</key>
+              <string>Clippi reads and writes only the network folder you choose for local-folder sync.</string>
+              <key>NSRemovableVolumesUsageDescription</key>
+              <string>Clippi reads and writes only the removable drive folder you choose for database storage or local-folder sync.</string>
           </dict>
           </plist>
           PLISTEOF
@@ -233,6 +243,12 @@ jobs:
           plutil -lint "$APP_DIR/Contents/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$APP_DIR/Contents/Info.plist")" = "com.clippi.app"
           test "$(plutil -extract CFBundleShortVersionString raw "$APP_DIR/Contents/Info.plist")" = "$VERSION"
+          plutil -extract NSDocumentsFolderUsageDescription raw "$APP_DIR/Contents/Info.plist" >/dev/null
+          ENTITLEMENTS="$(codesign -d --entitlements :- "$APP_DIR" 2>/dev/null || true)"
+          if echo "$ENTITLEMENTS" | grep -q "com.apple.security.app-sandbox"; then
+            echo "Unexpected App Sandbox entitlement; selected paths would need security-scoped bookmarks." >&2
+            exit 1
+          fi
           codesign --verify --deep --strict --verbose=2 "$APP_DIR"
           codesign -v -R='identifier "com.clippi.app"' "$APP_DIR"
           # Create staging directory with .app + Applications symlink
