@@ -145,7 +145,7 @@ fn default_sync_interval() -> u64 {
 }
 
 fn default_quick_hotkey() -> String {
-    "Alt+Shift+V".to_string()
+    "Alt+C".to_string()
 }
 
 impl Default for AppSettings {
