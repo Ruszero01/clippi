@@ -21,6 +21,7 @@ mod services;
 // Root view lives in ui::root — use that instead of inline ClippiApp
 use core::settings::AppSettings;
 use state::app::AppState;
+use ui::quick_paste::{QuickPasteView, QUICK_WINDOW_HEIGHT, QUICK_WINDOW_WIDTH};
 use ui::root::RootView;
 use ui::window_manager::WindowManager;
 
@@ -434,6 +435,73 @@ fn main() {
 
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
+
+                let quick_options = WindowOptions {
+                    window_background: WindowBackgroundAppearance::Transparent,
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Clippi Quick Paste".into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Bounds::centered(
+                            None,
+                            size(px(QUICK_WINDOW_WIDTH), px(QUICK_WINDOW_HEIGHT)),
+                            cx,
+                        )
+                        .origin,
+                        size(px(QUICK_WINDOW_WIDTH), px(QUICK_WINDOW_HEIGHT)),
+                    ))),
+                    window_min_size: Some(size(px(QUICK_WINDOW_WIDTH), px(QUICK_WINDOW_HEIGHT))),
+                    show: false,
+                    focus: false,
+                    kind: WindowKind::PopUp,
+                    is_movable: false,
+                    is_resizable: false,
+                    is_minimizable: false,
+                    ..Default::default()
+                };
+                let quick_state = state.clone();
+                let quick_wm = window_manager.clone();
+                if let Err(err) = cx.open_window(quick_options, move |quick_window, cx| {
+                    let quick_view = cx.new(|_cx| QuickPasteView::new(quick_state.clone()));
+                    let quick_handle = gpui::Window::window_handle(quick_window);
+                    quick_wm.update(cx, |wm, cx| {
+                        wm.set_quick_window(quick_handle, quick_view.clone(), cx);
+                    });
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Ok(handle) =
+                            raw_window_handle::HasWindowHandle::window_handle(quick_window)
+                        {
+                            if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                                quick_wm.update(cx, |wm, _cx| wm.set_quick_hwnd(wh.hwnd.get()));
+                            }
+                        }
+                    }
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        if let Ok(handle) =
+                            raw_window_handle::HasWindowHandle::window_handle(quick_window)
+                        {
+                            if let RawWindowHandle::AppKit(wh) = handle.as_raw() {
+                                let ns_view =
+                                    wh.ns_view.as_ptr() as *mut objc2::runtime::AnyObject;
+                                let ns_window: *mut objc2_app_kit::NSWindow =
+                                    unsafe { objc2::msg_send![ns_view, window] };
+                                quick_wm.update(cx, |wm, _cx| {
+                                    wm.set_quick_ns_window(ns_window as isize)
+                                });
+                            }
+                        }
+                    }
+
+                    cx.new(|cx| gpui_component::Root::new(quick_view, quick_window, cx))
+                }) {
+                    log::error!("Failed to create quick paste window: {err}");
+                }
 
                 // Defer startup actions until GPUI has completed the first render.
                 // Hotkey registration must happen on every desktop platform after

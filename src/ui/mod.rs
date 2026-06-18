@@ -7,6 +7,7 @@ pub mod components;
 pub mod context_menu;
 pub mod edit_panel;
 pub mod hover_toolbar;
+pub mod quick_paste;
 pub mod rich_preview;
 pub mod root;
 pub mod search_bar;
