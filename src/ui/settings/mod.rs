@@ -75,6 +75,8 @@ pub struct SettingsPanel {
     editing_max_items: bool,
     /// Input entity for the max-items editor (created once in constructor).
     max_items_input: Entity<InputState>,
+    /// Pending async file dialog for changing the database path.
+    _db_path_dialog_task: Option<Task<()>>,
     /// Focus-out subscription for the max-items input (auto-save on blur).
     _max_items_focus_sub: gpui::Subscription,
 }
@@ -141,6 +143,7 @@ impl SettingsPanel {
             reset_data_dialog: None,
             editing_max_items: false,
             max_items_input,
+            _db_path_dialog_task: None,
             _max_items_focus_sub,
         }
     }

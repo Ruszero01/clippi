@@ -156,46 +156,62 @@ impl SettingsPanel {
                                     .cursor(CursorStyle::PointingHand)
                                     .hover(move |s| s.opacity(0.85))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
-                                        // Run native dialog on a separate thread to avoid
-                                        // COM apartment conflicts with GPUI's main thread.
-                                        let (tx, rx) = std::sync::mpsc::channel();
-                                        std::thread::spawn(move || {
-                                            let result = rfd::FileDialog::new()
-                                                .set_file_name("clippi.db")
-                                                .save_file();
-                                            let _ = tx.send(result);
-                                        });
-                                        if let Ok(Some(new_path)) = rx.recv() {
+                                        let dialog = rfd::AsyncFileDialog::new()
+                                            .set_file_name("clippi.db")
+                                            .save_file();
+                                        let state = state.clone();
+                                        let task_panel = this.clone();
+                                        let task = _cx.spawn(async move |cx| {
+                                            let Some(new_path) = dialog.await else {
+                                                return;
+                                            };
+                                            let new_path = new_path.path().to_path_buf();
                                             let path_str = new_path.to_string_lossy().to_string();
-                                            let old = state.read(_cx).settings.resolve_db_path();
+                                            let old = match cx.read_entity(&state, |s, _cx| {
+                                                s.settings.resolve_db_path()
+                                            }) {
+                                                Ok(old) => old,
+                                                Err(e) => {
+                                                    log::error!("failed to read settings: {e}");
+                                                    return;
+                                                }
+                                            };
                                             if old == new_path {
                                                 return;
                                             }
                                             // --- Checkpoint DB before migration ---
+                                            match cx.read_entity(&state, |s, _cx| s.db.checkpoint())
                                             {
-                                                let s = state.read(_cx);
-                                                if let Err(e) = s.db.checkpoint() {
+                                                Ok(Err(e)) => {
                                                     log::error!(
                                                         "checkpoint failed before migration: {e}"
                                                     );
                                                 }
+                                                Err(e) => {
+                                                    log::error!("failed to read database: {e}");
+                                                    return;
+                                                }
+                                                Ok(Ok(())) => {}
                                             }
                                             match migrate_database(&old, &new_path) {
                                                 Ok(()) => {
-                                                    state.update(_cx, |s, _cx| {
+                                                    let _ = state.update(cx, |s, _cx| {
                                                         s.settings.db_path = path_str;
                                                         s.settings.save();
                                                     });
                                                     crate::core::settings::spawn_new_process();
-                                                    _cx.quit();
+                                                    let _ = cx.update(|cx| cx.quit());
                                                 }
                                                 Err(e) => {
-                                                    this.update(_cx, |_panel, cx| {
+                                                    let _ = task_panel.update(cx, |_panel, cx| {
                                                         cx.emit(SettingsEvent::DataError(e));
                                                     });
                                                 }
                                             }
-                                        }
+                                        });
+                                        this.update(_cx, |panel, _cx| {
+                                            panel._db_path_dialog_task = Some(task);
+                                        });
                                     })
                                     .child(
                                         div()

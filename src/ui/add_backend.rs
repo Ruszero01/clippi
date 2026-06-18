@@ -35,6 +35,7 @@ pub struct AddBackendPanel {
     test_ok: bool,
     test_error: String,
     _test_task: Option<Task<()>>,
+    _folder_dialog_task: Option<Task<()>>,
     last_lang_version: u64,
 }
 
@@ -69,6 +70,7 @@ impl AddBackendPanel {
             test_ok: false,
             test_error: String::new(),
             _test_task: None,
+            _folder_dialog_task: None,
             last_lang_version: crate::core::i18n::lang_version(),
         }
     }
@@ -355,24 +357,25 @@ impl AddBackendPanel {
                             .hover(move |style| style.bg(divider).text_color(text_1))
                             .on_mouse_down(MouseButton::Left, {
                                 let folder_input = self.folder_input.clone();
+                                let this = this.clone();
                                 move |_ev, window, cx| {
                                     let input = folder_input.clone();
-                                    // Run the native file dialog on a separate thread to avoid
-                                    // COM apartment conflicts with GPUI's main thread.
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    std::thread::spawn(move || {
-                                        let result = rfd::FileDialog::new().pick_folder();
-                                        let _ = tx.send(result);
+                                    let window_handle = window.window_handle();
+                                    let dialog = rfd::AsyncFileDialog::new().pick_folder();
+                                    let task = cx.spawn(async move |cx| {
+                                        if let Some(path) = dialog.await {
+                                            let path = path.path().to_string_lossy().to_string();
+                                            let _ =
+                                                cx.update_window(window_handle, |_, window, cx| {
+                                                    input.update(cx, |input, cx| {
+                                                        input.set_value(&path, window, cx);
+                                                    });
+                                                });
+                                        }
                                     });
-                                    if let Ok(Some(path)) = rx.recv() {
-                                        input.update(cx, |input, cx| {
-                                            input.set_value(
-                                                path.to_string_lossy().to_string(),
-                                                window,
-                                                cx,
-                                            )
-                                        });
-                                    }
+                                    this.update(cx, |panel, _cx| {
+                                        panel._folder_dialog_task = Some(task);
+                                    });
                                 }
                             })
                             .child(I18nKey::BackendBrowse.text()),
