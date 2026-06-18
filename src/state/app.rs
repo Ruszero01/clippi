@@ -440,9 +440,9 @@ impl AppState {
                 };
                 ("rich_text", "html", rich.to_json())
             }
-            "link" => ("link", "", String::new()),
-            "path" => ("path", "", String::new()),
-            "color" => ("color", "", String::new()),
+            "link" => ("plain_text", "link", String::new()),
+            "path" => ("plain_text", "path", String::new()),
+            "color" => ("plain_text", "color", String::new()),
             "email" => ("plain_text", "email", String::new()),
             "phone" => ("plain_text", "phone", String::new()),
             _ => ("plain_text", "", String::new()),
