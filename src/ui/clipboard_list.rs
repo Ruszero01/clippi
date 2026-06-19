@@ -325,7 +325,11 @@ impl ClipboardListView {
         self.select_index(next_index, scroll_strategy, cx);
     }
 
-    pub(crate) fn select_previous(&mut self, scroll_strategy: ScrollStrategy, cx: &mut Context<Self>) {
+    pub(crate) fn select_previous(
+        &mut self,
+        scroll_strategy: ScrollStrategy,
+        cx: &mut Context<Self>,
+    ) {
         if self.items.is_empty() {
             return;
         }
@@ -397,8 +401,7 @@ impl ClipboardListView {
             self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
         } else if let Some(idx) = self.selected_index {
             if let Some(item) = self.items.get(idx) {
-                self.confirm_dialog =
-                    Some(ConfirmDialogState::DeleteSingle { id: item.id });
+                self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle { id: item.id });
             }
         }
         cx.notify();

@@ -43,6 +43,9 @@ define_i18n! {
     DescPosition:       ("窗口弹出位置", "Popup position"),
     SettingLanguage:    ("语言", "Language"),
     DescLanguage:       ("选择界面语言", "Select interface language"),
+    SettingQuickWindow: ("快速粘贴窗口", "Quick Paste Window"),
+    DescQuickWindow:    ("开启后可通过独立快捷键呼出精简窗口", "Enable quick paste popup with separate hotkey"),
+    QuickHotkeyLabel:   ("快速窗口快捷键", "Quick window hotkey"),
 
     // ─── Theme options ───
     ThemeSystem:        ("跟随系统", "Auto"),

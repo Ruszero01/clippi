@@ -262,20 +262,14 @@ impl Render for SearchBar {
                                 match key {
                                     "up" => {
                                         list.update(cx, |list, cx| {
-                                            list.select_previous(
-                                                gpui::ScrollStrategy::Top,
-                                                cx,
-                                            );
+                                            list.select_previous(gpui::ScrollStrategy::Top, cx);
                                         });
                                         cx.stop_propagation();
                                         return;
                                     }
                                     "down" => {
                                         list.update(cx, |list, cx| {
-                                            list.select_next(
-                                                gpui::ScrollStrategy::Bottom,
-                                                cx,
-                                            );
+                                            list.select_next(gpui::ScrollStrategy::Bottom, cx);
                                         });
                                         cx.stop_propagation();
                                         return;

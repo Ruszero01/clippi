@@ -1,20 +1,40 @@
 //! Hotkey management - platform-agnostic trait and Windows implementation
 
-use std::time::Duration;
-
 use crate::core::i18n_keys::I18nKey;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyEvent {
+    Main,
+    Quick,
+    QuickAction(QuickAction),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickAction {
+    Previous,
+    Next,
+    PreviousPage,
+    NextPage,
+    Paste,
+    Close,
+    Pick(usize),
+}
+
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
 pub trait HotkeyListener {
     fn stop(&mut self);
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String>;
+    #[allow(dead_code)]
+    fn update_quick_hotkey(&mut self, hotkey_str: &str) -> Result<(), String>;
     fn start_recording(&mut self);
     fn finish_recording(&mut self);
-    fn poll_pressed(&self) -> bool;
+    fn is_recording(&self) -> bool;
+    fn poll_event(&mut self) -> Option<HotkeyEvent>;
     fn poll_recording_pressed(&mut self) -> Option<String>;
+    fn set_quick_actions_enabled(&mut self, enabled: bool);
     /// Temporarily unregister the hotkey (for blacklist).
     /// Does nothing if already unregistered.
     fn unregister(&mut self);
@@ -78,6 +98,8 @@ pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
         "tab" => Some(Code::Tab),
         "enter" | "return" => Some(Code::Enter),
         "esc" | "escape" => Some(Code::Escape),
+        "up" | "arrowup" => Some(Code::ArrowUp),
+        "down" | "arrowdown" => Some(Code::ArrowDown),
         "backspace" => Some(Code::Backspace),
         "=" | "equal" => Some(Code::Equal),
         "-" | "minus" => Some(Code::Minus),
@@ -254,13 +276,18 @@ mod tests {
 struct DesktopHotkeyListener {
     manager: GlobalHotKeyManager,
     hotkey: HotKey,
+    quick_hotkey: HotKey,
     is_recording: bool,
     registered: bool,
+    quick_enabled: bool,
+    quick_registered: bool,
+    quick_action_hotkeys: Vec<(QuickAction, HotKey)>,
+    quick_actions_registered: bool,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 impl DesktopHotkeyListener {
-    fn new(hotkey_str: &str) -> Result<Self, String> {
+    fn new(hotkey_str: &str, quick_hotkey_str: &str) -> Result<Self, String> {
         let manager = GlobalHotKeyManager::new()
             .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
         let hotkey = parse_hotkey(hotkey_str)?;
@@ -268,31 +295,121 @@ impl DesktopHotkeyListener {
             .register(hotkey)
             .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
 
+        let quick_hotkey;
+        let quick_registered;
+        if quick_hotkey_str.is_empty() {
+            // Quick hotkey disabled — use a placeholder that won't match any key.
+            quick_hotkey = HotKey::new(None, global_hotkey::hotkey::Code::F24);
+            quick_registered = false;
+        } else {
+            quick_hotkey = parse_hotkey(quick_hotkey_str)?;
+            manager
+                .register(quick_hotkey)
+                .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+            quick_registered = true;
+        }
+
         Ok(Self {
             manager,
             hotkey,
+            quick_hotkey,
             is_recording: false,
             registered: true,
+            quick_enabled: !quick_hotkey_str.is_empty(),
+            quick_registered,
+            quick_action_hotkeys: quick_action_hotkeys(),
+            quick_actions_registered: false,
         })
     }
+
+    fn register_hotkey(&self, hotkey: HotKey) -> Result<(), String> {
+        self.manager
+            .register(hotkey)
+            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn quick_action_hotkeys() -> Vec<(QuickAction, HotKey)> {
+    use global_hotkey::hotkey::Code;
+
+    let mut hotkeys = vec![
+        (QuickAction::Previous, HotKey::new(None, Code::ArrowUp)),
+        (QuickAction::Next, HotKey::new(None, Code::ArrowDown)),
+        (
+            QuickAction::PreviousPage,
+            HotKey::new(None, Code::ArrowLeft),
+        ),
+        (QuickAction::NextPage, HotKey::new(None, Code::ArrowRight)),
+        (QuickAction::Paste, HotKey::new(None, Code::Enter)),
+        (QuickAction::Close, HotKey::new(None, Code::Escape)),
+    ];
+    for (index, code) in [
+        Code::Digit1,
+        Code::Digit2,
+        Code::Digit3,
+        Code::Digit4,
+        Code::Digit5,
+        Code::Digit6,
+        Code::Digit7,
+        Code::Digit8,
+        Code::Digit9,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        hotkeys.push((QuickAction::Pick(index), HotKey::new(None, code)));
+    }
+    hotkeys
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 impl HotkeyListener for DesktopHotkeyListener {
     fn stop(&mut self) {
         self.unregister();
+        self.set_quick_actions_enabled(false);
     }
 
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
         let new_hotkey = parse_hotkey(hotkey_str)?;
-        self.unregister();
-        std::thread::sleep(Duration::from_millis(50));
-
+        if self.registered {
+            let _ = self.manager.unregister(self.hotkey);
+            self.registered = false;
+        }
         self.manager
             .register(new_hotkey)
             .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
         self.hotkey = new_hotkey;
         self.registered = true;
+        Ok(())
+    }
+
+    fn update_quick_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
+        // Empty string means disable quick hotkey.
+        if hotkey_str.is_empty() {
+            if self.quick_registered {
+                let _ = self.manager.unregister(self.quick_hotkey);
+                self.quick_registered = false;
+            }
+            self.quick_enabled = false;
+            return Ok(());
+        }
+
+        let new_hotkey = parse_hotkey(hotkey_str)?;
+        if self.quick_registered && new_hotkey.id() == self.quick_hotkey.id() {
+            self.quick_enabled = true;
+            return Ok(());
+        }
+
+        // Register first so a conflict does not silently disable the previous
+        // working quick hotkey. Only swap state after registration succeeds.
+        self.register_hotkey(new_hotkey)?;
+        if self.quick_registered {
+            let _ = self.manager.unregister(self.quick_hotkey);
+        }
+        self.quick_hotkey = new_hotkey;
+        self.quick_enabled = true;
+        self.quick_registered = true;
         Ok(())
     }
 
@@ -304,26 +421,66 @@ impl HotkeyListener for DesktopHotkeyListener {
         self.is_recording = false;
     }
 
+    fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+
     fn unregister(&mut self) {
         if self.registered {
             let _ = self.manager.unregister(self.hotkey);
             self.registered = false;
         }
+        if self.quick_registered {
+            let _ = self.manager.unregister(self.quick_hotkey);
+            self.quick_registered = false;
+        }
     }
 
     fn register(&mut self) {
+        // The blacklist poll calls this periodically. Do not let it restore the
+        // active shortcuts while the recorder intentionally has them disabled.
+        if self.is_recording {
+            return;
+        }
         if !self.registered {
-            match self.manager.register(self.hotkey) {
+            match self.register_hotkey(self.hotkey) {
                 Ok(()) => self.registered = true,
                 Err(e) => log::error!("hotkey register failed: {e}"),
             }
         }
+        if self.quick_enabled && !self.quick_registered {
+            match self.register_hotkey(self.quick_hotkey) {
+                Ok(()) => self.quick_registered = true,
+                Err(e) => log::error!("quick hotkey register failed: {e}"),
+            }
+        }
     }
 
-    fn poll_pressed(&self) -> bool {
-        GlobalHotKeyEvent::receiver().try_recv().is_ok_and(|event| {
-            event.state() == HotKeyState::Pressed && event.id() == self.hotkey.id()
-        })
+    fn poll_event(&mut self) -> Option<HotkeyEvent> {
+        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+            // Released and stale/unrecognised events must not stop draining the
+            // shared queue; otherwise the following press waits for another poll.
+            if event.state() != HotKeyState::Pressed {
+                continue;
+            }
+            let id = event.id();
+            if id == self.hotkey.id() {
+                return Some(HotkeyEvent::Main);
+            }
+            if self.quick_enabled && id == self.quick_hotkey.id() {
+                return Some(HotkeyEvent::Quick);
+            }
+            if let Some(action) = self
+                .quick_action_hotkeys
+                .iter()
+                .find_map(|(action, hotkey)| {
+                    (id == hotkey.id()).then_some(HotkeyEvent::QuickAction(*action))
+                })
+            {
+                return Some(action);
+            }
+        }
+        None
     }
 
     fn poll_recording_pressed(&mut self) -> Option<String> {
@@ -332,6 +489,25 @@ impl HotkeyListener for DesktopHotkeyListener {
         }
         let modifiers = platform_input::pressed_modifiers();
         platform_input::pressed_key().map(|code| format_pressed_hotkey(modifiers, code))
+    }
+
+    fn set_quick_actions_enabled(&mut self, enabled: bool) {
+        if enabled == self.quick_actions_registered {
+            return;
+        }
+
+        if enabled {
+            for (_, hotkey) in &self.quick_action_hotkeys {
+                if let Err(e) = self.manager.register(*hotkey) {
+                    log::warn!("quick action hotkey register failed: {e}");
+                }
+            }
+        } else {
+            for (_, hotkey) in &self.quick_action_hotkeys {
+                let _ = self.manager.unregister(*hotkey);
+            }
+        }
+        self.quick_actions_registered = enabled;
     }
 }
 
@@ -582,14 +758,21 @@ mod linux {
         fn update_hotkey(&mut self, _hotkey_str: &str) -> Result<(), String> {
             Ok(())
         }
+        fn update_quick_hotkey(&mut self, _hotkey_str: &str) -> Result<(), String> {
+            Ok(())
+        }
         fn start_recording(&mut self) {}
         fn finish_recording(&mut self) {}
-        fn poll_pressed(&self) -> bool {
+        fn is_recording(&self) -> bool {
             false
+        }
+        fn poll_event(&mut self) -> Option<HotkeyEvent> {
+            None
         }
         fn poll_recording_pressed(&mut self) -> Option<String> {
             None
         }
+        fn set_quick_actions_enabled(&mut self, _enabled: bool) {}
         fn unregister(&mut self) {}
         fn register(&mut self) {}
     }
@@ -598,10 +781,16 @@ mod linux {
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHotkeyListener;
 
-pub fn create_hotkey_listener(hotkey_str: &str) -> Result<Box<dyn HotkeyListener>, String> {
+pub fn create_hotkey_listener(
+    hotkey_str: &str,
+    quick_hotkey_str: &str,
+) -> Result<Box<dyn HotkeyListener>, String> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        Ok(Box::new(DesktopHotkeyListener::new(hotkey_str)?))
+        Ok(Box::new(DesktopHotkeyListener::new(
+            hotkey_str,
+            quick_hotkey_str,
+        )?))
     }
     #[cfg(target_os = "linux")]
     {

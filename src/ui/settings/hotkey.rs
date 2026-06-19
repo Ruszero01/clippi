@@ -592,8 +592,8 @@ impl SettingsPanel {
                                 if recording {
                                     return;
                                 }
-                                wm.update(cx, |wm, _cx| {
-                                    wm.start_hotkey_recording();
+                                wm.update(cx, |wm, cx| {
+                                    wm.start_hotkey_recording(cx);
                                 });
                                 state.update(cx, |s, _cx| {
                                     s.hotkey_recording = true;
@@ -609,6 +609,111 @@ impl SettingsPanel {
                             )
                     }),
             )
+            // 1b. Quick hotkey recording card (only visible when enabled)
+            .when(self.state.read(cx).settings.quick_hotkey_enabled, {
+                let quick_hotkey = self.state.read(cx).settings.quick_hotkey.clone();
+                let quick_recording = self.state.read(cx).recording_quick_hotkey;
+                let state = state.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                let theme = theme.clone();
+                move |parent| {
+                    let recording_border = if quick_recording {
+                        theme.accent
+                    } else {
+                        theme.divider
+                    };
+                    let recording_btn_bg = if quick_recording {
+                        theme.accent_soft
+                    } else {
+                        theme.accent
+                    };
+                    let recording_btn_text = if quick_recording {
+                        theme.accent
+                    } else {
+                        rgb(0xffffff)
+                    };
+                    let desc_color = if quick_recording {
+                        theme.accent
+                    } else {
+                        theme.text_3
+                    };
+                    let desc_text = if quick_recording {
+                        I18nKey::HotkeyPressToRecord.text()
+                    } else {
+                        I18nKey::HotkeyRecordingIdle.text()
+                    };
+
+                    parent.child(
+                        div()
+                            .h(px(66.))
+                            .rounded(px(10.))
+                            .bg(theme.surface)
+                            .border(px(1.))
+                            .border_color(recording_border)
+                            .px(px(14.))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme.text_1)
+                                            .child(I18nKey::QuickHotkeyLabel.text()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(desc_color)
+                                            .child(desc_text),
+                                    ),
+                            )
+                            .child({
+                                let state = state.clone();
+                                let wm = wm.clone();
+                                let this = this.clone();
+                                div()
+                                    .h(px(28.))
+                                    .w(px(80.))
+                                    .rounded(px(7.))
+                                    .bg(recording_btn_bg)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(!quick_recording, |d| {
+                                        d.cursor(CursorStyle::PointingHand)
+                                            .hover(move |style| style.opacity(0.85))
+                                    })
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        if quick_recording {
+                                            return;
+                                        }
+                                        wm.update(cx, |wm, cx| {
+                                            wm.start_quick_hotkey_recording(cx);
+                                        });
+                                        state.update(cx, |s, _cx| {
+                                            s.recording_quick_hotkey = true;
+                                        });
+                                        this.update(cx, |_panel, cx| cx.notify());
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(recording_btn_text)
+                                            .child(quick_hotkey.clone()),
+                                    )
+                            }),
+                    )
+                }
+            })
             // 2. Shared foreground app info bar (always shows current foreground)
             .child({
                 // When recording was triggered from the bar button, show recording
@@ -635,8 +740,8 @@ impl SettingsPanel {
                     move |_window, cx| {
                         this_ps.update(cx, |panel, cx| {
                             panel.recording_paste_shortcut = Some(app_name_ps.clone());
-                            panel.window_manager.update(cx, |wm, _cx| {
-                                wm.start_paste_shortcut_recording(app_name_ps.clone());
+                            panel.window_manager.update(cx, |wm, cx| {
+                                wm.start_paste_shortcut_recording(app_name_ps.clone(), cx);
                             });
                             cx.notify();
                         });
@@ -748,8 +853,8 @@ impl SettingsPanel {
                                 on_shortcut_click: Some(Rc::new(move |_window, cx| {
                                     this_re.update(cx, |panel, cx| {
                                         panel.recording_paste_shortcut = Some(name_re.clone());
-                                        panel.window_manager.update(cx, |wm, _cx| {
-                                            wm.start_paste_shortcut_recording(name_re.clone());
+                                        panel.window_manager.update(cx, |wm, cx| {
+                                            wm.start_paste_shortcut_recording(name_re.clone(), cx);
                                         });
                                         cx.notify();
                                     });

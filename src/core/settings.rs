@@ -67,6 +67,10 @@ pub struct PasteShortcutEntry {
 pub struct AppSettings {
     pub theme: String,
     pub hotkey: String,
+    #[serde(default = "default_quick_hotkey")]
+    pub quick_hotkey: String,
+    #[serde(default)]
+    pub quick_hotkey_enabled: bool,
     pub auto_start: bool,
     pub auto_hide: bool,
     pub db_path: String,
@@ -142,11 +146,17 @@ fn default_sync_interval() -> u64 {
     60
 }
 
+fn default_quick_hotkey() -> String {
+    "Alt+C".to_string()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "system".to_string(),
             hotkey: "Alt+V".to_string(),
+            quick_hotkey: default_quick_hotkey(),
+            quick_hotkey_enabled: false,
             auto_start: false,
             auto_hide: true,
             db_path: String::new(),

@@ -56,7 +56,8 @@ winreg = "0.56"
 gpui = { version = "0.2.2", features = ["font-kit"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSBundle", "NSDictionary", "NSArray", "NSThread", "NSLocale"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow", "NSEvent"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSScreen", "NSAppearance", "NSWorkspace", "NSWindow", "NSView", "NSEvent", "objc2-quartz-core"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "objc2-core-foundation"] }
 core-graphics = { version = "0.25", features = ["elcapitan"] }
 core-foundation = "0.10"
 

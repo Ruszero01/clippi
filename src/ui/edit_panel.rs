@@ -528,8 +528,7 @@ impl Render for EditPanel {
 
                                         // 提前取出 input handle，避免在 this.update 内部
                                         // 调用 input.set_value 造成 GPUI re-entrancy
-                                        let input_handle =
-                                            this.read(cx).content_input.clone();
+                                        let input_handle = this.read(cx).content_input.clone();
                                         let mut pending_value: Option<String> = None;
 
                                         this.update(cx, |panel, cx| {
