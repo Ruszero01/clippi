@@ -29,8 +29,9 @@ pub fn get_text_input_anchor() -> Option<TextInputAnchor> {
 #[cfg(target_os = "windows")]
 fn windows_text_input_anchor() -> Option<TextInputAnchor> {
     use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        ClientToScreen, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+        GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
     let target = crate::platform::focus::get_last_non_clippi_window()?;

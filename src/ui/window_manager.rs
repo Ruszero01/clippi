@@ -329,6 +329,30 @@ impl WindowManager {
                     return;
                 }
 
+                // Check if recording for quick window hotkey
+                let recording_quick = self.state.read(cx).recording_quick_hotkey;
+                if recording_quick {
+                    hk.finish_recording();
+                    hk.register();
+                    if !new_hotkey.is_empty() {
+                        if let Err(e) = hk.update_quick_hotkey(&new_hotkey) {
+                            self.state.update(cx, |state, _cx| {
+                                state.toast_message = Some(e);
+                            });
+                        }
+                        self.state.update(cx, |state, _cx| {
+                            state.settings.quick_hotkey = new_hotkey;
+                            state.settings.save();
+                            state.recording_quick_hotkey = false;
+                        });
+                    } else {
+                        self.state.update(cx, |state, _cx| {
+                            state.recording_quick_hotkey = false;
+                        });
+                    }
+                    return;
+                }
+
                 if !new_hotkey.is_empty() {
                     match hk.update_hotkey(&new_hotkey) {
                         Ok(()) => {
@@ -402,13 +426,77 @@ impl WindowManager {
 
         let is_self_fg = self.is_self_foreground();
 
-        // --- Auto-hide logic ---
+        // --- Quick window click-outside detection ---
+        // Detect mouse-down anywhere outside the quick window and auto-hide.
+        if self.quick_visible {
+            // If main window activated (e.g. via hotkey), complementary close.
+            if is_self_fg {
+                self.hide_quick_window();
+                return;
+            }
+            // Detect click outside quick window via mouse button state.
+            self.poll_quick_click_outside();
+            // If quick window was just hidden by click-outside, skip main logic.
+            if !self.quick_visible {
+                return;
+            }
+        }
+
+        // --- Auto-hide logic for main window ---
         // --- Guard conditions: any true → skip auto-hide ---
         if !self.auto_hide || self.pinned || !self.visible || self.is_suppressed() || is_self_fg {
             return;
         }
 
         self.hide(cx);
+    }
+
+    /// Hide the quick window if the user clicks outside its bounds.
+    fn poll_quick_click_outside(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::Foundation::{POINT, RECT};
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+            use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+            const VK_LBUTTON: i32 = 0x01;
+
+            // SAFETY: `GetAsyncKeyState` is a non-blocking poll callable from any
+            // thread; `GetCursorPos` and `GetWindowRect` are read-only queries.
+            // We check the LSB (bit 0) which indicates the button was pressed
+            // since the last GetAsyncKeyState call on this thread — this reliably
+            // catches clicks even if the button is already released by poll time.
+            unsafe {
+                let state = GetAsyncKeyState(VK_LBUTTON);
+                if (state & 0x0001) != 0 {
+                    // Button activity since last poll — check cursor position.
+                    let mut cursor = POINT { x: 0, y: 0 };
+                    if GetCursorPos(&mut cursor) != 0 {
+                        let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
+                        let mut rect = RECT {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        };
+                        if !hwnd.is_null() && GetWindowRect(hwnd, &mut rect) != 0
+                            && (cursor.x < rect.left
+                                || cursor.x > rect.right
+                                || cursor.y < rect.top
+                                || cursor.y > rect.bottom)
+                        {
+                            self.hide_quick_window();
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS the NSWindow level + no-activate already makes click-outside
+            // dismiss the popup natively via `orderOut:`.
+        }
     }
 
     // --- Tray event polling ---
@@ -808,7 +896,12 @@ impl WindowManager {
     /// is ready before the first `show_and_focus` can be triggered.
     pub fn init_hotkey(&mut self, cx: &mut Context<Self>) {
         let hotkey_str = self.state.read(cx).settings.hotkey.clone();
-        let quick_hotkey_str = self.state.read(cx).settings.quick_hotkey.clone();
+        let enabled = self.state.read(cx).settings.quick_hotkey_enabled;
+        let quick_hotkey_str = if enabled {
+            self.state.read(cx).settings.quick_hotkey.clone()
+        } else {
+            String::new()
+        };
         self.hotkey = match create_hotkey_listener(&hotkey_str, &quick_hotkey_str) {
             Ok(hk) => Some(hk),
             Err(e) => {
@@ -885,8 +978,7 @@ impl WindowManager {
         };
 
         self.state.update(cx, |state, _cx| state.reload_items());
-        let items = self.state.read(cx).items.clone();
-        view.update(cx, |view, cx| view.set_items(items, cx));
+        view.update(cx, |view, cx| view.reset_scroll(cx));
         self.quick_visible = true;
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
@@ -939,6 +1031,33 @@ impl WindowManager {
         if let Some(handle) = self.quick_window {
             let _ = cx.update_window(handle, |_view, window, _cx| window.refresh());
         }
+
+        // Re-enforce window size after GPUI render — PopUp windows may
+        // not respect initial bounds on first paint.
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+            };
+
+            let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
+            if !hwnd.is_null() {
+                let scale = monitor::get_scale_factor(x, y);
+                let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
+                let win_h = (QUICK_WINDOW_HEIGHT * scale) as i32;
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        std::ptr::null_mut(),
+                        0,
+                        0,
+                        win_w,
+                        win_h,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+                    );
+                }
+            }
+        }
     }
 
     fn hide_quick_window(&mut self) {
@@ -979,7 +1098,7 @@ impl WindowManager {
                 view.update(cx, |view, cx| view.select_next(cx));
             }
             QuickAction::Paste => {
-                let id = view.read(cx).selected_item_id();
+                let id = view.update(cx, |view, vcx| view.selected_item_id(vcx));
                 if let Some(id) = id {
                     self.quick_paste_item(id, cx);
                 }
@@ -1378,11 +1497,32 @@ impl WindowManager {
 
     pub fn start_hotkey_recording(&mut self) {
         if let Some(ref mut hk) = self.hotkey {
-            // --- Unregister the current hotkey before recording so the old ---
-            // --- hotkey doesn't fire poll_pressed() during the recording ---
-            // --- session (which would trigger show_and_focus / reposition). ---
             hk.unregister();
             hk.start_recording();
+        }
+    }
+
+    /// Start recording the quick window hotkey.
+    pub fn start_quick_hotkey_recording(&mut self) {
+        if let Some(ref mut hk) = self.hotkey {
+            hk.unregister();
+            hk.start_recording();
+        }
+    }
+
+    /// Reload quick hotkey registration (called when quick window is enabled).
+    pub fn reload_quick_hotkey(&mut self, cx: &mut Context<Self>) {
+        let quick_hotkey = self.state.read(cx).settings.quick_hotkey.clone();
+        if let Some(ref mut hk) = self.hotkey {
+            let _ = hk.update_quick_hotkey(&quick_hotkey);
+            hk.set_quick_actions_enabled(false);
+        }
+    }
+
+    /// Disable quick hotkey (called when quick window is disabled).
+    pub fn disable_quick_hotkey(&mut self) {
+        if let Some(ref mut hk) = self.hotkey {
+            let _ = hk.update_quick_hotkey("");
         }
     }
 
