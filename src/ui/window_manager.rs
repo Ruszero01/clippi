@@ -162,6 +162,8 @@ pub struct WindowManager {
 
     // --- Poll task ---
     _poll_task: Option<Task<()>>,
+    /// Fast poll for quick-action hotkeys when quick window is visible (16ms ≈ 60fps).
+    _quick_poll_task: Option<Task<()>>,
 }
 
 impl EventEmitter<WindowManagerEvent> for WindowManager {}
@@ -225,6 +227,7 @@ impl WindowManager {
             #[cfg(target_os = "macos")]
             quick_ns_window: 0,
             _poll_task: None,
+            _quick_poll_task: None,
         };
 
         // --- Share the batch_pasting flag with AppState so it can suppress ---
@@ -257,6 +260,24 @@ impl WindowManager {
                 break;
             };
             if this.update(cx, |wm, cx| wm.poll(cx)).is_err() {
+                break;
+            }
+        }));
+    }
+
+    /// Fast poll (16ms ≈ 60fps) for quick-action hotkeys when quick window is visible.
+    /// Gives responsive keyboard navigation without the 200ms main poll delay.
+    fn start_quick_poll(&mut self, cx: &mut Context<Self>) {
+        self._quick_poll_task = Some(cx.spawn(async move |weak_self, cx| loop {
+            Timer::after(Duration::from_millis(16)).await;
+            let Some(this) = weak_self.upgrade() else {
+                break;
+            };
+            let visible = this.update(cx, |wm, _cx| wm.quick_visible).unwrap_or(false);
+            if !visible {
+                break;
+            }
+            if this.update(cx, |wm, cx| wm.poll_hotkey(cx)).is_err() {
                 break;
             }
         }));
@@ -1032,6 +1053,9 @@ impl WindowManager {
             let _ = cx.update_window(handle, |_view, window, _cx| window.refresh());
         }
 
+        // Start fast poll for responsive keyboard navigation.
+        self.start_quick_poll(cx);
+
         // Re-enforce window size after GPUI render — PopUp windows may
         // not respect initial bounds on first paint.
         #[cfg(target_os = "windows")]
@@ -1061,6 +1085,7 @@ impl WindowManager {
     }
 
     fn hide_quick_window(&mut self) {
+        self._quick_poll_task = None; // cancel fast poll
         self.quick_visible = false;
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(false);
