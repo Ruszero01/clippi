@@ -592,8 +592,8 @@ impl SettingsPanel {
                                 if recording {
                                     return;
                                 }
-                                wm.update(cx, |wm, _cx| {
-                                    wm.start_hotkey_recording();
+                                wm.update(cx, |wm, cx| {
+                                    wm.start_hotkey_recording(cx);
                                 });
                                 state.update(cx, |s, _cx| {
                                     s.hotkey_recording = true;
@@ -695,8 +695,8 @@ impl SettingsPanel {
                                         if quick_recording {
                                             return;
                                         }
-                                        wm.update(cx, |wm, _cx| {
-                                            wm.start_quick_hotkey_recording();
+                                        wm.update(cx, |wm, cx| {
+                                            wm.start_quick_hotkey_recording(cx);
                                         });
                                         state.update(cx, |s, _cx| {
                                             s.recording_quick_hotkey = true;
@@ -740,8 +740,8 @@ impl SettingsPanel {
                     move |_window, cx| {
                         this_ps.update(cx, |panel, cx| {
                             panel.recording_paste_shortcut = Some(app_name_ps.clone());
-                            panel.window_manager.update(cx, |wm, _cx| {
-                                wm.start_paste_shortcut_recording(app_name_ps.clone());
+                            panel.window_manager.update(cx, |wm, cx| {
+                                wm.start_paste_shortcut_recording(app_name_ps.clone(), cx);
                             });
                             cx.notify();
                         });
@@ -853,8 +853,8 @@ impl SettingsPanel {
                                 on_shortcut_click: Some(Rc::new(move |_window, cx| {
                                     this_re.update(cx, |panel, cx| {
                                         panel.recording_paste_shortcut = Some(name_re.clone());
-                                        panel.window_manager.update(cx, |wm, _cx| {
-                                            wm.start_paste_shortcut_recording(name_re.clone());
+                                        panel.window_manager.update(cx, |wm, cx| {
+                                            wm.start_paste_shortcut_recording(name_re.clone(), cx);
                                         });
                                         cx.notify();
                                     });

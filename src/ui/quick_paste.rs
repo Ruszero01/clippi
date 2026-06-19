@@ -16,7 +16,12 @@ pub const QUICK_WINDOW_HEIGHT: f32 = 282.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
+#[cfg(target_os = "macos")]
+const OUTER_PADDING: f32 = 0.0;
+#[cfg(not(target_os = "macos"))]
 const OUTER_PADDING: f32 = 2.0;
+
+pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 10.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
 
 /// (slot, id, icon, preview_text, relative_time, image_path)
@@ -60,6 +65,36 @@ impl QuickPasteView {
         }
         self.selected_index = self.selected_index.saturating_sub(1);
         self.ensure_selected_visible();
+        cx.notify();
+    }
+
+    pub fn select_next_page(&mut self, cx: &mut Context<Self>) {
+        let len = self.state.read(cx).items.len();
+        if len == 0 {
+            return;
+        }
+        let last_page = (len - 1) / VISIBLE_ROWS;
+        let current_page = self.selected_index / VISIBLE_ROWS;
+        if current_page >= last_page {
+            return;
+        }
+        let next_page = current_page + 1;
+        self.selected_index = next_page * VISIBLE_ROWS;
+        self.first_visible = self.selected_index;
+        cx.notify();
+    }
+
+    pub fn select_previous_page(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).items.is_empty() {
+            return;
+        }
+        let current_page = self.selected_index / VISIBLE_ROWS;
+        if current_page == 0 {
+            return;
+        }
+        let previous_page = current_page - 1;
+        self.selected_index = previous_page * VISIBLE_ROWS;
+        self.first_visible = self.selected_index;
         cx.notify();
     }
 
@@ -118,7 +153,8 @@ impl QuickPasteView {
             .take(VISIBLE_ROWS)
             .enumerate()
             .map(|(slot, item)| {
-                let is_image = item.content_type == ContentType::Image && !item.image_path.is_empty();
+                let is_image =
+                    item.content_type == ContentType::Image && !item.image_path.is_empty();
                 (
                     slot,
                     item.id,
@@ -195,7 +231,7 @@ impl Render for QuickPasteView {
             .child(
                 div()
                     .size_full()
-                    .rounded(px(6.0))
+                    .rounded(px(QUICK_WINDOW_CORNER_RADIUS))
                     .border_1()
                     .border_color(theme.divider)
                     .bg(theme.bg)
@@ -226,19 +262,18 @@ impl Render for QuickPasteView {
                                     let key = entry.key.clone();
                                     let t = theme.clone();
                                     let app_state = self.state.clone();
-                                    let filter_text = if active {
-                                        rgb(0xffffff)
-                                    } else {
-                                        t.text_2
-                                    };
+                                    let filter_text = if active { rgb(0xffffff) } else { t.text_2 };
                                     div()
                                         .h(px(22.0))
                                         .when(icon_only, |b| {
                                             b.flex_1().min_w(px(0.0)).justify_center()
                                         })
                                         .when(!icon_only, |b| {
-                                            b.flex_1().min_w(px(0.0)).justify_center()
-                                                .px(px(5.0)).gap(px(2.0))
+                                            b.flex_1()
+                                                .min_w(px(0.0))
+                                                .justify_center()
+                                                .px(px(5.0))
+                                                .gap(px(2.0))
                                         })
                                         .rounded(px(5.0))
                                         .flex()
@@ -391,7 +426,11 @@ impl Render for QuickPasteView {
                                     .flex()
                                     .items_center()
                                     .gap(px(8.0))
-                                    .bg(if selected { t.accent_overlay() } else { rgba(0x00000000) })
+                                    .bg(if selected {
+                                        t.accent_overlay()
+                                    } else {
+                                        rgba(0x00000000)
+                                    })
                                     .cursor(CursorStyle::PointingHand)
                                     .on_mouse_down(MouseButton::Left, {
                                         let ve2 = ve.clone();
@@ -419,7 +458,11 @@ impl Render for QuickPasteView {
                                             .items_center()
                                             .justify_center()
                                             .bg(if selected { t.accent } else { rgba(0x00000000) })
-                                            .text_color(if selected { rgb(0xffffff) } else { t.text_2 })
+                                            .text_color(if selected {
+                                                rgb(0xffffff)
+                                            } else {
+                                                t.text_2
+                                            })
                                             .text_size(px(11.0))
                                             .font_weight(FontWeight::BOLD)
                                             .child((slot + 1).to_string()),

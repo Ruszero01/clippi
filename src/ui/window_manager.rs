@@ -24,7 +24,8 @@ use crate::services::gpui_sync::GpuiSyncService;
 use crate::services::update;
 use crate::state::app::AppState;
 use crate::ui::quick_paste::{
-    QuickPasteEvent, QuickPasteView, QUICK_WINDOW_HEIGHT, QUICK_WINDOW_WIDTH,
+    QuickPasteEvent, QuickPasteView, QUICK_WINDOW_CORNER_RADIUS, QUICK_WINDOW_HEIGHT,
+    QUICK_WINDOW_WIDTH,
 };
 
 /// Shared foreground app name for cross-service coordination.
@@ -152,6 +153,12 @@ pub struct WindowManager {
     quick_window: Option<AnyWindowHandle>,
     quick_view: Option<Entity<QuickPasteView>>,
     quick_visible: bool,
+    /// Tracks the current mouse-button state so click-outside handling reacts
+    /// once per press instead of repeatedly while a button is held.
+    quick_mouse_down: bool,
+    /// Native identity of the app/window that owned focus when the popup opened.
+    /// A change means the user switched context and the popup is now stale.
+    quick_foreground_id: isize,
     _quick_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
     quick_hwnd: isize,
@@ -164,6 +171,9 @@ pub struct WindowManager {
     _poll_task: Option<Task<()>>,
     /// Fast poll for quick-action hotkeys when quick window is visible (16ms ≈ 60fps).
     _quick_poll_task: Option<Task<()>>,
+    /// Fast poll used only while recording a shortcut, so a short key press
+    /// cannot fall between two ticks of the 200 ms service loop.
+    _recording_poll_task: Option<Task<()>>,
 }
 
 impl EventEmitter<WindowManagerEvent> for WindowManager {}
@@ -221,6 +231,8 @@ impl WindowManager {
             quick_window: None,
             quick_view: None,
             quick_visible: false,
+            quick_mouse_down: false,
+            quick_foreground_id: 0,
             _quick_subscription: None,
             #[cfg(target_os = "windows")]
             quick_hwnd: 0,
@@ -228,6 +240,7 @@ impl WindowManager {
             quick_ns_window: 0,
             _poll_task: None,
             _quick_poll_task: None,
+            _recording_poll_task: None,
         };
 
         // --- Share the batch_pasting flag with AppState so it can suppress ---
@@ -277,7 +290,33 @@ impl WindowManager {
             if !visible {
                 break;
             }
-            if this.update(cx, |wm, cx| wm.poll_hotkey(cx)).is_err() {
+            if this
+                .update(cx, |wm, cx| {
+                    wm.poll_hotkey(cx);
+                    wm.poll_quick_click_outside();
+                })
+                .is_err()
+            {
+                break;
+            }
+        }));
+    }
+
+    fn start_recording_poll(&mut self, cx: &mut Context<Self>) {
+        self._recording_poll_task = Some(cx.spawn(async move |weak_self, cx| loop {
+            Timer::after(Duration::from_millis(16)).await;
+            let Some(this) = weak_self.upgrade() else {
+                break;
+            };
+            let recording = this
+                .update(cx, |wm, cx| {
+                    wm.poll_recording(cx);
+                    wm.hotkey
+                        .as_ref()
+                        .is_some_and(|hotkey| hotkey.is_recording())
+                })
+                .unwrap_or(false);
+            if !recording {
                 break;
             }
         }));
@@ -317,7 +356,13 @@ impl WindowManager {
             };
             match event {
                 HotkeyEvent::Main => self.show_and_focus(cx),
-                HotkeyEvent::Quick => self.show_quick_window(cx),
+                HotkeyEvent::Quick => {
+                    if self.quick_visible {
+                        self.hide_quick_window();
+                    } else {
+                        self.show_quick_window(cx);
+                    }
+                }
                 HotkeyEvent::QuickAction(action) => self.handle_quick_action(action, cx),
             }
         }
@@ -356,21 +401,27 @@ impl WindowManager {
                     hk.finish_recording();
                     hk.register();
                     if !new_hotkey.is_empty() {
-                        if let Err(e) = hk.update_quick_hotkey(&new_hotkey) {
-                            self.state.update(cx, |state, _cx| {
-                                state.toast_message = Some(e);
-                            });
+                        match hk.update_quick_hotkey(&new_hotkey) {
+                            Ok(()) => {
+                                self.state.update(cx, |state, _cx| {
+                                    state.settings.quick_hotkey = new_hotkey;
+                                    state.settings.save();
+                                    state.recording_quick_hotkey = false;
+                                });
+                            }
+                            Err(e) => {
+                                self.state.update(cx, |state, _cx| {
+                                    state.toast_message = Some(e);
+                                    state.recording_quick_hotkey = false;
+                                });
+                            }
                         }
-                        self.state.update(cx, |state, _cx| {
-                            state.settings.quick_hotkey = new_hotkey;
-                            state.settings.save();
-                            state.recording_quick_hotkey = false;
-                        });
                     } else {
                         self.state.update(cx, |state, _cx| {
                             state.recording_quick_hotkey = false;
                         });
                     }
+                    cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
                     return;
                 }
 
@@ -450,15 +501,11 @@ impl WindowManager {
         // --- Quick window click-outside detection ---
         // Detect mouse-down anywhere outside the quick window and auto-hide.
         if self.quick_visible {
-            // If main window activated (e.g. via hotkey), complementary close.
-            if is_self_fg {
+            // Close when focus moves to the main window or to a different app.
+            // The popup itself is non-activating, so interacting inside it does
+            // not change this foreground identity.
+            if is_self_fg || self.quick_foreground_changed() {
                 self.hide_quick_window();
-                return;
-            }
-            // Detect click outside quick window via mouse button state.
-            self.poll_quick_click_outside();
-            // If quick window was just hidden by click-outside, skip main logic.
-            if !self.quick_visible {
                 return;
             }
         }
@@ -474,6 +521,10 @@ impl WindowManager {
 
     /// Hide the quick window if the user clicks outside its bounds.
     fn poll_quick_click_outside(&mut self) {
+        if !self.quick_visible {
+            return;
+        }
+
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::Foundation::{POINT, RECT};
@@ -481,15 +532,20 @@ impl WindowManager {
             use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
 
             const VK_LBUTTON: i32 = 0x01;
+            const VK_RBUTTON: i32 = 0x02;
+            const VK_MBUTTON: i32 = 0x04;
 
-            // SAFETY: `GetAsyncKeyState` is a non-blocking poll callable from any
-            // thread; `GetCursorPos` and `GetWindowRect` are read-only queries.
-            // We check the LSB (bit 0) which indicates the button was pressed
-            // since the last GetAsyncKeyState call on this thread — this reliably
-            // catches clicks even if the button is already released by poll time.
+            // Check both the current down bit and the latched "pressed since last
+            // poll" bit. The latter catches short clicks that begin and end
+            // between two 16 ms quick-loop ticks.
             unsafe {
-                let state = GetAsyncKeyState(VK_LBUTTON);
-                if (state & 0x0001) != 0 {
+                let states = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].map(GetAsyncKeyState);
+                let mouse_down = states.iter().any(|state| (state & i16::MIN) != 0);
+                let pressed = states.iter().any(|state| (state & 0x0001) != 0)
+                    || (mouse_down && !self.quick_mouse_down);
+                self.quick_mouse_down = mouse_down;
+
+                if pressed {
                     // Button activity since last poll — check cursor position.
                     let mut cursor = POINT { x: 0, y: 0 };
                     if GetCursorPos(&mut cursor) != 0 {
@@ -500,11 +556,12 @@ impl WindowManager {
                             right: 0,
                             bottom: 0,
                         };
-                        if !hwnd.is_null() && GetWindowRect(hwnd, &mut rect) != 0
+                        if !hwnd.is_null()
+                            && GetWindowRect(hwnd, &mut rect) != 0
                             && (cursor.x < rect.left
-                                || cursor.x > rect.right
+                                || cursor.x >= rect.right
                                 || cursor.y < rect.top
-                                || cursor.y > rect.bottom)
+                                || cursor.y >= rect.bottom)
                         {
                             self.hide_quick_window();
                         }
@@ -515,8 +572,28 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            // On macOS the NSWindow level + no-activate already makes click-outside
-            // dismiss the popup natively via `orderOut:`.
+            use objc2_app_kit::NSEvent;
+
+            let mouse_down = NSEvent::pressedMouseButtons() != 0;
+            let pressed = mouse_down && !self.quick_mouse_down;
+            self.quick_mouse_down = mouse_down;
+            if !pressed || self.quick_ns_window == 0 {
+                return;
+            }
+
+            // `NSEvent::mouseLocation` and `NSWindow::frame` both use the native
+            // bottom-left global coordinate space, so this remains correct on
+            // secondary displays without doing a top-left conversion.
+            let window = unsafe { &*(self.quick_ns_window as *const objc2_app_kit::NSWindow) };
+            let cursor = NSEvent::mouseLocation();
+            let frame = window.frame();
+            let outside = cursor.x < frame.origin.x
+                || cursor.x >= frame.origin.x + frame.size.width
+                || cursor.y < frame.origin.y
+                || cursor.y >= frame.origin.y + frame.size.height;
+            if outside {
+                self.hide_quick_window();
+            }
         }
     }
 
@@ -836,6 +913,9 @@ impl WindowManager {
     /// period and brings the window to foreground — it skips repositioning
     /// and item reload to avoid disrupting the current view.
     pub fn show_and_focus(&mut self, cx: &mut Context<Self>) {
+        if self.quick_visible {
+            self.hide_quick_window();
+        }
         self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
 
         let was_already_visible = self.visible;
@@ -1001,6 +1081,8 @@ impl WindowManager {
         self.state.update(cx, |state, _cx| state.reload_items());
         view.update(cx, |view, cx| view.reset_scroll(cx));
         self.quick_visible = true;
+        self.quick_mouse_down = Self::mouse_buttons_down();
+        self.quick_foreground_id = Self::current_foreground_id();
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
         }
@@ -1087,6 +1169,8 @@ impl WindowManager {
     fn hide_quick_window(&mut self) {
         self._quick_poll_task = None; // cancel fast poll
         self.quick_visible = false;
+        self.quick_mouse_down = false;
+        self.quick_foreground_id = 0;
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(false);
         }
@@ -1107,6 +1191,51 @@ impl WindowManager {
         }
     }
 
+    fn mouse_buttons_down() -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+            [0x01, 0x02, 0x04]
+                .into_iter()
+                .any(|button| unsafe { (GetAsyncKeyState(button) & i16::MIN) != 0 })
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            objc2_app_kit::NSEvent::pressedMouseButtons() != 0
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        false
+    }
+
+    fn quick_foreground_changed(&self) -> bool {
+        if self.quick_foreground_id == 0 {
+            return false;
+        }
+        let current = Self::current_foreground_id();
+        current != 0 && current != self.quick_foreground_id
+    }
+
+    fn current_foreground_id() -> isize {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+            unsafe { GetForegroundWindow() as isize }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            objc2_app_kit::NSWorkspace::sharedWorkspace()
+                .frontmostApplication()
+                .map(|app| app.processIdentifier() as isize)
+                .unwrap_or(0)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        0
+    }
+
     fn handle_quick_action(&mut self, action: QuickAction, cx: &mut Context<Self>) {
         if !self.quick_visible {
             return;
@@ -1121,6 +1250,12 @@ impl WindowManager {
             }
             QuickAction::Next => {
                 view.update(cx, |view, cx| view.select_next(cx));
+            }
+            QuickAction::PreviousPage => {
+                view.update(cx, |view, cx| view.select_previous_page(cx));
+            }
+            QuickAction::NextPage => {
+                view.update(cx, |view, cx| view.select_next_page(cx));
             }
             QuickAction::Paste => {
                 let id = view.update(cx, |view, vcx| view.selected_item_id(vcx));
@@ -1286,6 +1421,7 @@ impl WindowManager {
     #[cfg(target_os = "macos")]
     pub fn set_quick_ns_window(&mut self, ns_window: isize) {
         use objc2_app_kit::{NSColor, NSWindow, NSWindowButton};
+        use objc2_quartz_core::kCACornerCurveContinuous;
 
         self.quick_ns_window = ns_window;
         if ns_window == 0 {
@@ -1306,6 +1442,18 @@ impl WindowManager {
         let clear = NSColor::clearColor();
         window.setBackgroundColor(Some(&clear));
         window.setOpaque(false);
+
+        // Let AppKit/Core Animation own the actual window clipping. A
+        // continuous corner curve matches standard macOS panels and avoids the
+        // jagged transparent corners produced by view-only GPUI rounding.
+        if let Some(content_view) = window.contentView() {
+            content_view.setWantsLayer(true);
+            if let Some(layer) = content_view.layer() {
+                layer.setCornerRadius(QUICK_WINDOW_CORNER_RADIUS as f64);
+                layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+                layer.setMasksToBounds(true);
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1520,18 +1668,20 @@ impl WindowManager {
         self.position_mode = mode;
     }
 
-    pub fn start_hotkey_recording(&mut self) {
+    pub fn start_hotkey_recording(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut hk) = self.hotkey {
             hk.unregister();
             hk.start_recording();
+            self.start_recording_poll(cx);
         }
     }
 
     /// Start recording the quick window hotkey.
-    pub fn start_quick_hotkey_recording(&mut self) {
+    pub fn start_quick_hotkey_recording(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut hk) = self.hotkey {
             hk.unregister();
             hk.start_recording();
+            self.start_recording_poll(cx);
         }
     }
 
@@ -1539,7 +1689,13 @@ impl WindowManager {
     pub fn reload_quick_hotkey(&mut self, cx: &mut Context<Self>) {
         let quick_hotkey = self.state.read(cx).settings.quick_hotkey.clone();
         if let Some(ref mut hk) = self.hotkey {
-            let _ = hk.update_quick_hotkey(&quick_hotkey);
+            if let Err(e) = hk.update_quick_hotkey(&quick_hotkey) {
+                self.state.update(cx, |state, _cx| {
+                    state.settings.quick_hotkey_enabled = false;
+                    state.settings.save();
+                    state.toast_message = Some(e);
+                });
+            }
             hk.set_quick_actions_enabled(false);
         }
     }
@@ -1552,9 +1708,9 @@ impl WindowManager {
     }
 
     /// Start recording a paste shortcut for the given app.
-    pub fn start_paste_shortcut_recording(&mut self, app_name: String) {
+    pub fn start_paste_shortcut_recording(&mut self, app_name: String, cx: &mut Context<Self>) {
         self.recording_paste_shortcut_app = Some(app_name);
-        self.start_hotkey_recording(); // reuse recording infra
+        self.start_hotkey_recording(cx); // reuse recording infra
     }
 
     /// Cancel a paste shortcut recording — re-register the global hotkey
