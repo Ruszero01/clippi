@@ -24,8 +24,7 @@ use crate::services::gpui_sync::GpuiSyncService;
 use crate::services::update;
 use crate::state::app::AppState;
 use crate::ui::quick_paste::{
-    QuickPasteEvent, QuickPasteView, QUICK_WINDOW_CORNER_RADIUS, QUICK_WINDOW_HEIGHT,
-    QUICK_WINDOW_WIDTH,
+    QuickPasteEvent, QuickPasteView, QUICK_WINDOW_HEIGHT, QUICK_WINDOW_WIDTH,
 };
 
 /// Shared foreground app name for cross-service coordination.
@@ -539,7 +538,8 @@ impl WindowManager {
             // poll" bit. The latter catches short clicks that begin and end
             // between two 16 ms quick-loop ticks.
             unsafe {
-                let states = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].map(GetAsyncKeyState);
+                let states = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+                    .map(|vkey| GetAsyncKeyState(vkey));
                 let mouse_down = states.iter().any(|state| (state & i16::MIN) != 0);
                 let pressed = states.iter().any(|state| (state & 0x0001) != 0)
                     || (mouse_down && !self.quick_mouse_down);
