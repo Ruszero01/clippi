@@ -66,6 +66,8 @@ pub struct AppState {
     pub foreground_app_icon_base64: String,
     /// Whether a hotkey recording is in progress (set by settings UI, cleared by WM poll).
     pub hotkey_recording: bool,
+    /// Whether a quick-window hotkey recording is in progress.
+    pub recording_quick_hotkey: bool,
     /// GPUI-facing sync status and backend snapshots.
     pub sync: SyncState,
 }
@@ -180,6 +182,7 @@ impl AppState {
             foreground_window_title: String::new(),
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
+            recording_quick_hotkey: false,
             sync,
         }
     }
@@ -1354,6 +1357,7 @@ mod tests {
             foreground_window_title: String::new(),
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
+            recording_quick_hotkey: false,
             sync: SyncState::default(),
         };
         (state, dirty)

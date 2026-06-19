@@ -115,6 +115,43 @@ impl SettingsPanel {
                         this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
+            })
+            // --- Quick paste window ---
+            .child({
+                let state = state.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                let quick_enabled = self.state.read(cx).settings.quick_hotkey_enabled;
+                self.setting_row_with_toggle(
+                    I18nKey::SettingQuickWindow.text(),
+                    I18nKey::DescQuickWindow.text(),
+                    quick_enabled,
+                    window,
+                    cx,
+                    {
+                        let state = state.clone();
+                        let wm = wm.clone();
+                        let this = this.clone();
+                        move |_window, _cx| {
+                            let new_val = !state.read(_cx).settings.quick_hotkey_enabled;
+                            state.update(_cx, |s, _cx| {
+                                s.settings.quick_hotkey_enabled = new_val;
+                                if new_val && s.settings.quick_hotkey == s.settings.hotkey {
+                                    s.settings.quick_hotkey = "Alt+V".to_string();
+                                }
+                                s.settings.save();
+                            });
+                            wm.update(_cx, |wm, cx| {
+                                if new_val {
+                                    wm.reload_quick_hotkey(cx);
+                                } else {
+                                    wm.disable_quick_hotkey();
+                                }
+                            });
+                            this.update(_cx, |_panel, cx| cx.notify());
+                        }
+                    },
+                )
             });
 
         // --- Hide taskbar icon (Windows only — macOS tray apps already hide from Dock) ---

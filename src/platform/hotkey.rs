@@ -289,13 +289,23 @@ impl DesktopHotkeyListener {
         let manager = GlobalHotKeyManager::new()
             .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
         let hotkey = parse_hotkey(hotkey_str)?;
-        let quick_hotkey = parse_hotkey(quick_hotkey_str)?;
         manager
             .register(hotkey)
             .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
-        manager
-            .register(quick_hotkey)
-            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+
+        let quick_hotkey;
+        let quick_registered;
+        if quick_hotkey_str.is_empty() {
+            // Quick hotkey disabled — use a placeholder that won't match any key.
+            quick_hotkey = HotKey::new(None, global_hotkey::hotkey::Code::F24);
+            quick_registered = false;
+        } else {
+            quick_hotkey = parse_hotkey(quick_hotkey_str)?;
+            manager
+                .register(quick_hotkey)
+                .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+            quick_registered = true;
+        }
 
         Ok(Self {
             manager,
@@ -303,7 +313,7 @@ impl DesktopHotkeyListener {
             quick_hotkey,
             is_recording: false,
             registered: true,
-            quick_registered: true,
+            quick_registered,
             quick_action_hotkeys: quick_action_hotkeys(),
             quick_actions_registered: false,
         })
@@ -369,11 +379,16 @@ impl HotkeyListener for DesktopHotkeyListener {
     }
 
     fn update_quick_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
-        let new_hotkey = parse_hotkey(hotkey_str)?;
+        // Unregister old quick hotkey if present.
         if self.quick_registered {
             let _ = self.manager.unregister(self.quick_hotkey);
             self.quick_registered = false;
         }
+        // Empty string means disable quick hotkey.
+        if hotkey_str.is_empty() {
+            return Ok(());
+        }
+        let new_hotkey = parse_hotkey(hotkey_str)?;
         std::thread::sleep(Duration::from_millis(50));
 
         self.register_hotkey(new_hotkey)?;
