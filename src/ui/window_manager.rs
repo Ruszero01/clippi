@@ -294,7 +294,7 @@ impl WindowManager {
             if this
                 .update(cx, |wm, cx| {
                     wm.poll_hotkey(cx);
-                    wm.poll_quick_click_outside();
+                    wm.poll_quick_click_outside(cx);
                 })
                 .is_err()
             {
@@ -359,7 +359,7 @@ impl WindowManager {
                 HotkeyEvent::Main => self.show_and_focus(cx),
                 HotkeyEvent::Quick => {
                     if self.quick_visible {
-                        self.hide_quick_window();
+                        self.hide_quick_window(cx);
                     } else {
                         self.show_quick_window(cx);
                     }
@@ -506,7 +506,7 @@ impl WindowManager {
             // The popup itself is non-activating, so interacting inside it does
             // not change this foreground identity.
             if is_self_fg || self.quick_foreground_changed() {
-                self.hide_quick_window();
+                self.hide_quick_window(cx);
                 return;
             }
         }
@@ -521,7 +521,7 @@ impl WindowManager {
     }
 
     /// Hide the quick window if the user clicks outside its bounds.
-    fn poll_quick_click_outside(&mut self) {
+    fn poll_quick_click_outside(&mut self, cx: &mut Context<Self>) {
         if !self.quick_visible {
             return;
         }
@@ -565,7 +565,7 @@ impl WindowManager {
                                 || cursor.y < rect.top
                                 || cursor.y >= rect.bottom)
                         {
-                            self.hide_quick_window();
+                            self.hide_quick_window(cx);
                         }
                     }
                 }
@@ -594,7 +594,7 @@ impl WindowManager {
                 || cursor.y < frame.origin.y
                 || cursor.y >= frame.origin.y + frame.size.height;
             if outside {
-                self.hide_quick_window();
+                self.hide_quick_window(cx);
             }
         }
     }
@@ -769,7 +769,7 @@ impl WindowManager {
             }
             settings.save();
         });
-        self.shutdown();
+        self.shutdown(cx);
     }
 
     /// Fully quit the application.
@@ -916,7 +916,7 @@ impl WindowManager {
     /// and item reload to avoid disrupting the current view.
     pub fn show_and_focus(&mut self, cx: &mut Context<Self>) {
         if self.quick_visible {
-            self.hide_quick_window();
+            self.hide_quick_window(cx);
         }
         self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
 
@@ -1032,12 +1032,9 @@ impl WindowManager {
 
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
-        self.hide_quick_window();
+        self.hide_quick_window(cx);
         self.dismiss_ui(cx);
         cx.emit(WindowManagerEvent::WindowHidden);
-
-        // Release memory: clear items, checkpoint, trim (emits ClipboardChanged)
-        self.release_memory(cx);
 
         #[cfg(target_os = "windows")]
         {
@@ -1168,7 +1165,7 @@ impl WindowManager {
         }
     }
 
-    fn hide_quick_window(&mut self) {
+    fn hide_quick_window(&mut self, cx: &mut Context<Self>) {
         self._quick_poll_task = None; // cancel fast poll
         self.quick_visible = false;
         self.quick_mouse_down = false;
@@ -1191,6 +1188,10 @@ impl WindowManager {
         {
             self.hide_quick_macos_window();
         }
+
+        // Release memory — main window and quick window are never shown
+        // simultaneously, so closing either one should drop the item list.
+        self.release_memory(cx);
     }
 
     fn mouse_buttons_down() -> bool {
@@ -1266,7 +1267,7 @@ impl WindowManager {
                 }
             }
             QuickAction::Close => {
-                self.hide_quick_window();
+                self.hide_quick_window(cx);
             }
             QuickAction::Pick(slot) => {
                 let id = view.update(cx, |view, cx| view.select_visible_slot(slot, cx));
@@ -1281,7 +1282,7 @@ impl WindowManager {
         let plain = self.state.read(cx).settings.copy_as_plain_text;
         self.state
             .update(cx, |state, _cx| state.paste_item(id, plain));
-        self.hide_quick_window();
+        self.hide_quick_window(cx);
     }
 
     fn calculate_quick_position(&self) -> Option<(i32, i32)> {
@@ -1996,8 +1997,8 @@ impl WindowManager {
     }
 
     /// Release platform resources on shutdown.
-    pub fn shutdown(&mut self) {
-        self.hide_quick_window();
+    pub fn shutdown(&mut self, cx: &mut Context<Self>) {
+        self.hide_quick_window(cx);
         if let Some(ref mut hk) = self.hotkey {
             hk.stop();
         }
