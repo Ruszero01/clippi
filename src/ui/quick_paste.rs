@@ -195,19 +195,14 @@ impl QuickPasteView {
             .collect()
     }
 
-    fn theme(&self, cx: &Context<Self>) -> ClippiTheme {
-        let is_dark = self.state.read(cx).settings.theme != "light";
-        if is_dark {
-            ClippiTheme::dark()
-        } else {
-            ClippiTheme::light()
-        }
+    fn theme(&self, appearance: WindowAppearance, cx: &Context<Self>) -> ClippiTheme {
+        ClippiTheme::from_setting(&self.state.read(cx).settings.theme, Some(appearance))
     }
 }
 
 impl Render for QuickPasteView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme(cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme(window.appearance(), cx);
         let view_entity = cx.entity();
 
         let (

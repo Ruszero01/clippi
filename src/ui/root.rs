@@ -64,6 +64,7 @@ pub struct RootView {
     needs_auto_focus: bool,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
+    _appearance_subscription: Option<Subscription>,
 }
 
 impl RootView {
@@ -365,6 +366,59 @@ impl RootView {
                 },
             ),
         ];
+
+        // --- Subscribe to OS appearance changes so the "system" theme ---
+        // --- updates in real-time without requiring an app restart. ---
+        let appearance_sub = cx.observe_window_appearance(
+            window,
+            move |this, win, cx| {
+                // Always refresh the cached appearance so the ThemeChanged
+                // handler reads the current value even if the user switches
+                // from an explicit theme to "system" after an OS change.
+                this.window_appearance = win.appearance();
+
+                // Only rebuild theme when the user has selected "system".
+                if this.state.read(cx).settings.theme != "system" {
+                    return;
+                }
+
+                this.theme =
+                    ClippiTheme::from_setting("system", Some(this.window_appearance));
+                let theme = this.theme.clone();
+
+                // Sync gpui_component theme so that Input, Scrollbar and other
+                // gpui_component widgets follow our theme.
+                let is_dark = theme.bg == rgb(0x191a1b);
+                gpui_component::Theme::change(
+                    if is_dark {
+                        gpui_component::ThemeMode::Dark
+                    } else {
+                        gpui_component::ThemeMode::Light
+                    },
+                    None,
+                    cx,
+                );
+                gpui_component::Theme::global_mut(cx).background =
+                    Hsla::transparent_black();
+
+                // Propagate to child views (mirrors ThemeChanged handler).
+                this.titlebar
+                    .update(cx, |tb, cx| tb.set_theme(theme.clone(), cx));
+                this.search_bar
+                    .update(cx, |sb, cx| sb.set_theme(theme.clone(), cx));
+                this.list_view
+                    .update(cx, |lv, cx| lv.set_theme(theme.clone(), cx));
+                this.settings_panel
+                    .update(cx, |sp, cx| sp.reload_theme(theme.clone(), cx));
+                this.edit_panel
+                    .update(cx, |ep, cx| ep.set_theme(theme.clone(), cx));
+                this.sidebar
+                    .update(cx, |sb, cx| sb.set_theme(&theme, cx));
+
+                cx.notify();
+            },
+        );
+
         Self {
             state,
             window_manager,
@@ -388,6 +442,7 @@ impl RootView {
             needs_auto_focus: true,
             _wm_subscription,
             _subscriptions,
+            _appearance_subscription: Some(appearance_sub),
         }
     }
 }
