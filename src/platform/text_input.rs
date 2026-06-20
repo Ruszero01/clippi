@@ -28,17 +28,18 @@ pub fn get_text_input_anchor() -> Option<TextInputAnchor> {
 
 #[cfg(target_os = "windows")]
 fn windows_text_input_anchor() -> Option<TextInputAnchor> {
-    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
-    let target = crate::platform::focus::get_last_non_clippi_window().or_else(|| {
-        // Fallback: when LAST_NON_CLIPPI_WINDOW hasn't been initialised yet
-        // (e.g. right after Clippi starts while another app is already
-        // foreground), use the current foreground window directly.
-        let fg = unsafe { GetForegroundWindow() };
+    // Prefer the current foreground window — `get_last_non_clippi_window`
+    // is designed for paste-target restoration and may be stale when Clippi
+    // was recently in the foreground. Fall back to the stored value only when
+    // Clippi itself is the foreground window.
+    let fg = unsafe { GetForegroundWindow() };
+    let foreground_hwnd: Option<HWND> = (|| {
         if fg.is_null() {
             return None;
         }
@@ -49,8 +50,10 @@ fn windows_text_input_anchor() -> Option<TextInputAnchor> {
             return None; // window is invalid or belongs to Clippi
         }
         Some(fg)
-    })?;
-    // SAFETY: The HWND comes from the focus watcher (or `GetForegroundWindow`
+    })();
+    let target = foreground_hwnd
+        .or_else(crate::platform::focus::get_last_non_clippi_window)?;
+    // SAFETY: The HWND comes from `GetForegroundWindow` (or the focus watcher
     // fallback). `GetWindowThreadProcessId` and `GetGUIThreadInfo` are read-only
     // queries; `GUITHREADINFO` is initialised with the required cbSize.
     unsafe {
