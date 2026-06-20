@@ -1138,7 +1138,7 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            self.position_quick_macos_window(x, y);
+            self.position_quick_macos_window(x, y, quick_h);
             self.show_quick_macos_window();
         }
 
@@ -1505,7 +1505,7 @@ impl WindowManager {
     }
 
     #[cfg(target_os = "macos")]
-    fn position_quick_macos_window(&self, x: i32, y: i32) {
+    fn position_quick_macos_window(&self, x: i32, y: i32, height: f32) {
         if self.quick_ns_window == 0 {
             return;
         }
@@ -1518,6 +1518,10 @@ impl WindowManager {
         let top = main_screen.frame().size.height - y as f64;
         unsafe {
             let window = &*(self.quick_ns_window as *const objc2_app_kit::NSWindow);
+            window.setContentSize(objc2_foundation::NSSize::new(
+                QUICK_WINDOW_WIDTH as f64,
+                height as f64,
+            ));
             window.setFrameTopLeftPoint(objc2_foundation::NSPoint::new(x as f64, top));
         }
     }

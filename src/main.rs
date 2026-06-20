@@ -463,7 +463,10 @@ fn main() {
                         .origin,
                         size(px(QUICK_WINDOW_WIDTH), px(quick_h)),
                     ))),
-                    window_min_size: Some(size(px(QUICK_WINDOW_WIDTH), px(quick_h))),
+                    window_min_size: Some(size(
+                        px(QUICK_WINDOW_WIDTH),
+                        px(calc_quick_window_height(false, false)),
+                    )),
                     show: false,
                     focus: false,
                     kind: WindowKind::PopUp,

@@ -4,7 +4,9 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui::{InteractiveElement, StatefulInteractiveElement};
 
-use crate::core::types::{format_relative_time, mask_sensitive_preview, ClipboardItem, ContentType, DisplayKind, FileData};
+use crate::core::types::{
+    format_relative_time, mask_sensitive_preview, ClipboardItem, ContentType, DisplayKind, FileData,
+};
 use crate::state::app::AppState;
 use crate::ui::search_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
@@ -42,7 +44,15 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
 }
 
 /// (slot, id, icon, preview_text, note, relative_time, image_path)
-type RowData = (usize, i64, &'static str, String, String, String, Option<String>);
+type RowData = (
+    usize,
+    i64,
+    &'static str,
+    String,
+    String,
+    String,
+    Option<String>,
+);
 
 pub enum QuickPasteEvent {
     Paste(i64),
@@ -200,7 +210,14 @@ impl Render for QuickPasteView {
         let theme = self.theme(cx);
         let view_entity = cx.entity();
 
-        let (type_config, pinned_tag_ids, filters, tags_snapshot, items_count, show_original_on_hover) = {
+        let (
+            type_config,
+            pinned_tag_ids,
+            filters,
+            tags_snapshot,
+            items_count,
+            show_original_on_hover,
+        ) = {
             let state = self.state.read(cx);
             (
                 state.settings.type_filter_config.clone(),
@@ -371,12 +388,8 @@ impl Render for QuickPasteView {
                                         .rounded(px(4.0))
                                         .flex()
                                         .items_center()
-                                        .when(tag_compact, |d| {
-                                            d.flex_1().min_w(px(0.0))
-                                        })
-                                        .when(!tag_compact, |d| {
-                                            d.max_w(px(120.0))
-                                        })
+                                        .when(tag_compact, |d| d.flex_1().min_w(px(0.0)))
+                                        .when(!tag_compact, |d| d.max_w(px(120.0)))
                                         .overflow_hidden()
                                         .text_size(px(10.0))
                                         .font_weight(FontWeight::MEDIUM)
@@ -438,121 +451,133 @@ impl Render for QuickPasteView {
                         let view_entity = cx.entity();
                         self.row_data(cx)
                             .into_iter()
-                            .map(move |(slot, item_id, icon, preview, note, time, img_path)| {
-                                let index = first_visible + slot;
-                                let selected = index == selected_index;
-                                let t = t.clone();
-                                let ve = view_entity.clone();
+                            .map(
+                                move |(slot, item_id, icon, preview, note, time, img_path)| {
+                                    let index = first_visible + slot;
+                                    let selected = index == selected_index;
+                                    let t = t.clone();
+                                    let ve = view_entity.clone();
 
-                                let content_cell = if let Some(ref path) = img_path {
-                                    let thumb_h = ROW_HEIGHT - 6.0;
+                                    let show_note =
+                                        !(note.is_empty() || show_original_on_hover && selected);
+                                    let content_cell = if show_note {
+                                        // Note takes precedence for every content type, including images.
+                                        div()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .text_size(px(12.0))
+                                            .text_color(t.text_2)
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(note)
+                                            .into_any_element()
+                                    } else if let Some(ref path) = img_path {
+                                        let thumb_h = ROW_HEIGHT - 6.0;
+                                        div()
+                                            .flex_1()
+                                            .h(px(thumb_h))
+                                            .rounded(px(4.0))
+                                            .overflow_hidden()
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                gpui::img(std::path::Path::new(path))
+                                                    .h(px(thumb_h))
+                                                    .object_fit(ObjectFit::Contain),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        // No note, or selected with show_original_on_hover → show original (masked)
+                                        div()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .text_size(px(13.0))
+                                            .text_color(t.text_1)
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(preview)
+                                            .into_any_element()
+                                    };
+
                                     div()
-                                        .flex_1()
-                                        .h(px(thumb_h))
-                                        .rounded(px(4.0))
-                                        .overflow_hidden()
+                                        .h(px(ROW_HEIGHT))
+                                        .px(px(HORIZONTAL_PADDING))
                                         .flex()
                                         .items_center()
+                                        .gap(px(8.0))
+                                        .bg(if selected {
+                                            t.accent_overlay()
+                                        } else {
+                                            rgba(0x00000000)
+                                        })
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let ve2 = ve.clone();
+                                            let ve3 = ve.clone();
+                                            move |ev, _window, cx| {
+                                                // Single-click: select
+                                                ve2.update(cx, |view, cx| {
+                                                    view.select_index(index, cx);
+                                                });
+                                                // Double-click: paste
+                                                if ev.click_count == 2 {
+                                                    ve3.update(cx, |_, cx| {
+                                                        cx.emit(QuickPasteEvent::Paste(item_id));
+                                                    });
+                                                }
+                                            }
+                                        })
+                                        // Slot number badge
                                         .child(
-                                            gpui::img(std::path::Path::new(path))
-                                                .h(px(thumb_h))
-                                                .object_fit(ObjectFit::Contain),
+                                            div()
+                                                .w(px(22.0))
+                                                .h(px(22.0))
+                                                .rounded(px(5.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(if selected {
+                                                    t.accent
+                                                } else {
+                                                    rgba(0x00000000)
+                                                })
+                                                .text_color(if selected {
+                                                    rgb(0xffffff)
+                                                } else {
+                                                    t.text_2
+                                                })
+                                                .text_size(px(11.0))
+                                                .font_weight(FontWeight::BOLD)
+                                                .child((slot + 1).to_string()),
+                                        )
+                                        // Type icon
+                                        .child(
+                                            div()
+                                                .w(px(16.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(12.0))
+                                                .font_family("iconfont")
+                                                .text_color(if selected {
+                                                    t.accent
+                                                } else {
+                                                    t.text_2
+                                                })
+                                                .child(icon),
+                                        )
+                                        .child(content_cell)
+                                        // Relative time
+                                        .child(
+                                            div()
+                                                .text_size(px(10.0))
+                                                .text_color(t.text_3)
+                                                .whitespace_nowrap()
+                                                .child(time),
                                         )
                                         .into_any_element()
-                                } else if !(note.is_empty() || show_original_on_hover && selected) {
-                                    // Note present, not selected (or show_original off) → show note
-                                    div()
-                                        .flex_1()
-                                        .overflow_hidden()
-                                        .text_size(px(12.0))
-                                        .text_color(t.text_2)
-                                        .whitespace_nowrap()
-                                        .text_ellipsis()
-                                        .child(note)
-                                        .into_any_element()
-                                } else {
-                                    // No note, or selected with show_original_on_hover → show original (masked)
-                                    div()
-                                        .flex_1()
-                                        .overflow_hidden()
-                                        .text_size(px(13.0))
-                                        .text_color(t.text_1)
-                                        .whitespace_nowrap()
-                                        .text_ellipsis()
-                                        .child(preview)
-                                        .into_any_element()
-                                };
-
-                                div()
-                                    .h(px(ROW_HEIGHT))
-                                    .px(px(HORIZONTAL_PADDING))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .bg(if selected {
-                                        t.accent_overlay()
-                                    } else {
-                                        rgba(0x00000000)
-                                    })
-                                    .cursor(CursorStyle::PointingHand)
-                                    .on_mouse_down(MouseButton::Left, {
-                                        let ve2 = ve.clone();
-                                        let ve3 = ve.clone();
-                                        move |ev, _window, cx| {
-                                            // Single-click: select
-                                            ve2.update(cx, |view, cx| {
-                                                view.select_index(index, cx);
-                                            });
-                                            // Double-click: paste
-                                            if ev.click_count == 2 {
-                                                ve3.update(cx, |_, cx| {
-                                                    cx.emit(QuickPasteEvent::Paste(item_id));
-                                                });
-                                            }
-                                        }
-                                    })
-                                    // Slot number badge
-                                    .child(
-                                        div()
-                                            .w(px(22.0))
-                                            .h(px(22.0))
-                                            .rounded(px(5.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .bg(if selected { t.accent } else { rgba(0x00000000) })
-                                            .text_color(if selected {
-                                                rgb(0xffffff)
-                                            } else {
-                                                t.text_2
-                                            })
-                                            .text_size(px(11.0))
-                                            .font_weight(FontWeight::BOLD)
-                                            .child((slot + 1).to_string()),
-                                    )
-                                    // Type icon
-                                    .child(
-                                        div()
-                                            .w(px(16.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_size(px(12.0))
-                                            .font_family("iconfont")
-                                            .text_color(if selected { t.accent } else { t.text_2 })
-                                            .child(icon),
-                                    )
-                                    .child(content_cell)
-                                    // Relative time
-                                    .child(
-                                        div()
-                                            .text_size(px(10.0))
-                                            .text_color(t.text_3)
-                                            .whitespace_nowrap()
-                                            .child(time),
-                                    )
-                                    .into_any_element()
-                            })
+                                },
+                            )
                             .collect::<Vec<_>>()
                     }),
             )
