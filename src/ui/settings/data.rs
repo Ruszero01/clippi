@@ -223,7 +223,6 @@ impl SettingsPanel {
                             })
                             // --- Reset button ---
                             .child({
-                                let state = state.clone();
                                 let this = this.clone();
                                 div()
                                     .h(px(28.))
@@ -238,41 +237,9 @@ impl SettingsPanel {
                                     .cursor(CursorStyle::PointingHand)
                                     .hover(move |s| s.bg(rgba(0xffffff10)))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
-                                        if crate::core::paths::is_portable_mode() {
-                                            this.update(_cx, |panel, cx| {
-                                                panel.show_reset_data_dialog(cx);
-                                            });
-                                        } else {
-                                            let old = state.read(_cx).settings.resolve_db_path();
-                                            let default_db =
-                                                crate::core::paths::resolve_db_path("");
-                                            if old == default_db {
-                                                return;
-                                            }
-                                            {
-                                                let s = state.read(_cx);
-                                                if let Err(e) = s.db.checkpoint() {
-                                                    log::error!(
-                                                        "checkpoint failed before reset: {e}"
-                                                    );
-                                                }
-                                            }
-                                            match migrate_database(&old, &default_db) {
-                                                Ok(()) => {
-                                                    state.update(_cx, |s, _cx| {
-                                                        s.settings.db_path = String::new();
-                                                        s.settings.save();
-                                                    });
-                                                    crate::core::settings::spawn_new_process();
-                                                    _cx.quit();
-                                                }
-                                                Err(e) => {
-                                                    this.update(_cx, |_panel, cx| {
-                                                        cx.emit(SettingsEvent::DataError(e));
-                                                    });
-                                                }
-                                            }
-                                        }
+                                        this.update(_cx, |panel, cx| {
+                                            panel.show_reset_data_dialog(cx);
+                                        });
                                     })
                                     .child(
                                         div()
@@ -403,21 +370,17 @@ impl SettingsPanel {
             })
     }
 
-    /// Show the reset-data-directory dialog. Only called in portable mode.
+    /// Show the reset-data-directory dialog. Available regardless of portable mode.
     pub fn show_reset_data_dialog(&mut self, cx: &mut Context<Self>) {
-        let portable_path = crate::core::paths::resolve_db_path("")
+        let portable_path = crate::core::paths::portable_db_path()
             .to_string_lossy()
             .to_string();
-        let system_path = {
-            let data_dir = dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("Clippi")
-                .join("clippi.db");
-            data_dir.to_string_lossy().to_string()
-        };
+        let system_path = crate::core::paths::system_data_dir()
+            .join("clippi.db")
+            .to_string_lossy()
+            .to_string();
 
-        let app = self.state.read(cx);
-        let currently_portable = app.settings.db_path.is_empty();
+        let currently_portable = crate::core::paths::is_portable_mode();
 
         self.reset_data_dialog = Some(ResetDataDirState {
             selected: if currently_portable {
@@ -437,27 +400,49 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    /// Apply the selected reset target: migrate DB, update settings, restart.
+    /// Apply the selected reset target: migrate DB, save config to target
+    /// location, and restart.
+    ///
+    /// When the target database already exists, smart-merges data instead of
+    /// overwriting — this prevents data loss when both locations have
+    /// accumulated clipboard history.
+    ///
+    /// Saves the config file explicitly to the chosen directory rather than
+    /// delegating to `AppSettings::save()`, because `config_path()` depends on
+    /// `is_portable_mode()` which may not reflect the user's new choice yet
+    /// (e.g. switching TO portable when `is_portable_mode()` is still false).
     pub fn apply_reset_data_dir(&mut self, cx: &mut Context<Self>) {
         let dialog = match self.reset_data_dialog.take() {
             Some(d) => d,
             None => return,
         };
 
-        let target_path = match dialog.selected {
-            StorageMode::Portable => crate::core::paths::resolve_db_path(""),
-            StorageMode::System => dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("Clippi")
-                .join("clippi.db"),
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let sys_data = crate::core::paths::system_data_dir();
+
+        let (target_db, target_config, new_db_path) = match dialog.selected {
+            StorageMode::Portable => (
+                exe_dir.join("clippi.db"),
+                exe_dir.join("clippi.toml"),
+                String::new(),
+            ),
+            StorageMode::System => {
+                let db = sys_data.join("clippi.db");
+                let cfg = sys_data.join("clippi.toml");
+                (db.clone(), cfg, db.to_string_lossy().to_string())
+            }
         };
 
         let old_path = self.state.read(cx).settings.resolve_db_path();
-        if old_path == target_path {
+        if old_path == target_db {
             cx.notify();
             return;
         }
 
+        // Checkpoint the current WAL so we have a consistent DB file to work with.
         {
             let s = self.state.read(cx);
             if let Err(e) = s.db.checkpoint() {
@@ -465,26 +450,155 @@ impl SettingsPanel {
             }
         }
 
-        match migrate_database(&old_path, &target_path) {
-            Ok(()) => {
-                let new_db_path = match dialog.selected {
-                    StorageMode::Portable => String::new(),
-                    StorageMode::System => target_path.to_string_lossy().to_string(),
-                };
-                self.state.update(cx, |s, _cx| {
-                    s.settings.db_path = new_db_path;
-                    s.settings.save();
-                });
-                crate::core::settings::spawn_new_process();
-                cx.quit();
-            }
-            Err(e) => {
-                cx.emit(SettingsEvent::DataError(e));
+        // ── Determine merge vs. fresh-migrate ──
+        if target_db.exists() {
+            // ── Smart merge: target already has data ──
+            self.apply_reset_with_merge(
+                &old_path,
+                &target_db,
+                &target_config,
+                &new_db_path,
+                &exe_dir,
+                dialog.selected,
+                cx,
+            );
+        } else {
+            // ── Fresh migration: target is empty ──
+            match migrate_database(&old_path, &target_db) {
+                Ok(()) => {
+                    self.finalize_reset(&target_config, &new_db_path, &exe_dir, dialog.selected, cx);
+                }
+                Err(e) => {
+                    cx.emit(SettingsEvent::DataError(e));
+                }
             }
         }
     }
 
-    /// Render the reset-data-directory dialog overlay (portable mode only).
+    /// Merge the current database + config into an already-existing target.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_reset_with_merge(
+        &mut self,
+        old_path: &std::path::Path,
+        target_db: &std::path::Path,
+        target_config: &std::path::Path,
+        new_db_path: &str,
+        exe_dir: &std::path::Path,
+        selected: StorageMode,
+        cx: &mut Context<Self>,
+    ) {
+        // ── 1. Open the target database and merge the current DB into it. ──
+        match crate::core::db::Database::open(&target_db.to_string_lossy()) {
+            Ok(target) => {
+                match target.merge_from(old_path) {
+                    Ok(stats) => {
+                        log::info!(
+                            "reset: merged DB — items +{}/~{} tags +{}/~{}",
+                            stats.items_added,
+                            stats.items_updated,
+                            stats.tags_added,
+                            stats.tags_updated,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("reset: DB merge failed, falling back to copy: {e}");
+                        // Fall back to simple copy on merge failure.
+                        if let Err(e2) = migrate_database(old_path, target_db) {
+                            cx.emit(SettingsEvent::DataError(e2));
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("reset: failed to open target DB, falling back to copy: {e}");
+                if let Err(e2) = migrate_database(old_path, target_db) {
+                    cx.emit(SettingsEvent::DataError(e2));
+                    return;
+                }
+            }
+        }
+
+        // ── 2. Merge config files if the target already has one. ──
+        let source_settings = self.state.read(cx).settings.clone();
+        let merged = if target_config.exists() {
+            match std::fs::read_to_string(target_config) {
+                Ok(content) => match toml::from_str::<crate::core::settings::AppSettings>(&content)
+                {
+                    Ok(target_settings) => {
+                        crate::core::settings::merge_configs(
+                            &source_settings,
+                            &target_settings,
+                            new_db_path,
+                        )
+                    }
+                    Err(e) => {
+                        log::warn!("reset: failed to parse target config, using source: {e}");
+                        let mut s = source_settings.clone();
+                        s.db_path = new_db_path.to_string();
+                        s
+                    }
+                },
+                Err(e) => {
+                    log::warn!("reset: failed to read target config, using source: {e}");
+                    let mut s = source_settings.clone();
+                    s.db_path = new_db_path.to_string();
+                    s
+                }
+            }
+        } else {
+            let mut s = source_settings;
+            s.db_path = new_db_path.to_string();
+            s
+        };
+        self.state.update(cx, |s, _cx| {
+            s.settings = merged;
+        });
+
+        // ── 3. Merge images directories. ──
+        let copied = crate::core::paths::merge_images_dir(old_path, target_db);
+        if copied > 0 {
+            log::info!("reset: copied {copied} image files");
+        }
+
+        self.finalize_reset(target_config, new_db_path, exe_dir, selected, cx);
+    }
+
+    /// Save config to target location, clean up exe-dir config if switching to
+    /// system mode, spawn new process, and quit.
+    fn finalize_reset(
+        &mut self,
+        target_config: &std::path::Path,
+        new_db_path: &str,
+        exe_dir: &std::path::Path,
+        selected: StorageMode,
+        cx: &mut Context<Self>,
+    ) {
+        // Update in-memory db_path (may have been overridden by merge).
+        self.state.update(cx, |s, _cx| {
+            s.settings.db_path = new_db_path.to_string();
+        });
+
+        // Save config to the target location explicitly.
+        let settings = self.state.read(cx).settings.clone();
+        if let Ok(content) = toml::to_string_pretty(&settings) {
+            if let Some(parent) = target_config.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(target_config, content);
+        }
+
+        // When switching to system mode, remove the old config from the
+        // exe dir so that is_portable_mode() returns false on next startup.
+        if selected == StorageMode::System {
+            let _ = std::fs::remove_file(exe_dir.join("clippi.toml"));
+        }
+
+        crate::core::settings::spawn_new_process();
+        cx.quit();
+    }
+
+    /// Render the reset-data-directory dialog overlay.
     pub fn render_reset_data_dialog(
         &self,
         _window: &mut Window,

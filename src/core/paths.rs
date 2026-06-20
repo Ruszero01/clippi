@@ -13,43 +13,17 @@ const DB_FILE: &str = "clippi.db";
 static IS_PORTABLE: AtomicBool = AtomicBool::new(false);
 
 /// Initialise portable mode detection. Call once at startup.
+///
+/// Portable mode is active when a config file (`clippi.toml`) already exists
+/// in the executable directory. This is more reliable than probing for
+/// writability — on Windows, the writable test can give inconsistent results
+/// across runs (UAC, antivirus, filesystem quirks), causing the config and
+/// database location to oscillate between exe_dir and app_data_dir.
 pub fn init_portable_mode() {
     let exe = exe_dir();
-    let writable = portable_mode_allowed(&exe) && {
-        // --- Try to create + delete a temp file to test writability. ---
-        let probe = exe.join(".clippi_writable_test");
-        let writable = std::fs::write(&probe, b"1").is_ok();
-        if writable {
-            let _ = std::fs::remove_file(&probe);
-        }
-        writable
-    };
-    IS_PORTABLE.store(writable, Ordering::Relaxed);
-    log::info!("Portable mode: {} (exe_dir: {})", writable, exe.display());
-}
-
-fn portable_mode_allowed(exe_dir: &Path) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        let is_app_bundle = exe_dir.file_name().is_some_and(|name| name == "MacOS")
-            && exe_dir
-                .parent()
-                .and_then(Path::file_name)
-                .is_some_and(|name| name == "Contents")
-            && exe_dir
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::extension)
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
-        !is_app_bundle
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = exe_dir;
-        true
-    }
+    let portable = exe.join(CONFIG_FILE).exists();
+    IS_PORTABLE.store(portable, Ordering::Relaxed);
+    log::info!("Portable mode: {} (exe_dir: {})", portable, exe.display());
 }
 
 /// The directory containing the running executable.
@@ -92,6 +66,71 @@ pub fn resolve_db_path(db_setting: &str) -> PathBuf {
         exe_dir().join(DB_FILE)
     } else {
         app_data_dir().join(DB_FILE)
+    }
+}
+
+/// Returns the database path when in portable mode (exe_dir / clippi.db).
+/// This is the explicit portable DB path, independent of `is_portable_mode()`.
+pub fn portable_db_path() -> PathBuf {
+    exe_dir().join(DB_FILE)
+}
+
+/// Returns the system data directory (`%LOCALAPPDATA%/Clippi/` on Windows,
+/// `~/Library/Application Support/Clippi/` on macOS).
+pub fn system_data_dir() -> PathBuf {
+    app_data_dir()
+}
+
+/// Merge images from the source data directory into the target data directory.
+///
+/// Copies only files that don't already exist in the target. Directories are
+/// traversed recursively. Non-fatal: logs warnings on individual copy failures
+/// and continues.
+pub fn merge_images_dir(source_db_path: &Path, target_db_path: &Path) -> usize {
+    let src_images = resolve_data_dir(
+        source_db_path
+            .to_string_lossy()
+            .as_ref(),
+    )
+    .join("images");
+    let dst_images = resolve_data_dir(
+        target_db_path
+            .to_string_lossy()
+            .as_ref(),
+    )
+    .join("images");
+
+    if !src_images.is_dir() {
+        return 0;
+    }
+    if let Err(e) = fs::create_dir_all(&dst_images) {
+        log::warn!("merge_images: failed to create target dir {}: {e}", dst_images.display());
+        return 0;
+    }
+
+    let mut copied = 0usize;
+    copy_missing_recursive(&src_images, &dst_images, &mut copied);
+    log::info!("merge_images: copied {copied} files from {} to {}", src_images.display(), dst_images.display());
+    copied
+}
+
+/// Recursively copy files from `src` to `dst` that don't exist in `dst`.
+fn copy_missing_recursive(src: &Path, dst: &Path, count: &mut usize) {
+    let entries = match fs::read_dir(src) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("merge_images: failed to read dir {}: {e}", src.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_missing_recursive(&path, &dest, count);
+        } else if !dest.exists() && fs::copy(&path, &dest).is_ok() {
+            *count += 1;
+        }
     }
 }
 
@@ -359,23 +398,7 @@ fn copy_dir_recursive_missing(src: &Path, dst: &Path) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
-    use super::portable_mode_allowed;
     use super::{migrate_legacy_files_from, CONFIG_FILE, DB_FILE};
-    #[cfg(target_os = "macos")]
-    use std::path::Path;
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn mac_app_bundle_is_never_treated_as_portable() {
-        assert!(!portable_mode_allowed(Path::new(
-            "/Applications/Clippi.app/Contents/MacOS"
-        )));
-        assert!(!portable_mode_allowed(Path::new(
-            "/Users/test/Clippi.app/Contents/MacOS"
-        )));
-        assert!(portable_mode_allowed(Path::new("/tmp/clippi-portable")));
-    }
 
     #[test]
     fn legacy_migration_copies_missing_data_when_config_already_exists() {
@@ -410,6 +433,98 @@ mod tests {
             std::fs::read_to_string(data.join("images").join("image.png")).unwrap(),
             "image"
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn merge_images_copies_missing_files() {
+        let root = std::env::temp_dir().join(format!(
+            "clippi-images-merge-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let src_db = root.join("src").join("clippi.db");
+        let tgt_db = root.join("tgt").join("clippi.db");
+
+        // Source: images/ dir with one file.
+        let src_images = root.join("src").join("images");
+        std::fs::create_dir_all(&src_images).unwrap();
+        std::fs::write(src_images.join("a.png"), "a").unwrap();
+
+        // Target: images/ dir with a different file.
+        let tgt_images = root.join("tgt").join("images");
+        std::fs::create_dir_all(&tgt_images).unwrap();
+        std::fs::write(tgt_images.join("b.png"), "b").unwrap();
+
+        let copied = super::merge_images_dir(&src_db, &tgt_db);
+        assert_eq!(copied, 1); // a.png copied, b.png already exists
+
+        // Verify a.png was copied.
+        assert!(tgt_images.join("a.png").exists());
+        assert_eq!(
+            std::fs::read_to_string(tgt_images.join("a.png")).unwrap(),
+            "a"
+        );
+        // b.png unchanged.
+        assert_eq!(
+            std::fs::read_to_string(tgt_images.join("b.png")).unwrap(),
+            "b"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn merge_images_skips_when_source_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "clippi-images-no-src-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Source has NO images dir.
+        let src_db = root.join("src").join("clippi.db");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        let tgt_db = root.join("tgt").join("clippi.db");
+        let tgt_images = root.join("tgt").join("images");
+        std::fs::create_dir_all(&tgt_images).unwrap();
+
+        let copied = super::merge_images_dir(&src_db, &tgt_db);
+        assert_eq!(copied, 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn merge_images_idempotent() {
+        let root = std::env::temp_dir().join(format!(
+            "clippi-images-idem-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let src_db = root.join("src").join("clippi.db");
+        let tgt_db = root.join("tgt").join("clippi.db");
+
+        let src_images = root.join("src").join("images");
+        std::fs::create_dir_all(&src_images).unwrap();
+        std::fs::write(src_images.join("x.png"), "x").unwrap();
+
+        let tgt_images = root.join("tgt").join("images");
+        std::fs::create_dir_all(&tgt_images).unwrap();
+
+        let copied1 = super::merge_images_dir(&src_db, &tgt_db);
+        assert_eq!(copied1, 1);
+
+        // Second merge: nothing new.
+        let copied2 = super::merge_images_dir(&src_db, &tgt_db);
+        assert_eq!(copied2, 0);
 
         std::fs::remove_dir_all(root).unwrap();
     }

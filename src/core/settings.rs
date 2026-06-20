@@ -1,7 +1,7 @@
 //! --- Settings persistence - loads and saves app settings ---
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::filters::BUILTIN_TYPE_KEYS;
@@ -471,7 +471,7 @@ pub(crate) fn generate_id() -> String {
     format!("{:016x}", x)
 }
 
-pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), String> {
+pub fn migrate_database(old_path: &Path, new_path: &Path) -> Result<(), String> {
     if *new_path == *old_path {
         return Err(I18nKey::ErrSamePath.text().into());
     }
@@ -489,5 +489,236 @@ pub fn migrate_database(old_path: &PathBuf, new_path: &PathBuf) -> Result<(), St
 pub fn spawn_new_process() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = Command::new(exe).spawn();
+    }
+}
+
+/// Merge two `AppSettings` instances for the data-directory reset flow.
+///
+/// Rules:
+/// - Scalar fields (theme, hotkey, etc.): keep `source` values (current user
+///   preferences).
+/// - List fields (`sync_backends`, `type_filter_config`, etc.): union from both
+///   configs, deduplicating by natural key.
+/// - `db_path`: set to `new_db_path` (may be empty for portable mode).
+pub fn merge_configs(
+    source: &AppSettings,
+    target: &AppSettings,
+    new_db_path: &str,
+) -> AppSettings {
+    let mut merged = source.clone();
+    merged.db_path = new_db_path.to_string();
+
+    // ── sync_backends: merge by id (source takes precedence) ──
+    let source_ids: Vec<&str> = source
+        .sync_backends
+        .iter()
+        .map(|b| b.id.as_str())
+        .collect();
+    for tb in &target.sync_backends {
+        if !source_ids.contains(&tb.id.as_str()) {
+            merged.sync_backends.push(tb.clone());
+        }
+    }
+
+    // ── type_filter_config: merge by key (source takes precedence) ──
+    let source_keys: Vec<&str> = source
+        .type_filter_config
+        .iter()
+        .map(|e| e.key.as_str())
+        .collect();
+    for te in &target.type_filter_config {
+        if !source_keys.contains(&te.key.as_str()) {
+            merged.type_filter_config.push(te.clone());
+        }
+    }
+
+    // ── hotkey_blacklist: set union ──
+    let mut blacklist = source.hotkey_blacklist.clone();
+    for app in &target.hotkey_blacklist {
+        if !blacklist.contains(app) {
+            blacklist.push(app.clone());
+        }
+    }
+    merged.hotkey_blacklist = blacklist;
+
+    // ── pinned_tag_ids: set union (ids may differ across DBs, but config merge
+    //    is best-effort — stale IDs are silently ignored on load) ──
+    let mut pinned = source.pinned_tag_ids.clone();
+    for id in &target.pinned_tag_ids {
+        if !pinned.contains(id) {
+            pinned.push(*id);
+        }
+    }
+    merged.pinned_tag_ids = pinned;
+
+    // ── paste_shortcuts: merge by app_name (source takes precedence) ──
+    let source_apps: Vec<&str> = source
+        .paste_shortcuts
+        .iter()
+        .map(|p| p.app_name.as_str())
+        .collect();
+    for tp in &target.paste_shortcuts {
+        if !source_apps.contains(&tp.app_name.as_str()) {
+            merged.paste_shortcuts.push(tp.clone());
+        }
+    }
+
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_configs_scalar_from_source() {
+        let source = AppSettings {
+            theme: "dark".into(),
+            hotkey: "Alt+V".into(),
+            auto_hide: true,
+            max_items: 500,
+            ..Default::default()
+        };
+        let target = AppSettings {
+            theme: "light".into(),
+            hotkey: "Ctrl+Shift+V".into(),
+            auto_hide: false,
+            max_items: 100,
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "/new/path/clippi.db");
+        assert_eq!(merged.theme, "dark"); // source wins
+        assert_eq!(merged.hotkey, "Alt+V"); // source wins
+        assert_eq!(merged.auto_hide, true); // source wins
+        assert_eq!(merged.max_items, 500); // source wins
+        assert_eq!(merged.db_path, "/new/path/clippi.db"); // explicit override
+    }
+
+    fn bk(id: &str, name: &str) -> BackendConfig {
+        BackendConfig {
+            id: id.into(),
+            enabled: true,
+            backend_type: "local_folder".into(),
+            name: name.into(),
+            folder_path: String::new(),
+            device_name: name.into(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        }
+    }
+
+    #[test]
+    fn merge_configs_union_sync_backends_by_id() {
+        let mut source = AppSettings::default();
+        source.sync_backends.push(bk("a", "Source"));
+
+        let mut target = AppSettings::default();
+        target.sync_backends.push(bk("a", "Target"));
+        target.sync_backends.push(bk("b", "TargetOnly"));
+
+        let merged = merge_configs(&source, &target, "");
+        assert_eq!(merged.sync_backends.len(), 2);
+        // Source's "a" wins (same id).
+        assert_eq!(merged.sync_backends[0].name, "Source");
+        // Target's "b" appended (new id).
+        assert_eq!(merged.sync_backends[1].name, "TargetOnly");
+    }
+
+    #[test]
+    fn merge_configs_union_type_filter_by_key() {
+        let mut source = AppSettings::default();
+        source.type_filter_config = vec![
+            TypeFilterEntry {
+                key: "plain_text".into(),
+                visible: false,
+            },
+        ];
+
+        let mut target = AppSettings::default();
+        target.type_filter_config = vec![
+            TypeFilterEntry {
+                key: "plain_text".into(),
+                visible: true,
+            },
+            TypeFilterEntry {
+                key: "image".into(),
+                visible: true,
+            },
+        ];
+
+        let merged = merge_configs(&source, &target, "");
+        assert_eq!(merged.type_filter_config.len(), 2);
+        // Source's plain_text wins (same key, visible=false from source).
+        assert!(!merged.type_filter_config[0].visible);
+        // Target's image appended (new key).
+        assert_eq!(merged.type_filter_config[1].key, "image");
+    }
+
+    #[test]
+    fn merge_configs_union_blacklist() {
+        let source = AppSettings {
+            hotkey_blacklist: vec!["app1".into(), "app2".into()],
+            ..Default::default()
+        };
+        let target = AppSettings {
+            hotkey_blacklist: vec!["app2".into(), "app3".into()],
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "");
+        assert_eq!(merged.hotkey_blacklist.len(), 3);
+        assert!(merged.hotkey_blacklist.contains(&"app1".into()));
+        assert!(merged.hotkey_blacklist.contains(&"app2".into()));
+        assert!(merged.hotkey_blacklist.contains(&"app3".into()));
+    }
+
+    #[test]
+    fn merge_configs_union_pinned_tags() {
+        let source = AppSettings {
+            pinned_tag_ids: vec![1, 2],
+            ..Default::default()
+        };
+        let target = AppSettings {
+            pinned_tag_ids: vec![2, 3],
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "");
+        assert_eq!(merged.pinned_tag_ids.len(), 3);
+        assert!(merged.pinned_tag_ids.contains(&1));
+        assert!(merged.pinned_tag_ids.contains(&2));
+        assert!(merged.pinned_tag_ids.contains(&3));
+    }
+
+    #[test]
+    fn merge_configs_union_paste_shortcuts_by_app_name() {
+        let mut source = AppSettings::default();
+        source.paste_shortcuts.push(PasteShortcutEntry {
+            app_name: "Terminal".into(),
+            shortcut: "Shift+Insert".into(),
+        });
+
+        let mut target = AppSettings::default();
+        target.paste_shortcuts.push(PasteShortcutEntry {
+            app_name: "Terminal".into(),
+            shortcut: "Ctrl+Shift+V".into(),
+        });
+        target.paste_shortcuts.push(PasteShortcutEntry {
+            app_name: "Notepad".into(),
+            shortcut: "Ctrl+V".into(),
+        });
+
+        let merged = merge_configs(&source, &target, "");
+        assert_eq!(merged.paste_shortcuts.len(), 2);
+        // Source's Terminal wins (same app_name).
+        assert_eq!(merged.paste_shortcuts[0].shortcut, "Shift+Insert");
+        // Target's Notepad appended (new app_name).
+        assert_eq!(merged.paste_shortcuts[1].app_name, "Notepad");
     }
 }

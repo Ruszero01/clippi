@@ -3,6 +3,16 @@
 use crate::core::filters::ClipboardFilters;
 use crate::core::types::{ClipboardItem, ContentType, TagInfo};
 use rusqlite::{params, Connection, Result as SqlResult};
+use std::path::Path;
+
+/// Statistics returned by [`Database::merge_from`].
+#[derive(Debug, Default)]
+pub struct MergeStats {
+    pub items_added: usize,
+    pub items_updated: usize,
+    pub tags_added: usize,
+    pub tags_updated: usize,
+}
 
 pub struct Database {
     conn: Connection,
@@ -957,6 +967,140 @@ impl Database {
         )?;
         Ok(self.conn.last_insert_rowid())
     }
+
+    /// Merge data from an external database into this one.
+    ///
+    /// Uses `ATTACH DATABASE` to merge the source database in-process:
+    /// - Items are deduplicated by `content_hash` (last-writer-wins on `updated_at`).
+    /// - Tags are deduplicated by `name` (last-writer-wins on `updated_at`).
+    /// - Tag associations (`item_tags`) are resolved across databases by joining
+    ///   on `content_hash` (items) and `name` (tags) to handle differing
+    ///   auto-increment IDs.
+    /// - Tombstone tables are merged with `INSERT OR IGNORE` (duplicates skipped
+    ///   via UNIQUE indexes).
+    ///
+    /// The source database is never modified. Both databases must have been
+    /// through `init_schema()` so that their schemas match (same columns).
+    pub fn merge_from(&self, source_path: &Path) -> SqlResult<MergeStats> {
+        // Ensure the current WAL is flushed before attaching another DB.
+        self.checkpoint()?;
+
+        let source_str = source_path.to_string_lossy();
+        self.conn.execute(
+            "ATTACH DATABASE ?1 AS source",
+            params![source_str.as_ref()],
+        )?;
+
+        // Rollback on error: best-effort DETACH.
+        let result = self.merge_from_attached();
+        let _ = self.conn.execute("DETACH DATABASE source", params![]);
+        self.checkpoint()?;
+        result
+    }
+
+    /// Inner merge logic — assumes `source` is already attached.
+    fn merge_from_attached(&self) -> SqlResult<MergeStats> {
+        // ── 1. Items: insert rows whose content_hash doesn't exist locally ──
+        let items_added = self.conn.execute(
+            "INSERT INTO main.clipboard_items
+             (content_type, full_text, content_hash, created_at, updated_at,
+              image_path, rich_data, file_data, is_favorite, note,
+              source_app_name, source_app_icon, image_width, image_height, size, meta_type)
+             SELECT content_type, full_text, content_hash, created_at, updated_at,
+                    image_path, rich_data, file_data, is_favorite, note,
+                    source_app_name, source_app_icon, image_width, image_height, size,
+                    COALESCE(meta_type, '')
+             FROM source.clipboard_items s
+             WHERE s.content_hash NOT IN (
+                 SELECT content_hash FROM main.clipboard_items
+             )",
+            params![],
+        )?;
+
+        // ── 2. Items: update existing rows when source has a newer updated_at ──
+        let items_updated = self.conn.execute(
+            "UPDATE main.clipboard_items
+             SET content_type   = (SELECT s.content_type    FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 full_text      = (SELECT s.full_text       FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 updated_at     = (SELECT s.updated_at      FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 image_path     = (SELECT s.image_path      FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 rich_data      = (SELECT s.rich_data       FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 file_data      = (SELECT s.file_data       FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 is_favorite    = (SELECT s.is_favorite     FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 note           = (SELECT s.note            FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 source_app_name= (SELECT s.source_app_name FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 source_app_icon= (SELECT s.source_app_icon FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 image_width    = (SELECT s.image_width     FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 image_height   = (SELECT s.image_height    FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 size           = (SELECT s.size            FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 meta_type      = (SELECT COALESCE(s.meta_type, '') FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash)
+             WHERE EXISTS (
+                 SELECT 1 FROM source.clipboard_items s
+                 WHERE s.content_hash = main.clipboard_items.content_hash
+                   AND s.updated_at > main.clipboard_items.updated_at
+             )",
+            params![],
+        )?;
+
+        // ── 3. Tags: insert names that don't exist locally ──
+        let tags_added = self.conn.execute(
+            "INSERT INTO main.tags (name, color, updated_at)
+             SELECT name, color, updated_at FROM source.tags
+             WHERE name NOT IN (SELECT name FROM main.tags)",
+            params![],
+        )?;
+
+        // ── 4. Tags: update existing rows when source has a newer updated_at ──
+        let tags_updated = self.conn.execute(
+            "UPDATE main.tags
+             SET color      = (SELECT s.color      FROM source.tags s WHERE s.name = main.tags.name),
+                 updated_at = (SELECT s.updated_at FROM source.tags s WHERE s.name = main.tags.name)
+             WHERE EXISTS (
+                 SELECT 1 FROM source.tags s
+                 WHERE s.name = main.tags.name
+                   AND s.updated_at > main.tags.updated_at
+             )",
+            params![],
+        )?;
+
+        // ── 5. Item-tag associations: resolve IDs across databases ──
+        // source.item_tags → source.items (by id → content_hash) → main.items (by content_hash → id)
+        // source.item_tags → source.tags  (by id → name)         → main.tags  (by name → id)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO main.item_tags (tag_id, item_id, used_at)
+             SELECT mt.id, mi.id, sit.used_at
+             FROM source.item_tags sit
+             JOIN source.tags            st  ON st.id  = sit.tag_id
+             JOIN source.clipboard_items sci ON sci.id = sit.item_id
+             JOIN main.clipboard_items   mi  ON mi.content_hash = sci.content_hash
+             JOIN main.tags              mt  ON mt.name         = st.name",
+            params![],
+        )?;
+
+        // ── 6. Tombstones: INSERT OR IGNORE (UNIQUE indexes prevent duplicates) ──
+        self.conn.execute(
+            "INSERT OR IGNORE INTO main.deleted_items (content_hash, deleted_at, device_name)
+             SELECT content_hash, deleted_at, device_name FROM source.deleted_items",
+            params![],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO main.deleted_tags (name, deleted_at, device_name)
+             SELECT name, deleted_at, device_name FROM source.deleted_tags",
+            params![],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO main.unfavorited_items (content_hash, unfavorited_at, device_name)
+             SELECT content_hash, unfavorited_at, device_name FROM source.unfavorited_items",
+            params![],
+        )?;
+
+        Ok(MergeStats {
+            items_added,
+            items_updated,
+            tags_added,
+            tags_updated,
+        })
+    }
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
@@ -1014,4 +1158,274 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         tags: Vec::new(), // filled later via batch query
         meta_type,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(name: &str) -> (std::path::PathBuf, Database) {
+        let dir = std::env::temp_dir().join(format!(
+            "clippi-merge-test-{}-{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("clippi.db");
+        // Remove stale file if present.
+        let _ = std::fs::remove_file(&path);
+        let db = Database::open(&path.to_string_lossy()).unwrap();
+        (path, db)
+    }
+
+    fn insert_item(db: &Database, hash: u64, text: &str, updated: &str) {
+        db.conn.execute(
+            "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+             VALUES ('plain_text', ?1, ?2, ?3, ?4, '')",
+            rusqlite::params![text, hash as i64, updated, updated],
+        )
+        .unwrap();
+    }
+
+    fn insert_tag(db: &Database, name: &str, color: &str, updated: &str) -> i64 {
+        db.conn
+            .execute(
+                "INSERT INTO tags (name, color, updated_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![name, color, updated],
+            )
+            .unwrap();
+        db.conn.last_insert_rowid()
+    }
+
+    fn tag_item(db: &Database, item_id: i64, tag_id: i64) {
+        db.conn
+            .execute(
+                "INSERT INTO item_tags (tag_id, item_id, used_at) VALUES (?1, ?2, datetime('now'))",
+                rusqlite::params![tag_id, item_id],
+            )
+            .unwrap();
+    }
+
+    fn count_items(db: &Database) -> usize {
+        db.conn
+            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |r| {
+                r.get::<_, usize>(0)
+            })
+            .unwrap()
+    }
+
+    fn count_tags(db: &Database) -> usize {
+        db.conn
+            .query_row("SELECT COUNT(*) FROM tags", [], |r| {
+                r.get::<_, usize>(0)
+            })
+            .unwrap()
+    }
+
+    // ── merge_from tests ──
+
+    #[test]
+    fn merge_adds_new_items() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        insert_item(&src, 100, "hello", "2025-01-01T00:00:00Z");
+        // Target has different item
+        insert_item(&tgt, 200, "world", "2025-01-01T00:00:00Z");
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats.items_added, 1);
+        assert_eq!(stats.items_updated, 0);
+        assert_eq!(count_items(&tgt), 2); // both items present
+    }
+
+    #[test]
+    fn merge_skips_duplicate_by_hash() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        insert_item(&src, 100, "hello", "2025-01-01T00:00:00Z");
+        insert_item(&tgt, 100, "hello-old", "2024-06-01T00:00:00Z");
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats.items_added, 0);
+        // Source is newer → should update
+        assert_eq!(stats.items_updated, 1);
+        assert_eq!(count_items(&tgt), 1);
+    }
+
+    #[test]
+    fn merge_preserves_newer_target_item() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        // Source has older version
+        insert_item(&src, 100, "hello-old", "2024-06-01T00:00:00Z");
+        // Target has newer version
+        insert_item(&tgt, 100, "hello-new", "2025-01-01T00:00:00Z");
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats.items_added, 0);
+        assert_eq!(stats.items_updated, 0); // source is older, no update
+        assert_eq!(count_items(&tgt), 1);
+
+        // Verify target text wasn't changed.
+        let text: String = tgt
+            .conn
+            .query_row(
+                "SELECT full_text FROM clipboard_items WHERE content_hash = 100",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(text, "hello-new");
+    }
+
+    #[test]
+    fn merge_adds_new_tags() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        insert_tag(&src, "rust", "#FF0000", "2025-01-01T00:00:00Z");
+        insert_tag(&tgt, "golang", "#00FF00", "2025-01-01T00:00:00Z");
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats.tags_added, 1);
+        assert_eq!(stats.tags_updated, 0);
+        assert_eq!(count_tags(&tgt), 2);
+    }
+
+    #[test]
+    fn merge_updates_tag_when_source_newer() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        insert_tag(&src, "rust", "#FF0000", "2025-06-01T00:00:00Z");
+        insert_tag(&tgt, "rust", "#0000FF", "2024-01-01T00:00:00Z");
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats.tags_added, 0);
+        assert_eq!(stats.tags_updated, 1);
+
+        let color: String = tgt
+            .conn
+            .query_row("SELECT color FROM tags WHERE name = 'rust'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(color, "#FF0000");
+    }
+
+    #[test]
+    fn merge_resolves_tag_associations_across_ids() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        // Source: item hash=100 tagged "rust"
+        insert_item(&src, 100, "hello", "2025-01-01T00:00:00Z");
+        let src_tag = insert_tag(&src, "rust", "#FF0000", "2025-01-01T00:00:00Z");
+        let src_item_id: i64 = src
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 100",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        tag_item(&src, src_item_id, src_tag);
+
+        // Target: item hash=100 already exists (will be updated by source),
+        // tag "rust" NOT yet in target.
+        insert_item(&tgt, 100, "hello-old", "2024-06-01T00:00:00Z");
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert!(stats.items_updated >= 1);
+        assert!(stats.tags_added >= 1);
+
+        // Verify tag association was carried over.
+        let tag_count: usize = tgt
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM item_tags it
+                 JOIN tags t ON t.id = it.tag_id
+                 JOIN clipboard_items ci ON ci.id = it.item_id
+                 WHERE t.name = 'rust' AND ci.content_hash = 100",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_count, 1);
+    }
+
+    #[test]
+    fn merge_tombstones_are_inserted() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        // Insert a deleted item tombstone in source.
+        src.conn
+            .execute(
+                "INSERT INTO deleted_items (content_hash, deleted_at, device_name) VALUES (999, '2025-01-01T00:00:00Z', 'test')",
+                [],
+            )
+            .unwrap();
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+
+        let tombstones: usize = tgt
+            .conn
+            .query_row("SELECT COUNT(*) FROM deleted_items", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(tombstones, 1);
+        // Stats don't track tombstones separately.
+        assert_eq!(stats.items_added + stats.items_updated, 0);
+    }
+
+    #[test]
+    fn merge_idempotent() {
+        let (src_path, src) = temp_db("src");
+        let (_tgt_path, tgt) = temp_db("tgt");
+
+        insert_item(&src, 100, "hello", "2025-01-01T00:00:00Z");
+        insert_tag(&src, "rust", "#FF0000", "2025-01-01T00:00:00Z");
+
+        // First merge.
+        let stats1 = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats1.items_added, 1);
+        assert_eq!(stats1.tags_added, 1);
+
+        // Second merge — nothing new to add.
+        let stats2 = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats2.items_added, 0);
+        assert_eq!(stats2.items_updated, 0);
+        assert_eq!(stats2.tags_added, 0);
+        assert_eq!(stats2.tags_updated, 0);
+        assert_eq!(count_items(&tgt), 1);
+        assert_eq!(count_tags(&tgt), 1);
+    }
+
+    #[test]
+    fn merge_both_directions_same_result() {
+        // Merging A→B should produce the same item count as B→A (union).
+        let (a_path, a) = temp_db("a");
+        let (_b_path, b) = temp_db("b");
+        let (c_path, c) = temp_db("c"); // copy of B for reverse merge
+
+        insert_item(&a, 100, "hello", "2025-01-01T00:00:00Z");
+        insert_item(&b, 200, "world", "2025-01-01T00:00:00Z");
+        insert_item(&c, 200, "world", "2025-01-01T00:00:00Z");
+
+        // A → B
+        b.merge_from(&a_path).unwrap();
+        // B (now merged) ← A (reverse)
+        a.merge_from(&c_path).unwrap();
+
+        assert_eq!(count_items(&a), 2);
+        assert_eq!(count_items(&b), 2);
+    }
 }
