@@ -26,7 +26,7 @@ use crate::state::app::AppState;
 #[cfg(target_os = "macos")]
 use crate::ui::quick_paste::QUICK_WINDOW_CORNER_RADIUS;
 use crate::ui::quick_paste::{
-    QuickPasteEvent, QuickPasteView, QUICK_WINDOW_HEIGHT, QUICK_WINDOW_WIDTH,
+    calc_quick_window_height, QuickPasteEvent, QuickPasteView, QUICK_WINDOW_WIDTH,
 };
 
 /// Shared foreground app name for cross-service coordination.
@@ -1086,13 +1086,25 @@ impl WindowManager {
             hotkey.set_quick_actions_enabled(true);
         }
 
+        // Compute dynamic window height based on visible bars
+        let quick_h = {
+            let state = self.state.read(cx);
+            let pinned_tag_ids = &state.settings.pinned_tag_ids;
+            let tags = &state.tags;
+            let has_tag = pinned_tag_ids
+                .iter()
+                .any(|&id| tags.iter().any(|t| t.id == id));
+            let has_type = !state.settings.type_filter_config.is_empty();
+            calc_quick_window_height(has_tag, has_type)
+        };
+
         let (x, y) = self
-            .calculate_quick_position()
+            .calculate_quick_position(quick_h)
             .or_else(|| {
                 let scale = monitor::get_scale_factor(0, 0);
                 self.calc_center(
                     (QUICK_WINDOW_WIDTH * scale) as i32,
-                    (QUICK_WINDOW_HEIGHT * scale) as i32,
+                    (quick_h * scale) as i32,
                 )
             })
             .unwrap_or((0, 0));
@@ -1107,7 +1119,7 @@ impl WindowManager {
             if !hwnd.is_null() {
                 let scale = monitor::get_scale_factor(x, y);
                 let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-                let win_h = (QUICK_WINDOW_HEIGHT * scale) as i32;
+                let win_h = (quick_h * scale) as i32;
                 // SAFETY: HWND is our quick popup. The popup is positioned and
                 // shown without activation so the target app keeps focus.
                 unsafe {
@@ -1149,7 +1161,7 @@ impl WindowManager {
             if !hwnd.is_null() {
                 let scale = monitor::get_scale_factor(x, y);
                 let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-                let win_h = (QUICK_WINDOW_HEIGHT * scale) as i32;
+                let win_h = (quick_h * scale) as i32;
                 unsafe {
                     SetWindowPos(
                         hwnd,
@@ -1285,11 +1297,11 @@ impl WindowManager {
         self.hide_quick_window(cx);
     }
 
-    fn calculate_quick_position(&self) -> Option<(i32, i32)> {
+    fn calculate_quick_position(&self, quick_h: f32) -> Option<(i32, i32)> {
         if let Some(anchor) = crate::platform::text_input::get_text_input_anchor() {
             let scale = monitor::get_scale_factor(anchor.x, anchor.y);
             let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-            let win_h = (QUICK_WINDOW_HEIGHT * scale) as i32;
+            let win_h = (quick_h * scale) as i32;
             let area = monitor::get_monitor_work_area(anchor.x, anchor.y)?;
             let gap = (6.0 * scale).round() as i32;
             let below_y = anchor.y + anchor.height.max(1) + gap;
@@ -1305,7 +1317,7 @@ impl WindowManager {
         let (cx, cy) = monitor::get_cursor_pos()?;
         let scale = monitor::get_scale_factor(cx, cy);
         let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-        let win_h = (QUICK_WINDOW_HEIGHT * scale) as i32;
+        let win_h = (quick_h * scale) as i32;
         let area = monitor::get_monitor_work_area(cx, cy)?;
         Some(clamp_to_work_area(cx, cy, win_w, win_h, &area))
     }

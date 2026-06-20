@@ -2,16 +2,20 @@
 
 use gpui::prelude::*;
 use gpui::*;
+use gpui::{InteractiveElement, StatefulInteractiveElement};
 
-use crate::core::types::{format_relative_time, ClipboardItem, ContentType, DisplayKind, FileData};
+use crate::core::types::{format_relative_time, mask_sensitive_preview, ClipboardItem, ContentType, DisplayKind, FileData};
 use crate::state::app::AppState;
 use crate::ui::search_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
+use gpui_component::tooltip::Tooltip;
 
 const VISIBLE_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 44.0;
 pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
 // Height: 5 rows (220) + type bar (30) + tag bar (26) + dividers (2) + outer pad (4) = 282
+// Kept as reference; actual height is computed by calc_quick_window_height().
+#[allow(dead_code)]
 pub const QUICK_WINDOW_HEIGHT: f32 = 282.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
@@ -24,8 +28,21 @@ const OUTER_PADDING: f32 = 2.0;
 pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 10.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
 
-/// (slot, id, icon, preview_text, relative_time, image_path)
-type RowData = (usize, i64, &'static str, String, String, Option<String>);
+/// Calculate the quick window height based on visible bars.
+/// Used by window_manager for positioning and main.rs for initial window size.
+pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
+    let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + OUTER_PADDING * 2.0;
+    if has_type_bar {
+        h += TYPE_BAR_HEIGHT + 1.0; // bar + divider
+    }
+    if has_tag_row {
+        h += TAG_ROW_HEIGHT + 1.0; // bar + divider
+    }
+    h
+}
+
+/// (slot, id, icon, preview_text, note, relative_time, image_path)
+type RowData = (usize, i64, &'static str, String, String, String, Option<String>);
 
 pub enum QuickPasteEvent {
     Paste(i64),
@@ -160,6 +177,7 @@ impl QuickPasteView {
                     item.id,
                     type_icon(item),
                     preview_text(item),
+                    item.note.clone(),
                     format_relative_time(&item.updated_at),
                     is_image.then(|| item.image_path.clone()),
                 )
@@ -182,7 +200,7 @@ impl Render for QuickPasteView {
         let theme = self.theme(cx);
         let view_entity = cx.entity();
 
-        let (type_config, pinned_tag_ids, filters, tags_snapshot, items_count) = {
+        let (type_config, pinned_tag_ids, filters, tags_snapshot, items_count, show_original_on_hover) = {
             let state = self.state.read(cx);
             (
                 state.settings.type_filter_config.clone(),
@@ -190,6 +208,7 @@ impl Render for QuickPasteView {
                 state.filters.clone(),
                 state.tags.clone(),
                 state.items.len(),
+                state.settings.show_original_on_hover,
             )
         };
 
@@ -206,6 +225,19 @@ impl Render for QuickPasteView {
 
         let has_type_bar = !type_config.is_empty();
         let has_tag_row = !pinned_tags.is_empty();
+
+        // ── Tag compact mode detection ──
+        // Estimate total tag width; if it overflows the row, switch to flex_1 equal division.
+        let tag_avail = QUICK_WINDOW_WIDTH - OUTER_PADDING * 2.0 - HORIZONTAL_PADDING * 2.0;
+        let tag_gap = 4.0;
+        let char_est: f32 = 6.5; // rough char width at 10px font
+        let tag_pad: f32 = 12.0; // px(6.0) * 2
+        let total_est: f32 = pinned_tags
+            .iter()
+            .map(|(_, name, _)| name.chars().count() as f32 * char_est + tag_pad)
+            .sum();
+        let gaps = (pinned_tags.len().max(1) - 1) as f32 * tag_gap;
+        let tag_compact = (total_est + gaps) > tag_avail * 0.88;
 
         // ── Dynamic type filter sizing ──
         let visible_type_entries: Vec<&crate::core::settings::TypeFilterEntry> =
@@ -224,9 +256,11 @@ impl Render for QuickPasteView {
             rgba(0x00000008)
         };
 
+        let window_h = calc_quick_window_height(has_tag_row, has_type_bar);
+
         div()
             .w(px(QUICK_WINDOW_WIDTH))
-            .h(px(QUICK_WINDOW_HEIGHT))
+            .h(px(window_h))
             .p(px(OUTER_PADDING))
             .child(
                 div()
@@ -323,25 +357,42 @@ impl Render for QuickPasteView {
                                 .flex()
                                 .items_center()
                                 .gap(px(4.0))
-                                .flex_wrap()
                                 .children(pinned_tags.iter().map(|(id, name, color_hex)| {
                                     let active = filters.tag_ids.contains(id);
                                     let tag_color = parse_hex_for_tag(color_hex);
                                     let tag_id = *id;
                                     let app_state = self.state.clone();
+                                    let tag_name = name.clone();
+                                    let tag_name_for_tip = name.clone();
                                     div()
+                                        .id(("quick-tag", tag_id as u64))
                                         .h(px(20.0))
                                         .px(px(6.0))
                                         .rounded(px(4.0))
                                         .flex()
                                         .items_center()
-                                        .max_w(px(120.0))
+                                        .when(tag_compact, |d| {
+                                            d.flex_1().min_w(px(0.0))
+                                        })
+                                        .when(!tag_compact, |d| {
+                                            d.max_w(px(120.0))
+                                        })
                                         .overflow_hidden()
                                         .text_size(px(10.0))
                                         .font_weight(FontWeight::MEDIUM)
                                         .bg(if active { theme.accent } else { tag_color })
                                         .text_color(rgb(0xffffff))
                                         .cursor(CursorStyle::PointingHand)
+                                        .when(tag_compact, move |d| {
+                                            let tip = tag_name_for_tip;
+                                            d.tooltip(move |window, cx| {
+                                                let tip = tip.clone();
+                                                Tooltip::element(move |_window, _cx| {
+                                                    div().text_size(px(10.)).child(tip.clone())
+                                                })
+                                                .build(window, cx)
+                                            })
+                                        })
                                         .on_mouse_down(MouseButton::Left, {
                                             let s = app_state.clone();
                                             let v = view_entity.clone();
@@ -357,7 +408,7 @@ impl Render for QuickPasteView {
                                                 .overflow_hidden()
                                                 .whitespace_nowrap()
                                                 .text_ellipsis()
-                                                .child(name.clone()),
+                                                .child(tag_name),
                                         )
                                         .into_any_element()
                                 })),
@@ -387,7 +438,7 @@ impl Render for QuickPasteView {
                         let view_entity = cx.entity();
                         self.row_data(cx)
                             .into_iter()
-                            .map(move |(slot, item_id, icon, preview, time, img_path)| {
+                            .map(move |(slot, item_id, icon, preview, note, time, img_path)| {
                                 let index = first_visible + slot;
                                 let selected = index == selected_index;
                                 let t = t.clone();
@@ -408,7 +459,19 @@ impl Render for QuickPasteView {
                                                 .object_fit(ObjectFit::Contain),
                                         )
                                         .into_any_element()
+                                } else if !(note.is_empty() || show_original_on_hover && selected) {
+                                    // Note present, not selected (or show_original off) → show note
+                                    div()
+                                        .flex_1()
+                                        .overflow_hidden()
+                                        .text_size(px(12.0))
+                                        .text_color(t.text_2)
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(note)
+                                        .into_any_element()
                                 } else {
+                                    // No note, or selected with show_original_on_hover → show original (masked)
                                     div()
                                         .flex_1()
                                         .overflow_hidden()
@@ -546,7 +609,9 @@ fn preview_text(item: &ClipboardItem) -> String {
         }
         _ => item.full_text.clone(),
     };
-    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+    let raw = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Mask sensitive content (email / phone) in preview
+    mask_sensitive_preview(&raw, &item.meta_type)
 }
 
 fn parse_hex_for_tag(hex: &str) -> Rgba {

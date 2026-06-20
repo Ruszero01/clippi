@@ -21,7 +21,7 @@ mod services;
 // Root view lives in ui::root — use that instead of inline ClippiApp
 use core::settings::AppSettings;
 use state::app::AppState;
-use ui::quick_paste::{QuickPasteView, QUICK_WINDOW_HEIGHT, QUICK_WINDOW_WIDTH};
+use ui::quick_paste::{calc_quick_window_height, QuickPasteView, QUICK_WINDOW_WIDTH};
 use ui::root::RootView;
 use ui::window_manager::WindowManager;
 
@@ -436,6 +436,17 @@ fn main() {
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
 
+                let quick_h = {
+                    let s = state.read(cx);
+                    let has_tag = s
+                        .settings
+                        .pinned_tag_ids
+                        .iter()
+                        .any(|&id| s.tags.iter().any(|t| t.id == id));
+                    let has_type = !s.settings.type_filter_config.is_empty();
+                    calc_quick_window_height(has_tag, has_type)
+                };
+
                 let quick_options = WindowOptions {
                     window_background: WindowBackgroundAppearance::Transparent,
                     titlebar: Some(TitlebarOptions {
@@ -446,13 +457,13 @@ fn main() {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                         Bounds::centered(
                             None,
-                            size(px(QUICK_WINDOW_WIDTH), px(QUICK_WINDOW_HEIGHT)),
+                            size(px(QUICK_WINDOW_WIDTH), px(quick_h)),
                             cx,
                         )
                         .origin,
-                        size(px(QUICK_WINDOW_WIDTH), px(QUICK_WINDOW_HEIGHT)),
+                        size(px(QUICK_WINDOW_WIDTH), px(quick_h)),
                     ))),
-                    window_min_size: Some(size(px(QUICK_WINDOW_WIDTH), px(QUICK_WINDOW_HEIGHT))),
+                    window_min_size: Some(size(px(QUICK_WINDOW_WIDTH), px(quick_h))),
                     show: false,
                     focus: false,
                     kind: WindowKind::PopUp,
