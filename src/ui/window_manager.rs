@@ -42,19 +42,24 @@ static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 #[cfg(target_os = "windows")]
 static IN_MOVE_OPERATION: AtomicBool = AtomicBool::new(false);
 
-/// Convert a desired quick-window client size to the HWND's outer size.
+/// Convert a desired quick-window client size to the HWND's outer size,
+/// plus the client-area position offset inside the native window.
 ///
 /// `SetWindowPos` sizes the complete native window, while GPUI lays out inside
-/// the client area. Windows keeps an invisible non-client frame even for this
-/// borderless popup, so passing the client size directly clips several pixels
-/// from the bottom of the GPUI viewport.
+/// the client area. GPUI's `WM_NCCALCSIZE` handler applies asymmetric insets
+/// (left/right/bottom = frame_thickness, top = 0–1 px) even for borderless
+/// popups, shifting the client origin.  The returned offsets let the caller
+/// compensate the window position so the rendered content lands at the
+/// intended screen coordinates.
 #[cfg(target_os = "windows")]
 fn quick_outer_size_for_client(
     hwnd: *mut std::ffi::c_void,
     client_width: i32,
     client_height: i32,
-) -> (i32, i32) {
-    use windows_sys::Win32::Foundation::{GetLastError, RECT};
+) -> (i32, i32, i32, i32) {
+    // ^ (outer_width, outer_height, client_left_offset, client_top_offset)
+    use windows_sys::Win32::Foundation::{GetLastError, POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 
     let mut window_rect = RECT {
@@ -79,14 +84,31 @@ fn quick_outer_size_for_client(
             "quick window frame measurement failed: win32 error {}",
             unsafe { GetLastError() }
         );
-        return (client_width, client_height);
+        return (client_width, client_height, 0, 0);
     }
 
     let frame_width =
         ((window_rect.right - window_rect.left) - (client_rect.right - client_rect.left)).max(0);
     let frame_height =
         ((window_rect.bottom - window_rect.top) - (client_rect.bottom - client_rect.top)).max(0);
-    (client_width + frame_width, client_height + frame_height)
+
+    // Measure where the client origin sits on screen relative to the window
+    // origin.  On the first call (window still hidden) the offset is typically
+    // (0,0); after `WM_NCCALCSIZE` has run it reflects the actual insets.
+    // SAFETY: `hwnd` is our window; `ClientToScreen` writes to stack POINT.
+    let mut client_origin = POINT { x: 0, y: 0 };
+    let left_offset = unsafe { ClientToScreen(hwnd, &mut client_origin) }
+        .checked_sub(1) // 0 means failure
+        .map(|_| (client_origin.x - window_rect.left).max(0))
+        .unwrap_or(0);
+    let top_offset = (client_origin.y - window_rect.top).max(0);
+
+    (
+        client_width + frame_width,
+        client_height + frame_height,
+        left_offset,
+        top_offset,
+    )
 }
 
 /// Window subclass procedure that intercepts system behaviors while preserving
@@ -1167,7 +1189,7 @@ impl WindowManager {
                 let scale = monitor::get_scale_factor(x, y);
                 let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
                 let client_h = (quick_h * scale) as i32;
-                let (win_w, win_h) = quick_outer_size_for_client(hwnd, client_w, client_h);
+                let (win_w, win_h, _, _) = quick_outer_size_for_client(hwnd, client_w, client_h);
                 // SAFETY: HWND is our quick popup. The popup is positioned and
                 // shown without activation so the target app keeps focus.
                 unsafe {
@@ -1197,12 +1219,14 @@ impl WindowManager {
         // Start fast poll for responsive keyboard navigation.
         self.start_quick_poll(cx);
 
-        // Re-enforce window size after GPUI render — PopUp windows may
-        // not respect initial bounds on first paint.
+        // Re-enforce window size and position after GPUI render — GPUI's
+        // WM_NCCALCSIZE handler may have shifted the client origin inside the
+        // window.  ClientToScreen now returns the real offset so we can nudge
+        // the window back to place the GPUI viewport at the intended (x, y).
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
             };
 
             let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
@@ -1210,16 +1234,17 @@ impl WindowManager {
                 let scale = monitor::get_scale_factor(x, y);
                 let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
                 let client_h = (quick_h * scale) as i32;
-                let (win_w, win_h) = quick_outer_size_for_client(hwnd, client_w, client_h);
+                let (win_w, win_h, left_offset, top_offset) =
+                    quick_outer_size_for_client(hwnd, client_w, client_h);
                 unsafe {
                     SetWindowPos(
                         hwnd,
-                        std::ptr::null_mut(),
-                        0,
-                        0,
+                        HWND_TOPMOST,
+                        x - left_offset,
+                        y - top_offset,
                         win_w,
                         win_h,
-                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
                 }
             }
