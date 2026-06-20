@@ -31,13 +31,29 @@ fn windows_text_input_anchor() -> Option<TextInputAnchor> {
     use windows_sys::Win32::Foundation::{POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
-    let target = crate::platform::focus::get_last_non_clippi_window()?;
-    // SAFETY: The HWND comes from the focus watcher. `GetWindowThreadProcessId`
-    // and `GetGUIThreadInfo` are read-only queries; `GUITHREADINFO` is
-    // initialised with the required cbSize before the call.
+    let target = crate::platform::focus::get_last_non_clippi_window()
+        .or_else(|| {
+            // Fallback: when LAST_NON_CLIPPI_WINDOW hasn't been initialised yet
+            // (e.g. right after Clippi starts while another app is already
+            // foreground), use the current foreground window directly.
+            let fg = unsafe { GetForegroundWindow() };
+            if fg.is_null() {
+                return None;
+            }
+            let mut pid: u32 = 0;
+            // SAFETY: GetWindowThreadProcessId is a read-only query.
+            let tid = unsafe { GetWindowThreadProcessId(fg, &mut pid) };
+            if tid == 0 || pid == std::process::id() {
+                return None; // window is invalid or belongs to Clippi
+            }
+            Some(fg)
+        })?;
+    // SAFETY: The HWND comes from the focus watcher (or `GetForegroundWindow`
+    // fallback). `GetWindowThreadProcessId` and `GetGUIThreadInfo` are read-only
+    // queries; `GUITHREADINFO` is initialised with the required cbSize.
     unsafe {
         let tid = GetWindowThreadProcessId(target, std::ptr::null_mut());
         if tid == 0 {
