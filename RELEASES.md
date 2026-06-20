@@ -1,4 +1,4 @@
-# Version 0.2.7 (预发布)
+# Version 0.2.7
 
 ### Bug 修复
 
