@@ -34,23 +34,22 @@ fn windows_text_input_anchor() -> Option<TextInputAnchor> {
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
-    let target = crate::platform::focus::get_last_non_clippi_window()
-        .or_else(|| {
-            // Fallback: when LAST_NON_CLIPPI_WINDOW hasn't been initialised yet
-            // (e.g. right after Clippi starts while another app is already
-            // foreground), use the current foreground window directly.
-            let fg = unsafe { GetForegroundWindow() };
-            if fg.is_null() {
-                return None;
-            }
-            let mut pid: u32 = 0;
-            // SAFETY: GetWindowThreadProcessId is a read-only query.
-            let tid = unsafe { GetWindowThreadProcessId(fg, &mut pid) };
-            if tid == 0 || pid == std::process::id() {
-                return None; // window is invalid or belongs to Clippi
-            }
-            Some(fg)
-        })?;
+    let target = crate::platform::focus::get_last_non_clippi_window().or_else(|| {
+        // Fallback: when LAST_NON_CLIPPI_WINDOW hasn't been initialised yet
+        // (e.g. right after Clippi starts while another app is already
+        // foreground), use the current foreground window directly.
+        let fg = unsafe { GetForegroundWindow() };
+        if fg.is_null() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        // SAFETY: GetWindowThreadProcessId is a read-only query.
+        let tid = unsafe { GetWindowThreadProcessId(fg, &mut pid) };
+        if tid == 0 || pid == std::process::id() {
+            return None; // window is invalid or belongs to Clippi
+        }
+        Some(fg)
+    })?;
     // SAFETY: The HWND comes from the focus watcher (or `GetForegroundWindow`
     // fallback). `GetWindowThreadProcessId` and `GetGUIThreadInfo` are read-only
     // queries; `GUITHREADINFO` is initialised with the required cbSize.
@@ -267,44 +266,15 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
         }
     }
 
-    fn frontmost_bundle_id() -> Option<String> {
-        let mtm = objc2::MainThreadMarker::new()?;
-        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-        let app = workspace.frontmostApplication()?;
-        if app.processIdentifier() == std::process::id() as i32 {
-            return None;
-        }
-        let _ = mtm;
-        app.bundleIdentifier().map(|id| id.to_string())
-    }
-
-    fn is_browser_bundle_id(bundle_id: &str) -> bool {
-        matches!(
-            bundle_id,
-            "com.apple.Safari"
-                | "com.apple.SafariTechnologyPreview"
-                | "com.google.Chrome"
-                | "com.google.Chrome.beta"
-                | "com.google.Chrome.canary"
-                | "org.chromium.Chromium"
-                | "com.microsoft.edgemac"
-                | "com.microsoft.edgemac.Beta"
-                | "com.microsoft.edgemac.Canary"
-                | "com.brave.Browser"
-                | "com.vivaldi.Vivaldi"
-                | "com.operasoftware.Opera"
-                | "org.mozilla.firefox"
-                | "org.mozilla.firefoxdeveloperedition"
-                | "company.thebrowser.Browser"
-                | "com.kagi.kagimacOS"
-        )
-    }
-
-    fn is_trusted_system_app_for_text_input_anchor() -> bool {
-        let Some(bundle_id) = frontmost_bundle_id() else {
+    fn is_external_app_frontmost() -> bool {
+        let Some(_mtm) = objc2::MainThreadMarker::new() else {
             return false;
         };
-        bundle_id.starts_with("com.apple.") && !is_browser_bundle_id(&bundle_id)
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let Some(app) = workspace.frontmostApplication() else {
+            return false;
+        };
+        app.processIdentifier() != std::process::id() as i32
     }
 
     // SAFETY: AX calls are read-only. Returned Core Foundation objects follow
@@ -313,7 +283,9 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
         if !crate::platform::paste::check_accessibility_permission() {
             return None;
         }
-        if !is_trusted_system_app_for_text_input_anchor() {
+        // Try every external application, including browsers. Apps that do not
+        // expose the relevant AX attributes naturally fall back to the cursor.
+        if !is_external_app_frontmost() {
             return None;
         }
 

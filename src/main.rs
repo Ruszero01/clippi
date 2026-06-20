@@ -478,7 +478,9 @@ fn main() {
                 let quick_state = state.clone();
                 let quick_wm = window_manager.clone();
                 if let Err(err) = cx.open_window(quick_options, move |quick_window, cx| {
-                    let quick_view = cx.new(|_cx| QuickPasteView::new(quick_state.clone()));
+                    let quick_view = cx.new(|cx| {
+                        QuickPasteView::new(quick_state.clone(), quick_window, cx)
+                    });
                     let quick_handle = gpui::Window::window_handle(quick_window);
                     quick_wm.update(cx, |wm, cx| {
                         wm.set_quick_window(quick_handle, quick_view.clone(), cx);

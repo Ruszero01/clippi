@@ -62,16 +62,20 @@ pub struct QuickPasteView {
     state: Entity<AppState>,
     selected_index: usize,
     first_visible: usize,
+    _appearance_subscription: Subscription,
 }
 
 impl EventEmitter<QuickPasteEvent> for QuickPasteView {}
 
 impl QuickPasteView {
-    pub fn new(state: Entity<AppState>) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let appearance_subscription =
+            cx.observe_window_appearance(window, |_this, _window, cx| cx.notify());
         Self {
             state,
             selected_index: 0,
             first_visible: 0,
+            _appearance_subscription: appearance_subscription,
         }
     }
 

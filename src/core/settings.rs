@@ -500,20 +500,12 @@ pub fn spawn_new_process() {
 /// - List fields (`sync_backends`, `type_filter_config`, etc.): union from both
 ///   configs, deduplicating by natural key.
 /// - `db_path`: set to `new_db_path` (may be empty for portable mode).
-pub fn merge_configs(
-    source: &AppSettings,
-    target: &AppSettings,
-    new_db_path: &str,
-) -> AppSettings {
+pub fn merge_configs(source: &AppSettings, target: &AppSettings, new_db_path: &str) -> AppSettings {
     let mut merged = source.clone();
     merged.db_path = new_db_path.to_string();
 
     // ── sync_backends: merge by id (source takes precedence) ──
-    let source_ids: Vec<&str> = source
-        .sync_backends
-        .iter()
-        .map(|b| b.id.as_str())
-        .collect();
+    let source_ids: Vec<&str> = source.sync_backends.iter().map(|b| b.id.as_str()).collect();
     for tb in &target.sync_backends {
         if !source_ids.contains(&tb.id.as_str()) {
             merged.sync_backends.push(tb.clone());
@@ -590,7 +582,7 @@ mod tests {
         let merged = merge_configs(&source, &target, "/new/path/clippi.db");
         assert_eq!(merged.theme, "dark"); // source wins
         assert_eq!(merged.hotkey, "Alt+V"); // source wins
-        assert_eq!(merged.auto_hide, true); // source wins
+        assert!(merged.auto_hide); // source wins
         assert_eq!(merged.max_items, 500); // source wins
         assert_eq!(merged.db_path, "/new/path/clippi.db"); // explicit override
     }
@@ -632,25 +624,27 @@ mod tests {
 
     #[test]
     fn merge_configs_union_type_filter_by_key() {
-        let mut source = AppSettings::default();
-        source.type_filter_config = vec![
-            TypeFilterEntry {
+        let source = AppSettings {
+            type_filter_config: vec![TypeFilterEntry {
                 key: "plain_text".into(),
                 visible: false,
-            },
-        ];
+            }],
+            ..Default::default()
+        };
 
-        let mut target = AppSettings::default();
-        target.type_filter_config = vec![
-            TypeFilterEntry {
-                key: "plain_text".into(),
-                visible: true,
-            },
-            TypeFilterEntry {
-                key: "image".into(),
-                visible: true,
-            },
-        ];
+        let target = AppSettings {
+            type_filter_config: vec![
+                TypeFilterEntry {
+                    key: "plain_text".into(),
+                    visible: true,
+                },
+                TypeFilterEntry {
+                    key: "image".into(),
+                    visible: true,
+                },
+            ],
+            ..Default::default()
+        };
 
         let merged = merge_configs(&source, &target, "");
         assert_eq!(merged.type_filter_config.len(), 2);
