@@ -42,6 +42,53 @@ static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 #[cfg(target_os = "windows")]
 static IN_MOVE_OPERATION: AtomicBool = AtomicBool::new(false);
 
+/// Convert a desired quick-window client size to the HWND's outer size.
+///
+/// `SetWindowPos` sizes the complete native window, while GPUI lays out inside
+/// the client area. Windows keeps an invisible non-client frame even for this
+/// borderless popup, so passing the client size directly clips several pixels
+/// from the bottom of the GPUI viewport.
+#[cfg(target_os = "windows")]
+fn quick_outer_size_for_client(
+    hwnd: *mut std::ffi::c_void,
+    client_width: i32,
+    client_height: i32,
+) -> (i32, i32) {
+    use windows_sys::Win32::Foundation::{GetLastError, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
+
+    let mut window_rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let mut client_rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: `hwnd` is the quick window owned by this process and both APIs
+    // only write to the provided stack-allocated RECT values.
+    let measured = unsafe {
+        GetWindowRect(hwnd, &mut window_rect) != 0 && GetClientRect(hwnd, &mut client_rect) != 0
+    };
+    if !measured {
+        log::warn!(
+            "quick window frame measurement failed: win32 error {}",
+            unsafe { GetLastError() }
+        );
+        return (client_width, client_height);
+    }
+
+    let frame_width =
+        ((window_rect.right - window_rect.left) - (client_rect.right - client_rect.left)).max(0);
+    let frame_height =
+        ((window_rect.bottom - window_rect.top) - (client_rect.bottom - client_rect.top)).max(0);
+    (client_width + frame_width, client_height + frame_height)
+}
+
 /// Window subclass procedure that intercepts system behaviors while preserving
 /// manual resize. Only active when `BLOCK_SYSTEM_WINDOW_BEHAVIORS` is true.
 ///
@@ -1118,8 +1165,9 @@ impl WindowManager {
             let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
                 let scale = monitor::get_scale_factor(x, y);
-                let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-                let win_h = (quick_h * scale) as i32;
+                let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
+                let client_h = (quick_h * scale) as i32;
+                let (win_w, win_h) = quick_outer_size_for_client(hwnd, client_w, client_h);
                 // SAFETY: HWND is our quick popup. The popup is positioned and
                 // shown without activation so the target app keeps focus.
                 unsafe {
@@ -1160,8 +1208,9 @@ impl WindowManager {
             let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
                 let scale = monitor::get_scale_factor(x, y);
-                let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-                let win_h = (quick_h * scale) as i32;
+                let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
+                let client_h = (quick_h * scale) as i32;
+                let (win_w, win_h) = quick_outer_size_for_client(hwnd, client_w, client_h);
                 unsafe {
                     SetWindowPos(
                         hwnd,

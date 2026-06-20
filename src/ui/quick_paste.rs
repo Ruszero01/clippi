@@ -15,10 +15,10 @@ use gpui_component::tooltip::Tooltip;
 const VISIBLE_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 44.0;
 pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
-// Height: 5 rows (220) + type bar (30) + tag bar (26) + dividers (2) + outer pad (4) = 282
+// Height: rows + optional filter bars/dividers + platform padding + list bottom inset.
 // Kept as reference; actual height is computed by calc_quick_window_height().
 #[allow(dead_code)]
-pub const QUICK_WINDOW_HEIGHT: f32 = 282.0;
+pub const QUICK_WINDOW_HEIGHT: f32 = 286.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
@@ -29,11 +29,17 @@ const OUTER_PADDING: f32 = 2.0;
 
 pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 10.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
+const LIST_INSET: f32 = 4.0;
+// Nested radii shrink by the same amount as their inset. This keeps the
+// Windows outer window curve, the 2px-inset panel border, and the list surface
+// visually concentric instead of making the inner corners look larger.
+const PANEL_CORNER_RADIUS: f32 = QUICK_WINDOW_CORNER_RADIUS - OUTER_PADDING;
+const LIST_CORNER_RADIUS: f32 = PANEL_CORNER_RADIUS - LIST_INSET;
 
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
 pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
-    let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + OUTER_PADDING * 2.0;
+    let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET + OUTER_PADDING * 2.0;
     if has_type_bar {
         h += TYPE_BAR_HEIGHT + 1.0; // bar + divider
     }
@@ -277,11 +283,18 @@ impl Render for QuickPasteView {
         div()
             .w(px(QUICK_WINDOW_WIDTH))
             .h(px(window_h))
-            .p(px(OUTER_PADDING))
+            .flex()
+            .items_center()
+            .justify_center()
             .child(
                 div()
-                    .size_full()
-                    .rounded(px(QUICK_WINDOW_CORNER_RADIUS))
+                    // Use explicit inset dimensions instead of `size_full`
+                    // inside a padded parent. On Windows the latter overflowed
+                    // the native client area, which clipped away the intended
+                    // bottom breathing room.
+                    .w(px(QUICK_WINDOW_WIDTH - OUTER_PADDING * 2.0))
+                    .h(px(window_h - OUTER_PADDING * 2.0))
+                    .rounded(px(PANEL_CORNER_RADIUS))
                     .border_1()
                     .border_color(theme.divider)
                     .bg(theme.bg)
@@ -429,156 +442,181 @@ impl Render for QuickPasteView {
                     .when(has_tag_row, |parent| {
                         parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
                     })
-                    // ── Empty state ──
-                    .when(items_count == 0, |parent| {
-                        parent.child(
-                            div()
-                                .flex_1()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(13.0))
-                                .text_color(theme.text_2)
-                                .child("No clipboard items"),
-                        )
-                    })
-                    // ── List rows ──
-                    .children({
-                        let t = theme.clone();
-                        let selected_index = self.selected_index;
-                        let first_visible = self.first_visible;
-                        let view_entity = cx.entity();
-                        self.row_data(cx)
-                            .into_iter()
-                            .map(
-                                move |(slot, item_id, icon, preview, note, time, img_path)| {
-                                    let index = first_visible + slot;
-                                    let selected = index == selected_index;
-                                    let t = t.clone();
-                                    let ve = view_entity.clone();
-
-                                    let show_note =
-                                        !(note.is_empty() || show_original_on_hover && selected);
-                                    let content_cell = if show_note {
-                                        // Note takes precedence for every content type, including images.
-                                        div()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .text_size(px(12.0))
-                                            .text_color(t.text_2)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(note)
-                                            .into_any_element()
-                                    } else if let Some(ref path) = img_path {
-                                        let thumb_h = ROW_HEIGHT - 6.0;
-                                        div()
-                                            .flex_1()
-                                            .h(px(thumb_h))
-                                            .rounded(px(4.0))
-                                            .overflow_hidden()
-                                            .flex()
-                                            .items_center()
-                                            .child(
-                                                gpui::img(std::path::Path::new(path))
-                                                    .h(px(thumb_h))
-                                                    .object_fit(ObjectFit::Contain),
-                                            )
-                                            .into_any_element()
-                                    } else {
-                                        // No note, or selected with show_original_on_hover → show original (masked)
-                                        div()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .text_size(px(13.0))
-                                            .text_color(t.text_1)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(preview)
-                                            .into_any_element()
-                                    };
-
+                    // ── List viewport ──
+                    // Keep the selection surface away from the window edges so
+                    // the final row reads as a complete rounded item instead of
+                    // being cut off by the native window mask.
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .mx(px(LIST_INSET))
+                            .flex()
+                            .flex_col()
+                            .pb(px(LIST_INSET))
+                            .rounded_b(px(LIST_CORNER_RADIUS))
+                            .overflow_hidden()
+                            .when(items_count == 0, |list| {
+                                list.child(
                                     div()
-                                        .h(px(ROW_HEIGHT))
-                                        .px(px(HORIZONTAL_PADDING))
+                                        .flex_1()
+                                        .min_h(px(0.0))
                                         .flex()
                                         .items_center()
-                                        .gap(px(8.0))
-                                        .bg(if selected {
-                                            t.accent_overlay()
-                                        } else {
-                                            rgba(0x00000000)
-                                        })
-                                        .cursor(CursorStyle::PointingHand)
-                                        .on_mouse_down(MouseButton::Left, {
-                                            let ve2 = ve.clone();
-                                            let ve3 = ve.clone();
-                                            move |ev, _window, cx| {
-                                                // Single-click: select
-                                                ve2.update(cx, |view, cx| {
-                                                    view.select_index(index, cx);
-                                                });
-                                                // Double-click: paste
-                                                if ev.click_count == 2 {
-                                                    ve3.update(cx, |_, cx| {
-                                                        cx.emit(QuickPasteEvent::Paste(item_id));
-                                                    });
-                                                }
-                                            }
-                                        })
-                                        // Slot number badge
-                                        .child(
+                                        .justify_center()
+                                        .text_size(px(13.0))
+                                        .text_color(theme.text_2)
+                                        .child("No clipboard items"),
+                                )
+                            })
+                            .children({
+                                let t = theme.clone();
+                                let selected_index = self.selected_index;
+                                let first_visible = self.first_visible;
+                                let view_entity = cx.entity();
+                                self.row_data(cx)
+                                    .into_iter()
+                                    .map(
+                                        move |(
+                                            slot,
+                                            item_id,
+                                            icon,
+                                            preview,
+                                            note,
+                                            time,
+                                            img_path,
+                                        )| {
+                                            let index = first_visible + slot;
+                                            let selected = index == selected_index;
+                                            let t = t.clone();
+                                            let ve = view_entity.clone();
+
+                                            let show_note = !(note.is_empty()
+                                                || show_original_on_hover && selected);
+                                            let content_cell = if show_note {
+                                                // Note takes precedence for every content type, including images.
+                                                div()
+                                                    .flex_1()
+                                                    .overflow_hidden()
+                                                    .text_size(px(12.0))
+                                                    .text_color(t.text_2)
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child(note)
+                                                    .into_any_element()
+                                            } else if let Some(ref path) = img_path {
+                                                let thumb_h = ROW_HEIGHT - 6.0;
+                                                div()
+                                                    .flex_1()
+                                                    .h(px(thumb_h))
+                                                    .rounded(px(4.0))
+                                                    .overflow_hidden()
+                                                    .flex()
+                                                    .items_center()
+                                                    .child(
+                                                        gpui::img(std::path::Path::new(path))
+                                                            .h(px(thumb_h))
+                                                            .object_fit(ObjectFit::Contain),
+                                                    )
+                                                    .into_any_element()
+                                            } else {
+                                                // No note, or selected with show_original_on_hover → show original (masked)
+                                                div()
+                                                    .flex_1()
+                                                    .overflow_hidden()
+                                                    .text_size(px(13.0))
+                                                    .text_color(t.text_1)
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child(preview)
+                                                    .into_any_element()
+                                            };
+
                                             div()
-                                                .w(px(22.0))
-                                                .h(px(22.0))
-                                                .rounded(px(5.0))
+                                                .h(px(ROW_HEIGHT))
+                                                .flex_shrink_0()
+                                                .px(px(HORIZONTAL_PADDING - LIST_INSET))
                                                 .flex()
                                                 .items_center()
-                                                .justify_center()
+                                                .gap(px(8.0))
                                                 .bg(if selected {
-                                                    t.accent
+                                                    t.accent_overlay()
                                                 } else {
                                                     rgba(0x00000000)
                                                 })
-                                                .text_color(if selected {
-                                                    rgb(0xffffff)
-                                                } else {
-                                                    t.text_2
+                                                .cursor(CursorStyle::PointingHand)
+                                                .on_mouse_down(MouseButton::Left, {
+                                                    let ve2 = ve.clone();
+                                                    let ve3 = ve.clone();
+                                                    move |ev, _window, cx| {
+                                                        // Single-click: select
+                                                        ve2.update(cx, |view, cx| {
+                                                            view.select_index(index, cx);
+                                                        });
+                                                        // Double-click: paste
+                                                        if ev.click_count == 2 {
+                                                            ve3.update(cx, |_, cx| {
+                                                                cx.emit(QuickPasteEvent::Paste(
+                                                                    item_id,
+                                                                ));
+                                                            });
+                                                        }
+                                                    }
                                                 })
-                                                .text_size(px(11.0))
-                                                .font_weight(FontWeight::BOLD)
-                                                .child((slot + 1).to_string()),
-                                        )
-                                        // Type icon
-                                        .child(
-                                            div()
-                                                .w(px(16.0))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .text_size(px(12.0))
-                                                .font_family("iconfont")
-                                                .text_color(if selected {
-                                                    t.accent
-                                                } else {
-                                                    t.text_2
-                                                })
-                                                .child(icon),
-                                        )
-                                        .child(content_cell)
-                                        // Relative time
-                                        .child(
-                                            div()
-                                                .text_size(px(10.0))
-                                                .text_color(t.text_3)
-                                                .whitespace_nowrap()
-                                                .child(time),
-                                        )
-                                        .into_any_element()
-                                },
-                            )
-                            .collect::<Vec<_>>()
-                    }),
+                                                // Slot number badge
+                                                .child(
+                                                    div()
+                                                        .w(px(22.0))
+                                                        .h(px(22.0))
+                                                        .rounded(px(5.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .bg(if selected {
+                                                            t.accent
+                                                        } else {
+                                                            rgba(0x00000000)
+                                                        })
+                                                        .text_color(if selected {
+                                                            rgb(0xffffff)
+                                                        } else {
+                                                            t.text_2
+                                                        })
+                                                        .text_size(px(11.0))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .child((slot + 1).to_string()),
+                                                )
+                                                // Type icon
+                                                .child(
+                                                    div()
+                                                        .w(px(16.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .text_size(px(12.0))
+                                                        .font_family("iconfont")
+                                                        .text_color(if selected {
+                                                            t.accent
+                                                        } else {
+                                                            t.text_2
+                                                        })
+                                                        .child(icon),
+                                                )
+                                                .child(content_cell)
+                                                // Relative time
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(t.text_3)
+                                                        .whitespace_nowrap()
+                                                        .child(time),
+                                                )
+                                                .into_any_element()
+                                        },
+                                    )
+                                    .collect::<Vec<_>>()
+                            }),
+                    ),
             )
     }
 }
