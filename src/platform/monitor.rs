@@ -182,16 +182,31 @@ pub fn is_point_on_monitor(_x: i32, _y: i32) -> bool {
 
 /// Get the DPI scale factor for the monitor containing point (x, y).
 ///
-/// On Windows, returns `system_dpi / 96.0`. On macOS, coordinates are
-/// already DPI-independent so returns `1.0`. Other platforms return `1.0`.
+/// On Windows, queries per-monitor DPI via `GetDpiForMonitor` so the
+/// returned scale matches the monitor the window actually occupies.
+/// Falls back to system DPI if the monitor cannot be resolved.
+/// On macOS, coordinates are already DPI-independent so returns `1.0`.
+/// Other platforms return `1.0`.
 ///
-/// The point (x, y) should be in physical pixels on Windows (used only to
-/// identify the target monitor; falls back to system DPI if unavailable).
+/// The point (x, y) should be in physical pixels on Windows.
 #[cfg(target_os = "windows")]
-pub fn get_scale_factor(_x: i32, _y: i32) -> f32 {
-    use windows_sys::Win32::UI::HiDpi::GetDpiForSystem;
-    // SAFETY: `GetDpiForSystem` is a read-only query callable from any thread.
+pub fn get_scale_factor(x: i32, y: i32) -> f32 {
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
+
+    // SAFETY: All Win32 APIs used here are read-only queries callable from
+    // any thread. `GetDpiForMonitor` writes to stack-allocated u32 values.
     unsafe {
+        let hmonitor = MonitorFromPoint(
+            windows_sys::Win32::Foundation::POINT { x, y },
+            MONITOR_DEFAULTTONEAREST,
+        );
+        if !hmonitor.is_null() {
+            let mut dpi_x: u32 = 96;
+            let mut dpi_y: u32 = 96;
+            if GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) == 0 {
+                return dpi_x as f32 / 96.0;
+            }
+        }
         let dpi = GetDpiForSystem();
         dpi as f32 / 96.0
     }

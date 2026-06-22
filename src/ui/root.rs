@@ -170,6 +170,9 @@ impl RootView {
                         bar.close_tag_panel(cx);
                     });
                 }
+                WindowManagerEvent::DpiChanged => {
+                    cx.notify();
+                }
             },
         );
 

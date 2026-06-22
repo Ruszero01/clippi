@@ -178,6 +178,8 @@ pub enum WindowManagerEvent {
     PasteShortcutRecorded { app_name: String, shortcut: String },
     /// Window was hidden — RootView should dismiss all floating panels.
     WindowHidden,
+    /// Main window DPI changed — RootView should force a re-render.
+    DpiChanged,
 }
 
 /// Unified window manager entity.
@@ -218,6 +220,8 @@ pub struct WindowManager {
     // --- Raw window handle (HWND on Windows) ---
     #[allow(dead_code)]
     hwnd: isize,
+    #[cfg(target_os = "windows")]
+    last_main_dpi: u32,
     #[cfg(target_os = "macos")]
     ns_window: isize,
     quick_window: Option<AnyWindowHandle>,
@@ -296,6 +300,8 @@ impl WindowManager {
             sync_service,
             tray,
             hwnd: 0,
+            #[cfg(target_os = "windows")]
+            last_main_dpi: 0,
             #[cfg(target_os = "macos")]
             ns_window: 0,
             quick_window: None,
@@ -731,20 +737,48 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::Foundation::RECT;
+            use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
             use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
             if self.hwnd == 0 {
                 return;
             }
+            let hwnd = self.hwnd as *mut std::ffi::c_void;
+
+            // Detect DPI changes and force layout invalidation.
+            let current_dpi = unsafe { GetDpiForWindow(hwnd) } as u32;
+            if current_dpi != self.last_main_dpi && self.last_main_dpi != 0 {
+                self.last_main_dpi = current_dpi;
+                cx.emit(WindowManagerEvent::DpiChanged);
+                // Nudge width by 1 px and back → WM_SIZE →
+                // GPUI layout recalculation.
+                {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
+                    };
+                    let mut r = RECT {
+                        left: 0, top: 0, right: 0, bottom: 0,
+                    };
+                    if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
+                        let w = r.right - r.left;
+                        let h = r.bottom - r.top;
+                        unsafe {
+                            SetWindowPos(hwnd, HWND_TOP, 0, 0, w + 1, h, SWP_NOACTIVATE | SWP_NOMOVE);
+                            SetWindowPos(hwnd, HWND_TOP, 0, 0, w, h, SWP_NOACTIVATE | SWP_NOMOVE);
+                        }
+                    }
+                }
+                return;
+            }
+            self.last_main_dpi = current_dpi;
+
             let mut rect = RECT {
                 left: 0,
                 top: 0,
                 right: 0,
                 bottom: 0,
             };
-            // SAFETY: `GetWindowRect` reads our own window's geometry. The HWND
-            // is valid (guarded by `self.hwnd != 0` above) and RECT is stack-allocated.
-            let ok = unsafe { GetWindowRect(self.hwnd as *mut std::ffi::c_void, &mut rect) };
+            let ok = unsafe { GetWindowRect(hwnd, &mut rect) };
             if ok == 0 {
                 return;
             }
@@ -754,12 +788,11 @@ impl WindowManager {
                 return;
             }
 
-            // --- Convert physical → logical pixels ---
-            let scale = crate::platform::monitor::get_scale_factor(rect.left, rect.top);
+            // Convert physical → logical using window's actual DPI.
+            let scale = current_dpi as f32 / 96.0;
             let logical_w = phys_w as f32 / scale;
             let logical_h = phys_h as f32 / scale;
 
-            // Also capture the position (in physical pixels — save_geometry expects logical)
             let phys_x = rect.left;
             let phys_y = rect.top;
 
