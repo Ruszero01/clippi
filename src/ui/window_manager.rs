@@ -221,7 +221,7 @@ pub struct WindowManager {
     #[allow(dead_code)]
     hwnd: isize,
     #[cfg(target_os = "windows")]
-    last_main_dpi: u32,
+    last_system_dpi: u32,
     #[cfg(target_os = "macos")]
     ns_window: isize,
     quick_window: Option<AnyWindowHandle>,
@@ -301,7 +301,7 @@ impl WindowManager {
             tray,
             hwnd: 0,
             #[cfg(target_os = "windows")]
-            last_main_dpi: 0,
+            last_system_dpi: 0,
             #[cfg(target_os = "macos")]
             ns_window: 0,
             quick_window: None,
@@ -747,8 +747,8 @@ impl WindowManager {
 
             // Detect DPI changes and force layout invalidation.
             let current_dpi = unsafe { GetDpiForWindow(hwnd) } as u32;
-            if current_dpi != self.last_main_dpi && self.last_main_dpi != 0 {
-                self.last_main_dpi = current_dpi;
+            if current_dpi != self.last_system_dpi && self.last_system_dpi != 0 {
+                self.last_system_dpi = current_dpi;
                 cx.emit(WindowManagerEvent::DpiChanged);
                 // Nudge width by 1 px and back → WM_SIZE →
                 // GPUI layout recalculation.
@@ -770,7 +770,7 @@ impl WindowManager {
                 }
                 return;
             }
-            self.last_main_dpi = current_dpi;
+            self.last_system_dpi = current_dpi;
 
             let mut rect = RECT {
                 left: 0,
@@ -1179,6 +1179,11 @@ impl WindowManager {
             return;
         };
 
+        // Main and quick window are never shown simultaneously.
+        if self.visible {
+            self.hide(cx);
+        }
+
         self.state.update(cx, |state, _cx| state.reload_items());
         view.update(cx, |view, cx| view.reset_scroll(cx));
         self.quick_visible = true;
@@ -1213,18 +1218,19 @@ impl WindowManager {
 
         #[cfg(target_os = "windows")]
         {
+            use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
             };
 
             let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
-                let scale = monitor::get_scale_factor(x, y);
+                let dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
+                let scale = dpi / 96.0;
                 let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
                 let client_h = (quick_h * scale) as i32;
-                let (win_w, win_h, _, _) = quick_outer_size_for_client(hwnd, client_w, client_h);
-                // SAFETY: HWND is our quick popup. The popup is positioned and
-                // shown without activation so the target app keeps focus.
+                let (win_w, win_h, _, _) =
+                    quick_outer_size_for_client(hwnd, client_w, client_h);
                 unsafe {
                     SetWindowPos(
                         hwnd,
@@ -1295,11 +1301,22 @@ impl WindowManager {
 
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            };
             let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
             if !hwnd.is_null() {
-                // SAFETY: HWND is our quick popup.
-                unsafe { ShowWindow(hwnd, SW_HIDE) };
+                // Use SWP_HIDEWINDOW instead of SW_HIDE — SW_HIDE minimises
+                // the window, causing GPUI to save request_frame and restore
+                // it with should_resize_renderer=false on next show.
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        std::ptr::null_mut(),
+                        0, 0, 0, 0,
+                        SWP_HIDEWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                    );
+                }
             }
         }
 
