@@ -15,31 +15,23 @@ use gpui_component::tooltip::Tooltip;
 const VISIBLE_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 44.0;
 pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
-// Height: rows + optional filter bars/dividers + platform padding + list bottom inset.
+// Height: rows + optional filter bars/dividers + list bottom inset.
 // Kept as reference; actual height is computed by calc_quick_window_height().
 #[allow(dead_code)]
 pub const QUICK_WINDOW_HEIGHT: f32 = 286.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
-#[cfg(target_os = "macos")]
-const OUTER_PADDING: f32 = 0.0;
-#[cfg(not(target_os = "macos"))]
-const OUTER_PADDING: f32 = 2.0;
 
 pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 10.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
 const LIST_INSET: f32 = 4.0;
-// Nested radii shrink by the same amount as their inset. This keeps the
-// Windows outer window curve, the 2px-inset panel border, and the list surface
-// visually concentric instead of making the inner corners look larger.
-const PANEL_CORNER_RADIUS: f32 = QUICK_WINDOW_CORNER_RADIUS - OUTER_PADDING;
-const LIST_CORNER_RADIUS: f32 = PANEL_CORNER_RADIUS - LIST_INSET;
+const LIST_CORNER_RADIUS: f32 = QUICK_WINDOW_CORNER_RADIUS - LIST_INSET;
 
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
 pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
-    let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET + OUTER_PADDING * 2.0;
+    let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET * 2.0;
     if has_type_bar {
         h += TYPE_BAR_HEIGHT + 1.0; // bar + divider
     }
@@ -250,7 +242,7 @@ impl Render for QuickPasteView {
 
         // ── Tag compact mode detection ──
         // Estimate total tag width; if it overflows the row, switch to flex_1 equal division.
-        let tag_avail = QUICK_WINDOW_WIDTH - OUTER_PADDING * 2.0 - HORIZONTAL_PADDING * 2.0;
+        let tag_avail = QUICK_WINDOW_WIDTH - HORIZONTAL_PADDING * 2.0;
         let tag_gap = 4.0;
         let char_est: f32 = 6.5; // rough char width at 10px font
         let tag_pad: f32 = 12.0; // px(6.0) * 2
@@ -267,7 +259,7 @@ impl Render for QuickPasteView {
         let visible_count = visible_type_entries.len().max(1) as f32;
         // Use design width constant so sizing is deterministic — viewport
         // may vary on first paint before SetWindowPos enforces correct size.
-        let type_bar_avail = QUICK_WINDOW_WIDTH - OUTER_PADDING * 2.0 - HORIZONTAL_PADDING * 2.0;
+        let type_bar_avail = QUICK_WINDOW_WIDTH - HORIZONTAL_PADDING * 2.0;
         let text_gap_total = 4.0 * (visible_count - 1.0).max(0.0); // TYPE_FILTER_TEXT_GAP
         let type_slot_width = (type_bar_avail - text_gap_total).max(0.0) / visible_count;
         let icon_only = type_slot_width < 50.0; // TYPE_FILTER_TEXT_MIN_SLOT_WIDTH
@@ -283,25 +275,10 @@ impl Render for QuickPasteView {
         div()
             .w(px(QUICK_WINDOW_WIDTH))
             .h(px(window_h))
+            .bg(theme.bg)
             .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    // Use explicit inset dimensions instead of `size_full`
-                    // inside a padded parent. On Windows the latter overflowed
-                    // the native client area, which clipped away the intended
-                    // bottom breathing room.
-                    .w(px(QUICK_WINDOW_WIDTH - OUTER_PADDING * 2.0))
-                    .h(px(window_h - OUTER_PADDING * 2.0))
-                    .rounded(px(PANEL_CORNER_RADIUS))
-                    .border_1()
-                    .border_color(theme.divider)
-                    .bg(theme.bg)
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _window, cx| {
+            .flex_col()
+            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _window, cx| {
                         let delta = ev.delta.pixel_delta(px(16.0)).y;
                         if delta < px(0.0) {
                             this.select_next(cx);
@@ -451,6 +428,7 @@ impl Render for QuickPasteView {
                             .flex_1()
                             .min_h(px(0.0))
                             .mx(px(LIST_INSET))
+                            .pt(px(LIST_INSET))
                             .flex()
                             .flex_col()
                             .pb(px(LIST_INSET))
@@ -536,6 +514,7 @@ impl Render for QuickPasteView {
                                                 .h(px(ROW_HEIGHT))
                                                 .flex_shrink_0()
                                                 .px(px(HORIZONTAL_PADDING - LIST_INSET))
+                                                .rounded(px(6.0))
                                                 .flex()
                                                 .items_center()
                                                 .gap(px(8.0))
@@ -615,8 +594,7 @@ impl Render for QuickPasteView {
                                         },
                                     )
                                     .collect::<Vec<_>>()
-                            }),
-                    ),
+                            })
             )
     }
 }
