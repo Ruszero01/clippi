@@ -32,9 +32,6 @@ use crate::ui::quick_paste::{
 /// Shared foreground app name for cross-service coordination.
 pub type ForegroundAppName = Arc<Mutex<String>>;
 
-/// GitHub releases page for the Clippi project.
-const RELEASES_URL: &str = "https://github.com/Ruszero01/clippi/releases";
-
 #[cfg(target_os = "windows")]
 static BLOCK_SYSTEM_WINDOW_BEHAVIORS: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
@@ -233,6 +230,12 @@ pub enum WindowManagerEvent {
     /// Main window DPI changed — RootView should force a re-render.
     #[cfg(target_os = "windows")]
     DpiChanged,
+    /// Open settings and switch to the version tab.
+    OpenVersionSettings,
+    /// An update is available — RootView should show a notification toast.
+    UpdateAvailable,
+    /// Update progress changed — RootView should refresh toast / settings page.
+    UpdateProgress(update::UpdatePhase),
 }
 
 /// Unified window manager entity.
@@ -243,6 +246,10 @@ pub enum WindowManagerEvent {
 pub struct WindowManager {
     // --- Window state ---
     position_mode: PositionMode,
+    /// When true, the next `calculate_position()` forces "remember" mode.
+    /// Set by tray actions so the window opens at the last-saved position
+    /// instead of following the cursor (which is near the tray at the screen edge).
+    tray_triggered: bool,
     pinned: bool,
     auto_hide: bool,
     visible: bool,
@@ -312,6 +319,14 @@ pub struct WindowManager {
     /// Fast poll used only while recording a shortcut, so a short key press
     /// cannot fall between two ticks of the 200 ms service loop.
     _recording_poll_task: Option<Task<()>>,
+
+    // --- Update state ---
+    /// Pending update info from background check thread (consumed by poll loop).
+    pending_update: Arc<Mutex<Option<update::UpdateInfo>>>,
+    /// Pending update phase from background download/install thread.
+    pending_update_phase: Arc<Mutex<update::UpdatePhase>>,
+    /// Last update check time for 24h periodic check throttling.
+    last_update_check: Option<Instant>,
 }
 
 impl EventEmitter<WindowManagerEvent> for WindowManager {}
@@ -344,6 +359,7 @@ impl WindowManager {
 
         let mut wm = Self {
             position_mode: PositionMode::from_str(&settings.window_position_mode),
+            tray_triggered: false,
             pinned: false,
             auto_hide: settings.auto_hide,
             // When silent_start is true the window is created hidden
@@ -386,6 +402,9 @@ impl WindowManager {
             #[cfg(target_os = "windows")]
             _quick_position_task: None,
             _recording_poll_task: None,
+            pending_update: Arc::new(Mutex::new(None)),
+            pending_update_phase: Arc::new(Mutex::new(update::UpdatePhase::Idle)),
+            last_update_check: None,
         };
 
         // --- Share the batch_pasting flag with AppState so it can suppress ---
@@ -491,6 +510,9 @@ impl WindowManager {
 
         // --- 8. Cloud sync ---
         self.poll_sync(cx);
+
+        // --- 9. Auto-update ---
+        self.poll_update(cx);
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
@@ -756,13 +778,15 @@ impl WindowManager {
 
         match action {
             Some(TrayAction::Show) => {
+                self.tray_triggered = true;
                 self.show_and_focus(cx);
+                self.tray_triggered = false;
             }
             Some(TrayAction::OpenSettings) => {
-                // --- If the window is hidden, show it first — otherwise ---
-                // --- the settings view switch happens off-screen. ---
                 if !self.visible {
+                    self.tray_triggered = true;
                     self.show_and_focus(cx);
+                    self.tray_triggered = false;
                 }
                 cx.emit(WindowManagerEvent::OpenSettings);
             }
@@ -773,26 +797,13 @@ impl WindowManager {
                 self.do_quit(cx);
             }
             Some(TrayAction::CheckUpdate) => {
-                // --- Spawn on a background thread — ShellExecuteW can pump ---
-                // --- Windows messages internally (DDE/COM) and deadlock if ---
-                // --- called from the GPUI main thread event handler. ---
-                std::thread::spawn(|| {
-                    let checker = update::UpdateChecker::new(
-                        env!("CARGO_PKG_VERSION"),
-                        "Ruszero01",
-                        "clippi",
-                    );
-                    if let Some(info) = checker.check() {
-                        log::info!(
-                            "Update available: {} -> {}",
-                            checker.current_version(),
-                            info.latest_version
-                        );
-                        update::open_releases_page(&info.html_url);
-                    } else {
-                        update::open_releases_page(RELEASES_URL);
-                    }
-                });
+                self.start_update_check(cx);
+                if !self.visible {
+                    self.tray_triggered = true;
+                    self.show_and_focus(cx);
+                    self.tray_triggered = false;
+                }
+                cx.emit(WindowManagerEvent::OpenVersionSettings);
             }
             None => {}
         }
@@ -996,7 +1007,15 @@ impl WindowManager {
     fn calculate_position(&self) -> Option<(i32, i32)> {
         let (win_w, win_h) = self.effective_window_size();
 
-        match self.position_mode {
+        // Tray-triggered opens always use "remember" position — the cursor
+        // is near the tray at the screen edge and center/follow look awkward.
+        let mode = if self.tray_triggered {
+            &PositionMode::Remember
+        } else {
+            &self.position_mode
+        };
+
+        match mode {
             PositionMode::Center => {
                 let (cx, cy) = monitor::get_cursor_pos()?;
                 let scale = monitor::get_scale_factor(cx, cy);
@@ -2261,6 +2280,126 @@ impl WindowManager {
     /// Replace the internal blacklist with the given list (used for sync from settings).
     pub fn set_blacklist(&mut self, blacklist: Vec<String>) {
         self.blacklist = blacklist;
+    }
+
+    // ─── Update ──────────────────────────────────────────────────────────────
+
+    /// Poll the shared update state from background threads and emit events.
+    fn poll_update(&mut self, cx: &mut Context<Self>) {
+        // 1. Read update phase from background thread
+        if let Ok(mut phase) = self.pending_update_phase.lock() {
+            let current = phase.clone();
+            if *phase != update::UpdatePhase::Idle {
+                // Update AppState for settings page rendering
+                self.state
+                    .update(cx, |s, _| s.update_phase = current.clone());
+                cx.emit(WindowManagerEvent::UpdateProgress(current));
+                // Reset to Idle after emitting so we don't repeat
+                *phase = update::UpdatePhase::Idle;
+            }
+        }
+
+        // 2. Read update info from background thread
+        if let Ok(mut pending) = self.pending_update.lock() {
+            if let Some(info) = pending.take() {
+                log::info!(
+                    "Update available: {} -> {}",
+                    env!("CARGO_PKG_VERSION"),
+                    info.latest_version
+                );
+                self.state
+                    .update(cx, |s, _| s.update_available = Some(info.clone()));
+                // Update tray red dot
+                if let Some(ref mut tray) = self.tray {
+                    tray.set_update_available(true);
+                }
+                cx.emit(WindowManagerEvent::UpdateAvailable);
+            }
+        }
+
+        // 3. Periodic check: every 24 hours
+        let auto_check = self.state.read(cx).settings.auto_check_updates;
+        if auto_check {
+            let should_check = match self.last_update_check {
+                None => true,
+                Some(t) => t.elapsed().as_secs() >= 24 * 3600,
+            };
+            if should_check {
+                self.last_update_check = Some(Instant::now());
+                self.start_update_check(cx);
+            }
+        }
+    }
+
+    /// Start an update check (manual or periodic). Spawns a background thread.
+    pub fn start_update_check(&mut self, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |s, _| s.update_phase = update::UpdatePhase::Checking);
+        cx.emit(WindowManagerEvent::UpdateProgress(
+            update::UpdatePhase::Checking,
+        ));
+
+        let pending = self.pending_update.clone();
+        let pending_phase = self.pending_update_phase.clone();
+        std::thread::spawn(move || {
+            let checker =
+                update::UpdateChecker::new(env!("CARGO_PKG_VERSION"), "Ruszero01", "clippi");
+            let result = checker.check_full();
+            log::info!("[wm] update check complete: is_some={}", result.is_some());
+            match result {
+                Some(info) => {
+                    log::info!("[wm] update available: {}", info.latest_version);
+                    if let Ok(mut p) = pending.lock() {
+                        *p = Some(info);
+                    }
+                    if let Ok(mut phase) = pending_phase.lock() {
+                        *phase = update::UpdatePhase::UpdateAvailable;
+                    }
+                }
+                None => {
+                    if let Ok(mut phase) = pending_phase.lock() {
+                        *phase = update::UpdatePhase::UpToDate;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start downloading and installing an update. Spawns a background thread.
+    pub fn start_update_download(&mut self, cx: &mut Context<Self>) {
+        let info = match self.state.read(cx).update_available.clone() {
+            Some(info) => info,
+            None => return,
+        };
+
+        self.state.update(cx, |s, _| {
+            s.update_phase = update::UpdatePhase::Downloading { progress: 0 }
+        });
+        cx.emit(WindowManagerEvent::UpdateProgress(
+            update::UpdatePhase::Downloading { progress: 0 },
+        ));
+
+        let pending_phase = self.pending_update_phase.clone();
+        let pending_phase_err = self.pending_update_phase.clone();
+        std::thread::spawn(move || {
+            let result = crate::services::updater::download_and_install(&info, move |phase| {
+                if let Ok(mut p) = pending_phase.lock() {
+                    *p = phase;
+                }
+            });
+            if let Err(e) = result {
+                if let Ok(mut p) = pending_phase_err.lock() {
+                    *p = update::UpdatePhase::Error(e);
+                }
+            }
+        });
+    }
+
+    /// Restart the application after an update has been installed.
+    pub fn do_update_restart(&mut self, cx: &mut Context<Self>) {
+        self.prepare_shutdown(cx);
+        crate::core::settings::spawn_new_process();
+        cx.quit();
     }
 
     /// Release platform resources on shutdown.

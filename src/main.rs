@@ -57,17 +57,17 @@ enum DeferredStartupAction {
     /// Used when the window starts hidden (silent_start) to keep
     /// memory low without calling hide() (which would be redundant).
     ReleaseMemory,
+    /// Start an update check on startup when auto_check_updates is enabled.
+    CheckUpdate,
 }
 
-fn deferred_startup_actions(silent_start: bool) -> Vec<DeferredStartupAction> {
+fn deferred_startup_actions(silent_start: bool, auto_check: bool) -> Vec<DeferredStartupAction> {
     let mut actions = vec![DeferredStartupAction::InitializeHotkey];
     if silent_start {
-        // Window is created hidden via WindowOptions { show: false }.
-        // release_memory() drops the in-memory items list, checkpoints
-        // the WAL, and trims the process working set — same cleanup
-        // that hide() normally does, but without the platform show/hide
-        // call (the window is already hidden).
         actions.push(DeferredStartupAction::ReleaseMemory);
+    }
+    if auto_check {
+        actions.push(DeferredStartupAction::CheckUpdate);
     }
     actions
 }
@@ -171,6 +171,9 @@ fn main() {
     // --- a non-portable install, migrate existing data from the system dir. ---
     core::paths::migrate_portable_data();
     init_logging();
+
+    // Clean up leftover temp files from previous updates.
+    crate::services::updater::cleanup_temp();
 
     log::info!("Starting Clippi (GPUI experiment)");
 
@@ -330,6 +333,7 @@ fn main() {
                     }
                 }
                 let silent_start = settings.silent_start;
+                let auto_check = settings.auto_check_updates;
                 let state = cx.new(|_cx| AppState::new(settings));
                 let window_manager = cx.new(|cx| WindowManager::new(state.clone(), cx));
 
@@ -557,7 +561,7 @@ fn main() {
                 // Defer startup actions until GPUI has completed the first render.
                 // Hotkey registration must happen on every desktop platform after
                 // the input pipeline and native window handle are ready.
-                for action in deferred_startup_actions(silent_start) {
+                for action in deferred_startup_actions(silent_start, auto_check) {
                     let wm = window_manager.clone();
                     cx.defer(move |cx| match action {
                         DeferredStartupAction::InitializeHotkey => {
@@ -565,6 +569,9 @@ fn main() {
                         }
                         DeferredStartupAction::ReleaseMemory => {
                             wm.update(cx, |wm, cx| wm.release_memory(cx));
+                        }
+                        DeferredStartupAction::CheckUpdate => {
+                            wm.update(cx, |wm, cx| wm.start_update_check(cx));
                         }
                     });
                 }
@@ -591,19 +598,25 @@ mod tests {
 
     #[test]
     fn startup_always_initializes_hotkey_after_window_setup() {
-        // When silent_start is false: only InitializeHotkey is deferred.
+        // When silent_start is false, no auto_check: only InitializeHotkey.
         assert_eq!(
-            deferred_startup_actions(false),
+            deferred_startup_actions(false, false),
             vec![DeferredStartupAction::InitializeHotkey]
         );
-        // When silent_start is true: ReleaseMemory follows InitializeHotkey
-        // (the window starts hidden via WindowOptions { show: false }, so
-        // we release the in-memory items without a redundant hide() call).
+        // When silent_start is true, no auto_check: ReleaseMemory follows.
         assert_eq!(
-            deferred_startup_actions(true),
+            deferred_startup_actions(true, false),
             vec![
                 DeferredStartupAction::InitializeHotkey,
                 DeferredStartupAction::ReleaseMemory,
+            ]
+        );
+        // When auto_check is enabled: CheckUpdate follows.
+        assert_eq!(
+            deferred_startup_actions(false, true),
+            vec![
+                DeferredStartupAction::InitializeHotkey,
+                DeferredStartupAction::CheckUpdate,
             ]
         );
     }

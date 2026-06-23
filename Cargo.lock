@@ -989,6 +989,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "simplelog",
  "toml 0.8.23",
  "tray-icon",

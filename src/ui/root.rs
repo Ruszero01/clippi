@@ -6,6 +6,7 @@
 //! --- - Main panel offset 36px from left, 12px border-radius, 1px border ---
 //! --- - Titlebar + stacked views (clipboard / settings / edit) ---
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
@@ -60,6 +61,10 @@ pub struct RootView {
     toast_generation: u64,
     /// True while the exit animation is playing (toast still rendered but fading out).
     toast_dismissing: bool,
+    /// Action buttons for the current toast (e.g. "Download" / "Later").
+    toast_actions: Option<Vec<crate::ui::components::toast::ToastAction>>,
+    /// When the toast should auto-dismiss (None = use default, Some = custom).
+    toast_timer_expiry: Option<std::time::Instant>,
     /// Set to true on WindowHidden, cleared after auto-focusing the search bar.
     needs_auto_focus: bool,
     _wm_subscription: Subscription,
@@ -136,6 +141,14 @@ impl RootView {
                         .update(cx, |bar, cx| bar.close_tag_panel(cx));
                     cx.notify();
                 }
+                WindowManagerEvent::OpenVersionSettings => {
+                    this.current_view = "settings".into();
+                    this.settings_panel
+                        .update(cx, |panel, _cx| panel.set_active_tab(5));
+                    this.search_bar
+                        .update(cx, |bar, cx| bar.close_tag_panel(cx));
+                    cx.notify();
+                }
                 WindowManagerEvent::HotkeyRecordingComplete => {
                     // --- Notify SettingsPanel so it re-renders with the updated ---
                     // --- hotkey display and recording state from AppState. ---
@@ -172,6 +185,84 @@ impl RootView {
                 }
                 #[cfg(target_os = "windows")]
                 WindowManagerEvent::DpiChanged => {
+                    cx.notify();
+                }
+                WindowManagerEvent::UpdateAvailable => {
+                    let version = this
+                        .state
+                        .read(cx)
+                        .update_available
+                        .as_ref()
+                        .map(|i| i.latest_version.clone())
+                        .unwrap_or_default();
+                    let msg = I18nKey::ToastUpdateAvailable
+                        .text()
+                        .replace("{0}", &version);
+                    this.state.update(cx, |s, _cx| s.toast_message = Some(msg));
+                    this.toast_actions = Some(vec![
+                        crate::ui::components::toast::ToastAction {
+                            label: I18nKey::BtnDownload.text().to_string(),
+                            on_click: {
+                                let wm = this.window_manager.clone();
+                                Rc::new(move |_window, cx| {
+                                    wm.update(cx, |wm, cx| wm.start_update_download(cx));
+                                })
+                            },
+                            primary: true,
+                        },
+                        crate::ui::components::toast::ToastAction {
+                            label: I18nKey::BtnLater.text().to_string(),
+                            on_click: Rc::new(|_window, _cx| {}),
+                            primary: false,
+                        },
+                    ]);
+                    this.toast_timer_expiry =
+                        Some(std::time::Instant::now() + Duration::from_secs(15));
+                    cx.notify();
+                }
+                WindowManagerEvent::UpdateProgress(phase) => {
+                    use crate::services::update::UpdatePhase;
+                    match phase {
+                        UpdatePhase::Downloading { progress } => {
+                            let msg = I18nKey::VersionDownloading
+                                .text()
+                                .replace("{0}", &progress.to_string());
+                            this.state.update(cx, |s, _cx| s.toast_message = Some(msg));
+                            this.toast_actions = Some(Vec::new());
+                            this.toast_timer_expiry =
+                                Some(std::time::Instant::now() + Duration::from_secs(3600));
+                        }
+                        UpdatePhase::ReadyToRestart => {
+                            this.state.update(cx, |s, _cx| {
+                                s.toast_message = Some(I18nKey::VersionReady.text().to_string())
+                            });
+                            this.toast_actions =
+                                Some(vec![crate::ui::components::toast::ToastAction {
+                                    label: I18nKey::BtnRestartNow.text().to_string(),
+                                    on_click: {
+                                        let wm = this.window_manager.clone();
+                                        Rc::new(move |_window, cx| {
+                                            wm.update(cx, |wm, cx| wm.do_update_restart(cx));
+                                        })
+                                    },
+                                    primary: true,
+                                }]);
+                            this.toast_timer_expiry =
+                                Some(std::time::Instant::now() + Duration::from_secs(3600));
+                        }
+                        UpdatePhase::Error(msg) => {
+                            let err_msg = I18nKey::ToastUpdateError.text().replace("{0}", msg);
+                            this.state
+                                .update(cx, |s, _cx| s.toast_message = Some(err_msg));
+                            this.toast_actions = Some(Vec::new());
+                            this.toast_timer_expiry =
+                                Some(std::time::Instant::now() + Duration::from_secs(5));
+                        }
+                        UpdatePhase::UpToDate => {
+                            // Silent — no toast for "up to date".
+                        }
+                        _ => {}
+                    }
                     cx.notify();
                 }
             },
@@ -437,6 +528,8 @@ impl RootView {
             _toast_cleanup: None,
             toast_generation: 0,
             toast_dismissing: false,
+            toast_actions: None,
+            toast_timer_expiry: None,
             needs_auto_focus: true,
             _wm_subscription,
             _subscriptions,
@@ -495,31 +588,43 @@ impl Render for RootView {
         {
             let has_toast = self.state.read(cx).toast_message.is_some();
             if has_toast && !self.toast_dismissing && self._toast_timer.is_none() {
-                // Bump generation so the enter animation replays for a new message.
-                self.toast_generation = self.toast_generation.wrapping_add(1);
-                let show_duration =
-                    super::components::toast::TOAST_DURATION.saturating_sub(TOAST_ANIM_DURATION);
-                self._toast_timer =
-                    Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
-                        Timer::after(show_duration).await;
-                        if let Some(this) = weak_self.upgrade() {
-                            let _ = this.update(cx, |root, root_cx| {
-                                // --- Start exit animation — same generation so the ---
-                                // --- transition smoothly reverses from its current value. ---
-                                root.toast_dismissing = true;
-                                root_cx.notify();
-                            });
-                            // --- Cleanup after the exit transition finishes, plus a ---
-                            // --- small grace period so the visual zero point is stable. ---
-                            Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
+                // Determine duration:
+                //   Some(expiry) → dismiss at that moment
+                //   None          → never auto-dismiss (pinned toast)
+                let expiry = self.toast_timer_expiry.unwrap_or(
+                    std::time::Instant::now() + super::components::toast::TOAST_DURATION,
+                );
+                let dur = expiry
+                    .checked_duration_since(std::time::Instant::now())
+                    .map(|d| d.saturating_sub(TOAST_ANIM_DURATION))
+                    .unwrap_or(Duration::from_secs(0));
+                if dur > Duration::from_secs(0) {
+                    // Bump generation so the enter animation replays for a new message.
+                    self.toast_generation = self.toast_generation.wrapping_add(1);
+                    self._toast_timer =
+                        Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
+                            Timer::after(dur).await;
                             if let Some(this) = weak_self.upgrade() {
                                 let _ = this.update(cx, |root, root_cx| {
-                                    root.state.update(root_cx, |s, _cx| s.clear_toast());
-                                    root.toast_dismissing = false;
+                                    // --- Start exit animation — same generation so the ---
+                                    // --- transition smoothly reverses from its current value. ---
+                                    root.toast_dismissing = true;
+                                    root_cx.notify();
                                 });
+                                // --- Cleanup after the exit transition finishes, plus a ---
+                                // --- small grace period so the visual zero point is stable. ---
+                                Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
+                                if let Some(this) = weak_self.upgrade() {
+                                    let _ = this.update(cx, |root, root_cx| {
+                                        root.state.update(root_cx, |s, _cx| s.clear_toast());
+                                        root.toast_dismissing = false;
+                                        root.toast_actions = None;
+                                        root.toast_timer_expiry = None;
+                                    });
+                                }
                             }
-                        }
-                    }));
+                        }));
+                }
             } else if !has_toast {
                 self._toast_timer = None;
                 self._toast_cleanup = None;
@@ -1104,6 +1209,8 @@ impl Render for RootView {
                     let slide_y = *slide_transition.evaluate(window, cx);
 
                     let dismiss_state = self.toast_dismissing;
+                    let actions = self.toast_actions.clone().unwrap_or_default();
+                    let has_actions = !actions.is_empty();
                     root.child(
                         div()
                             .absolute()
@@ -1118,12 +1225,17 @@ impl Render for RootView {
                                     .right(px(20.))
                                     .bottom(px(50.0 + slide_y))
                                     .opacity(opacity)
-                                    .cursor(CursorStyle::PointingHand)
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        state.update(cx, |s, _cx| s.clear_toast());
+                                    // Plain toasts: click-to-dismiss. Interactive toasts
+                                    // (with action buttons): occlude to block click-through.
+                                    .when(!has_actions, |el| {
+                                        el.cursor(CursorStyle::PointingHand)
+                                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                                state.update(cx, |s, _cx| s.clear_toast());
+                                            })
                                     })
+                                    .when(has_actions, |el| el.occlude())
                                     .when(dismiss_state, |el| el.cursor(CursorStyle::Arrow))
-                                    .child(Toast::new(message).theme(theme)),
+                                    .child(Toast::new(message).theme(theme).actions(actions)),
                             ),
                     )
                 },

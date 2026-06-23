@@ -25,6 +25,25 @@ define_i18n! {
     TabHotkey:          ("快捷键", "Hotkey"),
     TabData:            ("数据", "Data"),
     TabSync:            ("同步", "Sync"),
+    TabVersion:         ("版本", "Version"),
+
+    // ─── Version settings ───
+    VersionCurrent:         ("当前版本", "Current version"),
+    VersionLatest:          ("最新版本", "Latest version"),
+    VersionCheckNow:        ("检查更新", "Check now"),
+    VersionChecking:        ("正在检查...", "Checking..."),
+    VersionUpToDate:        ("已是最新版本", "You're up to date"),
+    VersionFound:           ("发现新版本", "New version available"),
+    VersionReleaseNotes:    ("更新内容", "Release notes"),
+    VersionDownload:        ("下载更新", "Download update"),
+    VersionDownloading:     ("正在下载 {0}%...", "Downloading {0}%..."),
+    VersionVerifying:       ("正在验证...", "Verifying..."),
+    VersionInstalling:      ("正在安装...", "Installing..."),
+    VersionReady:           ("更新准备就绪，点击重启", "Ready — restart to apply"),
+
+    // ─── Update settings ───
+    SettingAutoCheckUpdate: ("自动检查更新", "Auto-check for updates"),
+    DescAutoCheckUpdate:    ("启动时和每天检查一次新版本", "Check daily and on startup"),
 
     // ─── General settings ───
     SettingAutoStart:   ("开机自启", "Auto-start"),
@@ -100,6 +119,9 @@ define_i18n! {
     BtnReset:           ("重置", "Reset"),
     BtnCancel:          ("取消", "Cancel"),
     BtnApply:           ("应用", "Apply"),
+    BtnDownload:        ("下载", "Download"),
+    BtnLater:           ("稍后", "Later"),
+    BtnRestartNow:      ("立即重启", "Restart now"),
     BtnResetDataDir:    ("重置数据目录", "Reset Data Directory"),
     SettingMaxItems:    ("最大保存条目数", "Max items"),
     DescMaxItems:       ("设为 0 不限制条目数", "Set to 0 for unlimited items"),
@@ -223,6 +245,8 @@ define_i18n! {
     ToastErrorMsg:      ("操作失败", "Operation failed"),
     ToastTagAdded:      ("标签已添加", "Tag added"),
     ToastTagRemoved:    ("标签已移除", "Tag removed"),
+    ToastUpdateAvailable: ("发现新版本 {0}", "New version {0} available"),
+    ToastUpdateError:   ("更新失败: {0}", "Update failed: {0}"),
 
     // ─── Batch operations ───
     BatchSelect:        ("批量选择", "Select"),

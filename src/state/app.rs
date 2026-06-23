@@ -13,6 +13,7 @@ use crate::core::types::ContentType;
 use crate::core::types::FileData;
 use crate::core::types::RichData;
 use crate::core::types::TagInfo;
+use crate::services::update::{UpdateInfo, UpdatePhase};
 use crate::state::sync::SyncState;
 use pinyin::ToPinyin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,6 +71,10 @@ pub struct AppState {
     pub recording_quick_hotkey: bool,
     /// GPUI-facing sync status and backend snapshots.
     pub sync: SyncState,
+    /// Update available info (set by WM poll, consumed by RootView + settings).
+    pub update_available: Option<UpdateInfo>,
+    /// Current update phase (for UI display).
+    pub update_phase: UpdatePhase,
 }
 
 /// Pinyin-aware text matching.
@@ -184,6 +189,8 @@ impl AppState {
             hotkey_recording: false,
             recording_quick_hotkey: false,
             sync,
+            update_available: None,
+            update_phase: UpdatePhase::Idle,
         }
     }
 

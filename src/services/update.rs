@@ -1,28 +1,41 @@
 //! Update checker — queries GitHub Releases API, compares versions via semver,
 //! --- caches results, and opens the releases page in the browser. ---
 
-use std::sync::Mutex;
-use std::time::Instant;
-
 /// Info about the latest available release, if any.
 #[derive(Debug, Clone)]
 pub struct UpdateInfo {
     pub latest_version: String,
-    pub html_url: String,
+    /// GitHub Release body (markdown source).
+    pub release_notes: String,
+    /// Direct download URL for the platform-appropriate asset.
+    pub download_url: String,
+    /// SHA256 checksum file URL.
+    pub checksum_url: String,
+    /// Asset filename (for display + local temp path).
+    pub asset_name: String,
+    /// Asset size in bytes (0 if unknown).
+    pub asset_size: u64,
 }
 
-/// Thread-safe update cache with cooldown.
+/// Phase of the update process (for UI display).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdatePhase {
+    Idle,
+    Checking,
+    UpToDate,
+    UpdateAvailable,
+    Downloading { progress: u8 },
+    Verifying,
+    Installing,
+    ReadyToRestart,
+    Error(String),
+}
+
+/// GitHub Releases update checker.
 pub struct UpdateChecker {
     current_version: String,
     repo_owner: String,
     repo_name: String,
-    cache: Mutex<Option<CachedResult>>,
-    cache_ttl_secs: u64,
-}
-
-struct CachedResult {
-    info: Option<UpdateInfo>, // None = no update available
-    checked_at: Instant,
 }
 
 impl UpdateChecker {
@@ -31,62 +44,16 @@ impl UpdateChecker {
             current_version: current_version.to_string(),
             repo_owner: repo_owner.to_string(),
             repo_name: repo_name.to_string(),
-            cache: Mutex::new(None),
-            cache_ttl_secs: 3600, // 1 hour
         }
     }
 
-    /// Returns the current app version string.
-    pub fn current_version(&self) -> &str {
-        &self.current_version
+    /// Full check — version, release notes, and platform-appropriate asset.
+    pub fn check_full(&self) -> Option<UpdateInfo> {
+        self.fetch_latest_release_full()
     }
 
-    /// Returns cached update info if still fresh, otherwise performs a live check.
-    /// `None` means no update available. `Some(UpdateInfo)` means a newer version exists.
-    pub fn check(&self) -> Option<UpdateInfo> {
-        // Return cached result if still fresh
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(ref cached) = *cache {
-                if cached.checked_at.elapsed().as_secs() < self.cache_ttl_secs {
-                    return cached.info.clone();
-                }
-            }
-        }
-
-        // --- Perform live check ---
-        let result = self.fetch_latest_release();
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = Some(CachedResult {
-                info: result.clone(),
-                checked_at: Instant::now(),
-            });
-        }
-        result
-    }
-
-    /// Force a fresh check, ignoring cache.
-    #[allow(dead_code)]
-    pub fn check_now(&self) -> Option<UpdateInfo> {
-        let result = self.fetch_latest_release();
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = Some(CachedResult {
-                info: result.clone(),
-                checked_at: Instant::now(),
-            });
-        }
-        result
-    }
-
-    /// Build the releases page URL.
-    #[allow(dead_code)]
-    pub fn releases_url(&self) -> String {
-        format!(
-            "https://github.com/{}/{}/releases",
-            self.repo_owner, self.repo_name
-        )
-    }
-
-    fn fetch_latest_release(&self) -> Option<UpdateInfo> {
+    /// Full fetch — version, release notes, and platform-appropriate asset with checksum.
+    fn fetch_latest_release_full(&self) -> Option<UpdateInfo> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",
             self.repo_owner, self.repo_name
@@ -104,7 +71,6 @@ impl UpdateChecker {
         let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
 
         let tag_name = parsed["tag_name"].as_str()?;
-        let html_url = parsed["html_url"].as_str().unwrap_or("");
 
         // Strip leading 'v' if present
         let latest_ver = tag_name.strip_prefix('v').unwrap_or(tag_name);
@@ -112,15 +78,100 @@ impl UpdateChecker {
         let current = semver::Version::parse(&self.current_version).ok()?;
         let latest = semver::Version::parse(latest_ver).ok()?;
 
-        if latest > current {
-            Some(UpdateInfo {
-                latest_version: latest.to_string(),
-                html_url: html_url.to_string(),
-            })
-        } else {
-            None // No update available
+        if latest <= current {
+            return None; // No update available
+        }
+
+        let release_notes = parsed["body"].as_str().unwrap_or("").to_string();
+        let version_str = latest.to_string();
+
+        // Select the right asset for the current platform
+        let (download_url, checksum_url, asset_name, asset_size) =
+            select_platform_asset(&parsed, &version_str)?;
+
+        Some(UpdateInfo {
+            latest_version: version_str,
+            release_notes,
+            download_url,
+            checksum_url,
+            asset_name,
+            asset_size,
+        })
+    }
+}
+
+/// Pick the right asset for the current platform from the release JSON.
+fn select_platform_asset(
+    release: &serde_json::Value,
+    version: &str,
+) -> Option<(String, String, String, u64)> {
+    let assets = release["assets"].as_array()?;
+
+    // Build a map: filename → (download_url, size)
+    let mut asset_map: std::collections::HashMap<&str, (&str, u64)> =
+        std::collections::HashMap::new();
+    for asset in assets {
+        let name = asset["name"].as_str().unwrap_or("");
+        let url = asset["browser_download_url"].as_str().unwrap_or("");
+        let size = asset["size"].as_u64().unwrap_or(0);
+        if !name.is_empty() && !url.is_empty() {
+            asset_map.insert(name, (url, size));
         }
     }
+
+    // Determine which asset name pattern to look for
+    let (asset_pattern, checksum_pattern) = platform_asset_patterns(version);
+
+    // Find the main asset — use ends_with so ".sha256" isn't falsely matched.
+    let (main_name, (download_url, size)) = asset_map
+        .iter()
+        .find(|(name, _)| name.ends_with(&asset_pattern))?;
+
+    // Find the corresponding checksum file.
+    let checksum_url = asset_map
+        .iter()
+        .find(|(name, _)| name.ends_with(&checksum_pattern))
+        .map(|(_, (url, _))| url.to_string())
+        .unwrap_or_default();
+
+    Some((
+        download_url.to_string(),
+        checksum_url,
+        main_name.to_string(),
+        *size,
+    ))
+}
+
+/// Returns (asset_name_fragment, checksum_name_fragment) for the current platform.
+#[cfg(target_os = "windows")]
+fn platform_asset_patterns(version: &str) -> (String, String) {
+    // Always use the NSIS installer on Windows — portable mode only affects
+    // the data directory, not how the software itself is updated.
+    (
+        format!("Clippi_{}_x64-setup.exe", version),
+        format!("Clippi_{}_x64-setup.exe.sha256", version),
+    )
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn platform_asset_patterns(_version: &str) -> (String, String) {
+    (
+        "Clippi_aarch64.dmg".to_string(),
+        "Clippi_aarch64.dmg.sha256".to_string(),
+    )
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn platform_asset_patterns(_version: &str) -> (String, String) {
+    (
+        "Clippi_x86_64.dmg".to_string(),
+        "Clippi_x86_64.dmg.sha256".to_string(),
+    )
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn platform_asset_patterns(_version: &str) -> (String, String) {
+    (String::new(), String::new())
 }
 
 /// Open the releases page in the system browser.

@@ -21,6 +21,7 @@ mod data;
 mod general;
 pub mod hotkey;
 mod sync;
+mod version;
 
 use data::ResetDataDirState;
 use hotkey::HotkeyConfirmAction;
@@ -81,13 +82,14 @@ pub struct SettingsPanel {
     _max_items_focus_sub: gpui::Subscription,
 }
 
-fn tab_names() -> [&'static str; 5] {
+fn tab_names() -> [&'static str; 6] {
     [
         I18nKey::TabGeneral.text(),
         I18nKey::TabClipboard.text(),
         I18nKey::TabHotkey.text(),
         I18nKey::TabData.text(),
         I18nKey::TabSync.text(),
+        I18nKey::TabVersion.text(),
     ]
 }
 
@@ -154,6 +156,11 @@ impl SettingsPanel {
         self.backend_panel
             .update(cx, |panel, cx| panel.set_theme(theme, cx));
         cx.notify();
+    }
+
+    /// Switch to a specific tab by index.
+    pub fn set_active_tab(&mut self, index: usize) {
+        self.active_tab = index;
     }
 
     pub fn backend_panel(&self) -> Entity<AddBackendPanel> {
@@ -302,7 +309,7 @@ impl Render for SettingsPanel {
                                             .flex()
                                             .flex_col()
                                             .px(px(8.))
-                                            .pb(px(56.))
+                                            .when(active != 5, |el| el.pb(px(56.)))
                                             .child(match active {
                                                 0 => self
                                                     .render_general_tab(window, cx)
@@ -318,6 +325,9 @@ impl Render for SettingsPanel {
                                                     .into_any_element(),
                                                 4 => self
                                                     .render_sync_tab(window, cx)
+                                                    .into_any_element(),
+                                                5 => self
+                                                    .render_version_tab(window, cx)
                                                     .into_any_element(),
                                                 _ => div().into_any_element(),
                                             }),

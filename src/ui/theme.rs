@@ -41,7 +41,6 @@ pub struct ClippiTheme {
 
     // --- Toast ---
     pub toast_bg: Rgba,
-    pub toast_text: Rgba,
 }
 
 impl ClippiTheme {
@@ -72,7 +71,6 @@ impl ClippiTheme {
             panel_sep_line: rgba(0xffffff0d),
 
             toast_bg: rgba(0x3a3b3de8),
-            toast_text: rgb(0xeaebec),
         }
     }
 
@@ -102,8 +100,7 @@ impl ClippiTheme {
             panel_input_bg: rgb(0xf5f6fc),
             panel_sep_line: rgba(0x00000010),
 
-            toast_bg: rgba(0x2c2d2fe8),
-            toast_text: rgb(0xffffff),
+            toast_bg: rgba(0xfffffff0),
         }
     }
 

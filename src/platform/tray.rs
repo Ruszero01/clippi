@@ -129,6 +129,17 @@ impl TrayManager {
         None
     }
 
+    /// Toggle the red-dot indicator on the version label when an update is available.
+    pub fn set_update_available(&mut self, available: bool) {
+        let base = format!("Clippi v{}", env!("CARGO_PKG_VERSION"));
+        let text = if available {
+            format!("\u{25cf}  {}", base) // ● (U+25CF) + space
+        } else {
+            base
+        };
+        self._version_item.set_text(&text);
+    }
+
     /// Update all menu item texts when language changes.
     /// muda supports live text updates — no tray recreation needed.
     pub fn update_language(&mut self) {

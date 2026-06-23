@@ -132,6 +132,8 @@ pub struct AppSettings {
     pub type_filter_config: Vec<TypeFilterEntry>, // custom type filter visibility & order
     #[serde(default)]
     pub paste_shortcuts: Vec<PasteShortcutEntry>,
+    #[serde(default = "default_auto_check_updates")]
+    pub auto_check_updates: bool,
 }
 
 fn default_qr_enabled() -> bool {
@@ -144,6 +146,10 @@ fn default_ocr_enabled() -> bool {
 
 fn default_sync_interval() -> u64 {
     60
+}
+
+fn default_auto_check_updates() -> bool {
+    true
 }
 
 fn default_quick_hotkey() -> String {
@@ -191,6 +197,7 @@ impl Default for AppSettings {
             auto_focus_search: false,
             type_filter_config: Vec::new(),
             paste_shortcuts: Vec::new(),
+            auto_check_updates: true,
         }
     }
 }

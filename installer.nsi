@@ -51,6 +51,14 @@ Function ${un}CheckAndCloseApp
   FindWindow $0 "" "${APP_NAME}"
   IntCmp $0 0 done
 
+  ${If} ${Silent}
+    ; Silent mode: kill without asking the user.
+    DetailPrint "Silently closing ${APP_NAME}..."
+    nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
+    Sleep 1500
+    Goto done
+  ${EndIf}
+
   ; App is running — ask user
   MessageBox MB_YESNO|MB_ICONQUESTION \
     "${APP_NAME} 正在运行。$\r$\n$\r$\n点击「是」将关闭程序并继续，点击「否」取消。" \
