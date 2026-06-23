@@ -341,15 +341,24 @@ fn main() {
                             let hwnd = wh.hwnd.get();
                             window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
 
-                            // Move the native window only after the open-window
-                            // callback releases GPUI's AppCell borrow. Windows
-                            // then applies WM_DPICHANGED and preserves the logical
-                            // size supplied through WindowOptions.
-                            if let Some((x, y)) = initial_phys_pos {
-                                cx.spawn(async move |_cx| {
-                                    use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE,
-                                    };
+                            // Apply the saved native geometry only after the
+                            // open-window callback releases GPUI's AppCell borrow,
+                            // so synchronous DPI/size callbacks can update GPUI.
+                            let scale = initial_phys_pos
+                                .map(|(x, y)| platform::monitor::get_scale_factor(x, y))
+                                .unwrap_or_else(|| platform::monitor::get_scale_factor(0, 0));
+                            let phys_w = (initial_logical_w * scale).round() as i32;
+                            let phys_h = (initial_logical_h * scale).round() as i32;
+                            cx.spawn(async move |_cx| {
+                                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                    SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                                };
+
+                                // Moving and resizing across monitors in one call
+                                // makes Windows scale the requested target-DPI size
+                                // again while handling WM_DPICHANGED. Move first so
+                                // GPUI and the HWND settle on the destination DPI.
+                                if let Some((x, y)) = initial_phys_pos {
                                     unsafe {
                                         SetWindowPos(
                                             hwnd as _,
@@ -361,9 +370,25 @@ fn main() {
                                             SWP_NOACTIVATE | SWP_NOSIZE,
                                         );
                                     }
-                                })
-                                .detach();
-                            }
+                                    Timer::after(std::time::Duration::from_millis(1)).await;
+                                }
+
+                                // Saved dimensions are logical outer-window sizes;
+                                // apply their destination-DPI physical equivalent
+                                // only after the DPI transition has completed.
+                                unsafe {
+                                    SetWindowPos(
+                                        hwnd as _,
+                                        HWND_TOP,
+                                        0,
+                                        0,
+                                        phys_w,
+                                        phys_h,
+                                        SWP_NOACTIVATE | SWP_NOMOVE,
+                                    );
+                                }
+                            })
+                            .detach();
 
                             // --- Set window icon via WM_SETICON using embedded ICO bytes. ---
                             // --- Parses the ICO binary directly to create an HICON — ---

@@ -98,16 +98,41 @@ pub fn calculate_initial_position(
 ) -> Option<(i32, i32)> {
     let mode = PositionMode::from_str(&settings.window_position_mode);
     let (win_w, win_h) = effective_window_size(settings);
-    // Convert logical → physical for monitor calculations
-    let scale = monitor::get_scale_factor(0, 0);
-    let win_w = (win_w * scale) as i32;
-    let win_h = (win_h * scale) as i32;
 
     match mode {
-        PositionMode::Center => calc_center(win_w, win_h),
-        PositionMode::FollowMouse => calc_follow_mouse(win_w, win_h),
+        PositionMode::Center => {
+            let (cx, cy) = monitor::get_cursor_pos()?;
+            let scale = monitor::get_scale_factor(cx, cy);
+            calc_center(
+                (win_w * scale).round() as i32,
+                (win_h * scale).round() as i32,
+            )
+        }
+        PositionMode::FollowMouse => {
+            let (cx, cy) = monitor::get_cursor_pos()?;
+            let scale = monitor::get_scale_factor(cx, cy);
+            calc_follow_mouse(
+                (win_w * scale).round() as i32,
+                (win_h * scale).round() as i32,
+            )
+        }
         PositionMode::Remember => {
-            calc_remember(settings, win_w, win_h).or_else(|| calc_center(win_w, win_h))
+            let (sx, sy) = (settings.saved_window_x, settings.saved_window_y);
+            if has_saved_window_geometry(settings) && monitor::is_point_on_monitor(sx, sy) {
+                let scale = monitor::get_scale_factor(sx, sy);
+                calc_remember(
+                    settings,
+                    (win_w * scale).round() as i32,
+                    (win_h * scale).round() as i32,
+                )
+            } else {
+                let (cx, cy) = monitor::get_cursor_pos()?;
+                let scale = monitor::get_scale_factor(cx, cy);
+                calc_center(
+                    (win_w * scale).round() as i32,
+                    (win_h * scale).round() as i32,
+                )
+            }
         }
     }
 }
@@ -144,15 +169,12 @@ fn calc_remember(
     if !has_saved_window_geometry(settings) {
         return None;
     }
-    // saved x/y are logical pixels; convert to physical for monitor check
-    let scale = monitor::get_scale_factor(sx, sy);
-    let sx_phys = (sx as f32 * scale) as i32;
-    let sy_phys = (sy as f32 * scale) as i32;
-    if !monitor::is_point_on_monitor(sx_phys, sy_phys) {
+    // Windows geometry capture stores desktop coordinates in physical pixels.
+    if !monitor::is_point_on_monitor(sx, sy) {
         return None;
     }
-    let area = monitor::get_monitor_work_area(sx_phys, sy_phys)?;
-    Some(clamp_to_work_area(sx_phys, sy_phys, win_w, win_h, &area))
+    let area = monitor::get_monitor_work_area(sx, sy)?;
+    Some(clamp_to_work_area(sx, sy, win_w, win_h, &area))
 }
 
 #[cfg(test)]
