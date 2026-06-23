@@ -51,8 +51,7 @@ fn windows_text_input_anchor() -> Option<TextInputAnchor> {
         }
         Some(fg)
     })();
-    let target = foreground_hwnd
-        .or_else(crate::platform::focus::get_last_non_clippi_window)?;
+    let target = foreground_hwnd.or_else(crate::platform::focus::get_last_non_clippi_window)?;
     // SAFETY: The HWND comes from `GetForegroundWindow` (or the focus watcher
     // fallback). `GetWindowThreadProcessId` and `GetGUIThreadInfo` are read-only
     // queries; `GUITHREADINFO` is initialised with the required cbSize.

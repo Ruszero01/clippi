@@ -986,10 +986,8 @@ impl Database {
         self.checkpoint()?;
 
         let source_str = source_path.to_string_lossy();
-        self.conn.execute(
-            "ATTACH DATABASE ?1 AS source",
-            params![source_str.as_ref()],
-        )?;
+        self.conn
+            .execute("ATTACH DATABASE ?1 AS source", params![source_str.as_ref()])?;
 
         // Rollback on error: best-effort DETACH.
         let result = self.merge_from_attached();
@@ -1219,9 +1217,7 @@ mod tests {
 
     fn count_tags(db: &Database) -> usize {
         db.conn
-            .query_row("SELECT COUNT(*) FROM tags", [], |r| {
-                r.get::<_, usize>(0)
-            })
+            .query_row("SELECT COUNT(*) FROM tags", [], |r| r.get::<_, usize>(0))
             .unwrap()
     }
 
@@ -1377,9 +1373,7 @@ mod tests {
 
         let tombstones: usize = tgt
             .conn
-            .query_row("SELECT COUNT(*) FROM deleted_items", [], |r| {
-                r.get(0)
-            })
+            .query_row("SELECT COUNT(*) FROM deleted_items", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tombstones, 1);
         // Stats don't track tombstones separately.

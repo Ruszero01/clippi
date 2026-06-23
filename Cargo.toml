@@ -48,7 +48,7 @@ raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui = { version = "0.2.2", features = ["windows-manifest"] }
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_Memory"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_Memory"] }
 windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Media_Ocr", "Graphics_Imaging", "Storage", "Storage_Streams", "Globalization"] }
 winreg = "0.56"
 

@@ -466,7 +466,13 @@ impl SettingsPanel {
             // ── Fresh migration: target is empty ──
             match migrate_database(&old_path, &target_db) {
                 Ok(()) => {
-                    self.finalize_reset(&target_config, &new_db_path, &exe_dir, dialog.selected, cx);
+                    self.finalize_reset(
+                        &target_config,
+                        &new_db_path,
+                        &exe_dir,
+                        dialog.selected,
+                        cx,
+                    );
                 }
                 Err(e) => {
                     cx.emit(SettingsEvent::DataError(e));
@@ -525,13 +531,11 @@ impl SettingsPanel {
             match std::fs::read_to_string(target_config) {
                 Ok(content) => match toml::from_str::<crate::core::settings::AppSettings>(&content)
                 {
-                    Ok(target_settings) => {
-                        crate::core::settings::merge_configs(
-                            &source_settings,
-                            &target_settings,
-                            new_db_path,
-                        )
-                    }
+                    Ok(target_settings) => crate::core::settings::merge_configs(
+                        &source_settings,
+                        &target_settings,
+                        new_db_path,
+                    ),
                     Err(e) => {
                         log::warn!("reset: failed to parse target config, using source: {e}");
                         let mut s = source_settings.clone();

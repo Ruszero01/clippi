@@ -87,30 +87,27 @@ pub fn system_data_dir() -> PathBuf {
 /// traversed recursively. Non-fatal: logs warnings on individual copy failures
 /// and continues.
 pub fn merge_images_dir(source_db_path: &Path, target_db_path: &Path) -> usize {
-    let src_images = resolve_data_dir(
-        source_db_path
-            .to_string_lossy()
-            .as_ref(),
-    )
-    .join("images");
-    let dst_images = resolve_data_dir(
-        target_db_path
-            .to_string_lossy()
-            .as_ref(),
-    )
-    .join("images");
+    let src_images = resolve_data_dir(source_db_path.to_string_lossy().as_ref()).join("images");
+    let dst_images = resolve_data_dir(target_db_path.to_string_lossy().as_ref()).join("images");
 
     if !src_images.is_dir() {
         return 0;
     }
     if let Err(e) = fs::create_dir_all(&dst_images) {
-        log::warn!("merge_images: failed to create target dir {}: {e}", dst_images.display());
+        log::warn!(
+            "merge_images: failed to create target dir {}: {e}",
+            dst_images.display()
+        );
         return 0;
     }
 
     let mut copied = 0usize;
     copy_missing_recursive(&src_images, &dst_images, &mut copied);
-    log::info!("merge_images: copied {copied} files from {} to {}", src_images.display(), dst_images.display());
+    log::info!(
+        "merge_images: copied {copied} files from {} to {}",
+        src_images.display(),
+        dst_images.display()
+    );
     copied
 }
 

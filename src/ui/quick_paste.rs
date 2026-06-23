@@ -279,322 +279,310 @@ impl Render for QuickPasteView {
             .flex()
             .flex_col()
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _window, cx| {
-                        let delta = ev.delta.pixel_delta(px(16.0)).y;
-                        if delta < px(0.0) {
-                            this.select_next(cx);
-                        } else if delta > px(0.0) {
-                            this.select_previous(cx);
-                        }
-                    }))
-                    // ── Type filter bar ──
-                    .when(has_type_bar, |parent| {
-                        parent.child(
+                let delta = ev.delta.pixel_delta(px(16.0)).y;
+                if delta < px(0.0) {
+                    this.select_next(cx);
+                } else if delta > px(0.0) {
+                    this.select_previous(cx);
+                }
+            }))
+            // ── Type filter bar ──
+            .when(has_type_bar, |parent| {
+                parent.child(
+                    div()
+                        .h(px(TYPE_BAR_HEIGHT))
+                        .px(px(HORIZONTAL_PADDING))
+                        .flex()
+                        .items_center()
+                        .gap(px(filter_gap))
+                        .children(visible_type_entries.iter().map(|entry| {
+                            let active = filters.is_type_active(&entry.key);
+                            let (icon, label) =
+                                filter_type_display(&entry.key).unwrap_or(("\u{e60e}", "".into()));
+                            let key = entry.key.clone();
+                            let t = theme.clone();
+                            let app_state = self.state.clone();
+                            let filter_text = if active { rgb(0xffffff) } else { t.text_2 };
                             div()
-                                .h(px(TYPE_BAR_HEIGHT))
-                                .px(px(HORIZONTAL_PADDING))
-                                .flex()
-                                .items_center()
-                                .gap(px(filter_gap))
-                                .children(visible_type_entries.iter().map(|entry| {
-                                    let active = filters.is_type_active(&entry.key);
-                                    let (icon, label) = filter_type_display(&entry.key)
-                                        .unwrap_or(("\u{e60e}", "".into()));
-                                    let key = entry.key.clone();
-                                    let t = theme.clone();
-                                    let app_state = self.state.clone();
-                                    let filter_text = if active { rgb(0xffffff) } else { t.text_2 };
-                                    div()
-                                        .h(px(22.0))
-                                        .when(icon_only, |b| {
-                                            b.flex_1().min_w(px(0.0)).justify_center()
-                                        })
-                                        .when(!icon_only, |b| {
-                                            b.flex_1()
-                                                .min_w(px(0.0))
-                                                .justify_center()
-                                                .px(px(5.0))
-                                                .gap(px(2.0))
-                                        })
-                                        .rounded(px(5.0))
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .bg(if active { t.accent } else { inactive_bg })
-                                        .cursor(CursorStyle::PointingHand)
-                                        .on_mouse_down(MouseButton::Left, {
-                                            let s = app_state.clone();
-                                            let k = key.clone();
-                                            let v = view_entity.clone();
-                                            move |_, _window, cx| {
-                                                s.update(cx, |s, _cx| {
-                                                    s.toggle_type_filter(&k);
-                                                });
-                                                v.update(cx, |view, cx| view.reset_scroll(cx));
-                                            }
-                                        })
-                                        .child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .font_family("iconfont")
-                                                .text_color(filter_text)
-                                                .child(icon),
-                                        )
-                                        .when(!icon_only, |b| {
-                                            b.child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(filter_text)
-                                                    .child(label),
-                                            )
-                                        })
-                                        .into_any_element()
-                                })),
-                        )
-                    })
-                    .when(has_type_bar, |parent| {
-                        parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
-                    })
-                    // ── Pinned tag row ──
-                    .when(has_tag_row, |parent| {
-                        parent.child(
-                            div()
-                                .h(px(TAG_ROW_HEIGHT))
-                                .px(px(HORIZONTAL_PADDING))
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .children(pinned_tags.iter().map(|(id, name, color_hex)| {
-                                    let active = filters.tag_ids.contains(id);
-                                    let tag_color = parse_hex_for_tag(color_hex);
-                                    let tag_id = *id;
-                                    let app_state = self.state.clone();
-                                    let tag_name = name.clone();
-                                    let tag_name_for_tip = name.clone();
-                                    div()
-                                        .id(("quick-tag", tag_id as u64))
-                                        .h(px(20.0))
-                                        .px(px(6.0))
-                                        .rounded(px(4.0))
-                                        .flex()
-                                        .items_center()
-                                        .when(tag_compact, |d| d.flex_1().min_w(px(0.0)))
-                                        .when(!tag_compact, |d| d.max_w(px(120.0)))
-                                        .overflow_hidden()
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .bg(if active { theme.accent } else { tag_color })
-                                        .text_color(rgb(0xffffff))
-                                        .cursor(CursorStyle::PointingHand)
-                                        .when(tag_compact, move |d| {
-                                            let tip = tag_name_for_tip;
-                                            d.tooltip(move |window, cx| {
-                                                let tip = tip.clone();
-                                                Tooltip::element(move |_window, _cx| {
-                                                    div().text_size(px(10.)).child(tip.clone())
-                                                })
-                                                .build(window, cx)
-                                            })
-                                        })
-                                        .on_mouse_down(MouseButton::Left, {
-                                            let s = app_state.clone();
-                                            let v = view_entity.clone();
-                                            move |_, _window, cx| {
-                                                s.update(cx, |s, _cx| {
-                                                    s.toggle_tag_filter(tag_id);
-                                                });
-                                                v.update(cx, |view, cx| view.reset_scroll(cx));
-                                            }
-                                        })
-                                        .child(
-                                            div()
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .text_ellipsis()
-                                                .child(tag_name),
-                                        )
-                                        .into_any_element()
-                                })),
-                        )
-                    })
-                    .when(has_tag_row, |parent| {
-                        parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
-                    })
-                    // ── List viewport ──
-                    // Keep the selection surface away from the window edges so
-                    // the final row reads as a complete rounded item instead of
-                    // being cut off by the native window mask.
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .mx(px(LIST_INSET))
-                            .pt(px(LIST_INSET))
-                            .flex()
-                            .flex_col()
-                            .pb(px(LIST_INSET))
-                            .rounded_b(px(LIST_CORNER_RADIUS))
-                            .overflow_hidden()
-                            .when(items_count == 0, |list| {
-                                list.child(
-                                    div()
-                                        .flex_1()
-                                        .min_h(px(0.0))
-                                        .flex()
-                                        .items_center()
+                                .h(px(22.0))
+                                .when(icon_only, |b| b.flex_1().min_w(px(0.0)).justify_center())
+                                .when(!icon_only, |b| {
+                                    b.flex_1()
+                                        .min_w(px(0.0))
                                         .justify_center()
-                                        .text_size(px(13.0))
-                                        .text_color(theme.text_2)
-                                        .child("No clipboard items"),
+                                        .px(px(5.0))
+                                        .gap(px(2.0))
+                                })
+                                .rounded(px(5.0))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .bg(if active { t.accent } else { inactive_bg })
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, {
+                                    let s = app_state.clone();
+                                    let k = key.clone();
+                                    let v = view_entity.clone();
+                                    move |_, _window, cx| {
+                                        s.update(cx, |s, _cx| {
+                                            s.toggle_type_filter(&k);
+                                        });
+                                        v.update(cx, |view, cx| view.reset_scroll(cx));
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_family("iconfont")
+                                        .text_color(filter_text)
+                                        .child(icon),
                                 )
-                            })
-                            .children({
-                                let t = theme.clone();
-                                let selected_index = self.selected_index;
-                                let first_visible = self.first_visible;
-                                let view_entity = cx.entity();
-                                self.row_data(cx)
-                                    .into_iter()
-                                    .map(
-                                        move |(
-                                            slot,
-                                            item_id,
-                                            icon,
-                                            preview,
-                                            note,
-                                            time,
-                                            img_path,
-                                        )| {
-                                            let index = first_visible + slot;
-                                            let selected = index == selected_index;
-                                            let t = t.clone();
-                                            let ve = view_entity.clone();
+                                .when(!icon_only, |b| {
+                                    b.child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(filter_text)
+                                            .child(label),
+                                    )
+                                })
+                                .into_any_element()
+                        })),
+                )
+            })
+            .when(has_type_bar, |parent| {
+                parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
+            })
+            // ── Pinned tag row ──
+            .when(has_tag_row, |parent| {
+                parent.child(
+                    div()
+                        .h(px(TAG_ROW_HEIGHT))
+                        .px(px(HORIZONTAL_PADDING))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .children(pinned_tags.iter().map(|(id, name, color_hex)| {
+                            let active = filters.tag_ids.contains(id);
+                            let tag_color = parse_hex_for_tag(color_hex);
+                            let tag_id = *id;
+                            let app_state = self.state.clone();
+                            let tag_name = name.clone();
+                            let tag_name_for_tip = name.clone();
+                            div()
+                                .id(("quick-tag", tag_id as u64))
+                                .h(px(20.0))
+                                .px(px(6.0))
+                                .rounded(px(4.0))
+                                .flex()
+                                .items_center()
+                                .when(tag_compact, |d| d.flex_1().min_w(px(0.0)))
+                                .when(!tag_compact, |d| d.max_w(px(120.0)))
+                                .overflow_hidden()
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .bg(if active { theme.accent } else { tag_color })
+                                .text_color(rgb(0xffffff))
+                                .cursor(CursorStyle::PointingHand)
+                                .when(tag_compact, move |d| {
+                                    let tip = tag_name_for_tip;
+                                    d.tooltip(move |window, cx| {
+                                        let tip = tip.clone();
+                                        Tooltip::element(move |_window, _cx| {
+                                            div().text_size(px(10.)).child(tip.clone())
+                                        })
+                                        .build(window, cx)
+                                    })
+                                })
+                                .on_mouse_down(MouseButton::Left, {
+                                    let s = app_state.clone();
+                                    let v = view_entity.clone();
+                                    move |_, _window, cx| {
+                                        s.update(cx, |s, _cx| {
+                                            s.toggle_tag_filter(tag_id);
+                                        });
+                                        v.update(cx, |view, cx| view.reset_scroll(cx));
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(tag_name),
+                                )
+                                .into_any_element()
+                        })),
+                )
+            })
+            .when(has_tag_row, |parent| {
+                parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
+            })
+            // ── List viewport ──
+            // Keep the selection surface away from the window edges so
+            // the final row reads as a complete rounded item instead of
+            // being cut off by the native window mask.
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .mx(px(LIST_INSET))
+                    .pt(px(LIST_INSET))
+                    .flex()
+                    .flex_col()
+                    .pb(px(LIST_INSET))
+                    .rounded_b(px(LIST_CORNER_RADIUS))
+                    .overflow_hidden()
+                    .when(items_count == 0, |list| {
+                        list.child(
+                            div()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(13.0))
+                                .text_color(theme.text_2)
+                                .child("No clipboard items"),
+                        )
+                    })
+                    .children({
+                        let t = theme.clone();
+                        let selected_index = self.selected_index;
+                        let first_visible = self.first_visible;
+                        let view_entity = cx.entity();
+                        self.row_data(cx)
+                            .into_iter()
+                            .map(
+                                move |(slot, item_id, icon, preview, note, time, img_path)| {
+                                    let index = first_visible + slot;
+                                    let selected = index == selected_index;
+                                    let t = t.clone();
+                                    let ve = view_entity.clone();
 
-                                            let show_note = !(note.is_empty()
-                                                || show_original_on_hover && selected);
-                                            let content_cell = if show_note {
-                                                // Note takes precedence for every content type, including images.
-                                                div()
-                                                    .flex_1()
-                                                    .overflow_hidden()
-                                                    .text_size(px(12.0))
-                                                    .text_color(t.text_2)
-                                                    .whitespace_nowrap()
-                                                    .text_ellipsis()
-                                                    .child(note)
-                                                    .into_any_element()
-                                            } else if let Some(ref path) = img_path {
-                                                let thumb_h = ROW_HEIGHT - 6.0;
-                                                div()
-                                                    .flex_1()
+                                    let show_note =
+                                        !(note.is_empty() || show_original_on_hover && selected);
+                                    let content_cell = if show_note {
+                                        // Note takes precedence for every content type, including images.
+                                        div()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .text_size(px(12.0))
+                                            .text_color(t.text_2)
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(note)
+                                            .into_any_element()
+                                    } else if let Some(ref path) = img_path {
+                                        let thumb_h = ROW_HEIGHT - 6.0;
+                                        div()
+                                            .flex_1()
+                                            .h(px(thumb_h))
+                                            .rounded(px(4.0))
+                                            .overflow_hidden()
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                gpui::img(std::path::Path::new(path))
                                                     .h(px(thumb_h))
-                                                    .rounded(px(4.0))
-                                                    .overflow_hidden()
-                                                    .flex()
-                                                    .items_center()
-                                                    .child(
-                                                        gpui::img(std::path::Path::new(path))
-                                                            .h(px(thumb_h))
-                                                            .object_fit(ObjectFit::Contain),
-                                                    )
-                                                    .into_any_element()
-                                            } else {
-                                                // No note, or selected with show_original_on_hover → show original (masked)
-                                                div()
-                                                    .flex_1()
-                                                    .overflow_hidden()
-                                                    .text_size(px(13.0))
-                                                    .text_color(t.text_1)
-                                                    .whitespace_nowrap()
-                                                    .text_ellipsis()
-                                                    .child(preview)
-                                                    .into_any_element()
-                                            };
+                                                    .object_fit(ObjectFit::Contain),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        // No note, or selected with show_original_on_hover → show original (masked)
+                                        div()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .text_size(px(13.0))
+                                            .text_color(t.text_1)
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(preview)
+                                            .into_any_element()
+                                    };
 
+                                    div()
+                                        .h(px(ROW_HEIGHT))
+                                        .flex_shrink_0()
+                                        .px(px(HORIZONTAL_PADDING - LIST_INSET))
+                                        .rounded(px(6.0))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .bg(if selected {
+                                            t.accent_overlay()
+                                        } else {
+                                            rgba(0x00000000)
+                                        })
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let ve2 = ve.clone();
+                                            let ve3 = ve.clone();
+                                            move |ev, _window, cx| {
+                                                // Single-click: select
+                                                ve2.update(cx, |view, cx| {
+                                                    view.select_index(index, cx);
+                                                });
+                                                // Double-click: paste
+                                                if ev.click_count == 2 {
+                                                    ve3.update(cx, |_, cx| {
+                                                        cx.emit(QuickPasteEvent::Paste(item_id));
+                                                    });
+                                                }
+                                            }
+                                        })
+                                        // Slot number badge
+                                        .child(
                                             div()
-                                                .h(px(ROW_HEIGHT))
-                                                .flex_shrink_0()
-                                                .px(px(HORIZONTAL_PADDING - LIST_INSET))
-                                                .rounded(px(6.0))
+                                                .w(px(22.0))
+                                                .h(px(22.0))
+                                                .rounded(px(5.0))
                                                 .flex()
                                                 .items_center()
-                                                .gap(px(8.0))
+                                                .justify_center()
                                                 .bg(if selected {
-                                                    t.accent_overlay()
+                                                    t.accent
                                                 } else {
                                                     rgba(0x00000000)
                                                 })
-                                                .cursor(CursorStyle::PointingHand)
-                                                .on_mouse_down(MouseButton::Left, {
-                                                    let ve2 = ve.clone();
-                                                    let ve3 = ve.clone();
-                                                    move |ev, _window, cx| {
-                                                        // Single-click: select
-                                                        ve2.update(cx, |view, cx| {
-                                                            view.select_index(index, cx);
-                                                        });
-                                                        // Double-click: paste
-                                                        if ev.click_count == 2 {
-                                                            ve3.update(cx, |_, cx| {
-                                                                cx.emit(QuickPasteEvent::Paste(
-                                                                    item_id,
-                                                                ));
-                                                            });
-                                                        }
-                                                    }
+                                                .text_color(if selected {
+                                                    rgb(0xffffff)
+                                                } else {
+                                                    t.text_2
                                                 })
-                                                // Slot number badge
-                                                .child(
-                                                    div()
-                                                        .w(px(22.0))
-                                                        .h(px(22.0))
-                                                        .rounded(px(5.0))
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .bg(if selected {
-                                                            t.accent
-                                                        } else {
-                                                            rgba(0x00000000)
-                                                        })
-                                                        .text_color(if selected {
-                                                            rgb(0xffffff)
-                                                        } else {
-                                                            t.text_2
-                                                        })
-                                                        .text_size(px(11.0))
-                                                        .font_weight(FontWeight::BOLD)
-                                                        .child((slot + 1).to_string()),
-                                                )
-                                                // Type icon
-                                                .child(
-                                                    div()
-                                                        .w(px(16.0))
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .text_size(px(12.0))
-                                                        .font_family("iconfont")
-                                                        .text_color(if selected {
-                                                            t.accent
-                                                        } else {
-                                                            t.text_2
-                                                        })
-                                                        .child(icon),
-                                                )
-                                                .child(content_cell)
-                                                // Relative time
-                                                .child(
-                                                    div()
-                                                        .text_size(px(10.0))
-                                                        .text_color(t.text_3)
-                                                        .whitespace_nowrap()
-                                                        .child(time),
-                                                )
-                                                .into_any_element()
-                                        },
-                                    )
-                                    .collect::<Vec<_>>()
-                            })
+                                                .text_size(px(11.0))
+                                                .font_weight(FontWeight::BOLD)
+                                                .child((slot + 1).to_string()),
+                                        )
+                                        // Type icon
+                                        .child(
+                                            div()
+                                                .w(px(16.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(12.0))
+                                                .font_family("iconfont")
+                                                .text_color(if selected {
+                                                    t.accent
+                                                } else {
+                                                    t.text_2
+                                                })
+                                                .child(icon),
+                                        )
+                                        .child(content_cell)
+                                        // Relative time
+                                        .child(
+                                            div()
+                                                .text_size(px(10.0))
+                                                .text_color(t.text_3)
+                                                .whitespace_nowrap()
+                                                .child(time),
+                                        )
+                                        .into_any_element()
+                                },
+                            )
+                            .collect::<Vec<_>>()
+                    }),
             )
     }
 }

@@ -231,6 +231,7 @@ pub enum WindowManagerEvent {
     /// Window was hidden — RootView should dismiss all floating panels.
     WindowHidden,
     /// Main window DPI changed — RootView should force a re-render.
+    #[cfg(target_os = "windows")]
     DpiChanged,
 }
 
@@ -285,6 +286,9 @@ pub struct WindowManager {
     /// Native identity of the app/window that owned focus when the popup opened.
     /// A change means the user switched context and the popup is now stale.
     quick_foreground_id: isize,
+    /// Allows the OS to restore the previous app after switching directly from
+    /// the main window to the non-activating quick window.
+    quick_focus_grace_until: Option<Instant>,
     _quick_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
     quick_hwnd: isize,
@@ -369,6 +373,7 @@ impl WindowManager {
             quick_visible: false,
             quick_mouse_down: false,
             quick_foreground_id: 0,
+            quick_focus_grace_until: None,
             _quick_subscription: None,
             #[cfg(target_os = "windows")]
             quick_hwnd: 0,
@@ -644,7 +649,10 @@ impl WindowManager {
             // Close when focus moves to the main window or to a different app.
             // The popup itself is non-activating, so interacting inside it does
             // not change this foreground identity.
-            if is_self_fg || self.quick_foreground_changed() {
+            let restoring_target = self
+                .quick_focus_grace_until
+                .is_some_and(|until| Instant::now() <= until);
+            if !restoring_target && (is_self_fg || self.quick_foreground_changed()) {
                 self.hide_quick_window(cx);
                 return;
             }
@@ -1256,16 +1264,30 @@ impl WindowManager {
             return;
         };
 
+        let switching_from_main = self.visible;
+        let current_foreground_id = Self::current_foreground_id();
+        let quick_foreground_id = Self::select_quick_foreground_id(
+            switching_from_main,
+            current_foreground_id,
+            Self::last_non_clippi_foreground_id(),
+        );
+
         // Main and quick window are never shown simultaneously.
-        if self.visible {
+        if switching_from_main {
             self.hide(cx);
+            // A non-activating popup cannot receive the focus relinquished by
+            // the main window. Restore the previous application explicitly so
+            // keyboard shortcuts and paste keep targeting it on both platforms.
+            crate::platform::paste::restore_paste_target();
         }
 
         self.state.update(cx, |state, _cx| state.reload_items());
         view.update(cx, |view, cx| view.reset_scroll(cx));
         self.quick_visible = true;
         self.quick_mouse_down = Self::mouse_buttons_down();
-        self.quick_foreground_id = Self::current_foreground_id();
+        self.quick_foreground_id = quick_foreground_id;
+        self.quick_focus_grace_until = switching_from_main
+            .then(|| Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
         }
@@ -1365,6 +1387,7 @@ impl WindowManager {
         self.quick_visible = false;
         self.quick_mouse_down = false;
         self.quick_foreground_id = 0;
+        self.quick_focus_grace_until = None;
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(false);
         }
@@ -1383,7 +1406,10 @@ impl WindowManager {
                     SetWindowPos(
                         hwnd,
                         std::ptr::null_mut(),
-                        0, 0, 0, 0,
+                        0,
+                        0,
+                        0,
+                        0,
                         SWP_HIDEWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
                     );
                 }
@@ -1424,6 +1450,37 @@ impl WindowManager {
         }
         let current = Self::current_foreground_id();
         current != 0 && current != self.quick_foreground_id
+    }
+
+    fn select_quick_foreground_id(
+        switching_from_main: bool,
+        current_foreground_id: isize,
+        last_non_clippi_foreground_id: isize,
+    ) -> isize {
+        if switching_from_main && last_non_clippi_foreground_id != 0 {
+            last_non_clippi_foreground_id
+        } else {
+            current_foreground_id
+        }
+    }
+
+    fn last_non_clippi_foreground_id() -> isize {
+        #[cfg(target_os = "windows")]
+        {
+            crate::platform::focus::get_last_non_clippi_window()
+                .map(|hwnd| hwnd as isize)
+                .unwrap_or(0)
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            crate::platform::focus::get_last_non_clippi_pid()
+                .map(|pid| pid as isize)
+                .unwrap_or(0)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        0
     }
 
     fn current_foreground_id() -> isize {
@@ -2220,6 +2277,23 @@ impl WindowManager {
 
 #[cfg(test)]
 mod exit_tests {
+    use super::WindowManager;
+
+    #[test]
+    fn quick_window_keeps_current_target_when_main_is_hidden() {
+        assert_eq!(WindowManager::select_quick_foreground_id(false, 42, 7), 42);
+    }
+
+    #[test]
+    fn quick_window_restores_external_target_when_switching_from_main() {
+        assert_eq!(WindowManager::select_quick_foreground_id(true, 42, 7), 7);
+    }
+
+    #[test]
+    fn quick_window_falls_back_to_current_target_without_focus_history() {
+        assert_eq!(WindowManager::select_quick_foreground_id(true, 42, 0), 42);
+    }
+
     #[test]
     fn tray_quit_requests_platform_termination() {
         let source = include_str!("window_manager.rs");
