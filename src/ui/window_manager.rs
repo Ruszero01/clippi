@@ -2333,6 +2333,16 @@ impl WindowManager {
 
     /// Start an update check (manual or periodic). Spawns a background thread.
     pub fn start_update_check(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.state.read(cx).update_phase,
+            update::UpdatePhase::Checking
+                | update::UpdatePhase::Downloading { .. }
+                | update::UpdatePhase::Verifying
+                | update::UpdatePhase::Installing
+        ) {
+            return;
+        }
+        self.last_update_check = Some(Instant::now());
         self.state
             .update(cx, |s, _| s.update_phase = update::UpdatePhase::Checking);
         cx.emit(WindowManagerEvent::UpdateProgress(
@@ -2345,9 +2355,8 @@ impl WindowManager {
             let checker =
                 update::UpdateChecker::new(env!("CARGO_PKG_VERSION"), "Ruszero01", "clippi");
             let result = checker.check_full();
-            log::info!("[wm] update check complete: is_some={}", result.is_some());
             match result {
-                Some(info) => {
+                Ok(Some(info)) => {
                     log::info!("[wm] update available: {}", info.latest_version);
                     if let Ok(mut p) = pending.lock() {
                         *p = Some(info);
@@ -2356,17 +2365,31 @@ impl WindowManager {
                         *phase = update::UpdatePhase::UpdateAvailable;
                     }
                 }
-                None => {
+                Ok(None) => {
                     if let Ok(mut phase) = pending_phase.lock() {
                         *phase = update::UpdatePhase::UpToDate;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("[wm] update check failed: {error}");
+                    if let Ok(mut phase) = pending_phase.lock() {
+                        *phase = update::UpdatePhase::Error(error);
                     }
                 }
             }
         });
     }
 
-    /// Start downloading and installing an update. Spawns a background thread.
+    /// Start downloading, verifying, and preparing an update.
     pub fn start_update_download(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.state.read(cx).update_phase,
+            update::UpdatePhase::Downloading { .. }
+                | update::UpdatePhase::Verifying
+                | update::UpdatePhase::Installing
+        ) {
+            return;
+        }
         let info = match self.state.read(cx).update_available.clone() {
             Some(info) => info,
             None => return,
@@ -2382,7 +2405,7 @@ impl WindowManager {
         let pending_phase = self.pending_update_phase.clone();
         let pending_phase_err = self.pending_update_phase.clone();
         std::thread::spawn(move || {
-            let result = crate::services::updater::download_and_install(&info, move |phase| {
+            let result = crate::services::updater::download_and_prepare(&info, move |phase| {
                 if let Ok(mut p) = pending_phase.lock() {
                     *p = phase;
                 }
@@ -2395,10 +2418,22 @@ impl WindowManager {
         });
     }
 
-    /// Restart the application after an update has been installed.
+    /// Quit and let the prepared platform installer replace the application.
     pub fn do_update_restart(&mut self, cx: &mut Context<Self>) {
+        let Some(info) = self.state.read(cx).update_available.clone() else {
+            return;
+        };
+        if let Err(error) = crate::services::updater::launch_prepared_update(&info) {
+            log::error!("Failed to launch prepared update: {error}");
+            self.state.update(cx, |state, _| {
+                state.update_phase = update::UpdatePhase::Error(error.clone())
+            });
+            cx.emit(WindowManagerEvent::UpdateProgress(
+                update::UpdatePhase::Error(error),
+            ));
+            return;
+        }
         self.prepare_shutdown(cx);
-        crate::core::settings::spawn_new_process();
         cx.quit();
     }
 

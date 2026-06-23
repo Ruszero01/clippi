@@ -2,37 +2,13 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Progress of an ongoing download — shared between background thread and UI poll.
-pub struct DownloadProgress {
-    pub downloaded: AtomicU64,
-    pub total: u64,
-}
-
-impl DownloadProgress {
-    pub fn new(total: u64) -> Self {
-        Self {
-            downloaded: AtomicU64::new(0),
-            total,
-        }
-    }
-
-    pub fn percentage(&self) -> u8 {
-        let d = self.downloaded.load(Ordering::Relaxed);
-        if self.total == 0 {
-            return 0;
-        }
-        ((d * 100) / self.total).min(100) as u8
-    }
-}
-
-/// Download a file from `url` to `dest_path`, writing progress to `progress`.
+/// Download a file from `url` to `dest_path`, reporting percentage changes.
 /// Blocking — call from a background thread.
 pub fn download_file(
     url: &str,
     dest_path: &Path,
-    progress: &DownloadProgress,
+    expected_size: u64,
+    mut on_progress: impl FnMut(u8),
 ) -> Result<(), String> {
     let response = ureq::get(url)
         .set(
@@ -42,8 +18,10 @@ pub fn download_file(
         .call()
         .map_err(|e| format!("Download failed: {e}"))?;
 
-    // Reset downloaded counter
-    progress.downloaded.store(0, Ordering::Relaxed);
+    let total = response
+        .header("Content-Length")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(expected_size);
 
     let mut reader = response.into_reader();
     let mut file =
@@ -51,6 +29,7 @@ pub fn download_file(
 
     let mut buf = [0u8; 8192];
     let mut downloaded = 0u64;
+    let mut last_percentage = 0;
     loop {
         let n = reader
             .read(&mut buf)
@@ -61,8 +40,22 @@ pub fn download_file(
         file.write_all(&buf[..n])
             .map_err(|e| format!("Write error: {e}"))?;
         downloaded += n as u64;
-        progress.downloaded.store(downloaded, Ordering::Relaxed);
+        if total > 0 {
+            let percentage = ((downloaded.saturating_mul(100)) / total).min(100) as u8;
+            if percentage != last_percentage {
+                last_percentage = percentage;
+                on_progress(percentage);
+            }
+        }
     }
+    file.sync_all()
+        .map_err(|e| format!("Cannot flush downloaded file: {e}"))?;
+    if total > 0 && downloaded != total {
+        return Err(format!(
+            "Incomplete download: expected {total} bytes, received {downloaded}"
+        ));
+    }
+    on_progress(100);
     Ok(())
 }
 
@@ -98,6 +91,9 @@ pub fn verify_sha256(file_path: &Path, expected_hex: &str) -> Result<(), String>
 /// Fetch the checksum file from `sha256_url` and return the hash string.
 /// The file format is: `<hash>  <filename>` or just `<hash>`.
 pub fn fetch_checksum(sha256_url: &str) -> Result<String, String> {
+    if sha256_url.is_empty() {
+        return Err("Release checksum URL is missing".into());
+    }
     let response = ureq::get(sha256_url)
         .set(
             "User-Agent",
@@ -109,5 +105,9 @@ pub fn fetch_checksum(sha256_url: &str) -> Result<String, String> {
         .into_string()
         .map_err(|e| format!("Cannot read checksum: {e}"))?;
     // Take the first whitespace-delimited token (the hash)
-    Ok(body.split_whitespace().next().unwrap_or("").to_string())
+    let hash = body.split_whitespace().next().unwrap_or("");
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Release checksum is not a valid SHA256 hash".into());
+    }
+    Ok(hash.to_string())
 }

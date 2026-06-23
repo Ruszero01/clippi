@@ -1366,6 +1366,8 @@ mod tests {
             hotkey_recording: false,
             recording_quick_hotkey: false,
             sync: SyncState::default(),
+            update_available: None,
+            update_phase: UpdatePhase::Idle,
         };
         (state, dirty)
     }

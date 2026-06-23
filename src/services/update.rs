@@ -48,12 +48,12 @@ impl UpdateChecker {
     }
 
     /// Full check — version, release notes, and platform-appropriate asset.
-    pub fn check_full(&self) -> Option<UpdateInfo> {
+    pub fn check_full(&self) -> Result<Option<UpdateInfo>, String> {
         self.fetch_latest_release_full()
     }
 
     /// Full fetch — version, release notes, and platform-appropriate asset with checksum.
-    fn fetch_latest_release_full(&self) -> Option<UpdateInfo> {
+    fn fetch_latest_release_full(&self) -> Result<Option<UpdateInfo>, String> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",
             self.repo_owner, self.repo_name
@@ -65,21 +65,28 @@ impl UpdateChecker {
             .set("User-Agent", &agent)
             .set("Accept", "application/vnd.github.v3+json")
             .call()
-            .ok()?;
+            .map_err(|e| format!("Failed to query GitHub Releases: {e}"))?;
 
-        let body = response.into_string().ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
+        let body = response
+            .into_string()
+            .map_err(|e| format!("Failed to read GitHub response: {e}"))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("Invalid GitHub response: {e}"))?;
 
-        let tag_name = parsed["tag_name"].as_str()?;
+        let tag_name = parsed["tag_name"]
+            .as_str()
+            .ok_or("GitHub release is missing tag_name")?;
 
         // Strip leading 'v' if present
         let latest_ver = tag_name.strip_prefix('v').unwrap_or(tag_name);
 
-        let current = semver::Version::parse(&self.current_version).ok()?;
-        let latest = semver::Version::parse(latest_ver).ok()?;
+        let current = semver::Version::parse(&self.current_version)
+            .map_err(|e| format!("Invalid current version: {e}"))?;
+        let latest = semver::Version::parse(latest_ver)
+            .map_err(|e| format!("Invalid release version {latest_ver:?}: {e}"))?;
 
         if latest <= current {
-            return None; // No update available
+            return Ok(None); // No update available
         }
 
         let release_notes = parsed["body"].as_str().unwrap_or("").to_string();
@@ -89,14 +96,14 @@ impl UpdateChecker {
         let (download_url, checksum_url, asset_name, asset_size) =
             select_platform_asset(&parsed, &version_str)?;
 
-        Some(UpdateInfo {
+        Ok(Some(UpdateInfo {
             latest_version: version_str,
             release_notes,
             download_url,
             checksum_url,
             asset_name,
             asset_size,
-        })
+        }))
     }
 }
 
@@ -104,8 +111,10 @@ impl UpdateChecker {
 fn select_platform_asset(
     release: &serde_json::Value,
     version: &str,
-) -> Option<(String, String, String, u64)> {
-    let assets = release["assets"].as_array()?;
+) -> Result<(String, String, String, u64), String> {
+    let assets = release["assets"]
+        .as_array()
+        .ok_or("GitHub release is missing assets")?;
 
     // Build a map: filename → (download_url, size)
     let mut asset_map: std::collections::HashMap<&str, (&str, u64)> =
@@ -120,21 +129,22 @@ fn select_platform_asset(
     }
 
     // Determine which asset name pattern to look for
-    let (asset_pattern, checksum_pattern) = platform_asset_patterns(version);
+    let (asset_pattern, checksum_pattern) = platform_asset_patterns(version)?;
 
     // Find the main asset — use ends_with so ".sha256" isn't falsely matched.
     let (main_name, (download_url, size)) = asset_map
         .iter()
-        .find(|(name, _)| name.ends_with(&asset_pattern))?;
+        .find(|(name, _)| name.ends_with(&asset_pattern))
+        .ok_or_else(|| format!("Release asset not found: {asset_pattern}"))?;
 
     // Find the corresponding checksum file.
     let checksum_url = asset_map
         .iter()
         .find(|(name, _)| name.ends_with(&checksum_pattern))
         .map(|(_, (url, _))| url.to_string())
-        .unwrap_or_default();
+        .ok_or_else(|| format!("Release checksum not found: {checksum_pattern}"))?;
 
-    Some((
+    Ok((
         download_url.to_string(),
         checksum_url,
         main_name.to_string(),
@@ -144,34 +154,45 @@ fn select_platform_asset(
 
 /// Returns (asset_name_fragment, checksum_name_fragment) for the current platform.
 #[cfg(target_os = "windows")]
-fn platform_asset_patterns(version: &str) -> (String, String) {
-    // Always use the NSIS installer on Windows — portable mode only affects
-    // the data directory, not how the software itself is updated.
-    (
-        format!("Clippi_{}_x64-setup.exe", version),
-        format!("Clippi_{}_x64-setup.exe.sha256", version),
-    )
+fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+    asset_patterns_for("windows", std::env::consts::ARCH, version)
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn platform_asset_patterns(_version: &str) -> (String, String) {
-    (
-        "Clippi_aarch64.dmg".to_string(),
-        "Clippi_aarch64.dmg.sha256".to_string(),
-    )
+fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+    asset_patterns_for("macos", "aarch64", version)
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn platform_asset_patterns(_version: &str) -> (String, String) {
-    (
-        "Clippi_x86_64.dmg".to_string(),
-        "Clippi_x86_64.dmg.sha256".to_string(),
-    )
+fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+    asset_patterns_for("macos", "x86_64", version)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn platform_asset_patterns(_version: &str) -> (String, String) {
-    (String::new(), String::new())
+fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+    asset_patterns_for(std::env::consts::OS, std::env::consts::ARCH, version)
+}
+
+fn asset_patterns_for(os: &str, arch: &str, version: &str) -> Result<(String, String), String> {
+    match (os, arch) {
+        // Always use the NSIS installer on Windows — portable mode only affects
+        // the data directory, not how the software itself is updated.
+        ("windows", "x86_64") => Ok((
+            format!("Clippi_{version}_x64-setup.exe"),
+            format!("Clippi_{version}_x64-setup.exe.sha256"),
+        )),
+        ("macos", "aarch64") => Ok((
+            "Clippi_aarch64.dmg".to_string(),
+            "Clippi_aarch64.dmg.sha256".to_string(),
+        )),
+        ("macos", "x86_64") => Ok((
+            "Clippi_x86_64.dmg".to_string(),
+            "Clippi_x86_64.dmg.sha256".to_string(),
+        )),
+        _ => Err(format!(
+            "Automatic updates are not supported on {os}/{arch}"
+        )),
+    }
 }
 
 /// Open the releases page in the system browser.
@@ -199,5 +220,51 @@ pub fn open_releases_page(url: &str) {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn release_asset_patterns_match_packaging_names() {
+        assert_eq!(
+            asset_patterns_for("windows", "x86_64", "1.2.3").unwrap(),
+            (
+                "Clippi_1.2.3_x64-setup.exe".into(),
+                "Clippi_1.2.3_x64-setup.exe.sha256".into()
+            )
+        );
+        assert_eq!(
+            asset_patterns_for("macos", "aarch64", "1.2.3").unwrap(),
+            (
+                "Clippi_aarch64.dmg".into(),
+                "Clippi_aarch64.dmg.sha256".into()
+            )
+        );
+        assert_eq!(
+            asset_patterns_for("macos", "x86_64", "1.2.3").unwrap(),
+            (
+                "Clippi_x86_64.dmg".into(),
+                "Clippi_x86_64.dmg.sha256".into()
+            )
+        );
+    }
+
+    #[test]
+    fn platform_asset_requires_matching_checksum() {
+        let (asset, _) = platform_asset_patterns("1.2.3").unwrap();
+        let release = json!({
+            "assets": [{
+                "name": asset,
+                "browser_download_url": "https://example.invalid/update",
+                "size": 42
+            }]
+        });
+        assert!(select_platform_asset(&release, "1.2.3")
+            .unwrap_err()
+            .contains("checksum"));
     }
 }

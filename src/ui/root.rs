@@ -188,6 +188,10 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::UpdateAvailable => {
+                    // A newly discovered update must not inherit the timer from
+                    // an unrelated toast that happened to be visible already.
+                    this._toast_timer = None;
+                    this.toast_dismissing = false;
                     let version = this
                         .state
                         .read(cx)
@@ -224,6 +228,16 @@ impl RootView {
                     use crate::services::update::UpdatePhase;
                     match phase {
                         UpdatePhase::Downloading { progress } => {
+                            // The first progress event replaces the update prompt;
+                            // subsequent percentage events keep the same timer.
+                            if this
+                                .toast_actions
+                                .as_ref()
+                                .is_some_and(|actions| !actions.is_empty())
+                            {
+                                this._toast_timer = None;
+                                this.toast_dismissing = false;
+                            }
                             let msg = I18nKey::VersionDownloading
                                 .text()
                                 .replace("{0}", &progress.to_string());
@@ -232,7 +246,22 @@ impl RootView {
                             this.toast_timer_expiry =
                                 Some(std::time::Instant::now() + Duration::from_secs(3600));
                         }
+                        UpdatePhase::Verifying => {
+                            this.state.update(cx, |s, _cx| {
+                                s.toast_message = Some(I18nKey::VersionVerifying.text().to_string())
+                            });
+                            this.toast_actions = Some(Vec::new());
+                        }
+                        UpdatePhase::Installing => {
+                            this.state.update(cx, |s, _cx| {
+                                s.toast_message =
+                                    Some(I18nKey::VersionInstalling.text().to_string())
+                            });
+                            this.toast_actions = Some(Vec::new());
+                        }
                         UpdatePhase::ReadyToRestart => {
+                            this._toast_timer = None;
+                            this.toast_dismissing = false;
                             this.state.update(cx, |s, _cx| {
                                 s.toast_message = Some(I18nKey::VersionReady.text().to_string())
                             });
@@ -251,6 +280,8 @@ impl RootView {
                                 Some(std::time::Instant::now() + Duration::from_secs(3600));
                         }
                         UpdatePhase::Error(msg) => {
+                            this._toast_timer = None;
+                            this.toast_dismissing = false;
                             let err_msg = I18nKey::ToastUpdateError.text().replace("{0}", msg);
                             this.state
                                 .update(cx, |s, _cx| s.toast_message = Some(err_msg));

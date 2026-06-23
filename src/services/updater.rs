@@ -1,17 +1,15 @@
-//! Update orchestrator — coordinates check → download → verify → install → restart.
+//! Update orchestrator — coordinates download → verify → prepare → restart.
 //!
 //! High-level API consumed by `WindowManager`. All blocking work runs on
 //! background threads; progress is communicated via `Arc<Mutex<UpdatePhase>>`.
 
 use std::path::Path;
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
 
 use super::update::{UpdateInfo, UpdatePhase};
 
-/// Download, verify, and install an update. Blocking — call from background thread.
+/// Download, verify, and prepare an update. Blocking — call from background thread.
 /// `phase_callback` is invoked on each phase transition for UI updates.
-pub fn download_and_install(
+pub fn download_and_prepare(
     info: &UpdateInfo,
     phase_callback: impl Fn(UpdatePhase) + Send + 'static,
 ) -> Result<(), String> {
@@ -23,14 +21,14 @@ pub fn download_and_install(
     // 1. Download
     phase_callback(UpdatePhase::Downloading { progress: 0 });
 
-    let progress = super::downloader::DownloadProgress::new(info.asset_size);
-
-    // Sub-spawn to poll progress and call back (this is still inside a
-    // background thread — the callback writes to the shared phase mutex)
-    super::downloader::download_file(&info.download_url, &dest_path, &progress)?;
-
-    let pct = progress.percentage();
-    phase_callback(UpdatePhase::Downloading { progress: pct });
+    super::downloader::download_file(
+        &info.download_url,
+        &dest_path,
+        info.asset_size,
+        |progress| {
+            phase_callback(UpdatePhase::Downloading { progress });
+        },
+    )?;
 
     // 2. Verify
     phase_callback(UpdatePhase::Verifying);
@@ -38,33 +36,26 @@ pub fn download_and_install(
     let expected_hash = super::downloader::fetch_checksum(&info.checksum_url)?;
     super::downloader::verify_sha256(&dest_path, &expected_hash)?;
 
-    // 3. Install
+    // 3. Prepare the platform artifact. Installation happens only after the
+    // user clicks restart, so the running executable is never replaced here.
     phase_callback(UpdatePhase::Installing);
-
-    install_asset(&dest_path)?;
+    prepare_asset(&dest_path, &temp_dir)?;
 
     phase_callback(UpdatePhase::ReadyToRestart);
     Ok(())
 }
 
-/// Install the downloaded asset based on current platform and mode.
-fn install_asset(asset_path: &Path) -> Result<(), String> {
+/// Prepare the downloaded asset for installation after the app exits.
+fn prepare_asset(asset_path: &Path, temp_dir: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        super::install::run_nsis_installer(asset_path)
+        let _ = (asset_path, temp_dir);
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
     {
-        let app_path = super::install::mount_dmg(asset_path)?;
-        // Determine the mount volume for later unmounting
-        let mount = app_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("/Volumes/Clippi"));
-        super::install::replace_app_bundle(&app_path)?;
-        super::install::unmount_dmg(&mount);
-        Ok(())
+        super::install::prepare_macos_app(asset_path, temp_dir).map(|_| ())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -74,9 +65,39 @@ fn install_asset(asset_path: &Path) -> Result<(), String> {
     }
 }
 
+/// Launch the prepared platform installer. The caller must quit immediately
+/// after this returns successfully.
+pub fn launch_prepared_update(info: &UpdateInfo) -> Result<(), String> {
+    let temp_dir = super::install::update_temp_dir();
+    #[cfg(target_os = "windows")]
+    {
+        super::install::launch_nsis_installer(&temp_dir.join(&info.asset_name))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = info;
+        super::install::launch_macos_installer(&temp_dir.join("Clippi.app"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (info, temp_dir);
+        Err("Platform not supported".into())
+    }
+}
+
 /// Clean up old temp files from previous updates. Call at startup.
 pub fn cleanup_temp() {
     let temp_dir = super::install::update_temp_dir();
+    #[cfg(target_os = "macos")]
+    {
+        let mount_point = temp_dir.join("mount");
+        if mount_point.exists() {
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-force"])
+                .arg(&mount_point)
+                .status();
+        }
+    }
     if temp_dir.exists() {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

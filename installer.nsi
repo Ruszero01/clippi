@@ -52,10 +52,19 @@ Function ${un}CheckAndCloseApp
   IntCmp $0 0 done
 
   ${If} ${Silent}
-    ; Silent mode: kill without asking the user.
-    DetailPrint "Silently closing ${APP_NAME}..."
+    ; The in-app updater quits voluntarily after launching us. Give its normal
+    ; shutdown path time to finish before using taskkill as a fallback.
+    StrCpy $1 0
+  wait_silent_exit:
+    FindWindow $0 "" "${APP_NAME}"
+    IntCmp $0 0 done
+    Sleep 250
+    IntOp $1 $1 + 1
+    IntCmp $1 20 kill_silent wait_silent_exit kill_silent
+  kill_silent:
+    DetailPrint "Closing ${APP_NAME} after waiting for graceful shutdown..."
     nsExec::ExecToLog 'taskkill /F /IM ${APP_EXE}'
-    Sleep 1500
+    Sleep 500
     Goto done
   ${EndIf}
 
@@ -113,7 +122,16 @@ Section "!Clippi" SectionCore
   WriteRegStr HKLM "${REG_UNINST}" "URLInfoAbout" "https://github.com/Ruszero01/clippi"
   WriteRegDWORD HKLM "${REG_UNINST}" "NoModify" 1
   WriteRegDWORD HKLM "${REG_UNINST}" "NoRepair" 1
+
 SectionEnd
+
+; Automatic updates use silent mode. Restart only after every selected
+; section has completed successfully.
+Function .onInstSuccess
+  ${If} ${Silent}
+    Exec '"$INSTDIR\${APP_EXE}"'
+  ${EndIf}
+FunctionEnd
 
 Section "开始菜单快捷方式" SectionStartMenu
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
