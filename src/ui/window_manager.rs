@@ -111,6 +111,58 @@ fn quick_outer_size_for_client(
     )
 }
 
+/// Move and size the quick window without holding GPUI's application borrow.
+///
+/// Win32 delivers `WM_DPICHANGED`, `WM_SIZE`, and `WM_MOVE` synchronously from
+/// `SetWindowPos`. Calling it from an entity update prevents GPUI's native
+/// callbacks from borrowing the app to synchronize `Window::scale_factor()`.
+#[cfg(target_os = "windows")]
+fn position_quick_window_windows(
+    hwnd: isize,
+    x: i32,
+    y: i32,
+    quick_h: f32,
+    scale: f32,
+    compensate_client_offset: bool,
+) {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    };
+
+    let hwnd = hwnd as *mut std::ffi::c_void;
+    if hwnd.is_null() {
+        return;
+    }
+
+    let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
+    let client_h = (quick_h * scale) as i32;
+    let (win_w, win_h, left_offset, top_offset) =
+        quick_outer_size_for_client(hwnd, client_w, client_h);
+    let (left_offset, top_offset) = if compensate_client_offset {
+        (left_offset, top_offset)
+    } else {
+        (0, 0)
+    };
+
+    let positioned = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x - left_offset,
+            y - top_offset,
+            win_w,
+            win_h,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    };
+    if positioned == 0 {
+        log::warn!("failed to position quick window: win32 error {}", unsafe {
+            GetLastError()
+        });
+    }
+}
+
 /// Window subclass procedure that intercepts system behaviors while preserving
 /// manual resize. Only active when `BLOCK_SYSTEM_WINDOW_BEHAVIORS` is true.
 ///
@@ -243,8 +295,16 @@ pub struct WindowManager {
 
     // --- Poll task ---
     _poll_task: Option<Task<()>>,
+    /// One-shot main-window show task. Native positioning must run outside an
+    /// app/entity update so synchronous DPI callbacks can re-borrow GPUI.
+    #[cfg(target_os = "windows")]
+    _main_show_task: Option<Task<()>>,
     /// Fast poll for quick-action hotkeys when quick window is visible (16ms ≈ 60fps).
     _quick_poll_task: Option<Task<()>>,
+    /// One-shot native positioning task. On Windows this must run outside an
+    /// app/entity update so synchronous DPI callbacks can re-borrow GPUI.
+    #[cfg(target_os = "windows")]
+    _quick_position_task: Option<Task<()>>,
     /// Fast poll used only while recording a shortcut, so a short key press
     /// cannot fall between two ticks of the 200 ms service loop.
     _recording_poll_task: Option<Task<()>>,
@@ -315,7 +375,11 @@ impl WindowManager {
             #[cfg(target_os = "macos")]
             quick_ns_window: 0,
             _poll_task: None,
+            #[cfg(target_os = "windows")]
+            _main_show_task: None,
             _quick_poll_task: None,
+            #[cfg(target_os = "windows")]
+            _quick_position_task: None,
             _recording_poll_task: None,
         };
 
@@ -750,24 +814,10 @@ impl WindowManager {
             if current_dpi != self.last_system_dpi && self.last_system_dpi != 0 {
                 self.last_system_dpi = current_dpi;
                 cx.emit(WindowManagerEvent::DpiChanged);
-                // Nudge width by 1 px and back → WM_SIZE →
-                // GPUI layout recalculation.
-                {
-                    use windows_sys::Win32::UI::WindowsAndMessaging::{
-                        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
-                    };
-                    let mut r = RECT {
-                        left: 0, top: 0, right: 0, bottom: 0,
-                    };
-                    if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
-                        let w = r.right - r.left;
-                        let h = r.bottom - r.top;
-                        unsafe {
-                            SetWindowPos(hwnd, HWND_TOP, 0, 0, w + 1, h, SWP_NOACTIVATE | SWP_NOMOVE);
-                            SetWindowPos(hwnd, HWND_TOP, 0, 0, w, h, SWP_NOACTIVATE | SWP_NOMOVE);
-                        }
-                    }
-                }
+                // GPUI has already handled WM_DPICHANGED and WM_SIZE. Emitting
+                // the event is sufficient to invalidate Clippi's own views;
+                // synchronously nudging the HWND here would re-enter GPUI while
+                // the application state is borrowed.
                 return;
             }
             self.last_system_dpi = current_dpi;
@@ -937,22 +987,35 @@ impl WindowManager {
 
     fn calculate_position(&self) -> Option<(i32, i32)> {
         let (win_w, win_h) = self.effective_window_size();
-        // Convert logical → physical pixels for Windows SetWindowPos.
-        // --- monitor::get_cursor_pos() returns physical pixels; window dimensions ---
-        // --- and sidebar offset are in logical pixels and must be scaled. ---
-        let scale = monitor::get_scale_factor(0, 0);
-        let win_w_phys = (win_w * scale) as i32;
-        let win_h_phys = (win_h * scale) as i32;
-        let sidebar_offset = (PANEL_OFFSET_X * scale) as i32;
 
         match self.position_mode {
-            PositionMode::Center => self.calc_center(win_w_phys, win_h_phys),
-            PositionMode::FollowMouse => {
-                self.calc_follow_mouse(win_w_phys, win_h_phys, sidebar_offset)
+            PositionMode::Center => {
+                let (cx, cy) = monitor::get_cursor_pos()?;
+                let scale = monitor::get_scale_factor(cx, cy);
+                self.calc_center((win_w * scale) as i32, (win_h * scale) as i32)
             }
-            PositionMode::Remember => self
-                .calc_remember(win_w_phys, win_h_phys)
-                .or_else(|| self.calc_center(win_w_phys, win_h_phys)),
+            PositionMode::FollowMouse => {
+                let (cx, cy) = monitor::get_cursor_pos()?;
+                let scale = monitor::get_scale_factor(cx, cy);
+                self.calc_follow_mouse(
+                    (win_w * scale) as i32,
+                    (win_h * scale) as i32,
+                    (PANEL_OFFSET_X * scale) as i32,
+                )
+            }
+            PositionMode::Remember => {
+                if self.saved_w > 0.0
+                    && self.saved_h > 0.0
+                    && monitor::is_point_on_monitor(self.saved_x, self.saved_y)
+                {
+                    let scale = monitor::get_scale_factor(self.saved_x, self.saved_y);
+                    self.calc_remember((win_w * scale) as i32, (win_h * scale) as i32)
+                } else {
+                    let (cx, cy) = monitor::get_cursor_pos()?;
+                    let scale = monitor::get_scale_factor(cx, cy);
+                    self.calc_center((win_w * scale) as i32, (win_h * scale) as i32)
+                }
+            }
         }
     }
 
@@ -1054,28 +1117,38 @@ impl WindowManager {
 
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE,
-                SWP_NOSIZE, SW_SHOW,
-            };
+            let hwnd = self.hwnd;
+            let position = self.calculate_position();
+            self._main_show_task = Some(cx.spawn(async move |weak_self, cx| {
+                // Yield until the WindowManager update that handled the hotkey
+                // or tray action has released GPUI's AppCell borrow.
+                Timer::after(Duration::from_millis(1)).await;
 
-            let hwnd = self.hwnd as *mut std::ffi::c_void;
-            if !hwnd.is_null() {
-                if let Some((x, y)) = self.calculate_position() {
-                    // SAFETY: HWND is our own window (non-null), coordinates are
-                    // validated by `calculate_position`. SWP_NOSIZE/SWP_NOACTIVATE
-                    // make this a pure positioning call.
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let should_show = this
+                    .update(cx, |wm, _cx| wm.visible && wm.hwnd == hwnd)
+                    .unwrap_or(false);
+                if !should_show || hwnd == 0 {
+                    return;
+                }
+
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE,
+                    SWP_NOSIZE, SW_SHOW,
+                };
+                let hwnd = hwnd as *mut std::ffi::c_void;
+                if let Some((x, y)) = position {
                     unsafe {
                         SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
                     }
                 }
-                // SAFETY: HWND is our own window. `ShowWindow(SW_SHOW)` makes it
-                // visible; `SetForegroundWindow` brings it to the foreground.
                 unsafe {
                     ShowWindow(hwnd, SW_SHOW);
                     SetForegroundWindow(hwnd);
-                };
-            }
+                }
+            }));
         }
 
         #[cfg(target_os = "macos")]
@@ -1134,6 +1207,10 @@ impl WindowManager {
 
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        {
+            self._main_show_task = None;
+        }
         self.hide_quick_window(cx);
         self.dismiss_ui(cx);
         cx.emit(WindowManagerEvent::WindowHidden);
@@ -1216,41 +1293,13 @@ impl WindowManager {
             })
             .unwrap_or((0, 0));
 
-        #[cfg(target_os = "windows")]
-        {
-            use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-            };
-
-            let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
-            if !hwnd.is_null() {
-                let dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
-                let scale = dpi / 96.0;
-                let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-                let client_h = (quick_h * scale) as i32;
-                let (win_w, win_h, _, _) =
-                    quick_outer_size_for_client(hwnd, client_w, client_h);
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        x,
-                        y,
-                        win_w,
-                        win_h,
-                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                    );
-                }
-            }
-        }
-
         #[cfg(target_os = "macos")]
         {
             self.position_quick_macos_window(x, y, quick_h);
             self.show_quick_macos_window();
         }
 
+        #[cfg(not(target_os = "windows"))]
         if let Some(handle) = self.quick_window {
             let _ = cx.update_window(handle, |_view, window, _cx| window.refresh());
         }
@@ -1258,40 +1307,61 @@ impl WindowManager {
         // Start fast poll for responsive keyboard navigation.
         self.start_quick_poll(cx);
 
-        // Re-enforce window size and position after GPUI render — GPUI's
-        // WM_NCCALCSIZE handler may have shifted the client origin inside the
-        // window.  ClientToScreen now returns the real offset so we can nudge
-        // the window back to place the GPUI viewport at the intended (x, y).
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-            };
+            use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 
-            let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
-            if !hwnd.is_null() {
-                let scale = monitor::get_scale_factor(x, y);
-                let client_w = (QUICK_WINDOW_WIDTH * scale) as i32;
-                let client_h = (quick_h * scale) as i32;
-                let (win_w, win_h, left_offset, top_offset) =
-                    quick_outer_size_for_client(hwnd, client_w, client_h);
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        x - left_offset,
-                        y - top_offset,
-                        win_w,
-                        win_h,
-                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                    );
+            let quick_hwnd = self.quick_hwnd;
+            let quick_window = self.quick_window;
+            let target_sf = monitor::get_scale_factor(x, y);
+            self._quick_position_task = Some(cx.spawn(async move |weak_self, cx| {
+                // Yield until the WindowManager update that handled the hotkey
+                // has released GPUI's AppCell borrow.
+                Timer::after(Duration::from_millis(1)).await;
+
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let should_position = this
+                    .update(cx, |wm, _cx| {
+                        wm.quick_visible && wm.quick_hwnd == quick_hwnd
+                    })
+                    .unwrap_or(false);
+                if !should_position || quick_hwnd == 0 {
+                    return;
                 }
-            }
+
+                let hwnd = quick_hwnd as *mut std::ffi::c_void;
+                let current_sf = unsafe { GetDpiForWindow(hwnd) } as f32 / 96.0;
+                position_quick_window_windows(quick_hwnd, x, y, quick_h, current_sf, false);
+
+                // Let WM_DPICHANGED update GPUI before measuring the new frame
+                // insets and enforcing the final target-monitor client size.
+                Timer::after(Duration::from_millis(1)).await;
+                let should_finish = this
+                    .update(cx, |wm, _cx| {
+                        wm.quick_visible && wm.quick_hwnd == quick_hwnd
+                    })
+                    .unwrap_or(false);
+                if !should_finish {
+                    return;
+                }
+
+                position_quick_window_windows(quick_hwnd, x, y, quick_h, target_sf, true);
+
+                if let Some(handle) = quick_window {
+                    let _ = cx.update_window(handle, |_, window, _cx| window.refresh());
+                }
+            }));
         }
     }
 
     fn hide_quick_window(&mut self, cx: &mut Context<Self>) {
         self._quick_poll_task = None; // cancel fast poll
+        #[cfg(target_os = "windows")]
+        {
+            self._quick_position_task = None;
+        }
         self.quick_visible = false;
         self.quick_mouse_down = false;
         self.quick_foreground_id = 0;

@@ -474,7 +474,7 @@ impl Render for RootView {
         // 1 physical-pixel border, DPI-aware — matches OS system border width.
         // px(1.0) is 1 logical px which scales with monitor DPI; dividing by the
         // scale factor keeps the rendered border at device-pixel thickness.
-        let scale = crate::platform::monitor::get_scale_factor(0, 0);
+        let scale = window.scale_factor();
         let border_width = px(1.5 / scale.max(1.0));
 
         // Actual window dimensions for positioning overlays

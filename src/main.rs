@@ -341,27 +341,28 @@ fn main() {
                             let hwnd = wh.hwnd.get();
                             window_manager.update(cx, |wm, _cx| wm.set_hwnd(hwnd));
 
-                            // --- Set initial position and size via platform API. ---
-                            // --- calculate_initial_position returns physical pixels ---
-                            // (matching SetWindowPos convention on Windows).
-                            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                SetWindowPos, HWND_TOP, SWP_NOACTIVATE,
-                            };
+                            // Move the native window only after the open-window
+                            // callback releases GPUI's AppCell borrow. Windows
+                            // then applies WM_DPICHANGED and preserves the logical
+                            // size supplied through WindowOptions.
                             if let Some((x, y)) = initial_phys_pos {
-                                let scale = platform::monitor::get_scale_factor(x, y);
-                                let phys_w = (initial_logical_w * scale) as i32;
-                                let phys_h = (initial_logical_h * scale) as i32;
-                                unsafe {
-                                    SetWindowPos(
-                                        hwnd as _,
-                                        HWND_TOP,
-                                        x,
-                                        y,
-                                        phys_w,
-                                        phys_h,
-                                        SWP_NOACTIVATE,
-                                    );
-                                }
+                                cx.spawn(async move |_cx| {
+                                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE,
+                                    };
+                                    unsafe {
+                                        SetWindowPos(
+                                            hwnd as _,
+                                            HWND_TOP,
+                                            x,
+                                            y,
+                                            0,
+                                            0,
+                                            SWP_NOACTIVATE | SWP_NOSIZE,
+                                        );
+                                    }
+                                })
+                                .detach();
                             }
 
                             // --- Set window icon via WM_SETICON using embedded ICO bytes. ---
@@ -463,6 +464,15 @@ fn main() {
                         .origin,
                         size(px(QUICK_WINDOW_WIDTH), px(quick_h)),
                     ))),
+                    // The popup is not user-resizable and WindowManager applies
+                    // its exact client size whenever it is shown. On Windows,
+                    // GPUI 0.2.2 calculates the minimum outer size with a cached
+                    // non-client border offset. That offset can still belong to
+                    // the previous (larger) DPI while moving between monitors,
+                    // which clamps the window a few physical pixels too wide.
+                    #[cfg(target_os = "windows")]
+                    window_min_size: None,
+                    #[cfg(not(target_os = "windows"))]
                     window_min_size: Some(size(
                         px(QUICK_WINDOW_WIDTH),
                         px(calc_quick_window_height(false, false)),
