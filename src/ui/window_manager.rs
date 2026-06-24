@@ -1323,23 +1323,24 @@ impl WindowManager {
             calc_quick_window_height(has_tag, has_type)
         };
 
+        // Positioning priority: Caret (Path A/B) → Cursor (Path D) → raw cursor
+        // Never fall back to window-centered positioning — the window
+        // must follow the text caret or the mouse, never the screen center.
         let (x, y) = self
             .calculate_quick_position(quick_h)
             .or_else(|| {
-                let scale = monitor::get_scale_factor(0, 0);
+                // calculate_quick_position already tries cursor as Path D;
+                // reaching here means even GetCursorPos failed (extremely rare).
+                // Try one more time directly as a last resort.
+                let (cx, cy) = monitor::get_cursor_pos().unwrap_or((0, 0));
                 log::debug!(
-                    "show_quick_window: calculate_quick_position returned None, falling back to calc_center with scale={:.2}",
-                    scale
+                    "show_quick_window: positioning fallback, raw cursor=({},{})",
+                    cx,
+                    cy
                 );
-                self.calc_center(
-                    (QUICK_WINDOW_WIDTH * scale) as i32,
-                    (quick_h * scale) as i32,
-                )
+                Some((cx, cy))
             })
-            .unwrap_or_else(|| {
-                log::warn!("show_quick_window: all positioning failed, defaulting to (0,0)");
-                (0, 0)
-            });
+            .unwrap_or((0, 0));
 
         #[cfg(target_os = "macos")]
         {
@@ -1575,7 +1576,7 @@ impl WindowManager {
     }
 
     fn calculate_quick_position(&self, quick_h: f32) -> Option<(i32, i32)> {
-        // ── Path A/B: Precise caret anchor (GetGUIThreadInfo / AttachThreadInput) ──
+        // ── Path A/B/C: caret anchor (Win32 or UIA) ──
         if let Some(anchor) = crate::platform::text_input::get_text_input_anchor() {
             let scale = monitor::get_scale_factor(anchor.x, anchor.y);
             let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
@@ -1590,8 +1591,8 @@ impl WindowManager {
                 above_y
             };
             let pos = clamp_to_work_area(anchor.x, y, win_w, win_h, &area);
-            log::debug!(
-                "quick_position: Path-A/B caret → ({},{}) scale={:.2}",
+            log::info!(
+                "quick_position: caret → ({},{}) scale={:.2}",
                 pos.0,
                 pos.1,
                 scale
@@ -1599,7 +1600,7 @@ impl WindowManager {
             return Some(pos);
         }
 
-        // ── Path D: Cursor position (ultimate fallback) ──
+        // ── Cursor fallback ──
         let (cx, cy) = monitor::get_cursor_pos()?;
         let scale = monitor::get_scale_factor(cx, cy);
         let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
@@ -1607,7 +1608,7 @@ impl WindowManager {
         let area = monitor::get_monitor_work_area(cx, cy)?;
         let pos = clamp_to_work_area(cx, cy, win_w, win_h, &area);
         log::debug!(
-            "quick_position: Path-D cursor → ({},{}) scale={:.2}",
+            "quick_position: cursor → ({},{}) scale={:.2}",
             pos.0,
             pos.1,
             scale
