@@ -1327,12 +1327,19 @@ impl WindowManager {
             .calculate_quick_position(quick_h)
             .or_else(|| {
                 let scale = monitor::get_scale_factor(0, 0);
+                log::debug!(
+                    "show_quick_window: calculate_quick_position returned None, falling back to calc_center with scale={:.2}",
+                    scale
+                );
                 self.calc_center(
                     (QUICK_WINDOW_WIDTH * scale) as i32,
                     (quick_h * scale) as i32,
                 )
             })
-            .unwrap_or((0, 0));
+            .unwrap_or_else(|| {
+                log::warn!("show_quick_window: all positioning failed, defaulting to (0,0)");
+                (0, 0)
+            });
 
         #[cfg(target_os = "macos")]
         {
@@ -1568,6 +1575,7 @@ impl WindowManager {
     }
 
     fn calculate_quick_position(&self, quick_h: f32) -> Option<(i32, i32)> {
+        // ── Path A/B: Precise caret anchor (GetGUIThreadInfo / AttachThreadInput) ──
         if let Some(anchor) = crate::platform::text_input::get_text_input_anchor() {
             let scale = monitor::get_scale_factor(anchor.x, anchor.y);
             let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
@@ -1581,15 +1589,30 @@ impl WindowManager {
             } else {
                 above_y
             };
-            return Some(clamp_to_work_area(anchor.x, y, win_w, win_h, &area));
+            let pos = clamp_to_work_area(anchor.x, y, win_w, win_h, &area);
+            log::debug!(
+                "quick_position: Path-A/B caret → ({},{}) scale={:.2}",
+                pos.0,
+                pos.1,
+                scale
+            );
+            return Some(pos);
         }
 
+        // ── Path D: Cursor position (ultimate fallback) ──
         let (cx, cy) = monitor::get_cursor_pos()?;
         let scale = monitor::get_scale_factor(cx, cy);
         let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
         let win_h = (quick_h * scale) as i32;
         let area = monitor::get_monitor_work_area(cx, cy)?;
-        Some(clamp_to_work_area(cx, cy, win_w, win_h, &area))
+        let pos = clamp_to_work_area(cx, cy, win_w, win_h, &area);
+        log::debug!(
+            "quick_position: Path-D cursor → ({},{}) scale={:.2}",
+            pos.0,
+            pos.1,
+            scale
+        );
+        Some(pos)
     }
 
     /// Clear all floating UI state.

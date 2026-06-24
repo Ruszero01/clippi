@@ -30,8 +30,10 @@ pub fn get_text_input_anchor() -> Option<TextInputAnchor> {
 fn windows_text_input_anchor() -> Option<TextInputAnchor> {
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+        GetCaretPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
     // Prefer the current foreground window — `get_last_non_clippi_window`
@@ -41,58 +43,150 @@ fn windows_text_input_anchor() -> Option<TextInputAnchor> {
     let fg = unsafe { GetForegroundWindow() };
     let foreground_hwnd: Option<HWND> = (|| {
         if fg.is_null() {
+            log::debug!("text_input_anchor: GetForegroundWindow returned null");
             return None;
         }
         let mut pid: u32 = 0;
         // SAFETY: GetWindowThreadProcessId is a read-only query.
         let tid = unsafe { GetWindowThreadProcessId(fg, &mut pid) };
         if tid == 0 || pid == std::process::id() {
+            log::debug!(
+                "text_input_anchor: foreground belongs to Clippi (pid={}, tid={})",
+                pid,
+                tid
+            );
             return None; // window is invalid or belongs to Clippi
         }
         Some(fg)
     })();
-    let target = foreground_hwnd.or_else(crate::platform::focus::get_last_non_clippi_window)?;
-    // SAFETY: The HWND comes from `GetForegroundWindow` (or the focus watcher
-    // fallback). `GetWindowThreadProcessId` and `GetGUIThreadInfo` are read-only
-    // queries; `GUITHREADINFO` is initialised with the required cbSize.
-    unsafe {
-        let tid = GetWindowThreadProcessId(target, std::ptr::null_mut());
-        if tid == 0 {
+    let target = match foreground_hwnd
+        .or_else(crate::platform::focus::get_last_non_clippi_window)
+    {
+        Some(hwnd) => hwnd,
+        None => {
+            log::debug!("text_input_anchor: no target window (foreground is Clippi, no last-non-clippi window)");
             return None;
         }
+    };
 
-        let mut info: GUITHREADINFO = std::mem::zeroed();
-        info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-        if GetGUIThreadInfo(tid, &mut info) == 0 || info.hwndCaret.is_null() {
-            return None;
-        }
-
-        let RECT {
-            left,
-            top,
-            right,
-            bottom,
-        } = info.rcCaret;
-        let width = (right - left).abs().max(1);
-        let height = (bottom - top).abs().max(1);
+    /// Try to produce a TextInputAnchor from a caret point in client coords
+    /// of the given window. Validates size, ClientToScreen, and on-monitor.
+    unsafe fn anchor_from_caret(
+        caret_hwnd: HWND,
+        caret_rect: RECT,
+        tid_for_log: u32,
+    ) -> Option<TextInputAnchor> {
+        let width = (caret_rect.right - caret_rect.left).abs().max(1);
+        let height = (caret_rect.bottom - caret_rect.top).abs().max(1);
         if width > 200 || height > 200 {
+            log::debug!(
+                "text_input_anchor: caret rect too large ({}x{}), likely selected text range",
+                width,
+                height
+            );
             return None;
         }
 
-        let mut point = POINT { x: left, y: top };
-        if ClientToScreen(info.hwndCaret, &mut point) == 0 {
+        let mut point = POINT {
+            x: caret_rect.left,
+            y: caret_rect.top,
+        };
+        if ClientToScreen(caret_hwnd, &mut point) == 0 {
+            log::debug!("text_input_anchor: ClientToScreen failed");
             return None;
         }
         if !crate::platform::monitor::is_point_on_monitor(point.x, point.y) {
+            log::debug!(
+                "text_input_anchor: caret screen position ({}, {}) is not on any monitor",
+                point.x,
+                point.y
+            );
             return None;
         }
 
+        log::debug!(
+            "text_input_anchor: found caret at screen=({},{}), size=({},{}), tid={}",
+            point.x,
+            point.y,
+            width,
+            height,
+            tid_for_log
+        );
         Some(TextInputAnchor {
             x: point.x,
             y: point.y,
             width,
             height,
         })
+    }
+
+    // SAFETY: The HWND comes from `GetForegroundWindow` (or the focus watcher
+    // fallback). `GetWindowThreadProcessId`, `GetGUIThreadInfo`, `AttachThreadInput`,
+    // `GetCaretPos`, and `ClientToScreen` are read-only queries; all structs are
+    // properly zeroed and sized before Win32 calls.
+    unsafe {
+        let tid = GetWindowThreadProcessId(target, std::ptr::null_mut());
+        if tid == 0 {
+            log::debug!(
+                "text_input_anchor: GetWindowThreadProcessId returned 0 for target HWND"
+            );
+            return None;
+        }
+
+        // ── Path A: GetGUIThreadInfo (reliable for classic Win32 apps) ──
+        let mut info: GUITHREADINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        if GetGUIThreadInfo(tid, &mut info) != 0 && !info.hwndCaret.is_null() {
+            return anchor_from_caret(info.hwndCaret, info.rcCaret, tid);
+        }
+        log::debug!(
+            "text_input_anchor: GetGUIThreadInfo caret unavailable (hwndCaret={:?}), trying AttachThreadInput fallback",
+            if info.hwndCaret.is_null() { "null" } else { "non-null" }
+        );
+
+        // ── Path B: AttachThreadInput + GetCaretPos (works for browsers / IME-aware apps) ──
+        let our_tid = GetCurrentThreadId();
+        if our_tid == tid {
+            log::debug!("text_input_anchor: our thread == target thread, skipping AttachThreadInput");
+            return None;
+        }
+        // AttachThreadInput couples the input states of two threads. Call
+        // with TRUE to attach, then always call with FALSE to detach.
+        if AttachThreadInput(our_tid, tid, 1) == 0 {
+            log::debug!(
+                "text_input_anchor: AttachThreadInput failed (access denied or threads in different desktops)"
+            );
+            return None;
+        }
+        // AttachThreadInput succeeded — MUST detach on all exit paths.
+        let result = (|| {
+            let focused = GetFocus();
+            if focused.is_null() {
+                log::debug!("text_input_anchor: GetFocus returned null after AttachThreadInput");
+                return None;
+            }
+            let mut caret_point = POINT { x: 0, y: 0 };
+            if GetCaretPos(&mut caret_point) == 0 {
+                log::debug!("text_input_anchor: GetCaretPos failed after AttachThreadInput");
+                return None;
+            }
+            // GetCaretPos returns client coords relative to the window that owns
+            // the caret (the focused window).
+            let caret_rect = RECT {
+                left: caret_point.x,
+                top: caret_point.y,
+                right: caret_point.x + 2, // typical caret width
+                bottom: caret_point.y + 20, // typical caret height
+            };
+            log::debug!(
+                "text_input_anchor: AttachThreadInput succeeded, caret at client=({},{})",
+                caret_point.x,
+                caret_point.y
+            );
+            anchor_from_caret(focused, caret_rect, tid)
+        })();
+        AttachThreadInput(our_tid, tid, 0); // detach
+        result
     }
 }
 
