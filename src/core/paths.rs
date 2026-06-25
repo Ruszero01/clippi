@@ -180,6 +180,10 @@ static RESOLVED_IMAGES_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Must be called once at startup before any clipboard capture.
 pub fn init_images_dir(db_path: &str) {
     let dir = resolve_data_dir(db_path).join("images");
+    // Pre-create icon and file-icon cache directories at startup
+    // so the render path never needs filesystem writes.
+    let _ = std::fs::create_dir_all(dir.join("icons"));
+    let _ = std::fs::create_dir_all(dir.join("file_icons"));
     let _ = RESOLVED_IMAGES_DIR.set(dir);
 }
 

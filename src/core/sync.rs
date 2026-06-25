@@ -306,7 +306,9 @@ pub fn merge_remote_into_local(
     let mut stats = MergeStats::default();
 
     // --- Phase 0: Clean expired local tombstones ---
-    let _ = db.cleanup_old_tombstones(30);
+    let _ = db
+        .cleanup_old_tombstones(30)
+        .inspect_err(|e| log::warn!("sync: cleanup_old_tombstones failed: {e}"));
 
     // --- Phase 1: Process remote item tombstones ---
     for tombstone in &remote.deleted_items {
@@ -322,12 +324,18 @@ pub fn merge_remote_into_local(
             // --- stale timestamps don't propagate to other devices. ---
             if let Ok(Some(local_at)) = db.get_item_tombstone_deleted_at(tombstone.content_hash) {
                 if rfc3339_newer(&tombstone.deleted_at, &local_at) {
-                    let _ = db.remove_item_tombstone(tombstone.content_hash);
-                    let _ = db.record_item_deletion(
-                        tombstone.content_hash,
-                        &tombstone.deleted_at,
-                        &tombstone.device_name,
-                    );
+                    if let Err(e) = db.remove_item_tombstone(tombstone.content_hash) {
+                        log::warn!("sync: remove_item_tombstone (update) failed: {e}");
+                    }
+                    let _ = db
+                        .record_item_deletion(
+                            tombstone.content_hash,
+                            &tombstone.deleted_at,
+                            &tombstone.device_name,
+                        )
+                        .inspect_err(|e| {
+                            log::warn!("sync: record_item_deletion (update) failed: {e}")
+                        });
                 }
             }
             continue;
@@ -345,20 +353,24 @@ pub fn merge_remote_into_local(
                 {
                     stats.items_deleted += 1;
                 }
-                let _ = db.record_item_deletion(
-                    tombstone.content_hash,
-                    &tombstone.deleted_at,
-                    &tombstone.device_name,
-                );
+                let _ = db
+                    .record_item_deletion(
+                        tombstone.content_hash,
+                        &tombstone.deleted_at,
+                        &tombstone.device_name,
+                    )
+                    .inspect_err(|e| log::warn!("sync: record_item_deletion (newer) failed: {e}"));
             }
             // else: local item is newer, do nothing (don't record tombstone) ---
         } else {
             // No local item — record tombstone for propagation to other devices.
-            let _ = db.record_item_deletion(
-                tombstone.content_hash,
-                &tombstone.deleted_at,
-                &tombstone.device_name,
-            );
+            let _ = db
+                .record_item_deletion(
+                    tombstone.content_hash,
+                    &tombstone.deleted_at,
+                    &tombstone.device_name,
+                )
+                .inspect_err(|e| log::warn!("sync: record_item_deletion (no local) failed: {e}"));
         }
     }
 
@@ -371,9 +383,14 @@ pub fn merge_remote_into_local(
             // Already marked — replace if remote marker is newer.
             if let Ok(Some(local_at)) = db.get_unfavorite_deleted_at(uf.content_hash) {
                 if rfc3339_newer(&uf.unfavorited_at, &local_at) {
-                    let _ = db.remove_unfavorite(uf.content_hash);
-                    let _ =
-                        db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
+                    if let Err(e) = db.remove_unfavorite(uf.content_hash) {
+                        log::warn!("sync: remove_unfavorite (update) failed: {e}");
+                    }
+                    let _ = db
+                        .record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name)
+                        .inspect_err(|e| {
+                            log::warn!("sync: record_unfavorite (update) failed: {e}")
+                        });
                 }
             }
             continue;
@@ -384,17 +401,22 @@ pub fn merge_remote_into_local(
             if local_item.is_favorite {
                 let remote_ts = parse_rfc3339(&uf.unfavorited_at);
                 if remote_ts.is_some_and(|r| r > local_item.updated_at) {
-                    let _ = db.set_favorite(local_item.id, false);
+                    if let Err(e) = db.set_favorite(local_item.id, false) {
+                        log::error!("sync: set_favorite failed: {e}");
+                    }
                     stats.items_updated += 1;
-                    let _ =
-                        db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
+                    let _ = db
+                        .record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name)
+                        .inspect_err(|e| log::warn!("sync: record_unfavorite (fav) failed: {e}"));
                 }
                 // else: item was re-favorited after unfavorite, skip
             }
             // else: already not favorited, nothing to do
         } else {
             // No local item — record marker for propagation.
-            let _ = db.record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name);
+            let _ = db
+                .record_unfavorite(uf.content_hash, &uf.unfavorited_at, &uf.device_name)
+                .inspect_err(|e| log::warn!("sync: record_unfavorite (no local) failed: {e}"));
         }
     }
 
@@ -417,12 +439,18 @@ pub fn merge_remote_into_local(
             // Already tombstoned — replace if remote tombstone is newer.
             if let Ok(Some(local_at)) = db.get_tag_tombstone_deleted_at(&tombstone.name) {
                 if rfc3339_newer(&tombstone.deleted_at, &local_at) {
-                    let _ = db.remove_tag_tombstone(&tombstone.name);
-                    let _ = db.record_tag_deletion(
-                        &tombstone.name,
-                        &tombstone.deleted_at,
-                        &tombstone.device_name,
-                    );
+                    if let Err(e) = db.remove_tag_tombstone(&tombstone.name) {
+                        log::warn!("sync: remove_tag_tombstone (update) failed: {e}");
+                    }
+                    let _ = db
+                        .record_tag_deletion(
+                            &tombstone.name,
+                            &tombstone.deleted_at,
+                            &tombstone.device_name,
+                        )
+                        .inspect_err(|e| {
+                            log::warn!("sync: record_tag_deletion (update) failed: {e}")
+                        });
                 }
             }
             continue;
@@ -438,20 +466,24 @@ pub fn merge_remote_into_local(
                 if db.delete_tag_by_name(&tombstone.name).unwrap_or(false) {
                     stats.tags_deleted += 1;
                 }
-                let _ = db.record_tag_deletion(
-                    &tombstone.name,
-                    &tombstone.deleted_at,
-                    &tombstone.device_name,
-                );
+                let _ = db
+                    .record_tag_deletion(
+                        &tombstone.name,
+                        &tombstone.deleted_at,
+                        &tombstone.device_name,
+                    )
+                    .inspect_err(|e| log::warn!("sync: record_tag_deletion (newer) failed: {e}"));
             }
             // else: local tag is newer, do nothing (don't record tombstone) ---
         } else {
             // No local tag — record tombstone for propagation.
-            let _ = db.record_tag_deletion(
-                &tombstone.name,
-                &tombstone.deleted_at,
-                &tombstone.device_name,
-            );
+            let _ = db
+                .record_tag_deletion(
+                    &tombstone.name,
+                    &tombstone.deleted_at,
+                    &tombstone.device_name,
+                )
+                .inspect_err(|e| log::warn!("sync: record_tag_deletion (no local) failed: {e}"));
         }
     }
 
@@ -478,7 +510,9 @@ pub fn merge_remote_into_local(
             }
         }
         // --- Clear any tombstone so the tag can be recreated. ---
-        let _ = db.remove_tag_tombstone(&remote_tag.name);
+        if let Err(e) = db.remove_tag_tombstone(&remote_tag.name) {
+            log::warn!("sync: remove_tag_tombstone (merge) failed: {e}");
+        }
         match db
             .get_tag_by_name(&remote_tag.name)
             .map_err(|e| format!("tag lookup: {e}"))?
@@ -534,8 +568,12 @@ pub fn merge_remote_into_local(
                 false
             };
             if should_import {
-                let _ = db.remove_item_tombstone(remote_item.content_hash);
-                let _ = db.remove_unfavorite(remote_item.content_hash);
+                if let Err(e) = db.remove_item_tombstone(remote_item.content_hash) {
+                    log::warn!("sync: remove_item_tombstone (import) failed: {e}");
+                }
+                if let Err(e) = db.remove_unfavorite(remote_item.content_hash) {
+                    log::warn!("sync: remove_unfavorite (import) failed: {e}");
+                }
                 // --- fall through to import below ---
             } else {
                 continue; // tombstone is newer or same age, skip
@@ -555,12 +593,16 @@ pub fn merge_remote_into_local(
 
                 for tag_ref in &remote_item.tags {
                     if let Ok(Some(tag)) = db.get_tag_by_name(&tag_ref.name) {
-                        let _ = db.add_item_tag(item_id, tag.id);
+                        if let Err(e) = db.add_item_tag(item_id, tag.id) {
+                            log::warn!("sync: add_item_tag (new) failed: {e}");
+                        }
                     }
                 }
 
                 // --- Restore remote timestamp: add_item_tag may have bumped it. ---
-                let _ = db.set_item_updated_at(item_id, &remote_item.updated_at);
+                if let Err(e) = db.set_item_updated_at(item_id, &remote_item.updated_at) {
+                    log::error!("sync: set_item_updated_at (new) failed: {e}");
+                }
             }
             Some(local_item) => {
                 let remote_ts = parse_rfc3339(&remote_item.updated_at);
@@ -574,14 +616,18 @@ pub fn merge_remote_into_local(
                         .map_err(|e| format!("clear tags: {e}"))?;
                     for tag_ref in &remote_item.tags {
                         if let Ok(Some(tag)) = db.get_tag_by_name(&tag_ref.name) {
-                            let _ = db.add_item_tag(local_item.id, tag.id);
+                            if let Err(e) = db.add_item_tag(local_item.id, tag.id) {
+                                log::warn!("sync: add_item_tag (update) failed: {e}");
+                            }
                         }
                     }
 
                     // --- Restore remote timestamp: tag operations above may have ---
                     // --- bumped updated_at via touch_item, but the item data is ---
                     // --- semantically identical to what we just pulled from remote. ---
-                    let _ = db.set_item_updated_at(local_item.id, &remote_item.updated_at);
+                    if let Err(e) = db.set_item_updated_at(local_item.id, &remote_item.updated_at) {
+                        log::error!("sync: set_item_updated_at (update) failed: {e}");
+                    }
 
                     stats.items_updated += 1;
                 }

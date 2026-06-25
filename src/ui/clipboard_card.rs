@@ -223,12 +223,10 @@ fn swatch_color(text: &str, fallback: Rgba) -> Rgba {
         .unwrap_or(fallback)
 }
 
-fn cached_source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
+fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     if item.source_app_name.is_empty() || item.source_app_icon.is_empty() {
         return None;
     }
-    let icon_dir = crate::core::paths::images_dir().join("icons");
-    let _ = std::fs::create_dir_all(&icon_dir);
     let safe_name: String = item
         .source_app_name
         .chars()
@@ -243,12 +241,20 @@ fn cached_source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     if safe_name.is_empty() {
         return None;
     }
-    let path = icon_dir.join(format!("{safe_name}.png"));
+    // Icon directory is pre-created at startup — no fs ops in render.
+    let path = crate::core::paths::images_dir()
+        .join("icons")
+        .join(format!("{safe_name}.png"));
     if !path.exists() {
-        let png = base64::engine::general_purpose::STANDARD
+        // Cache miss: write in background, skip icon this frame.
+        let decoded = base64::engine::general_purpose::STANDARD
             .decode(&item.source_app_icon)
             .ok()?;
-        std::fs::write(&path, png).ok()?;
+        let p = path.clone();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(&p, decoded);
+        });
+        return None;
     }
     Some(path)
 }
@@ -281,15 +287,23 @@ fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std::path::Pat
             .unwrap_or("file")
             .to_string()
     };
-    let icon_dir = crate::core::paths::images_dir().join("file_icons");
-    let _ = std::fs::create_dir_all(&icon_dir);
-    let icon_path = icon_dir.join(format!("{cache_key}.png"));
+    // File icon directory is pre-created at startup — no fs ops in render.
+    let icon_path = crate::core::paths::images_dir()
+        .join("file_icons")
+        .join(format!("{cache_key}.png"));
     if !icon_path.exists() {
-        let icon_base64 = crate::platform::source::get_file_icon_base64(file_path, is_dir)?;
-        let png = base64::engine::general_purpose::STANDARD
-            .decode(&icon_base64)
-            .ok()?;
-        std::fs::write(&icon_path, png).ok()?;
+        // Cache miss: heavy Win32 SHGetFileInfoW → spawn to background,
+        // skip icon this frame. Next render hits the cache.
+        let fp = file_path.to_string();
+        let p = icon_path.clone();
+        std::thread::spawn(move || {
+            if let Some(icon_base64) = crate::platform::source::get_file_icon_base64(&fp, is_dir) {
+                if let Ok(png) = base64::engine::general_purpose::STANDARD.decode(&icon_base64) {
+                    let _ = std::fs::write(&p, png);
+                }
+            }
+        });
+        return None;
     }
     Some(icon_path)
 }
@@ -648,7 +662,7 @@ impl RenderOnce for ClipboardCard {
         let show_source = show_source_app && !item.source_app_name.is_empty();
         let label = type_label(&item);
         let source_icon_path = if show_source {
-            cached_source_icon_path(&item)
+            source_icon_path(&item)
         } else {
             None
         };
