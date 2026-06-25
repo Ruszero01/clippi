@@ -318,6 +318,20 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
     const AX_VALUE_CG_RECT: i32 = 3;
     const AX_VALUE_CF_RANGE: i32 = 4;
     const AX_ERROR_SUCCESS: i32 = 0;
+    const MAX_CARET_RECT_WIDTH: f64 = 200.0;
+    const MAX_CARET_RECT_HEIGHT: f64 = 200.0;
+    const MAX_FOCUSED_TEXT_WIDTH: f64 = 1200.0;
+    const MAX_FOCUSED_TEXT_HEIGHT: f64 = 240.0;
+    // Some macOS apps report a collapsed caret rect whose height is closer to
+    // the insertion stroke than the full text line. Use a line-height-sized
+    // anchor so popup placement follows the caret bottom instead of its middle.
+    const MIN_CARET_ANCHOR_HEIGHT: i32 = 30;
+
+    #[derive(Clone, Copy)]
+    enum AnchorRectKind {
+        Caret,
+        FocusedElement,
+    }
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -369,6 +383,23 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
         }
     }
 
+    fn rect_size(rect: &CGRect) -> (f64, f64) {
+        (rect.size.width.abs(), rect.size.height.abs())
+    }
+
+    fn looks_like_caret_rect(rect: &CGRect) -> bool {
+        let (width, height) = rect_size(rect);
+        height > 0.0 && width <= MAX_CARET_RECT_WIDTH && height <= MAX_CARET_RECT_HEIGHT
+    }
+
+    fn looks_like_focused_text_rect(rect: &CGRect) -> bool {
+        let (width, height) = rect_size(rect);
+        width > 0.0
+            && height > 0.0
+            && width <= MAX_FOCUSED_TEXT_WIDTH
+            && height <= MAX_FOCUSED_TEXT_HEIGHT
+    }
+
     unsafe fn rect_for_selected_range(element: AXUIElementRef) -> Option<CGRect> {
         let range_value = copy_attribute(element, "AXSelectedTextRange")?;
         let range = ax_value::<CFRange>(range_value, AX_VALUE_CF_RANGE);
@@ -395,7 +426,47 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
         }
         let rect = ax_value::<CGRect>(bounds_value, AX_VALUE_CG_RECT);
         CFRelease(bounds_value);
-        rect
+        let rect = rect?;
+        if looks_like_caret_rect(&rect) {
+            Some(rect)
+        } else {
+            log::debug!(
+                "text_input_anchor: macOS AXBoundsForRange rect too large ({:.0}x{:.0}), ignoring",
+                rect.size.width,
+                rect.size.height
+            );
+            None
+        }
+    }
+
+    unsafe fn rect_for_selected_text_marker_range(element: AXUIElementRef) -> Option<CGRect> {
+        let marker_range = copy_attribute(element, "AXSelectedTextMarkerRange")?;
+        let parameterized = CFString::new("AXBoundsForTextMarkerRange");
+        let mut bounds_value: CFTypeRef = std::ptr::null();
+        let err = AXUIElementCopyParameterizedAttributeValue(
+            element,
+            parameterized.as_concrete_TypeRef(),
+            marker_range,
+            &mut bounds_value,
+        );
+        CFRelease(marker_range);
+        if err != AX_ERROR_SUCCESS || bounds_value.is_null() {
+            return None;
+        }
+
+        let rect = ax_value::<CGRect>(bounds_value, AX_VALUE_CG_RECT);
+        CFRelease(bounds_value);
+        let rect = rect?;
+        if looks_like_caret_rect(&rect) {
+            Some(rect)
+        } else {
+            log::debug!(
+                "text_input_anchor: macOS AXBoundsForTextMarkerRange rect too large ({:.0}x{:.0}), ignoring",
+                rect.size.width,
+                rect.size.height
+            );
+            None
+        }
     }
 
     unsafe fn rect_for_focused_element(element: AXUIElementRef) -> Option<CGRect> {
@@ -412,16 +483,29 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
         CFRelease(pos_value);
         CFRelease(size_value);
 
-        Some(CGRect::new(&position?, &size?))
+        let rect = CGRect::new(&position?, &size?);
+        if looks_like_focused_text_rect(&rect) {
+            Some(rect)
+        } else {
+            log::debug!(
+                "text_input_anchor: macOS focused element rect too large ({:.0}x{:.0}), ignoring",
+                rect.size.width,
+                rect.size.height
+            );
+            None
+        }
     }
 
-    fn anchor_from_top_left_rect(rect: CGRect) -> Option<TextInputAnchor> {
+    fn anchor_from_top_left_rect(rect: CGRect, kind: AnchorRectKind) -> Option<TextInputAnchor> {
         let x = rect.origin.x.round() as i32;
         let y = rect.origin.y.round() as i32;
         let width = rect.size.width.round().max(1.0) as i32;
-        let height = rect.size.height.round().max(1.0) as i32;
-        if width <= 0 || height <= 0 || width > 2000 || height > 2000 {
+        let mut height = rect.size.height.round().max(1.0) as i32;
+        if width <= 0 || height <= 0 {
             return None;
+        }
+        if matches!(kind, AnchorRectKind::Caret) {
+            height = height.max(MIN_CARET_ANCHOR_HEIGHT);
         }
 
         if crate::platform::monitor::is_point_on_monitor(x, y) {
@@ -436,7 +520,7 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
         None
     }
 
-    fn anchor_from_cocoa_rect(rect: CGRect) -> Option<TextInputAnchor> {
+    fn anchor_from_cocoa_rect(rect: CGRect, kind: AnchorRectKind) -> Option<TextInputAnchor> {
         let mtm = objc2::MainThreadMarker::new()?;
         let main_screen_height = objc2_app_kit::NSScreen::mainScreen(mtm)?
             .frame()
@@ -453,17 +537,27 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
             return None;
         }
 
+        let height = if matches!(kind, AnchorRectKind::Caret) {
+            flipped.height.max(MIN_CARET_ANCHOR_HEIGHT)
+        } else {
+            flipped.height.max(1)
+        };
+
         Some(TextInputAnchor {
             x: flipped.x,
             y: flipped.y,
             width: flipped.width.max(1),
-            height: flipped.height.max(1),
+            height,
         })
     }
 
-    fn to_anchor(rect: CGRect, prefer_flipped: bool) -> Option<TextInputAnchor> {
-        let raw = anchor_from_top_left_rect(rect);
-        let flipped = anchor_from_cocoa_rect(rect);
+    fn to_anchor(
+        rect: CGRect,
+        prefer_flipped: bool,
+        kind: AnchorRectKind,
+    ) -> Option<TextInputAnchor> {
+        let raw = anchor_from_top_left_rect(rect, kind);
+        let flipped = anchor_from_cocoa_rect(rect, kind);
         if prefer_flipped {
             return flipped.or(raw);
         }
@@ -511,10 +605,19 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
                 return None;
             }
         };
-        let rect = rect_for_selected_range(focused as AXUIElementRef)
-            .or_else(|| rect_for_focused_element(focused as AXUIElementRef));
+        let focused = focused as AXUIElementRef;
+        let anchor = rect_for_selected_range(focused)
+            .and_then(|rect| to_anchor(rect, false, AnchorRectKind::Caret))
+            .or_else(|| {
+                rect_for_selected_text_marker_range(focused)
+                    .and_then(|rect| to_anchor(rect, false, AnchorRectKind::Caret))
+            })
+            .or_else(|| {
+                rect_for_focused_element(focused)
+                    .and_then(|rect| to_anchor(rect, false, AnchorRectKind::FocusedElement))
+            });
         CFRelease(focused);
         CFRelease(system as CFTypeRef);
-        rect.and_then(|rect| to_anchor(rect, false))
+        anchor
     }
 }

@@ -1739,6 +1739,7 @@ impl WindowManager {
         }
         let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
         Self::_style_ns_window(window);
+        window.setHasShadow(true);
 
         // Let AppKit/Core Animation own the actual window clipping. A
         // continuous corner curve matches standard macOS panels and avoids the

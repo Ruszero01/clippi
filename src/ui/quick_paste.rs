@@ -262,10 +262,10 @@ impl Render for QuickPasteView {
         };
 
         let window_h = calc_quick_window_height(has_tag_row, has_type_bar);
-
         div()
             .w(px(QUICK_WINDOW_WIDTH))
             .h(px(window_h))
+            .rounded(px(QUICK_WINDOW_CORNER_RADIUS))
             .bg(theme.bg)
             .flex()
             .flex_col()
