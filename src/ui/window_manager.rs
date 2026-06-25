@@ -290,16 +290,10 @@ pub struct WindowManager {
     /// Tracks the current mouse-button state so click-outside handling reacts
     /// once per press instead of repeatedly while a button is held.
     quick_mouse_down: bool,
-    /// Native identity of the app/window that owned focus when the popup opened.
-    /// A change means the user switched context and the popup is now stale.
-    quick_foreground_id: isize,
-    /// Allows the OS to restore the previous app after switching directly from
-    /// the main window to the non-activating quick window.
-    quick_focus_grace_until: Option<Instant>,
-    /// Prevents any hide action (poll_focus, click-outside, hotkey toggle) for
-    /// a short period after the quick window is shown. This debounces double
-    /// hotkey events arriving in the same poll tick and gives the async
-    /// positioning task time to complete before the window can be dismissed.
+    /// Prevents click-outside and hotkey toggle hides for a short period after
+    /// the quick window is shown. This debounces double hotkey events arriving
+    /// in the same poll tick and gives the async positioning task time to
+    /// complete before the window can be dismissed.
     quick_suppress_until: Option<Instant>,
     _quick_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
@@ -393,8 +387,6 @@ impl WindowManager {
             quick_view: None,
             quick_visible: false,
             quick_mouse_down: false,
-            quick_foreground_id: 0,
-            quick_focus_grace_until: None,
             quick_suppress_until: None,
             _quick_subscription: None,
             #[cfg(target_os = "windows")]
@@ -679,29 +671,6 @@ impl WindowManager {
         self.update_foreground_app_name(cx);
 
         let is_self_fg = self.is_self_foreground();
-
-        // --- Quick window suppress guard ---
-        // Immediately after show, the async positioning task may not have
-        // completed yet and double hotkey events can arrive in the same poll
-        // tick. Suppress all hide actions for a short debounce window.
-        let quick_suppressed = self
-            .quick_suppress_until
-            .is_some_and(|until| Instant::now() <= until);
-
-        // --- Quick window click-outside detection ---
-        // Detect mouse-down anywhere outside the quick window and auto-hide.
-        if self.quick_visible && !quick_suppressed {
-            // Close when focus moves to the main window or to a different app.
-            // The popup itself is non-activating, so interacting inside it does
-            // not change this foreground identity.
-            let restoring_target = self
-                .quick_focus_grace_until
-                .is_some_and(|until| Instant::now() <= until);
-            if !restoring_target && (is_self_fg || self.quick_foreground_changed()) {
-                self.hide_quick_window(cx);
-                return;
-            }
-        }
 
         // --- Auto-hide logic for main window ---
         // --- Guard conditions: any true → skip auto-hide ---
@@ -1319,12 +1288,6 @@ impl WindowManager {
         };
 
         let switching_from_main = self.visible;
-        let current_foreground_id = Self::current_foreground_id();
-        let quick_foreground_id = Self::select_quick_foreground_id(
-            switching_from_main,
-            current_foreground_id,
-            Self::last_non_clippi_foreground_id(),
-        );
 
         // Main and quick window are never shown simultaneously.
         if switching_from_main {
@@ -1339,13 +1302,9 @@ impl WindowManager {
         view.update(cx, |view, cx| view.reset_scroll(cx));
         self.quick_visible = true;
         self.quick_mouse_down = Self::mouse_buttons_down();
-        self.quick_foreground_id = quick_foreground_id;
-        self.quick_focus_grace_until = switching_from_main
-            .then(|| Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
-        // Debounce: prevent any hide action (poll_focus, click-outside, hotkey
-        // toggle) for 400 ms after show. This absorbs double hotkey events that
-        // can arrive in the same poll tick and gives the async positioning task
-        // time to complete before the window is dismissible.
+        // Debounce: prevent click-outside and hotkey toggle hides briefly after
+        // show. This absorbs double hotkey events and lets async positioning
+        // complete before the window is dismissible.
         self.quick_suppress_until = Some(Instant::now() + Duration::from_millis(400));
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
@@ -1453,8 +1412,6 @@ impl WindowManager {
         }
         self.quick_visible = false;
         self.quick_mouse_down = false;
-        self.quick_foreground_id = 0;
-        self.quick_focus_grace_until = None;
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(false);
         }
@@ -1510,68 +1467,6 @@ impl WindowManager {
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             false
-        }
-    }
-
-    fn quick_foreground_changed(&self) -> bool {
-        if self.quick_foreground_id == 0 {
-            return false;
-        }
-        let current = Self::current_foreground_id();
-        current != 0 && current != self.quick_foreground_id
-    }
-
-    fn select_quick_foreground_id(
-        switching_from_main: bool,
-        current_foreground_id: isize,
-        last_non_clippi_foreground_id: isize,
-    ) -> isize {
-        if switching_from_main && last_non_clippi_foreground_id != 0 {
-            last_non_clippi_foreground_id
-        } else {
-            current_foreground_id
-        }
-    }
-
-    // `return` avoids rust-analyzer false E0308 with #[cfg] arms.
-    #[allow(clippy::needless_return)]
-    fn last_non_clippi_foreground_id() -> isize {
-        #[cfg(target_os = "windows")]
-        {
-            return crate::platform::focus::get_last_non_clippi_window()
-                .map(|hwnd| hwnd as isize)
-                .unwrap_or(0);
-        }
-        #[cfg(target_os = "macos")]
-        {
-            return crate::platform::focus::get_last_non_clippi_pid()
-                .map(|pid| pid as isize)
-                .unwrap_or(0);
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            0
-        }
-    }
-
-    // `return` avoids rust-analyzer false E0308 with #[cfg] arms.
-    #[allow(clippy::needless_return)]
-    fn current_foreground_id() -> isize {
-        #[cfg(target_os = "windows")]
-        {
-            use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-            return unsafe { GetForegroundWindow() as isize };
-        }
-        #[cfg(target_os = "macos")]
-        {
-            return objc2_app_kit::NSWorkspace::sharedWorkspace()
-                .frontmostApplication()
-                .map(|app| app.processIdentifier() as isize)
-                .unwrap_or(0);
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            0
         }
     }
 
@@ -2506,23 +2401,6 @@ impl WindowManager {
 
 #[cfg(test)]
 mod exit_tests {
-    use super::WindowManager;
-
-    #[test]
-    fn quick_window_keeps_current_target_when_main_is_hidden() {
-        assert_eq!(WindowManager::select_quick_foreground_id(false, 42, 7), 42);
-    }
-
-    #[test]
-    fn quick_window_restores_external_target_when_switching_from_main() {
-        assert_eq!(WindowManager::select_quick_foreground_id(true, 42, 7), 7);
-    }
-
-    #[test]
-    fn quick_window_falls_back_to_current_target_without_focus_history() {
-        assert_eq!(WindowManager::select_quick_foreground_id(true, 42, 0), 42);
-    }
-
     #[test]
     fn tray_quit_requests_platform_termination() {
         let source = include_str!("window_manager.rs");
