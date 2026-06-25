@@ -20,10 +20,9 @@ pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
 
-pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 10.0;
+pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 8.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
 const LIST_INSET: f32 = 4.0;
-const LIST_CORNER_RADIUS: f32 = QUICK_WINDOW_CORNER_RADIUS - LIST_INSET;
 
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
@@ -266,6 +265,7 @@ impl Render for QuickPasteView {
             .w(px(QUICK_WINDOW_WIDTH))
             .h(px(window_h))
             .rounded(px(QUICK_WINDOW_CORNER_RADIUS))
+            .overflow_hidden()
             .bg(theme.bg)
             .flex()
             .flex_col()
@@ -409,9 +409,8 @@ impl Render for QuickPasteView {
                 parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
             })
             // ── List viewport ──
-            // Keep the selection surface away from the window edges so
-            // the final row reads as a complete rounded item instead of
-            // being cut off by the native window mask.
+            // Outer container has overflow_hidden + rounded(10px) so all
+            // corners are clipped uniformly — no separate inset radius needed.
             .child(
                 div()
                     .flex_1()
@@ -421,8 +420,6 @@ impl Render for QuickPasteView {
                     .flex()
                     .flex_col()
                     .pb(px(LIST_INSET))
-                    .rounded_b(px(LIST_CORNER_RADIUS))
-                    .overflow_hidden()
                     .when(items_count == 0, |list| {
                         list.child(
                             div()

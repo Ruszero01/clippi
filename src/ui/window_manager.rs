@@ -296,6 +296,11 @@ pub struct WindowManager {
     /// Allows the OS to restore the previous app after switching directly from
     /// the main window to the non-activating quick window.
     quick_focus_grace_until: Option<Instant>,
+    /// Prevents any hide action (poll_focus, click-outside, hotkey toggle) for
+    /// a short period after the quick window is shown. This debounces double
+    /// hotkey events arriving in the same poll tick and gives the async
+    /// positioning task time to complete before the window can be dismissed.
+    quick_suppress_until: Option<Instant>,
     _quick_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
     quick_hwnd: isize,
@@ -390,6 +395,7 @@ impl WindowManager {
             quick_mouse_down: false,
             quick_foreground_id: 0,
             quick_focus_grace_until: None,
+            quick_suppress_until: None,
             _quick_subscription: None,
             #[cfg(target_os = "windows")]
             quick_hwnd: 0,
@@ -525,6 +531,15 @@ impl WindowManager {
                 HotkeyEvent::Main => self.show_and_focus(cx),
                 HotkeyEvent::Quick => {
                     if self.quick_visible {
+                        // Debounce: ignore toggle-hide if the window was just
+                        // shown — a second hotkey event arriving in the same
+                        // poll tick must not immediately dismiss the popup.
+                        if self
+                            .quick_suppress_until
+                            .is_some_and(|until| Instant::now() <= until)
+                        {
+                            continue;
+                        }
                         self.hide_quick_window(cx);
                     } else {
                         self.show_quick_window(cx);
@@ -665,9 +680,17 @@ impl WindowManager {
 
         let is_self_fg = self.is_self_foreground();
 
+        // --- Quick window suppress guard ---
+        // Immediately after show, the async positioning task may not have
+        // completed yet and double hotkey events can arrive in the same poll
+        // tick. Suppress all hide actions for a short debounce window.
+        let quick_suppressed = self
+            .quick_suppress_until
+            .is_some_and(|until| Instant::now() <= until);
+
         // --- Quick window click-outside detection ---
         // Detect mouse-down anywhere outside the quick window and auto-hide.
-        if self.quick_visible {
+        if self.quick_visible && !quick_suppressed {
             // Close when focus moves to the main window or to a different app.
             // The popup itself is non-activating, so interacting inside it does
             // not change this foreground identity.
@@ -692,6 +715,14 @@ impl WindowManager {
     /// Hide the quick window if the user clicks outside its bounds.
     fn poll_quick_click_outside(&mut self, cx: &mut Context<Self>) {
         if !self.quick_visible {
+            return;
+        }
+        // Debounce: ignore click-outside during the suppress window right after
+        // show, before the async positioning task has completed.
+        if self
+            .quick_suppress_until
+            .is_some_and(|until| Instant::now() <= until)
+        {
             return;
         }
 
@@ -1311,6 +1342,12 @@ impl WindowManager {
         self.quick_foreground_id = quick_foreground_id;
         self.quick_focus_grace_until = switching_from_main
             .then(|| Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+        // Debounce: prevent any hide action (poll_focus, click-outside, hotkey
+        // toggle) for 400 ms after show. This absorbs double hotkey events that
+        // can arrive in the same poll tick and gives the async positioning task
+        // time to complete before the window is dismissible.
+        self.quick_suppress_until =
+            Some(Instant::now() + Duration::from_millis(400));
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
         }

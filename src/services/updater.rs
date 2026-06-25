@@ -13,6 +13,8 @@ pub fn download_and_prepare(
     info: &UpdateInfo,
     phase_callback: impl Fn(UpdatePhase) + Send + 'static,
 ) -> Result<(), String> {
+    // Clean up previous downloads so only the latest installer is kept.
+    cleanup_temp();
     let temp_dir = super::install::update_temp_dir();
     let _ = std::fs::create_dir_all(&temp_dir);
 
