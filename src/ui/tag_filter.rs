@@ -12,11 +12,12 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{tag_preset_colors, TagInfo};
-use crate::state::app::AppState;
+use crate::state::app::{pinyin_match, AppState};
 
 use super::clipboard_list::ClipboardListView;
 use super::search_bar::SearchBar;
@@ -109,12 +110,26 @@ impl TagFilterPanel {
         self.refresh_list(cx);
     }
 
-    /// Read the create input value, create a tag if non-empty,
-    /// then clear the input. Used by both the "+" button and Enter.
+    /// Read the create input value.
+    /// If the name exactly matches an existing tag → toggle its filter;
+    /// otherwise create a new tag. Clear the input afterwards.
     fn create_tag_from_input(&self, window: &mut Window, cx: &mut App) {
         let name = self.create_input.read(cx).value().to_string();
-        if !name.trim().is_empty() {
-            self.create_tag(name.trim(), cx);
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            let tag_id = {
+                let app_state = self.state.read(cx);
+                app_state
+                    .tags
+                    .iter()
+                    .find(|t| t.name.eq_ignore_ascii_case(trimmed))
+                    .map(|t| t.id)
+            };
+            if let Some(tag_id) = tag_id {
+                self.toggle_filter(tag_id, cx);
+            } else {
+                self.create_tag(trimmed, cx);
+            }
         }
         self.create_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -146,9 +161,12 @@ impl Render for TagFilterPanel {
         }
 
         let app_state = self.state.read(cx);
+        // --- Filter tags by input text for live search (pinyin-aware) ---
+        let filter_text = self.create_input.read(cx).value();
         let tags: Vec<(TagInfo, bool)> = app_state
             .tags
             .iter()
+            .filter(|t| filter_text.is_empty() || pinyin_match(&t.name, &filter_text))
             .map(|t| (t.clone(), app_state.filters.tag_ids.contains(&t.id)))
             .collect();
         let tag_match_all = app_state.filters.is_tag_match_all();
@@ -196,12 +214,15 @@ impl Render for TagFilterPanel {
             .border(px(1.))
             .rounded(px(8.))
             .shadow_lg()
-            .p(px(8.))
+            .pt(px(8.))
+            .pb(px(8.))
+            .pl(px(8.))
             .gap(px(4.))
             // --- Title row ---
             .child({
                 let this = this_entity.clone();
                 div()
+                    .pr(px(8.))
                     .h(px(24.))
                     .flex()
                     .flex_row()
@@ -246,6 +267,7 @@ impl Render for TagFilterPanel {
             .child({
                 let this = this_entity.clone();
                 div()
+                    .pr(px(8.))
                     .h(px(26.))
                     .flex()
                     .flex_row()
@@ -322,10 +344,15 @@ impl Render for TagFilterPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
                     .max_h(px(200.))
-                    .overflow_hidden()
-                    .children(rows.into_iter().map(|row| {
+                    .overflow_y_scrollbar()
+                    .child(
+                        div()
+                            .pr(px(8.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .children(rows.into_iter().map(|row| {
                         let this = this_entity.clone();
                         div()
                             .flex()
@@ -424,6 +451,7 @@ impl Render for TagFilterPanel {
                                     ))
                             }))
                     })),
+                        ),
             )
             .when(rows_is_empty, |el| {
                 el.child(

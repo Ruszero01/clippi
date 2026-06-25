@@ -352,7 +352,7 @@ define_i18n! {
     TagFilterAdd:           ("+", "+"),
     TagFilterNoTags:        ("暂无标签，请在上方创建", "No tags. Create above"),
     TagEditTitle:           ("编辑标签", "Edit tag"),
-    TagCreatePlaceholder:   ("标签名称...", "Tag name..."),
+    TagCreatePlaceholder:   ("搜索或创建标签", "Search or create tag"),
 
     // ─── Tag picker ───
     TagPickerNoTags:        ("暂无标签，请在标签筛选面板中创建", "No tags. Create tags in the tag filter panel."),

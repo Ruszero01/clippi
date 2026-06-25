@@ -83,7 +83,7 @@ pub struct AppState {
 /// 1. Direct lowercase substring match (covers English text)
 /// 2. Full pinyin match — "zhongguo" matches "中国"
 /// 3. Pinyin initial match — "zg" matches "中国"
-fn pinyin_match(text: &str, keyword: &str) -> bool {
+pub fn pinyin_match(text: &str, keyword: &str) -> bool {
     if text.is_empty() {
         return false;
     }

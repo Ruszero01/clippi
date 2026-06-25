@@ -9,9 +9,11 @@ type CreateTagHandler = Rc<dyn Fn(String, &mut gpui::Window, &mut gpui::App)>;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
+use crate::state::app::pinyin_match;
 
 use crate::core::types::TagInfo;
 
@@ -113,7 +115,18 @@ impl RenderOnce for TagPickerPanel {
         };
         let active_bg = theme.accent_overlay();
 
-        let rows: Vec<Vec<(TagInfo, TagState)>> = tags.chunks(2).map(|row| row.to_vec()).collect();
+        // --- Filter tags by input text for live search (pinyin-aware) ---
+        let filter_text = create_input.read(_cx).value();
+        let tags_for_search = tags.clone();
+        let filtered_tags: Vec<(TagInfo, TagState)> = if filter_text.is_empty() {
+            tags
+        } else {
+            tags.into_iter()
+                .filter(|(tag, _)| pinyin_match(&tag.name, &filter_text))
+                .collect()
+        };
+        let rows: Vec<Vec<(TagInfo, TagState)>> =
+            filtered_tags.chunks(2).map(|row| row.to_vec()).collect();
         let is_empty = rows.is_empty();
 
         div()
@@ -126,10 +139,13 @@ impl RenderOnce for TagPickerPanel {
             .border_color(panel_border)
             .rounded(px(8.))
             .shadow_lg()
-            .p(px(8.))
+            .pt(px(8.))
+            .pb(px(8.))
+            .pl(px(8.))
             .gap(px(4.))
             .child(
                 div()
+                    .pr(px(8.))
                     .h(px(24.))
                     .flex()
                     .flex_row()
@@ -161,6 +177,7 @@ impl RenderOnce for TagPickerPanel {
                 let on_create = on_create.clone();
                 let input = create_input.clone();
                 div()
+                    .pr(px(8.))
                     .h(px(26.))
                     .flex()
                     .flex_row()
@@ -186,14 +203,25 @@ impl RenderOnce for TagPickerPanel {
                             )
                             .on_key_down({
                                 let on_create = on_create.clone();
+                                let on_toggle = on_toggle.clone();
                                 let input = input.clone();
+                                let tags_for_search = tags_for_search.clone();
                                 move |ev: &KeyDownEvent, window, cx| {
                                     if ev.keystroke.key.as_str() == "enter" {
                                         cx.stop_propagation();
                                         let name = input.read(cx).value().to_string();
-                                        if !name.trim().is_empty() {
-                                            if let Some(ref handler) = on_create {
-                                                handler(name.trim().to_string(), window, cx);
+                                        let trimmed = name.trim();
+                                        if !trimmed.is_empty() {
+                                            // Exact name match → toggle; no match → create
+                                            let exact = tags_for_search
+                                                .iter()
+                                                .find(|(t, _)| t.name.eq_ignore_ascii_case(trimmed));
+                                            if let Some((tag, state)) = exact {
+                                                if let Some(ref handler) = on_toggle {
+                                                    handler(tag.id, *state, window, cx);
+                                                }
+                                            } else if let Some(ref handler) = on_create {
+                                                handler(trimmed.to_string(), window, cx);
                                             }
                                             input.update(cx, |input, cx| {
                                                 input.set_value("", window, cx);
@@ -205,7 +233,9 @@ impl RenderOnce for TagPickerPanel {
                     )
                     .child({
                         let on_create = on_create.clone();
+                        let on_toggle = on_toggle.clone();
                         let input = input.clone();
+                        let tags_for_search = tags_for_search.clone();
                         div()
                             .w(px(26.))
                             .h(px(26.))
@@ -225,9 +255,18 @@ impl RenderOnce for TagPickerPanel {
                             )
                             .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
                                 let name = input.read(cx).value().to_string();
-                                if !name.trim().is_empty() {
-                                    if let Some(ref handler) = on_create {
-                                        handler(name.trim().to_string(), window, cx);
+                                let trimmed = name.trim();
+                                if !trimmed.is_empty() {
+                                    // Exact name match → toggle; no match → create
+                                    let exact = tags_for_search
+                                        .iter()
+                                        .find(|(t, _)| t.name.eq_ignore_ascii_case(trimmed));
+                                    if let Some((tag, state)) = exact {
+                                        if let Some(ref handler) = on_toggle {
+                                            handler(tag.id, *state, window, cx);
+                                        }
+                                    } else if let Some(ref handler) = on_create {
+                                        handler(trimmed.to_string(), window, cx);
                                     }
                                     input.update(cx, |input, cx| {
                                         input.set_value("", window, cx);
@@ -253,12 +292,17 @@ impl RenderOnce for TagPickerPanel {
                         .flex()
                         .flex_col()
                         .max_h(px(230.))
-                        .overflow_hidden()
-                        .gap(px(4.))
-                        .children(rows.into_iter().map(|row| {
-                            let on_toggle = on_toggle.clone();
+                        .overflow_y_scrollbar()
+                        .child(
                             div()
+                                .pr(px(8.))
                                 .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .children(rows.into_iter().map(|row| {
+                                    let on_toggle = on_toggle.clone();
+                                    div()
+                                        .flex()
                                 .flex_row()
                                 .gap(px(4.))
                                 .children(row.into_iter().map(move |(tag, state)| {
@@ -273,6 +317,7 @@ impl RenderOnce for TagPickerPanel {
                                     tag_cell(tag, state, on_toggle.clone(), &cell_colors)
                                 }))
                         })),
+                        ),
                 )
             })
     }
