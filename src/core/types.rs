@@ -179,6 +179,11 @@ impl RichData {
     }
 
     pub fn from_json(s: &str) -> Self {
+        // Empty rich_data is the normal state for plain-text/image/file items.
+        // Skip deserialization silently instead of logging a warning on every call.
+        if s.trim().is_empty() {
+            return Self::default();
+        }
         serde_json::from_str(s).unwrap_or_else(|e| {
             log::warn!("Failed to deserialize RichData: {e}");
             Self::default()
