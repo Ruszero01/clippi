@@ -155,14 +155,21 @@ mod mac {
             let c_path =
                 CString::new(path_str).map_err(|_| "OCR: path contains null byte".to_string())?;
 
+            // SAFETY: `c_path.as_ptr()` is a valid NUL-terminated C string.
+            // `clippi_ocr_recognize` reads the image file at the given path and
+            // returns an owned C string (allocated by the C side).
             let ptr = unsafe { clippi_ocr_recognize(c_path.as_ptr()) };
             if ptr.is_null() {
                 return Err("OCR: recognition failed".to_string());
             }
 
+            // SAFETY: `ptr` is non-null (checked above) and points to a
+            // NUL-terminated UTF-8 string returned by `clippi_ocr_recognize`.
             let result = unsafe { CStr::from_ptr(ptr) }
                 .to_string_lossy()
                 .into_owned();
+            // SAFETY: `ptr` was allocated by the C side and must be freed
+            // by the corresponding C free function.
             unsafe { clippi_ocr_free_string(ptr) };
             Ok(result)
         }

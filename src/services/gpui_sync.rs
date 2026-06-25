@@ -136,7 +136,7 @@ impl GpuiSyncService {
         }
 
         for runtime in &mut self.backends {
-            if runtime.is_running.load(Ordering::Relaxed) || runtime.config.backend_type == "webdav"
+            if runtime.is_running.load(Ordering::Acquire) || runtime.config.backend_type == "webdav"
             {
                 continue;
             }
@@ -427,7 +427,7 @@ fn run_sync_cycle_for_backend(
         }
     }
 
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.load(Ordering::Acquire) {
         return SyncCycleResult {
             success: false,
             message: "Sync cancelled".into(),

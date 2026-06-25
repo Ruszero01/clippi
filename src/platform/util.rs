@@ -1,7 +1,6 @@
 //! --- Shared platform utilities. ---
 
 /// Encode raw RGBA pixel data as a PNG byte vector.
-#[allow(dead_code)]
 pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     use image::{codecs::png::PngEncoder, ImageEncoder};
     let mut buf = Vec::new();

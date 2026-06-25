@@ -1453,22 +1453,24 @@ impl WindowManager {
         self.release_memory(cx);
     }
 
+    // `return` avoids rust-analyzer false E0308 with #[cfg] arms.
+    #[allow(clippy::needless_return)]
     fn mouse_buttons_down() -> bool {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-            [0x01, 0x02, 0x04]
+            return [0x01, 0x02, 0x04]
                 .into_iter()
-                .any(|button| unsafe { (GetAsyncKeyState(button) & i16::MIN) != 0 })
+                .any(|button| unsafe { (GetAsyncKeyState(button) & i16::MIN) != 0 });
         }
-
         #[cfg(target_os = "macos")]
         {
-            objc2_app_kit::NSEvent::pressedMouseButtons() != 0
+            return objc2_app_kit::NSEvent::pressedMouseButtons() != 0;
         }
-
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        false
+        {
+            false
+        }
     }
 
     fn quick_foreground_changed(&self) -> bool {
@@ -1491,42 +1493,46 @@ impl WindowManager {
         }
     }
 
+    // `return` avoids rust-analyzer false E0308 with #[cfg] arms.
+    #[allow(clippy::needless_return)]
     fn last_non_clippi_foreground_id() -> isize {
         #[cfg(target_os = "windows")]
         {
-            crate::platform::focus::get_last_non_clippi_window()
+            return crate::platform::focus::get_last_non_clippi_window()
                 .map(|hwnd| hwnd as isize)
-                .unwrap_or(0)
+                .unwrap_or(0);
         }
-
         #[cfg(target_os = "macos")]
         {
-            crate::platform::focus::get_last_non_clippi_pid()
+            return crate::platform::focus::get_last_non_clippi_pid()
                 .map(|pid| pid as isize)
-                .unwrap_or(0)
+                .unwrap_or(0);
         }
-
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        0
+        {
+            0
+        }
     }
 
+    // `return` avoids rust-analyzer false E0308 with #[cfg] arms.
+    #[allow(clippy::needless_return)]
     fn current_foreground_id() -> isize {
         #[cfg(target_os = "windows")]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-            unsafe { GetForegroundWindow() as isize }
+            return unsafe { GetForegroundWindow() as isize };
         }
-
         #[cfg(target_os = "macos")]
         {
-            objc2_app_kit::NSWorkspace::sharedWorkspace()
+            return objc2_app_kit::NSWorkspace::sharedWorkspace()
                 .frontmostApplication()
                 .map(|app| app.processIdentifier() as isize)
-                .unwrap_or(0)
+                .unwrap_or(0);
         }
-
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        0
+        {
+            0
+        }
     }
 
     fn handle_quick_action(&mut self, action: QuickAction, cx: &mut Context<Self>) {
@@ -1689,22 +1695,11 @@ impl WindowManager {
         }
     }
 
+    /// Shared macOS window styling — transparent floating panel with no chrome buttons.
     #[cfg(target_os = "macos")]
-    pub fn set_ns_window(&mut self, ns_window: isize) {
-        use objc2_app_kit::{NSColor, NSWindow, NSWindowButton};
-
-        self.ns_window = ns_window;
-        if ns_window == 0 {
-            return;
-        }
-        let window = unsafe { &*(ns_window as *const NSWindow) };
-
-        // --- Floating always-on-top level ---
+    fn _style_ns_window(window: &objc2_app_kit::NSWindow) {
+        use objc2_app_kit::{NSColor, NSWindowButton};
         window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
-
-        // --- Hide traffic light buttons (close/minimize/zoom). GPUI ---
-        // --- only repositions them — never hides. They don't belong on ---
-        // --- our frameless custom-titlebar overlay window. ---
         for btn_id in [
             NSWindowButton::CloseButton,
             NSWindowButton::MiniaturizeButton,
@@ -1714,43 +1709,32 @@ impl WindowManager {
                 btn.setHidden(true);
             }
         }
-
-        // --- Disable window shadow → removes the visible border/glow ---
-        // --- that surrounds transparent GPUI windows on macOS. ---
         window.setHasShadow(false);
-
-        // --- Truly transparent background to fix the "brighter than ---
-        // --- exterior" artifact that GPUI's default (alpha 0.0001) ---
-        // --- causes on floating overlay windows. ---
         let clear = NSColor::clearColor();
         window.setBackgroundColor(Some(&clear));
         window.setOpaque(false);
     }
 
     #[cfg(target_os = "macos")]
+    pub fn set_ns_window(&mut self, ns_window: isize) {
+        self.ns_window = ns_window;
+        if ns_window == 0 {
+            return;
+        }
+        let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
+        Self::_style_ns_window(window);
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn set_quick_ns_window(&mut self, ns_window: isize) {
-        use objc2_app_kit::{NSColor, NSWindow, NSWindowButton};
         use objc2_quartz_core::kCACornerCurveContinuous;
 
         self.quick_ns_window = ns_window;
         if ns_window == 0 {
             return;
         }
-        let window = unsafe { &*(ns_window as *const NSWindow) };
-        window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
-        for btn_id in [
-            NSWindowButton::CloseButton,
-            NSWindowButton::MiniaturizeButton,
-            NSWindowButton::ZoomButton,
-        ] {
-            if let Some(btn) = window.standardWindowButton(btn_id) {
-                btn.setHidden(true);
-            }
-        }
-        window.setHasShadow(false);
-        let clear = NSColor::clearColor();
-        window.setBackgroundColor(Some(&clear));
-        window.setOpaque(false);
+        let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
+        Self::_style_ns_window(window);
 
         // Let AppKit/Core Animation own the actual window clipping. A
         // continuous corner curve matches standard macOS panels and avoids the
@@ -2088,37 +2072,56 @@ impl WindowManager {
         cx.emit(WindowManagerEvent::SyncChanged);
     }
 
-    pub fn add_local_folder_backend(
+    /// Shared helper: push a new backend config and sync state.
+    fn _add_backend_config(
         &mut self,
-        name: String,
-        folder_path: String,
+        config: crate::core::settings::BackendConfig,
         cx: &mut Context<Self>,
     ) {
         let settings = self.state.update(cx, |state, _cx| {
-            state
-                .settings
-                .sync_backends
-                .push(crate::core::settings::BackendConfig {
-                    id: crate::core::settings::generate_id(),
-                    enabled: true,
-                    backend_type: "local_folder".into(),
-                    name,
-                    folder_path,
-                    device_name: String::new(),
-                    last_sync_at: String::new(),
-                    last_item_count: 0,
-                    last_tag_count: 0,
-                    sync_interval_secs: Some(60),
-                    webdav_url: String::new(),
-                    webdav_username: String::new(),
-                    webdav_password: String::new(),
-                });
+            state.settings.sync_backends.push(config);
             state.settings.save();
             state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
             state.settings.clone()
         });
         self.sync_service.reload_from_settings(&settings);
         cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    /// Shared helper: update an existing backend and sync state.
+    fn _update_backend_and_sync(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn add_local_folder_backend(
+        &mut self,
+        name: String,
+        folder_path: String,
+        cx: &mut Context<Self>,
+    ) {
+        self._add_backend_config(
+            crate::core::settings::BackendConfig {
+                id: crate::core::settings::generate_id(),
+                enabled: true,
+                backend_type: "local_folder".into(),
+                name,
+                folder_path,
+                device_name: String::new(),
+                last_sync_at: String::new(),
+                last_item_count: 0,
+                last_tag_count: 0,
+                sync_interval_secs: Some(60),
+                webdav_url: String::new(),
+                webdav_username: String::new(),
+                webdav_password: String::new(),
+            },
+            cx,
+        );
     }
 
     pub fn add_webdav_backend(
@@ -2129,31 +2132,24 @@ impl WindowManager {
         password: String,
         cx: &mut Context<Self>,
     ) {
-        let settings = self.state.update(cx, |state, _cx| {
-            state
-                .settings
-                .sync_backends
-                .push(crate::core::settings::BackendConfig {
-                    id: crate::core::settings::generate_id(),
-                    enabled: true,
-                    backend_type: "webdav".into(),
-                    name,
-                    folder_path: String::new(),
-                    device_name: crate::services::backends::local_folder::hostname(),
-                    last_sync_at: String::new(),
-                    last_item_count: 0,
-                    last_tag_count: 0,
-                    sync_interval_secs: Some(600),
-                    webdav_url: url,
-                    webdav_username: username,
-                    webdav_password: password,
-                });
-            state.settings.save();
-            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
-            state.settings.clone()
-        });
-        self.sync_service.reload_from_settings(&settings);
-        cx.emit(WindowManagerEvent::SyncChanged);
+        self._add_backend_config(
+            crate::core::settings::BackendConfig {
+                id: crate::core::settings::generate_id(),
+                enabled: true,
+                backend_type: "webdav".into(),
+                name,
+                folder_path: String::new(),
+                device_name: crate::services::backends::local_folder::hostname(),
+                last_sync_at: String::new(),
+                last_item_count: 0,
+                last_tag_count: 0,
+                sync_interval_secs: Some(600),
+                webdav_url: url,
+                webdav_username: username,
+                webdav_password: password,
+            },
+            cx,
+        );
     }
 
     pub fn edit_backend(
@@ -2163,17 +2159,14 @@ impl WindowManager {
         folder_path: String,
         cx: &mut Context<Self>,
     ) {
-        let settings = self.state.update(cx, |state, _cx| {
+        self.state.update(cx, |state, _cx| {
             if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
                 config.name = name;
                 config.folder_path = folder_path;
                 state.settings.save();
             }
-            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
-            state.settings.clone()
         });
-        self.sync_service.reload_from_settings(&settings);
-        cx.emit(WindowManagerEvent::SyncChanged);
+        self._update_backend_and_sync(cx);
     }
 
     pub fn edit_webdav_backend(
@@ -2185,7 +2178,7 @@ impl WindowManager {
         password: String,
         cx: &mut Context<Self>,
     ) {
-        let settings = self.state.update(cx, |state, _cx| {
+        self.state.update(cx, |state, _cx| {
             if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
                 config.name = name;
                 config.webdav_url = url;
@@ -2195,11 +2188,8 @@ impl WindowManager {
                 }
                 state.settings.save();
             }
-            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
-            state.settings.clone()
         });
-        self.sync_service.reload_from_settings(&settings);
-        cx.emit(WindowManagerEvent::SyncChanged);
+        self._update_backend_and_sync(cx);
     }
 
     pub fn remove_sync_backend(&mut self, id: &str, cx: &mut Context<Self>) {

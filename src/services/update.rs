@@ -200,6 +200,9 @@ pub fn open_releases_page(url: &str) {
     #[cfg(target_os = "windows")]
     {
         let url_utf16: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: All string arguments are NUL-terminated UTF-16. `ShellExecuteW`
+        // is called with `SW_SHOW` to open the URL in the default browser —
+        // a read-only operation with respect to our process.
         unsafe {
             use windows_sys::Win32::UI::Shell::ShellExecuteW;
             use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;

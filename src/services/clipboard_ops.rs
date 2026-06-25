@@ -29,8 +29,18 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
                 let png_bytes = std::fs::read(&item.image_path).unwrap_or_default();
                 if !png_bytes.is_empty() {
                     let png_name: Vec<u16> = "PNG\0".encode_utf16().collect();
+                    // SAFETY: `png_name` is a NUL-terminated UTF-16 string.
+                    // `RegisterClipboardFormatW` is a read-only string lookup
+                    // that returns a format ID (non-zero on success).
                     let png_fmt = unsafe { RegisterClipboardFormatW(png_name.as_ptr()) };
 
+                    // SAFETY: All clipboard API calls here follow the standard
+                    // Windows clipboard sequence: OpenClipboard → EmptyClipboard →
+                    // SetClipboardData → CloseClipboard. `GlobalAlloc`/`GlobalLock`/
+                    // `GlobalUnlock` manage the HGLOBAL memory correctly – ownership
+                    // is transferred to the clipboard via `SetClipboardData` and
+                    // will be freed by the system. The `png_bytes` buffer is
+                    // `copy_nonoverlapping`'d into the HGLOBAL before unlock.
                     unsafe {
                         if OpenClipboard(std::ptr::null_mut()) != 0 {
                             EmptyClipboard();

@@ -40,8 +40,8 @@ pub fn download_file(
         file.write_all(&buf[..n])
             .map_err(|e| format!("Write error: {e}"))?;
         downloaded += n as u64;
-        if total > 0 {
-            let percentage = ((downloaded.saturating_mul(100)) / total).min(100) as u8;
+        if let Some(percentage) = downloaded.saturating_mul(100).checked_div(total) {
+            let percentage = percentage.min(100) as u8;
             if percentage != last_percentage {
                 last_percentage = percentage;
                 on_progress(percentage);

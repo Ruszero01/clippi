@@ -210,6 +210,10 @@ fn main() {
                     // pointer without transmute.
                     let url_ptr: *const std::ffi::c_void =
                         objc2::rc::Retained::as_ptr(&url) as *const std::ffi::c_void;
+                    // SAFETY: `url_ptr` is a valid CFURLRef obtained from
+                    // Retained::as_ptr. CTFontManagerRegisterFontsForURL is a
+                    // read-only registration call — it makes the font available
+                    // to the process and has no other side effects.
                     unsafe {
                         CTFontManagerRegisterFontsForURL(
                             url_ptr,
@@ -316,6 +320,11 @@ fn main() {
             window_options,
             |window, cx| {
                 #[cfg(target_os = "windows")]
+                // SAFETY: `hwnd` comes from the GPUI WindowHandle which is
+                // guaranteed valid for the window's lifetime. DWMNCRP_DISABLED
+                // is a valid DWM attribute with a correctly-sized u32 value.
+                // DWM attribute calls are read-only to the window's render
+                // policy and don't affect the window procedure.
                 unsafe {
                     use windows_sys::Win32::Graphics::Dwm::{
                         DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY,

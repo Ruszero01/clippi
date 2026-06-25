@@ -15,10 +15,7 @@ use gpui_component::tooltip::Tooltip;
 const VISIBLE_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 44.0;
 pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
-// Height: rows + optional filter bars/dividers + list bottom inset.
-// Kept as reference; actual height is computed by calc_quick_window_height().
-#[allow(dead_code)]
-pub const QUICK_WINDOW_HEIGHT: f32 = 286.0;
+// Dynamic height is computed by calc_quick_window_height().
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
@@ -207,35 +204,29 @@ impl Render for QuickPasteView {
         let theme = self.theme(window.appearance(), cx);
         let view_entity = cx.entity();
 
-        let (
-            type_config,
-            pinned_tag_ids,
-            filters,
-            tags_snapshot,
-            items_count,
-            show_original_on_hover,
-        ) = {
+        let (type_config, filters, items_count, show_original_on_hover, pinned_tags) = {
             let state = self.state.read(cx);
+            // Only clone tag data for pinned tags (avoid cloning all tags every frame)
+            let pinned_tags: Vec<(i64, String, String)> = state
+                .settings
+                .pinned_tag_ids
+                .iter()
+                .filter_map(|&id| {
+                    state
+                        .tags
+                        .iter()
+                        .find(|t| t.id == id)
+                        .map(|t| (t.id, t.name.clone(), t.color.clone()))
+                })
+                .collect();
             (
                 state.settings.type_filter_config.clone(),
-                state.settings.pinned_tag_ids.clone(),
                 state.filters.clone(),
-                state.tags.clone(),
                 state.items.len(),
                 state.settings.show_original_on_hover,
+                pinned_tags,
             )
         };
-
-        // Resolve pinned tags (only show if they exist in DB)
-        let pinned_tags: Vec<(i64, String, String)> = pinned_tag_ids
-            .iter()
-            .filter_map(|&id| {
-                tags_snapshot
-                    .iter()
-                    .find(|t| t.id == id)
-                    .map(|t| (t.id, t.name.clone(), t.color.clone()))
-            })
-            .collect();
 
         let has_type_bar = !type_config.is_empty();
         let has_tag_row = !pinned_tags.is_empty();
@@ -637,7 +628,19 @@ fn preview_text(item: &ClipboardItem) -> String {
         }
         _ => item.full_text.clone(),
     };
-    let raw = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Normalize whitespace in a single pass (avoid intermediate Vec allocation)
+    let raw: String = {
+        let mut s = String::with_capacity(raw.len());
+        let mut first = true;
+        for token in raw.split_whitespace() {
+            if !first {
+                s.push(' ');
+            }
+            s.push_str(token);
+            first = false;
+        }
+        s
+    };
     // Mask sensitive content (email / phone) in preview
     mask_sensitive_preview(&raw, &item.meta_type)
 }

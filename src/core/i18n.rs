@@ -30,17 +30,6 @@ pub fn is_en() -> bool {
     IS_ENGLISH.load(Ordering::Relaxed)
 }
 
-/// Get the current language code.
-#[inline]
-#[allow(dead_code)]
-pub fn current_language() -> &'static str {
-    if is_en() {
-        "en"
-    } else {
-        "zh_CN"
-    }
-}
-
 /// Defines the `I18nKey` enum and its `text()` / `fmt()` methods.
 ///
 /// Usage in `i18n_keys.rs`:
