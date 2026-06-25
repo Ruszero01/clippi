@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.2.8"
+version = "0.2.9"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
@@ -12,8 +12,8 @@ build = "build.rs"
 name = "Clippi"
 identifier = "com.clippi.app"
 icon = ["assets/LOGO.icns"]
-version = "0.2.8"
-copyright= "Copyright © 2025 Rains. MIT license."
+version = "0.2.9"
+copyright= "Copyright © 2026 Rains. MIT license."
 category = "Utility"
 short_description = "A lightweight clipboard manager"
 long_description = "Clippi is a lightweight clipboard manager that helps you manage your clipboard history with ease."
