@@ -346,112 +346,110 @@ impl Render for TagFilterPanel {
                     .flex_col()
                     .max_h(px(200.))
                     .overflow_y_scrollbar()
-                    .child(
-                        div()
-                            .pr(px(8.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .children(rows.into_iter().map(|row| {
-                        let this = this_entity.clone();
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(4.))
-                            .children(row.into_iter().map(|(tag, checked)| {
-                                let tag_id = tag.id;
-                                let tag_color = parse_hex_to_rgba(&tag.color);
-                                let tag_name = tag.name.clone();
-                                let tag_name_edit = tag.name.clone();
-                                let tag_color_hex = tag.color.clone();
-                                let this = this.clone();
-                                div()
-                                    .w(px(140.))
-                                    .h(px(30.))
-                                    .rounded(px(5.))
-                                    .bg(if checked { active_bg } else { rgba(0x00000000) })
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .px(px(6.))
-                                    .cursor(CursorStyle::PointingHand)
-                                    .hover(move |style| {
-                                        if checked {
-                                            style.bg(active_bg)
-                                        } else {
-                                            style.bg(btn_hover)
-                                        }
-                                    })
-                                    .on_mouse_down(MouseButton::Left, {
-                                        let this = this.clone();
-                                        move |_ev, _window, cx| {
-                                            this.update(cx, |panel, cx| {
-                                                panel.toggle_filter(tag_id, cx)
-                                            });
-                                        }
-                                    })
-                                    .child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(tag_color))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_size(px(11.))
-                                            .font_weight(if checked {
-                                                FontWeight::SEMIBOLD
+                    .child(div().pr(px(8.)).flex().flex_col().gap(px(4.)).children(
+                        rows.into_iter().map(|row| {
+                            let this = this_entity.clone();
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(4.))
+                                .children(row.into_iter().map(|(tag, checked)| {
+                                    let tag_id = tag.id;
+                                    let tag_color = parse_hex_to_rgba(&tag.color);
+                                    let tag_name = tag.name.clone();
+                                    let tag_name_edit = tag.name.clone();
+                                    let tag_color_hex = tag.color.clone();
+                                    let this = this.clone();
+                                    div()
+                                        .w(px(140.))
+                                        .h(px(30.))
+                                        .rounded(px(5.))
+                                        .bg(if checked { active_bg } else { rgba(0x00000000) })
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(5.))
+                                        .px(px(6.))
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(move |style| {
+                                            if checked {
+                                                style.bg(active_bg)
                                             } else {
-                                                FontWeight::default()
-                                            })
-                                            .text_color(if checked { accent } else { text_1 })
-                                            .truncate()
-                                            .child(tag_name),
-                                    )
-                                    .child(small_btn(
-                                        "\u{e648}",
-                                        text_3,
-                                        false,
-                                        btn_hover,
-                                        danger_hover_bg,
-                                        {
+                                                style.bg(btn_hover)
+                                            }
+                                        })
+                                        .on_mouse_down(MouseButton::Left, {
                                             let this = this.clone();
-                                            move |w, cx| {
-                                                // --- Set edit name input value before updating state ---
-                                                let input = this.read(cx).edit_name_input.clone();
-                                                input.update(cx, |input, cx| {
-                                                    input.set_value(&tag_name_edit, w, cx);
-                                                });
+                                            move |_ev, _window, cx| {
                                                 this.update(cx, |panel, cx| {
-                                                    panel.state.update(cx, |s, _cx| {
-                                                        s.start_edit_tag(
-                                                            tag_id,
-                                                            &tag_name_edit,
-                                                            &tag_color_hex,
-                                                        );
-                                                    });
-                                                    panel.last_edit_tag_id = tag_id;
-                                                    cx.notify();
+                                                    panel.toggle_filter(tag_id, cx)
                                                 });
                                             }
-                                        },
-                                    ))
-                                    .child(small_btn(
-                                        "\u{e8b6}",
-                                        text_3,
-                                        true,
-                                        btn_hover,
-                                        danger_hover_bg,
-                                        {
-                                            let this = this.clone();
-                                            move |_w, cx| {
-                                                this.update(cx, |panel, cx| {
-                                                    panel.delete_tag(tag_id, cx);
-                                                    cx.notify();
+                                        })
+                                        .child(
+                                            div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(tag_color),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_size(px(11.))
+                                                .font_weight(if checked {
+                                                    FontWeight::SEMIBOLD
+                                                } else {
+                                                    FontWeight::default()
                                                 })
-                                            }
-                                        },
-                                    ))
-                            }))
-                    })),
-                        ),
+                                                .text_color(if checked { accent } else { text_1 })
+                                                .truncate()
+                                                .child(tag_name),
+                                        )
+                                        .child(small_btn(
+                                            "\u{e648}",
+                                            text_3,
+                                            false,
+                                            btn_hover,
+                                            danger_hover_bg,
+                                            {
+                                                let this = this.clone();
+                                                move |w, cx| {
+                                                    // --- Set edit name input value before updating state ---
+                                                    let input =
+                                                        this.read(cx).edit_name_input.clone();
+                                                    input.update(cx, |input, cx| {
+                                                        input.set_value(&tag_name_edit, w, cx);
+                                                    });
+                                                    this.update(cx, |panel, cx| {
+                                                        panel.state.update(cx, |s, _cx| {
+                                                            s.start_edit_tag(
+                                                                tag_id,
+                                                                &tag_name_edit,
+                                                                &tag_color_hex,
+                                                            );
+                                                        });
+                                                        panel.last_edit_tag_id = tag_id;
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            },
+                                        ))
+                                        .child(small_btn(
+                                            "\u{e8b6}",
+                                            text_3,
+                                            true,
+                                            btn_hover,
+                                            danger_hover_bg,
+                                            {
+                                                let this = this.clone();
+                                                move |_w, cx| {
+                                                    this.update(cx, |panel, cx| {
+                                                        panel.delete_tag(tag_id, cx);
+                                                        cx.notify();
+                                                    })
+                                                }
+                                            },
+                                        ))
+                                }))
+                        }),
+                    )),
             )
             .when(rows_is_empty, |el| {
                 el.child(
@@ -472,6 +470,7 @@ pub fn render_edit_panel(
     name_input: &Entity<InputState>,
     color: &str,
     theme: ClippiTheme,
+    scale: f32,
     on_cancel: impl Fn(&mut Window, &mut App) + 'static,
     on_color: impl Fn(&mut Window, &mut App, String) + 'static,
     on_save: impl Fn(&mut Window, &mut App, String, String) + 'static,
@@ -505,14 +504,14 @@ pub fn render_edit_panel(
     let on_save = Rc::new(on_save);
 
     div()
-        .w(px(260.))
+        .w(px(260. * scale))
         .bg(surface)
         .border_color(panel_border)
         .border(px(1.))
         .rounded(px(8.))
         .shadow_lg()
         .occlude()
-        .p(px(10.))
+        .p(px(10. * scale))
         .flex()
         .flex_col()
         .gap(px(6.))

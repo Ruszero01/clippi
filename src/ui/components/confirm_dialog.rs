@@ -33,6 +33,7 @@ pub struct ConfirmDialog {
     cancel_label: String,
     danger: bool,
     theme: ClippiTheme,
+    scale: f32,
     on_confirm: Option<DialogHandler>,
     on_cancel: Option<DialogHandler>,
     focus_handle: Option<FocusHandle>,
@@ -47,6 +48,7 @@ impl ConfirmDialog {
             cancel_label: I18nKey::BtnCancel.text().into(),
             danger: false,
             theme: ClippiTheme::dark(),
+            scale: 1.0,
             on_confirm: None,
             on_cancel: None,
             focus_handle: None,
@@ -77,6 +79,11 @@ impl ConfirmDialog {
 
     pub fn theme(mut self, theme: ClippiTheme) -> Self {
         self.theme = theme;
+        self
+    }
+
+    pub fn scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
         self
     }
 
@@ -162,6 +169,7 @@ impl RenderOnce for ConfirmDialog {
             cancel_label,
             danger: is_danger,
             theme,
+            scale,
             on_confirm,
             on_cancel,
             focus_handle,
@@ -219,12 +227,12 @@ impl RenderOnce for ConfirmDialog {
             .child(
                 // --- Modal card — occluded to prevent click-through to backdrop ---
                 div()
-                    .w(px(280.))
+                    .w(px(280. * scale))
                     .bg(theme.panel_surface)
                     .rounded(px(12.))
                     .border(px(1.))
                     .border_color(theme.panel_sep_line)
-                    .p(px(16.))
+                    .p(px(16. * scale))
                     .occlude()
                     // --- Title — 14px bold, text_1 ---
                     .child(

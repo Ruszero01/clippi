@@ -719,10 +719,10 @@ impl Render for RootView {
         } else {
             1.0
         };
-        let edit_tag_offset = if editing_tag_visible && edit_tag_animating {
-            Self::overlay_offset(window, cx, edit_tag_gen, "tag-edit")
+        let edit_tag_scale = if editing_tag_visible && edit_tag_animating {
+            Self::overlay_scale(window, cx, edit_tag_gen, "tag-edit")
         } else {
-            0.0
+            1.0
         };
         let context_menu_opacity = if context_menu_visible && context_menu_animating {
             Self::overlay_opacity(window, cx, context_menu_gen, "context-menu")
@@ -749,30 +749,25 @@ impl Render for RootView {
         } else {
             1.0
         };
-        let confirm_dialog_offset = if confirm_dialog_visible && confirm_dialog_animating {
-            Self::overlay_offset(window, cx, confirm_dialog_gen, "confirm-dialog")
+        let confirm_dialog_scale = if confirm_dialog_visible && confirm_dialog_animating {
+            Self::overlay_scale(window, cx, confirm_dialog_gen, "confirm-dialog")
         } else {
-            0.0
+            1.0
         };
         let hotkey_confirm_opacity = if hotkey_confirm_visible && hotkey_confirm_animating {
             Self::overlay_opacity(window, cx, hotkey_confirm_gen, "hotkey-confirm")
         } else {
             1.0
         };
-        let hotkey_confirm_offset = if hotkey_confirm_visible && hotkey_confirm_animating {
-            Self::overlay_offset(window, cx, hotkey_confirm_gen, "hotkey-confirm")
+        let hotkey_confirm_scale = if hotkey_confirm_visible && hotkey_confirm_animating {
+            Self::overlay_scale(window, cx, hotkey_confirm_gen, "hotkey-confirm")
         } else {
-            0.0
+            1.0
         };
         let backend_panel_opacity = if backend_panel_visible && backend_panel_animating {
             Self::overlay_opacity(window, cx, backend_panel_gen, "backend-panel")
         } else {
             1.0
-        };
-        let backend_panel_offset = if backend_panel_visible && backend_panel_animating {
-            Self::overlay_offset(window, cx, backend_panel_gen, "backend-panel")
-        } else {
-            0.0
         };
 
         // --- Auto-focus search bar when the window opens ---
@@ -890,7 +885,7 @@ impl Render for RootView {
                             div()
                                 .absolute()
                                 .right(px(8.))
-                                .top(px(106. + tag_panel_offset))
+                                .top(px(106. - tag_panel_offset))
                                 .occlude()
                                 .child(tag_filter_panel),
                         ),
@@ -913,7 +908,7 @@ impl Render for RootView {
                             div()
                                 .absolute()
                                 .right(px(8.))
-                                .top(px(106. + filter_config_offset))
+                                .top(px(106. - filter_config_offset))
                                 .occlude()
                                 .child(config_panel),
                         ),
@@ -935,7 +930,6 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .opacity(edit_tag_opacity)
-                        .pt(px(edit_tag_offset))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -943,6 +937,7 @@ impl Render for RootView {
                             &edit_name_input,
                             &editing_tag_color,
                             self.theme.clone(),
+                            edit_tag_scale,
                             {
                                 let tf = tag_filter.clone();
                                 move |_w, cx| {
@@ -977,7 +972,8 @@ impl Render for RootView {
                 let list = self.list_view.clone();
                 let list_for_action = self.list_view.clone();
                 let (menu_x, menu_y) = list.read(cx).context_menu_position();
-                let menu_y = menu_y + context_menu_offset;
+                let menu_y =
+                    menu_y + Self::directional_overlay_offset(menu_y, win_h, context_menu_offset);
                 let is_batch = list.read(cx).context_menu_is_batch();
                 let item = list.read(cx).context_menu_item().cloned();
 
@@ -1059,8 +1055,8 @@ impl Render for RootView {
                 let rows = list.update(cx, |list, cx| list.tag_picker_rows(cx));
                 let create_input = list.read(cx).tag_create_input().clone();
                 let clamped_x = picker_x.clamp(4.0, (win_w - 304.0 - 4.0).max(4.0));
-                let clamped_y =
-                    picker_y.clamp(4.0, (win_h - 300.0 - 4.0).max(4.0)) + tag_picker_offset;
+                let base_y = picker_y.clamp(4.0, (win_h - 300.0 - 4.0).max(4.0));
+                let clamped_y = base_y + tag_picker_offset;
 
                 root.child(
                     div()
@@ -1127,6 +1123,7 @@ impl Render for RootView {
                 let dialog_element: AnyElement = match dialog {
                     Some(ConfirmDialogState::DeleteSingle { id }) => ConfirmDialog::delete_single()
                         .theme(self.theme.clone())
+                        .scale(confirm_dialog_scale)
                         .on_confirm({
                             let s = app_state.clone();
                             let l = list.clone();
@@ -1148,6 +1145,7 @@ impl Render for RootView {
                     Some(ConfirmDialogState::DeleteBatch { count }) => {
                         ConfirmDialog::delete_batch(count)
                             .theme(self.theme.clone())
+                            .scale(confirm_dialog_scale)
                             .on_confirm({
                                 let s = app_state.clone();
                                 let l = list.clone();
@@ -1180,7 +1178,6 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .opacity(confirm_dialog_opacity)
-                        .pt(px(confirm_dialog_offset))
                         .child(dialog_element),
                 )
             })
@@ -1196,6 +1193,7 @@ impl Render for RootView {
                     Some(hotkey::HotkeyConfirmAction::AddBlacklist { app_name }) => {
                         ConfirmDialog::add_blacklist(&app_name)
                             .theme(self.theme.clone())
+                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let wm = wm.clone();
                                 let app_state = app_state.clone();
@@ -1234,6 +1232,7 @@ impl Render for RootView {
                     Some(hotkey::HotkeyConfirmAction::RemoveBlacklist { app_name }) => {
                         ConfirmDialog::remove_blacklist(&app_name)
                             .theme(self.theme.clone())
+                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let wm = wm.clone();
                                 let app_state = app_state.clone();
@@ -1269,6 +1268,7 @@ impl Render for RootView {
                     Some(hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut }) => {
                         ConfirmDialog::add_paste_shortcut(&app_name, &shortcut)
                             .theme(self.theme.clone())
+                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let settings = settings.clone();
                                 let app_name = app_name.clone();
@@ -1299,6 +1299,7 @@ impl Render for RootView {
                     Some(hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name }) => {
                         ConfirmDialog::remove_paste_shortcut(&app_name)
                             .theme(self.theme.clone())
+                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let settings = settings.clone();
                                 let app_name = app_name.clone();
@@ -1336,7 +1337,6 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .opacity(hotkey_confirm_opacity)
-                        .pt(px(hotkey_confirm_offset))
                         .child(dialog_element),
                 )
             })
@@ -1349,7 +1349,6 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .opacity(backend_panel_opacity)
-                        .pt(px(backend_panel_offset))
                         .child(backend_panel),
                 )
             })
@@ -1511,6 +1510,30 @@ impl RootView {
             5.0,
             0.0,
         )
+    }
+
+    fn overlay_scale(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        generation: u64,
+        key: &'static str,
+    ) -> f32 {
+        Self::transition_f32(
+            window,
+            cx,
+            (key, generation.wrapping_add(30_000)),
+            OVERLAY_ANIM_DURATION,
+            0.96,
+            1.0,
+        )
+    }
+
+    fn directional_overlay_offset(anchor_y: f32, container_height: f32, offset: f32) -> f32 {
+        if anchor_y < container_height * 0.5 {
+            -offset
+        } else {
+            offset
+        }
     }
 
     fn transition_f32(

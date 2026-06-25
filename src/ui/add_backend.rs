@@ -1,9 +1,12 @@
 //! Add/edit sync backend dialog.
 
+use std::time::{Duration, Instant};
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_transitions::WindowUseTransition;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
@@ -11,6 +14,8 @@ use crate::services::backends::local_folder::detect_presets;
 use crate::services::gpui_sync::test_webdav_connection;
 use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
+
+const BACKEND_PANEL_ANIM_DURATION: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditorStep {
@@ -21,6 +26,8 @@ enum EditorStep {
 
 pub struct AddBackendPanel {
     visible: bool,
+    animation_generation: u64,
+    animation_started: Option<Instant>,
     edit_id: Option<String>,
     step: EditorStep,
     theme: ClippiTheme,
@@ -48,6 +55,8 @@ impl AddBackendPanel {
     ) -> Self {
         Self {
             visible: false,
+            animation_generation: 0,
+            animation_started: None,
             edit_id: None,
             step: EditorStep::SelectType,
             theme,
@@ -86,6 +95,8 @@ impl AddBackendPanel {
 
     pub fn open_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = true;
+        self.animation_generation = self.animation_generation.wrapping_add(1);
+        self.animation_started = Some(Instant::now());
         self.edit_id = None;
         self.step = EditorStep::SelectType;
         self.clear_inputs(window, cx);
@@ -100,6 +111,8 @@ impl AddBackendPanel {
         cx: &mut Context<Self>,
     ) {
         self.visible = true;
+        self.animation_generation = self.animation_generation.wrapping_add(1);
+        self.animation_started = Some(Instant::now());
         self.edit_id = Some(config.id.clone());
         self.step = if config.backend_type == "webdav" {
             EditorStep::WebDav
@@ -126,6 +139,7 @@ impl AddBackendPanel {
 
     fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
+        self.animation_started = None;
         self.test_pending = false;
         self._test_task = None;
         cx.notify();
@@ -147,6 +161,29 @@ impl AddBackendPanel {
         self.test_pending = false;
         self.test_ok = false;
         self.test_error.clear();
+    }
+
+    fn transition_f32(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        key: (&'static str, u64),
+        initial: f32,
+        target: f32,
+    ) -> f32 {
+        let transition = window
+            .use_keyed_transition(key, cx, BACKEND_PANEL_ANIM_DURATION, move |_, _| initial)
+            .with_easing(Self::ease_out);
+        transition.update(cx, |value, cx| {
+            *value = target;
+            cx.notify();
+        });
+        let value = *transition.evaluate(window, cx);
+        value
+    }
+
+    fn ease_out(delta: f32) -> f32 {
+        1.0 - (1.0 - delta).powi(3)
     }
 
     fn start_webdav_test(&mut self, cx: &mut Context<Self>) {
@@ -535,6 +572,19 @@ impl Render for AddBackendPanel {
             EditorStep::LocalFolder => self.render_local_form(cx),
             EditorStep::WebDav => self.render_webdav_form(cx),
         };
+        let scale = if self.animation_started.is_some_and(|started| {
+            started.elapsed() <= BACKEND_PANEL_ANIM_DURATION + Duration::from_millis(24)
+        }) {
+            self.transition_f32(
+                window,
+                cx,
+                ("backend-panel-scale", self.animation_generation),
+                0.96,
+                1.0,
+            )
+        } else {
+            1.0
+        };
 
         div()
             .absolute()
@@ -551,15 +601,15 @@ impl Render for AddBackendPanel {
             })
             .child(
                 div()
-                    .w(px(304.))
-                    .max_h(px(440.))
+                    .w(px(304. * scale))
+                    .max_h(px(440. * scale))
                     .overflow_hidden()
                     .rounded(px(8.))
                     .bg(self.theme.surface)
                     .border(px(1.))
                     .border_color(self.theme.divider)
                     .shadow_lg()
-                    .p(px(12.))
+                    .p(px(12. * scale))
                     .occlude()
                     .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
                         cx.stop_propagation();

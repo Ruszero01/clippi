@@ -310,10 +310,9 @@ impl RenderOnce for TagPickerPanel {
                                         active_bg,
                                         input_bg,
                                         hover_bg: btn_hover,
-                                        accent,
-                                        text_1,
-                                        text_2,
-                                    };
+                                            accent,
+                                            text_1,
+                                        };
                                     tag_cell(tag, state, on_toggle.clone(), &cell_colors)
                                 }))
                         })),
@@ -370,7 +369,6 @@ struct TagCellColors {
     hover_bg: Rgba,
     accent: Rgba,
     text_1: Rgba,
-    text_2: Rgba,
 }
 
 fn tag_cell(
@@ -382,10 +380,10 @@ fn tag_cell(
     let tag_id = tag.id;
     let active = state != TagState::None;
     let tag_color = color_from_hex(&tag.color, colors.accent);
-    let state_mark = match state {
-        TagState::All => "*",
-        TagState::Partial => "-",
-        TagState::None => "",
+    let state_dot = if active {
+        colors.accent
+    } else {
+        rgba(0x00000000)
     };
 
     let cell = div()
@@ -427,9 +425,11 @@ fn tag_cell(
         .child(
             div()
                 .w(px(12.))
-                .text_size(px(11.))
-                .text_color(if active { colors.accent } else { colors.text_2 })
-                .child(state_mark),
+                .h(px(12.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().w(px(5.)).h(px(5.)).rounded_full().bg(state_dot)),
         );
 
     if let Some(handler) = on_toggle {
