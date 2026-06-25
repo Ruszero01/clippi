@@ -42,6 +42,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.))
+            .pt(px(8.))
             // ── Version info card ──
             .child(
                 div()
