@@ -1346,8 +1346,7 @@ impl WindowManager {
         // toggle) for 400 ms after show. This absorbs double hotkey events that
         // can arrive in the same poll tick and gives the async positioning task
         // time to complete before the window is dismissible.
-        self.quick_suppress_until =
-            Some(Instant::now() + Duration::from_millis(400));
+        self.quick_suppress_until = Some(Instant::now() + Duration::from_millis(400));
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
         }

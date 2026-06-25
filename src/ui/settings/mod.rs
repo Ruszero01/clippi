@@ -10,11 +10,13 @@
 //! --- Tab rendering methods (`render_*_tab`) serve as extension points. ---
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::InputState;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use gpui_transitions::WindowUseTransition;
 
 mod clipboard;
 mod data;
@@ -22,6 +24,8 @@ mod general;
 pub mod hotkey;
 mod sync;
 mod version;
+
+const TAB_ANIM_DURATION: Duration = Duration::from_millis(160);
 
 use data::ResetDataDirState;
 use hotkey::HotkeyConfirmAction;
@@ -63,6 +67,8 @@ pub struct SettingsPanel {
     /// Track toggle values + generation counter for transition animation.
     toggle_states: HashMap<String, ToggleTransitionState>,
     backend_collapse_states: HashMap<String, BackendCollapseState>,
+    tab_transition_generation: u64,
+    tab_transition_started: Option<Instant>,
     backend_panel: Entity<AddBackendPanel>,
     /// Pending hotkey blacklist confirmation (consumed by RootView).
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
@@ -138,6 +144,8 @@ impl SettingsPanel {
             scroll_handle: ScrollHandle::default(),
             toggle_states: HashMap::new(),
             backend_collapse_states: HashMap::new(),
+            tab_transition_generation: 0,
+            tab_transition_started: None,
             backend_panel,
             hotkey_confirm: None,
             recording_paste_shortcut: None,
@@ -160,7 +168,11 @@ impl SettingsPanel {
 
     /// Switch to a specific tab by index.
     pub fn set_active_tab(&mut self, index: usize) {
-        self.active_tab = index;
+        if self.active_tab != index {
+            self.active_tab = index;
+            self.tab_transition_generation = self.tab_transition_generation.wrapping_add(1);
+            self.tab_transition_started = Some(Instant::now());
+        }
     }
 
     pub fn backend_panel(&self) -> Entity<AddBackendPanel> {
@@ -173,6 +185,18 @@ impl Render for SettingsPanel {
         let active = self.active_tab;
         let theme = &self.theme;
         let this = cx.entity().clone();
+        let tab_key = ((active as u64) << 32).wrapping_add(self.tab_transition_generation);
+        let tab_animating = Self::animation_running(self.tab_transition_started);
+        let tab_opacity = if tab_animating {
+            Self::transition_f32(window, cx, ("settings-tab-opacity", tab_key), 0.0, 1.0)
+        } else {
+            1.0
+        };
+        let tab_offset = if tab_animating {
+            Self::transition_f32(window, cx, ("settings-tab-offset", tab_key), 4.0, 0.0)
+        } else {
+            0.0
+        };
 
         div()
             .flex()
@@ -260,7 +284,7 @@ impl Render for SettingsPanel {
                             .cursor(CursorStyle::PointingHand)
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 this.update(cx, |panel, cx| {
-                                    panel.active_tab = i;
+                                    panel.set_active_tab(i);
                                     cx.notify();
                                 });
                             })
@@ -309,6 +333,8 @@ impl Render for SettingsPanel {
                                             .flex()
                                             .flex_col()
                                             .px(px(8.))
+                                            .opacity(tab_opacity)
+                                            .mt(px(tab_offset))
                                             .when(active != 5, |el| el.pb(px(56.)))
                                             .child(match active {
                                                 0 => self
@@ -355,6 +381,34 @@ impl Render for SettingsPanel {
 // --- Reusable control helpers ---
 
 impl SettingsPanel {
+    fn animation_running(started_at: Option<Instant>) -> bool {
+        started_at.is_some_and(|started_at| {
+            started_at.elapsed() <= TAB_ANIM_DURATION + Duration::from_millis(24)
+        })
+    }
+
+    fn transition_f32(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        key: (&'static str, u64),
+        initial: f32,
+        target: f32,
+    ) -> f32 {
+        let transition = window
+            .use_keyed_transition(key, cx, TAB_ANIM_DURATION, move |_, _| initial)
+            .with_easing(Self::ease_out);
+        transition.update(cx, |value, cx| {
+            *value = target;
+            cx.notify();
+        });
+        let value = *transition.evaluate(window, cx);
+        value
+    }
+
+    fn ease_out(delta: f32) -> f32 {
+        1.0 - (1.0 - delta).powi(3)
+    }
+
     /// Render a settings row with an animated toggle switch on the right.
     fn setting_row_with_toggle(
         &mut self,

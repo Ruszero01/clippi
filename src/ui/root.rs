@@ -6,8 +6,9 @@
 //! --- - Main panel offset 36px from left, 12px border-radius, 1px border ---
 //! --- - Titlebar + stacked views (clipboard / settings / edit) ---
 
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -19,6 +20,10 @@ use crate::ui::window_manager::{WindowManager, WindowManagerEvent};
 
 /// Toast enter / exit animation duration.
 const TOAST_ANIM_DURATION: Duration = Duration::from_millis(220);
+/// Main content view transition duration.
+const VIEW_ANIM_DURATION: Duration = Duration::from_millis(180);
+/// Floating panel / dialog enter animation duration.
+const OVERLAY_ANIM_DURATION: Duration = Duration::from_millis(150);
 
 use super::clipboard_list::{ClipboardListEvent, ClipboardListView, ConfirmDialogState};
 use super::components::confirm_dialog::ConfirmDialog;
@@ -47,6 +52,9 @@ pub struct RootView {
     tag_filter_panel: Entity<TagFilterPanel>,
     type_filter_config_panel: Entity<TypeFilterConfigPanel>,
     current_view: String,
+    view_transition_generation: u64,
+    view_transition_started: Option<Instant>,
+    overlay_transitions: HashMap<&'static str, OverlayTransitionState>,
     pinned: bool,
     theme: ClippiTheme,
     /// Cached at creation time so the ThemeChanged handler (which only
@@ -70,6 +78,13 @@ pub struct RootView {
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct OverlayTransitionState {
+    visible: bool,
+    generation: u64,
+    started_at: Option<Instant>,
 }
 
 impl RootView {
@@ -136,13 +151,13 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::OpenSettings => {
-                    this.current_view = "settings".into();
+                    this.switch_view("settings");
                     this.search_bar
                         .update(cx, |bar, cx| bar.close_tag_panel(cx));
                     cx.notify();
                 }
                 WindowManagerEvent::OpenVersionSettings => {
-                    this.current_view = "settings".into();
+                    this.switch_view("settings");
                     this.settings_panel
                         .update(cx, |panel, _cx| panel.set_active_tab(5));
                     this.search_bar
@@ -323,7 +338,7 @@ impl RootView {
                             .state
                             .update(cx, |state, _cx| state.start_edit_item(*id));
                         if opened {
-                            this.current_view = "edit".into();
+                            this.switch_view("edit");
                             this.search_bar
                                 .update(cx, |bar, cx| bar.close_tag_panel(cx));
                             cx.notify();
@@ -345,7 +360,7 @@ impl RootView {
                             });
                         }
                     }
-                    this.current_view = "clipboard".into();
+                    this.switch_view("clipboard");
                     cx.notify();
                 },
             ),
@@ -362,7 +377,7 @@ impl RootView {
                         cx.notify();
                     }
                     TitlebarEvent::OpenSettings => {
-                        this.current_view = "settings".into();
+                        this.switch_view("settings");
                         this.search_bar
                             .update(cx, |bar, cx| bar.close_tag_panel(cx));
                         cx.notify();
@@ -373,7 +388,7 @@ impl RootView {
                 &settings_panel,
                 move |this, _panel, event: &SettingsEvent, cx| match event {
                     SettingsEvent::Back => {
-                        this.current_view = "clipboard".into();
+                        this.switch_view("clipboard");
                         cx.notify();
                     }
                     SettingsEvent::ThemeChanged(theme_str) => {
@@ -551,6 +566,9 @@ impl RootView {
             tag_filter_panel,
             type_filter_config_panel,
             current_view: "clipboard".into(),
+            view_transition_generation: 0,
+            view_transition_started: None,
+            overlay_transitions: HashMap::new(),
             pinned: false,
             theme,
             window_appearance,
@@ -577,14 +595,14 @@ impl Render for RootView {
         let search_bar = self.search_bar.clone();
         let settings_panel = self.settings_panel.clone();
         let backend_panel = self.settings_panel.read(cx).backend_panel();
-        let backend_panel_visible = backend_panel.read(cx).is_visible();
+        let backend_panel_open = backend_panel.read(cx).is_visible();
         let edit_panel = self.edit_panel.clone();
         let tag_filter_panel = self.tag_filter_panel.clone();
         let tag_panel_open = self.search_bar.read(cx).tag_panel_open();
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
-        let theme = &self.theme;
+        let theme = self.theme.clone();
         let panel_border = if theme.bg == rgb(0x191a1b) {
             rgb(0x3a3b3c)
         } else {
@@ -600,6 +618,162 @@ impl Render for RootView {
         let viewport = window.viewport_size();
         let win_w = f32::from(viewport.width);
         let win_h = f32::from(viewport.height);
+
+        let filter_config_open = self.search_bar.read(cx).filter_config_open();
+        let context_menu_open = self.list_view.read(cx).context_menu_visible();
+        let tag_picker_open = self.list_view.read(cx).tag_picker_visible();
+        let confirm_dialog_open = self.list_view.read(cx).confirm_dialog_state().is_some();
+        let hotkey_confirm_open = self.settings_panel.read(cx).hotkey_confirm.is_some();
+
+        let editing_tag_visible = {
+            let app_state = self.state.read(cx);
+            let editing_id = app_state.editing_tag_id;
+            if editing_id >= 0 && editing_id != self.last_edit_tag_id {
+                self.last_edit_tag_id = editing_id;
+                let edit_name = app_state.editing_tag_name.clone();
+                let edit_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
+                edit_input.update(cx, |input, cx| {
+                    input.set_value(&edit_name, window, cx);
+                });
+            }
+            editing_id >= 0 && is_clipboard
+        };
+
+        let tag_panel_visible = tag_panel_open && is_clipboard;
+        let filter_config_visible = filter_config_open && is_clipboard;
+        let context_menu_visible = context_menu_open && is_clipboard;
+        let tag_picker_visible = tag_picker_open && is_clipboard;
+        let confirm_dialog_visible = confirm_dialog_open && is_clipboard;
+        let hotkey_confirm_visible = is_settings && hotkey_confirm_open;
+        let backend_panel_visible = is_settings && backend_panel_open;
+
+        let view_animating =
+            Self::animation_running(self.view_transition_started, VIEW_ANIM_DURATION);
+        let view_key = self.view_transition_generation;
+        let view_opacity = if view_animating {
+            Self::transition_f32(
+                window,
+                cx,
+                ("root-view-opacity", view_key),
+                VIEW_ANIM_DURATION,
+                0.0,
+                1.0,
+            )
+        } else {
+            1.0
+        };
+        let view_offset = if view_animating {
+            Self::transition_f32(
+                window,
+                cx,
+                ("root-view-offset", view_key),
+                VIEW_ANIM_DURATION,
+                6.0,
+                0.0,
+            )
+        } else {
+            0.0
+        };
+
+        let tag_panel_gen = self.overlay_generation("tag-filter", tag_panel_visible);
+        let filter_config_gen =
+            self.overlay_generation("type-filter-config", filter_config_visible);
+        let edit_tag_gen = self.overlay_generation("tag-edit", editing_tag_visible);
+        let context_menu_gen = self.overlay_generation("context-menu", context_menu_visible);
+        let tag_picker_gen = self.overlay_generation("tag-picker", tag_picker_visible);
+        let confirm_dialog_gen = self.overlay_generation("confirm-dialog", confirm_dialog_visible);
+        let hotkey_confirm_gen = self.overlay_generation("hotkey-confirm", hotkey_confirm_visible);
+        let backend_panel_gen = self.overlay_generation("backend-panel", backend_panel_visible);
+
+        let tag_panel_animating = self.overlay_animating("tag-filter");
+        let filter_config_animating = self.overlay_animating("type-filter-config");
+        let edit_tag_animating = self.overlay_animating("tag-edit");
+        let context_menu_animating = self.overlay_animating("context-menu");
+        let tag_picker_animating = self.overlay_animating("tag-picker");
+        let confirm_dialog_animating = self.overlay_animating("confirm-dialog");
+        let hotkey_confirm_animating = self.overlay_animating("hotkey-confirm");
+        let backend_panel_animating = self.overlay_animating("backend-panel");
+
+        let tag_panel_opacity = if tag_panel_visible && tag_panel_animating {
+            Self::overlay_opacity(window, cx, tag_panel_gen, "tag-filter")
+        } else {
+            1.0
+        };
+        let tag_panel_offset = if tag_panel_visible && tag_panel_animating {
+            Self::overlay_offset(window, cx, tag_panel_gen, "tag-filter")
+        } else {
+            0.0
+        };
+        let filter_config_opacity = if filter_config_visible && filter_config_animating {
+            Self::overlay_opacity(window, cx, filter_config_gen, "type-filter-config")
+        } else {
+            1.0
+        };
+        let filter_config_offset = if filter_config_visible && filter_config_animating {
+            Self::overlay_offset(window, cx, filter_config_gen, "type-filter-config")
+        } else {
+            0.0
+        };
+        let edit_tag_opacity = if editing_tag_visible && edit_tag_animating {
+            Self::overlay_opacity(window, cx, edit_tag_gen, "tag-edit")
+        } else {
+            1.0
+        };
+        let edit_tag_offset = if editing_tag_visible && edit_tag_animating {
+            Self::overlay_offset(window, cx, edit_tag_gen, "tag-edit")
+        } else {
+            0.0
+        };
+        let context_menu_opacity = if context_menu_visible && context_menu_animating {
+            Self::overlay_opacity(window, cx, context_menu_gen, "context-menu")
+        } else {
+            1.0
+        };
+        let context_menu_offset = if context_menu_visible && context_menu_animating {
+            Self::overlay_offset(window, cx, context_menu_gen, "context-menu")
+        } else {
+            0.0
+        };
+        let tag_picker_opacity = if tag_picker_visible && tag_picker_animating {
+            Self::overlay_opacity(window, cx, tag_picker_gen, "tag-picker")
+        } else {
+            1.0
+        };
+        let tag_picker_offset = if tag_picker_visible && tag_picker_animating {
+            Self::overlay_offset(window, cx, tag_picker_gen, "tag-picker")
+        } else {
+            0.0
+        };
+        let confirm_dialog_opacity = if confirm_dialog_visible && confirm_dialog_animating {
+            Self::overlay_opacity(window, cx, confirm_dialog_gen, "confirm-dialog")
+        } else {
+            1.0
+        };
+        let confirm_dialog_offset = if confirm_dialog_visible && confirm_dialog_animating {
+            Self::overlay_offset(window, cx, confirm_dialog_gen, "confirm-dialog")
+        } else {
+            0.0
+        };
+        let hotkey_confirm_opacity = if hotkey_confirm_visible && hotkey_confirm_animating {
+            Self::overlay_opacity(window, cx, hotkey_confirm_gen, "hotkey-confirm")
+        } else {
+            1.0
+        };
+        let hotkey_confirm_offset = if hotkey_confirm_visible && hotkey_confirm_animating {
+            Self::overlay_offset(window, cx, hotkey_confirm_gen, "hotkey-confirm")
+        } else {
+            0.0
+        };
+        let backend_panel_opacity = if backend_panel_visible && backend_panel_animating {
+            Self::overlay_opacity(window, cx, backend_panel_gen, "backend-panel")
+        } else {
+            1.0
+        };
+        let backend_panel_offset = if backend_panel_visible && backend_panel_animating {
+            Self::overlay_offset(window, cx, backend_panel_gen, "backend-panel")
+        } else {
+            0.0
+        };
 
         // --- Auto-focus search bar when the window opens ---
         if self.needs_auto_focus && is_clipboard {
@@ -683,21 +857,31 @@ impl Render for RootView {
                     .overflow_hidden()
                     .occlude()
                     .child(titlebar)
-                    .when(is_clipboard, |panel| {
-                        panel.child(search_bar.clone()).child(list_view.clone())
-                    })
-                    .when(is_settings, |panel| panel.child(settings_panel))
-                    .when(is_edit, |panel| panel.child(edit_panel)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .overflow_hidden()
+                            .opacity(view_opacity)
+                            .mt(px(view_offset))
+                            .when(is_clipboard, |view| {
+                                view.child(search_bar.clone()).child(list_view.clone())
+                            })
+                            .when(is_settings, |view| view.child(settings_panel))
+                            .when(is_edit, |view| view.child(edit_panel)),
+                    ),
             )
             // --- Tag filter panel — ConfirmDialog pattern: ---
             // --- full-screen backdrop that closes on click outside, ---
             // --- panel positioned top-right, occlude prevents click-through. ---
-            .when(tag_panel_open && is_clipboard, |root| {
+            .when(tag_panel_visible, |root| {
                 let search_for_backdrop = search_bar.clone();
                 root.child(
                     div()
                         .absolute()
                         .size_full()
+                        .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                             cx.stop_propagation();
                             search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
@@ -706,473 +890,43 @@ impl Render for RootView {
                             div()
                                 .absolute()
                                 .right(px(8.))
-                                .top(px(106.))
+                                .top(px(106. + tag_panel_offset))
                                 .occlude()
                                 .child(tag_filter_panel),
                         ),
                 )
             })
             // --- Type filter config panel — same backdrop pattern as tag filter ---
-            .when(
-                self.search_bar.read(cx).filter_config_open() && is_clipboard,
-                |root| {
-                    let search_for_backdrop = search_bar.clone();
-                    let config_panel = self.type_filter_config_panel.clone();
-                    root.child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                cx.stop_propagation();
-                                search_for_backdrop
-                                    .update(cx, |bar, cx| bar.close_filter_config(cx));
-                            })
-                            .child(
-                                div()
-                                    .absolute()
-                                    .right(px(8.))
-                                    .top(px(106.))
-                                    .occlude()
-                                    .child(config_panel),
-                            ),
-                    )
-                },
-            )
+            .when(filter_config_visible, |root| {
+                let search_for_backdrop = search_bar.clone();
+                let config_panel = self.type_filter_config_panel.clone();
+                root.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .opacity(filter_config_opacity)
+                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                            cx.stop_propagation();
+                            search_for_backdrop.update(cx, |bar, cx| bar.close_filter_config(cx));
+                        })
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(8.))
+                                .top(px(106. + filter_config_offset))
+                                .occlude()
+                                .child(config_panel),
+                        ),
+                )
+            })
             // --- Tag edit overlay — centered in main panel area (left:36px) ---
-            .when(
-                {
-                    let app_state = self.state.read(cx);
-                    let editing_id = app_state.editing_tag_id;
-                    if editing_id >= 0 && editing_id != self.last_edit_tag_id {
-                        self.last_edit_tag_id = editing_id;
-                        let edit_name = app_state.editing_tag_name.clone();
-                        let edit_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
-                        edit_input.update(cx, |input, cx| {
-                            input.set_value(&edit_name, window, cx);
-                        });
-                    }
-                    editing_id >= 0 && is_clipboard
-                },
-                |root| {
-                    let app_state = self.state.read(cx);
-                    let editing_tag_id = app_state.editing_tag_id;
-                    let editing_tag_color = app_state.editing_tag_color.clone();
-                    let edit_name_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
-                    let tag_filter = self.tag_filter_panel.clone();
+            .when(editing_tag_visible, |root| {
+                let app_state = self.state.read(cx);
+                let editing_tag_id = app_state.editing_tag_id;
+                let editing_tag_color = app_state.editing_tag_color.clone();
+                let edit_name_input = self.tag_filter_panel.read(cx).edit_name_input().clone();
+                let tag_filter = self.tag_filter_panel.clone();
 
-                    root.child(
-                        div()
-                            .absolute()
-                            .left(px(36.))
-                            .right(px(0.))
-                            .top(px(0.))
-                            .bottom(px(0.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(render_edit_panel(
-                                &edit_name_input,
-                                &editing_tag_color,
-                                self.theme.clone(),
-                                {
-                                    let tf = tag_filter.clone();
-                                    move |_w, cx| {
-                                        tf.update(cx, |panel, cx| {
-                                            panel.cancel_edit_tag(cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                                {
-                                    let tf = tag_filter.clone();
-                                    move |_w, cx, color| {
-                                        tf.update(cx, |panel, cx| {
-                                            panel.set_edit_tag_color(&color, cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                                {
-                                    let tf = tag_filter.clone();
-                                    move |_w, cx, name, color| {
-                                        tf.update(cx, |panel, cx| {
-                                            panel.update_tag(editing_tag_id, &name, &color, cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                            )),
-                    )
-                },
-            )
-            .when(
-                self.list_view.read(cx).context_menu_visible() && is_clipboard,
-                |root| {
-                    let list = self.list_view.clone();
-                    let list_for_action = self.list_view.clone();
-                    let (menu_x, menu_y) = list.read(cx).context_menu_position();
-                    let is_batch = list.read(cx).context_menu_is_batch();
-                    let item = list.read(cx).context_menu_item().cloned();
-
-                    // --- Backdrop — click to dismiss ---
-                    root.child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .on_mouse_down(MouseButton::Left, {
-                                let l = list.clone();
-                                move |_ev, _window, cx| {
-                                    cx.stop_propagation();
-                                    l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
-                                }
-                            }),
-                    )
-                    .child(div().absolute().occlude().child({
-                        let l = list_for_action.clone();
-                        if is_batch {
-                            let count = l.read(cx).selected_count;
-                            ContextMenu::for_batch(count)
-                                .with_position(menu_x, menu_y, win_w, win_h)
-                                .theme(self.theme.clone())
-                                .on_action({
-                                    let l = l.clone();
-                                    move |action, window, cx| {
-                                        l.update(cx, |lst, cx| {
-                                            lst.handle_menu_action(action, window, cx);
-                                        });
-                                    }
-                                })
-                                .on_dismiss({
-                                    let l = l.clone();
-                                    move |_window, cx| {
-                                        l.update(cx, |lst, cx| {
-                                            lst.hide_context_menu(cx);
-                                        });
-                                    }
-                                })
-                                .into_any_element()
-                        } else if let Some(ref clip_item) = item {
-                            let ctx = MenuItemContext::from_item(clip_item);
-                            ContextMenu::for_item(&ctx)
-                                .with_position(menu_x, menu_y, win_w, win_h)
-                                .theme(self.theme.clone())
-                                .on_action({
-                                    let l = l.clone();
-                                    move |action, window, cx| {
-                                        l.update(cx, |lst, cx| {
-                                            lst.handle_menu_action(action, window, cx);
-                                        });
-                                    }
-                                })
-                                .on_dismiss({
-                                    let l = l.clone();
-                                    move |_window, cx| {
-                                        l.update(cx, |lst, cx| {
-                                            lst.hide_context_menu(cx);
-                                        });
-                                    }
-                                })
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }
-                    }))
-                },
-            )
-            .when(
-                self.list_view.read(cx).tag_picker_visible() && is_clipboard,
-                |root| {
-                    let list = self.list_view.clone();
-                    let list_for_panel = self.list_view.clone();
-                    let (picker_x, picker_y) = list.read(cx).tag_picker_position();
-                    let is_batch = list.read(cx).tag_picker_is_batch();
-                    let rows = list.update(cx, |list, cx| list.tag_picker_rows(cx));
-                    let create_input = list.read(cx).tag_create_input().clone();
-                    let clamped_x = picker_x.clamp(4.0, (win_w - 304.0 - 4.0).max(4.0));
-                    let clamped_y = picker_y.clamp(4.0, (win_h - 300.0 - 4.0).max(4.0));
-
-                    root.child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .on_mouse_down(MouseButton::Left, {
-                                let l = list.clone();
-                                move |_ev, _window, cx| {
-                                    cx.stop_propagation();
-                                    l.update(cx, |lst, cx| lst.hide_tag_picker(cx));
-                                }
-                            }),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(clamped_x))
-                            .top(px(clamped_y))
-                            .occlude()
-                            .child(
-                                TagPickerPanel::new(rows, is_batch, create_input, self.theme.clone())
-                                    .on_toggle({
-                                        let l = list_for_panel.clone();
-                                        move |tag_id, state, _window, cx| {
-                                            l.update(cx, |lst, cx| {
-                                                lst.toggle_picker_tag(tag_id, state, cx);
-                                            });
-                                        }
-                                    })
-                                    .on_clear({
-                                        let l = list_for_panel.clone();
-                                        move |_window, cx| {
-                                            l.update(cx, |lst, cx| {
-                                                lst.clear_picker_tags(cx);
-                                            });
-                                        }
-                                    })
-                                    .on_close({
-                                        let l = list_for_panel.clone();
-                                        move |_window, cx| {
-                                            l.update(cx, |lst, cx| {
-                                                lst.hide_tag_picker(cx);
-                                            });
-                                        }
-                                    })
-                                    .on_create({
-                                        let l = list_for_panel.clone();
-                                        move |name, _window, cx| {
-                                            l.update(cx, |lst, cx| {
-                                                lst.create_tag_from_picker(&name, cx);
-                                            });
-                                        }
-                                    }),
-                            ),
-                    )
-                },
-            )
-            .when(
-                self.list_view.read(cx).confirm_dialog_state().is_some() && is_clipboard,
-                |root| {
-                    let list = self.list_view.clone();
-                    let app_state = self.state.clone();
-
-                    // --- Read dialog state and clone what we need before closures ---
-                    let dialog = list.read(cx).confirm_dialog_state().cloned();
-                    let dialog_element: AnyElement = match dialog {
-                        Some(ConfirmDialogState::DeleteSingle { id }) => {
-                            ConfirmDialog::delete_single()
-                                .theme(self.theme.clone())
-                                .on_confirm({
-                                    let s = app_state.clone();
-                                    let l = list.clone();
-                                    move |_window, cx| {
-                                        s.update(cx, |s, _cx| s.delete_item(id));
-                                        l.update(cx, |lst, cx| {
-                                            lst.sync_items_from_state(cx);
-                                            lst.dismiss_confirm_dialog(cx);
-                                        });
-                                    }
-                                })
-                                .on_cancel({
-                                    let l = list.clone();
-                                    move |_window, cx| {
-                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
-                                    }
-                                })
-                                .into_any_element()
-                        }
-                        Some(ConfirmDialogState::DeleteBatch { count }) => {
-                            ConfirmDialog::delete_batch(count)
-                                .theme(self.theme.clone())
-                                .on_confirm({
-                                    let s = app_state.clone();
-                                    let l = list.clone();
-                                    move |_window, cx| {
-                                        s.update(cx, |s, _cx| s.batch_delete());
-                                        l.update(cx, |lst, cx| {
-                                            lst.sync_items_from_state(cx);
-                                            lst.dismiss_confirm_dialog(cx);
-                                        });
-                                    }
-                                })
-                                .on_cancel({
-                                    let l = list.clone();
-                                    move |_window, cx| {
-                                        l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
-                                    }
-                                })
-                                .into_any_element()
-                        }
-                        None => div().into_any_element(),
-                    };
-
-                    // Constrain to main panel bounds (left=36px offset for sidebar).
-                    // ConfirmDialog fills this container and centers the modal card within it.
-                    root.child(
-                        div()
-                            .absolute()
-                            .left(px(36.))
-                            .right(px(0.))
-                            .top(px(0.))
-                            .bottom(px(0.))
-                            .child(dialog_element),
-                    )
-                },
-            )
-            // --- Settings hotkey blacklist ConfirmDialog ---
-            .when(
-                is_settings && self.settings_panel.read(cx).hotkey_confirm.is_some(),
-                |root| {
-                    let dialog_focus = cx.focus_handle();
-                    let settings = self.settings_panel.clone();
-                    let wm = self.window_manager.clone();
-                    let app_state = self.state.clone();
-
-                    let action = settings.read(cx).hotkey_confirm.clone();
-                    let dialog_element: AnyElement = match action {
-                        Some(hotkey::HotkeyConfirmAction::AddBlacklist { app_name }) => {
-                            ConfirmDialog::add_blacklist(&app_name)
-                                .theme(self.theme.clone())
-                                .on_confirm({
-                                    let wm = wm.clone();
-                                    let app_state = app_state.clone();
-                                    let settings = settings.clone();
-                                    let app_name = app_name.clone();
-                                    move |_window, cx| {
-                                        let app_name = app_name.clone();
-                                        app_state.update(cx, |s, _cx| {
-                                            if !s.settings.hotkey_blacklist.contains(&app_name) {
-                                                s.settings.hotkey_blacklist.push(app_name.clone());
-                                                s.settings.save();
-                                            }
-                                        });
-                                        // --- Sync WindowManager's blacklist from settings ---
-                                        let updated =
-                                            app_state.read(cx).settings.hotkey_blacklist.clone();
-                                        wm.update(cx, |wm, _cx| {
-                                            wm.set_blacklist(updated);
-                                        });
-                                        settings.update(cx, |panel, cx| {
-                                            panel.clear_hotkey_confirm(cx);
-                                        });
-                                    }
-                                })
-                                .on_cancel({
-                                    let settings = settings.clone();
-                                    move |_window, cx| {
-                                        settings.update(cx, |panel, cx| {
-                                            panel.clear_hotkey_confirm(cx);
-                                        });
-                                    }
-                                })
-                                .focus_handle(dialog_focus.clone())
-                                .into_any_element()
-                        }
-                        Some(hotkey::HotkeyConfirmAction::RemoveBlacklist { app_name }) => {
-                            ConfirmDialog::remove_blacklist(&app_name)
-                                .theme(self.theme.clone())
-                                .on_confirm({
-                                    let wm = wm.clone();
-                                    let app_state = app_state.clone();
-                                    let settings = settings.clone();
-                                    let app_name = app_name.clone();
-                                    move |_window, cx| {
-                                        app_state.update(cx, |s, _cx| {
-                                            s.settings.hotkey_blacklist.retain(|a| a != &app_name);
-                                            s.settings.save();
-                                        });
-                                        // --- Sync WindowManager's blacklist from settings ---
-                                        let updated =
-                                            app_state.read(cx).settings.hotkey_blacklist.clone();
-                                        wm.update(cx, |wm, _cx| {
-                                            wm.set_blacklist(updated);
-                                        });
-                                        settings.update(cx, |panel, cx| {
-                                            panel.clear_hotkey_confirm(cx);
-                                        });
-                                    }
-                                })
-                                .on_cancel({
-                                    let settings = settings.clone();
-                                    move |_window, cx| {
-                                        settings.update(cx, |panel, cx| {
-                                            panel.clear_hotkey_confirm(cx);
-                                        });
-                                    }
-                                })
-                                .focus_handle(dialog_focus.clone())
-                                .into_any_element()
-                        }
-                        Some(hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut }) => {
-                            ConfirmDialog::add_paste_shortcut(&app_name, &shortcut)
-                                .theme(self.theme.clone())
-                                .on_confirm({
-                                    let settings = settings.clone();
-                                    let app_name = app_name.clone();
-                                    let shortcut = shortcut.clone();
-                                    move |_window, cx| {
-                                        settings.update(cx, |_panel, cx| {
-                                            cx.emit(SettingsEvent::HotkeyPasteShortcut {
-                                                action: hotkey::HotkeyConfirmAction::AddPasteShortcut {
-                                                    app_name: app_name.clone(),
-                                                    shortcut: shortcut.clone(),
-                                                },
-                                            });
-                                        });
-                                    }
-                                })
-                                .on_cancel({
-                                    let settings = settings.clone();
-                                    move |_window, cx| {
-                                        settings.update(cx, |panel, cx| {
-                                            panel.clear_paste_shortcut_state(cx);
-                                            panel.clear_hotkey_confirm(cx);
-                                        });
-                                    }
-                                })
-                                .focus_handle(dialog_focus.clone())
-                                .into_any_element()
-                        }
-                        Some(hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name }) => {
-                            ConfirmDialog::remove_paste_shortcut(&app_name)
-                                .theme(self.theme.clone())
-                                .on_confirm({
-                                    let settings = settings.clone();
-                                    let app_name = app_name.clone();
-                                    move |_window, cx| {
-                                        settings.update(cx, |_panel, cx| {
-                                            cx.emit(SettingsEvent::HotkeyPasteShortcut {
-                                                action: hotkey::HotkeyConfirmAction::RemovePasteShortcut {
-                                                    app_name: app_name.clone(),
-                                                },
-                                            });
-                                        });
-                                    }
-                                })
-                                .on_cancel({
-                                    let settings = settings.clone();
-                                    move |_window, cx| {
-                                        settings.update(cx, |panel, cx| {
-                                            panel.clear_paste_shortcut_state(cx);
-                                            panel.clear_hotkey_confirm(cx);
-                                        });
-                                    }
-                                })
-                                .focus_handle(dialog_focus.clone())
-                                .into_any_element()
-                        }
-                        None => div().into_any_element(),
-                    };
-
-                    root.child(
-                        div()
-                            .absolute()
-                            .left(px(36.))
-                            .right(px(0.))
-                            .top(px(0.))
-                            .bottom(px(0.))
-                            .child(dialog_element),
-                    )
-                },
-            )
-            .when(is_settings && backend_panel_visible, |root| {
                 root.child(
                     div()
                         .absolute()
@@ -1180,6 +934,422 @@ impl Render for RootView {
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
+                        .opacity(edit_tag_opacity)
+                        .pt(px(edit_tag_offset))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(render_edit_panel(
+                            &edit_name_input,
+                            &editing_tag_color,
+                            self.theme.clone(),
+                            {
+                                let tf = tag_filter.clone();
+                                move |_w, cx| {
+                                    tf.update(cx, |panel, cx| {
+                                        panel.cancel_edit_tag(cx);
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                            {
+                                let tf = tag_filter.clone();
+                                move |_w, cx, color| {
+                                    tf.update(cx, |panel, cx| {
+                                        panel.set_edit_tag_color(&color, cx);
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                            {
+                                let tf = tag_filter.clone();
+                                move |_w, cx, name, color| {
+                                    tf.update(cx, |panel, cx| {
+                                        panel.update_tag(editing_tag_id, &name, &color, cx);
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                        )),
+                )
+            })
+            .when(context_menu_visible, |root| {
+                let list = self.list_view.clone();
+                let list_for_action = self.list_view.clone();
+                let (menu_x, menu_y) = list.read(cx).context_menu_position();
+                let menu_y = menu_y + context_menu_offset;
+                let is_batch = list.read(cx).context_menu_is_batch();
+                let item = list.read(cx).context_menu_item().cloned();
+
+                // --- Backdrop — click to dismiss ---
+                root.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .on_mouse_down(MouseButton::Left, {
+                            let l = list.clone();
+                            move |_ev, _window, cx| {
+                                cx.stop_propagation();
+                                l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
+                            }
+                        }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .opacity(context_menu_opacity)
+                        .occlude()
+                        .child({
+                            let l = list_for_action.clone();
+                            if is_batch {
+                                let count = l.read(cx).selected_count;
+                                ContextMenu::for_batch(count)
+                                    .with_position(menu_x, menu_y, win_w, win_h)
+                                    .theme(self.theme.clone())
+                                    .on_action({
+                                        let l = l.clone();
+                                        move |action, window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.handle_menu_action(action, window, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_dismiss({
+                                        let l = l.clone();
+                                        move |_window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.hide_context_menu(cx);
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else if let Some(ref clip_item) = item {
+                                let ctx = MenuItemContext::from_item(clip_item);
+                                ContextMenu::for_item(&ctx)
+                                    .with_position(menu_x, menu_y, win_w, win_h)
+                                    .theme(self.theme.clone())
+                                    .on_action({
+                                        let l = l.clone();
+                                        move |action, window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.handle_menu_action(action, window, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_dismiss({
+                                        let l = l.clone();
+                                        move |_window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.hide_context_menu(cx);
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }
+                        }),
+                )
+            })
+            .when(tag_picker_visible, |root| {
+                let list = self.list_view.clone();
+                let list_for_panel = self.list_view.clone();
+                let (picker_x, picker_y) = list.read(cx).tag_picker_position();
+                let is_batch = list.read(cx).tag_picker_is_batch();
+                let rows = list.update(cx, |list, cx| list.tag_picker_rows(cx));
+                let create_input = list.read(cx).tag_create_input().clone();
+                let clamped_x = picker_x.clamp(4.0, (win_w - 304.0 - 4.0).max(4.0));
+                let clamped_y =
+                    picker_y.clamp(4.0, (win_h - 300.0 - 4.0).max(4.0)) + tag_picker_offset;
+
+                root.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .opacity(tag_picker_opacity)
+                        .on_mouse_down(MouseButton::Left, {
+                            let l = list.clone();
+                            move |_ev, _window, cx| {
+                                cx.stop_propagation();
+                                l.update(cx, |lst, cx| lst.hide_tag_picker(cx));
+                            }
+                        }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(clamped_x))
+                        .top(px(clamped_y))
+                        .occlude()
+                        .child(
+                            TagPickerPanel::new(rows, is_batch, create_input, self.theme.clone())
+                                .on_toggle({
+                                    let l = list_for_panel.clone();
+                                    move |tag_id, state, _window, cx| {
+                                        l.update(cx, |lst, cx| {
+                                            lst.toggle_picker_tag(tag_id, state, cx);
+                                        });
+                                    }
+                                })
+                                .on_clear({
+                                    let l = list_for_panel.clone();
+                                    move |_window, cx| {
+                                        l.update(cx, |lst, cx| {
+                                            lst.clear_picker_tags(cx);
+                                        });
+                                    }
+                                })
+                                .on_close({
+                                    let l = list_for_panel.clone();
+                                    move |_window, cx| {
+                                        l.update(cx, |lst, cx| {
+                                            lst.hide_tag_picker(cx);
+                                        });
+                                    }
+                                })
+                                .on_create({
+                                    let l = list_for_panel.clone();
+                                    move |name, _window, cx| {
+                                        l.update(cx, |lst, cx| {
+                                            lst.create_tag_from_picker(&name, cx);
+                                        });
+                                    }
+                                }),
+                        ),
+                )
+            })
+            .when(confirm_dialog_visible, |root| {
+                let list = self.list_view.clone();
+                let app_state = self.state.clone();
+
+                // --- Read dialog state and clone what we need before closures ---
+                let dialog = list.read(cx).confirm_dialog_state().cloned();
+                let dialog_element: AnyElement = match dialog {
+                    Some(ConfirmDialogState::DeleteSingle { id }) => ConfirmDialog::delete_single()
+                        .theme(self.theme.clone())
+                        .on_confirm({
+                            let s = app_state.clone();
+                            let l = list.clone();
+                            move |_window, cx| {
+                                s.update(cx, |s, _cx| s.delete_item(id));
+                                l.update(cx, |lst, cx| {
+                                    lst.sync_items_from_state(cx);
+                                    lst.dismiss_confirm_dialog(cx);
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let l = list.clone();
+                            move |_window, cx| {
+                                l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                            }
+                        })
+                        .into_any_element(),
+                    Some(ConfirmDialogState::DeleteBatch { count }) => {
+                        ConfirmDialog::delete_batch(count)
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let s = app_state.clone();
+                                let l = list.clone();
+                                move |_window, cx| {
+                                    s.update(cx, |s, _cx| s.batch_delete());
+                                    l.update(cx, |lst, cx| {
+                                        lst.sync_items_from_state(cx);
+                                        lst.dismiss_confirm_dialog(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let l = list.clone();
+                                move |_window, cx| {
+                                    l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                }
+                            })
+                            .into_any_element()
+                    }
+                    None => div().into_any_element(),
+                };
+
+                // Constrain to main panel bounds (left=36px offset for sidebar).
+                // ConfirmDialog fills this container and centers the modal card within it.
+                root.child(
+                    div()
+                        .absolute()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .opacity(confirm_dialog_opacity)
+                        .pt(px(confirm_dialog_offset))
+                        .child(dialog_element),
+                )
+            })
+            // --- Settings hotkey blacklist ConfirmDialog ---
+            .when(hotkey_confirm_visible, |root| {
+                let dialog_focus = cx.focus_handle();
+                let settings = self.settings_panel.clone();
+                let wm = self.window_manager.clone();
+                let app_state = self.state.clone();
+
+                let action = settings.read(cx).hotkey_confirm.clone();
+                let dialog_element: AnyElement = match action {
+                    Some(hotkey::HotkeyConfirmAction::AddBlacklist { app_name }) => {
+                        ConfirmDialog::add_blacklist(&app_name)
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let wm = wm.clone();
+                                let app_state = app_state.clone();
+                                let settings = settings.clone();
+                                let app_name = app_name.clone();
+                                move |_window, cx| {
+                                    let app_name = app_name.clone();
+                                    app_state.update(cx, |s, _cx| {
+                                        if !s.settings.hotkey_blacklist.contains(&app_name) {
+                                            s.settings.hotkey_blacklist.push(app_name.clone());
+                                            s.settings.save();
+                                        }
+                                    });
+                                    // --- Sync WindowManager's blacklist from settings ---
+                                    let updated =
+                                        app_state.read(cx).settings.hotkey_blacklist.clone();
+                                    wm.update(cx, |wm, _cx| {
+                                        wm.set_blacklist(updated);
+                                    });
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .into_any_element()
+                    }
+                    Some(hotkey::HotkeyConfirmAction::RemoveBlacklist { app_name }) => {
+                        ConfirmDialog::remove_blacklist(&app_name)
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let wm = wm.clone();
+                                let app_state = app_state.clone();
+                                let settings = settings.clone();
+                                let app_name = app_name.clone();
+                                move |_window, cx| {
+                                    app_state.update(cx, |s, _cx| {
+                                        s.settings.hotkey_blacklist.retain(|a| a != &app_name);
+                                        s.settings.save();
+                                    });
+                                    // --- Sync WindowManager's blacklist from settings ---
+                                    let updated =
+                                        app_state.read(cx).settings.hotkey_blacklist.clone();
+                                    wm.update(cx, |wm, _cx| {
+                                        wm.set_blacklist(updated);
+                                    });
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .into_any_element()
+                    }
+                    Some(hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut }) => {
+                        ConfirmDialog::add_paste_shortcut(&app_name, &shortcut)
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let settings = settings.clone();
+                                let app_name = app_name.clone();
+                                let shortcut = shortcut.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |_panel, cx| {
+                                        cx.emit(SettingsEvent::HotkeyPasteShortcut {
+                                            action: hotkey::HotkeyConfirmAction::AddPasteShortcut {
+                                                app_name: app_name.clone(),
+                                                shortcut: shortcut.clone(),
+                                            },
+                                        });
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_paste_shortcut_state(cx);
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .into_any_element()
+                    }
+                    Some(hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name }) => {
+                        ConfirmDialog::remove_paste_shortcut(&app_name)
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let settings = settings.clone();
+                                let app_name = app_name.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |_panel, cx| {
+                                        cx.emit(SettingsEvent::HotkeyPasteShortcut {
+                                            action:
+                                                hotkey::HotkeyConfirmAction::RemovePasteShortcut {
+                                                    app_name: app_name.clone(),
+                                                },
+                                        });
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_paste_shortcut_state(cx);
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .into_any_element()
+                    }
+                    None => div().into_any_element(),
+                };
+
+                root.child(
+                    div()
+                        .absolute()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .opacity(hotkey_confirm_opacity)
+                        .pt(px(hotkey_confirm_offset))
+                        .child(dialog_element),
+                )
+            })
+            .when(backend_panel_visible, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .opacity(backend_panel_opacity)
+                        .pt(px(backend_panel_offset))
                         .child(backend_panel),
                 )
             })
@@ -1259,10 +1429,12 @@ impl Render for RootView {
                                     // Plain toasts: click-to-dismiss. Interactive toasts
                                     // (with action buttons): occlude to block click-through.
                                     .when(!has_actions, |el| {
-                                        el.cursor(CursorStyle::PointingHand)
-                                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        el.cursor(CursorStyle::PointingHand).on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, _window, cx| {
                                                 state.update(cx, |s, _cx| s.clear_toast());
-                                            })
+                                            },
+                                        )
                                     })
                                     .when(has_actions, |el| el.occlude())
                                     .when(dismiss_state, |el| el.cursor(CursorStyle::Arrow))
@@ -1275,6 +1447,95 @@ impl Render for RootView {
 }
 
 impl RootView {
+    fn switch_view(&mut self, view: &str) {
+        if self.current_view != view {
+            self.current_view = view.into();
+            self.view_transition_generation = self.view_transition_generation.wrapping_add(1);
+            self.view_transition_started = Some(Instant::now());
+        }
+    }
+
+    fn overlay_generation(&mut self, key: &'static str, visible: bool) -> u64 {
+        let state = self.overlay_transitions.entry(key).or_default();
+        if visible && !state.visible {
+            state.generation = state.generation.wrapping_add(1);
+            state.started_at = Some(Instant::now());
+        } else if !visible {
+            state.started_at = None;
+        }
+        state.visible = visible;
+        state.generation
+    }
+
+    fn overlay_animating(&self, key: &'static str) -> bool {
+        self.overlay_transitions
+            .get(key)
+            .and_then(|state| state.started_at)
+            .is_some_and(|started_at| {
+                Self::animation_running(Some(started_at), OVERLAY_ANIM_DURATION)
+            })
+    }
+
+    fn animation_running(started_at: Option<Instant>, duration: Duration) -> bool {
+        started_at
+            .is_some_and(|started_at| started_at.elapsed() <= duration + Duration::from_millis(24))
+    }
+
+    fn overlay_opacity(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        generation: u64,
+        key: &'static str,
+    ) -> f32 {
+        Self::transition_f32(
+            window,
+            cx,
+            (key, generation.wrapping_add(10_000)),
+            OVERLAY_ANIM_DURATION,
+            0.0,
+            1.0,
+        )
+    }
+
+    fn overlay_offset(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        generation: u64,
+        key: &'static str,
+    ) -> f32 {
+        Self::transition_f32(
+            window,
+            cx,
+            (key, generation.wrapping_add(20_000)),
+            OVERLAY_ANIM_DURATION,
+            5.0,
+            0.0,
+        )
+    }
+
+    fn transition_f32(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        key: (&'static str, u64),
+        duration: Duration,
+        initial: f32,
+        target: f32,
+    ) -> f32 {
+        let transition = window
+            .use_keyed_transition(key, cx, duration, move |_, _| initial)
+            .with_easing(RootView::ease_out);
+        transition.update(cx, |value, cx| {
+            *value = target;
+            cx.notify();
+        });
+        let value = *transition.evaluate(window, cx);
+        value
+    }
+
+    fn ease_out(delta: f32) -> f32 {
+        1.0 - (1.0 - delta).powi(3)
+    }
+
     fn toast_ease_out(_delta: f32) -> f32 {
         1.0 - (1.0 - _delta).powi(3)
     }
