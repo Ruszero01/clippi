@@ -13,8 +13,9 @@ pub fn update_temp_dir() -> PathBuf {
 
 // ─── Windows ──────────────────────────────────────────────────────────
 
-/// Run the NSIS installer silently with admin privileges.
+/// Run the NSIS installer with admin privileges, non-silent.
 /// Uses ShellExecuteW with the `runas` verb to trigger a UAC prompt.
+/// The user goes through the installer wizard manually.
 /// The installer handles restarting Clippi after installation completes.
 #[cfg(target_os = "windows")]
 pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
@@ -23,7 +24,6 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
 
     let exe = installer_path.to_str().ok_or("Invalid installer path")?;
     let exe_wide: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
-    let args = "/S\0".encode_utf16().collect::<Vec<u16>>();
     let verb = "runas\0".encode_utf16().collect::<Vec<u16>>();
 
     // SAFETY: ShellExecuteW with known string pointers — safe call.
@@ -32,7 +32,7 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
             std::ptr::null_mut(), // parent window
             verb.as_ptr(),        // "runas" — triggers UAC elevation
             exe_wide.as_ptr(),    // installer path
-            args.as_ptr(),        // "/S" silent
+            std::ptr::null(),     // no silent flag — user runs installer manually
             std::ptr::null(),     // working directory
             SW_SHOW,
         )
