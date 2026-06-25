@@ -651,7 +651,7 @@ impl RenderOnce for ClipboardCard {
         let is_fav = item.is_favorite;
         let content_type = item.content_type;
         let note = item.note.clone();
-        let full_text = item.full_text.clone();
+        let full_text = &item.full_text; // borrowed — only cloned in the branches that own it
         let img_w = item.image_width;
         let img_h = item.image_height;
         let img_path = item.image_path.clone();
@@ -666,7 +666,7 @@ impl RenderOnce for ClipboardCard {
         } else {
             None
         };
-        let color_swatch = swatch_color(&full_text, accent);
+        let color_swatch = swatch_color(full_text, accent);
 
         let border_color = if selected { accent } else { divider };
 
@@ -897,7 +897,7 @@ impl RenderOnce for ClipboardCard {
                 // --- Favicon priority: cache → source app icon → type icon ---
                 // --- Only checks local cache — network fetch happens async ---
                 // --- in the clipboard detection thread (ensure_favicon_cached). ---
-                let domain = url_domain(&full_text);
+                let domain = url_domain(full_text);
                 let favicon_path = if domain.is_empty() {
                     None
                 } else {
@@ -1095,8 +1095,8 @@ impl RenderOnce for ClipboardCard {
             if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
                 if matches!(content_kind, DisplayKind::Link) {
                     // URL: bold domain + dimmed path
-                    let domain = url_domain(&full_text);
-                    let path = url_path(&full_text);
+                    let domain = url_domain(full_text);
+                    let path = url_path(full_text);
                     div()
                         .flex_1()
                         .flex()
@@ -1119,7 +1119,7 @@ impl RenderOnce for ClipboardCard {
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
                             .overflow_hidden()
-                            .child(full_text),
+                            .child(item.full_text.clone()),
                     )
                 }
             } else if matches!(content_kind, DisplayKind::Color) {
@@ -1129,7 +1129,7 @@ impl RenderOnce for ClipboardCard {
                         .font_weight(FontWeight::BOLD)
                         .text_color(text_1)
                         .overflow_hidden()
-                        .child(full_text),
+                        .child(item.full_text.clone()),
                 )
             } else {
                 match content_type {
@@ -1204,8 +1204,8 @@ impl RenderOnce for ClipboardCard {
                             .line_height(px(18.))
                             .overflow_hidden();
 
-                        if is_email(&full_text) || is_phone(&full_text) {
-                            content_box.child(mask_sensitive_preview(&full_text, &meta_type))
+                        if is_email(full_text) || is_phone(full_text) {
+                            content_box.child(mask_sensitive_preview(full_text, &meta_type))
                         } else {
                             let style = TextViewStyle::default()
                                 .paragraph_gap(rems(0.25))

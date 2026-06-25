@@ -484,6 +484,100 @@ impl SettingsPanel {
             )
     }
 
+    /// Shared recording card: title + description + record button.
+    /// Used for both the main hotkey and quick hotkey cards.
+    fn render_recording_card(
+        title: I18nKey,
+        hotkey_display: SharedString,
+        recording: bool,
+        theme: &ClippiTheme,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let recording_border = if recording {
+            theme.accent
+        } else {
+            theme.divider
+        };
+        let recording_btn_bg = if recording {
+            theme.accent_soft
+        } else {
+            theme.accent
+        };
+        let recording_btn_text = if recording {
+            theme.accent
+        } else {
+            rgb(0xffffff)
+        };
+        let desc_color = if recording {
+            theme.accent
+        } else {
+            theme.text_3
+        };
+        let desc_text = if recording {
+            I18nKey::HotkeyPressToRecord.text()
+        } else {
+            I18nKey::HotkeyRecordingIdle.text()
+        };
+
+        div()
+            .h(px(66.))
+            .rounded(px(10.))
+            .bg(theme.surface)
+            .border(px(1.))
+            .border_color(recording_border)
+            .px(px(14.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.text_1)
+                            .child(title.text()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(desc_color)
+                            .child(desc_text),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(28.))
+                    .w(px(80.))
+                    .rounded(px(7.))
+                    .bg(recording_btn_bg)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(!recording, |d| {
+                        d.cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.opacity(0.85))
+                    })
+                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                        if recording {
+                            return;
+                        }
+                        on_click(window, cx);
+                    })
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(recording_btn_text)
+                            .child(hotkey_display),
+                    ),
+            )
+    }
+
     pub fn render_hotkey_tab(
         &mut self,
         _window: &mut Window,
@@ -507,108 +601,28 @@ impl SettingsPanel {
         let theme = &self.theme;
         let has_fg = !fg_app_name.is_empty();
 
-        // Recording state colors — only for global hotkey (paste shortcut
-        // recording has its own dedicated panel below the foreground app bar).
-        let recording_border = if recording {
-            theme.accent
-        } else {
-            theme.divider
-        };
-        let recording_btn_bg = if recording {
-            theme.accent_soft
-        } else {
-            theme.accent
-        };
-        let recording_btn_text = if recording {
-            theme.accent
-        } else {
-            rgb(0xffffff)
-        };
-
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
             // 1. Hotkey recording card (66px)
-            .child(
-                div()
-                    .h(px(66.))
-                    .rounded(px(10.))
-                    .bg(theme.surface)
-                    .border(px(1.))
-                    .border_color(recording_border)
-                    .px(px(14.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.text_1)
-                                    .child(I18nKey::HotkeyTabTitle.text()),
-                            )
-                            .child({
-                                let desc_color = if recording {
-                                    theme.accent
-                                } else {
-                                    theme.text_3
-                                };
-                                let desc_text = if recording {
-                                    I18nKey::HotkeyPressToRecord.text()
-                                } else {
-                                    I18nKey::HotkeyRecordingIdle.text()
-                                };
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(desc_color)
-                                    .child(desc_text)
-                            }),
-                    )
-                    .child({
-                        let state = state.clone();
-                        let wm = wm.clone();
-                        let this = this.clone();
-                        div()
-                            .h(px(28.))
-                            .w(px(80.))
-                            .rounded(px(7.))
-                            .bg(recording_btn_bg)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(!recording, |d| {
-                                d.cursor(CursorStyle::PointingHand)
-                                    .hover(move |style| style.opacity(0.85))
-                            })
-                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                if recording {
-                                    return;
-                                }
-                                wm.update(cx, |wm, cx| {
-                                    wm.start_hotkey_recording(cx);
-                                });
-                                state.update(cx, |s, _cx| {
-                                    s.hotkey_recording = true;
-                                });
-                                this.update(cx, |_panel, cx| cx.notify());
-                            })
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(recording_btn_text)
-                                    .child(hotkey_display.clone()),
-                            )
-                    }),
-            )
+            .child({
+                let state = state.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                Self::render_recording_card(
+                    I18nKey::HotkeyTabTitle,
+                    hotkey_display.clone().into(),
+                    recording,
+                    theme,
+                    move |_window, cx| {
+                        wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                        state.update(cx, |s, _cx| s.hotkey_recording = true);
+                        this.update(cx, |_panel, cx| cx.notify());
+                    },
+                )
+            })
             // 1b. Quick hotkey recording card (only visible when enabled)
             .when(self.state.read(cx).settings.quick_hotkey_enabled, {
                 let quick_hotkey = self.state.read(cx).settings.quick_hotkey.clone();
@@ -618,100 +632,17 @@ impl SettingsPanel {
                 let this = this.clone();
                 let theme = theme.clone();
                 move |parent| {
-                    let recording_border = if quick_recording {
-                        theme.accent
-                    } else {
-                        theme.divider
-                    };
-                    let recording_btn_bg = if quick_recording {
-                        theme.accent_soft
-                    } else {
-                        theme.accent
-                    };
-                    let recording_btn_text = if quick_recording {
-                        theme.accent
-                    } else {
-                        rgb(0xffffff)
-                    };
-                    let desc_color = if quick_recording {
-                        theme.accent
-                    } else {
-                        theme.text_3
-                    };
-                    let desc_text = if quick_recording {
-                        I18nKey::HotkeyPressToRecord.text()
-                    } else {
-                        I18nKey::HotkeyRecordingIdle.text()
-                    };
-
-                    parent.child(
-                        div()
-                            .h(px(66.))
-                            .rounded(px(10.))
-                            .bg(theme.surface)
-                            .border(px(1.))
-                            .border_color(recording_border)
-                            .px(px(14.))
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(theme.text_1)
-                                            .child(I18nKey::QuickHotkeyLabel.text()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(desc_color)
-                                            .child(desc_text),
-                                    ),
-                            )
-                            .child({
-                                let state = state.clone();
-                                let wm = wm.clone();
-                                let this = this.clone();
-                                div()
-                                    .h(px(28.))
-                                    .w(px(80.))
-                                    .rounded(px(7.))
-                                    .bg(recording_btn_bg)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(!quick_recording, |d| {
-                                        d.cursor(CursorStyle::PointingHand)
-                                            .hover(move |style| style.opacity(0.85))
-                                    })
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        if quick_recording {
-                                            return;
-                                        }
-                                        wm.update(cx, |wm, cx| {
-                                            wm.start_quick_hotkey_recording(cx);
-                                        });
-                                        state.update(cx, |s, _cx| {
-                                            s.recording_quick_hotkey = true;
-                                        });
-                                        this.update(cx, |_panel, cx| cx.notify());
-                                    })
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(recording_btn_text)
-                                            .child(quick_hotkey.clone()),
-                                    )
-                            }),
-                    )
+                    parent.child(Self::render_recording_card(
+                        I18nKey::QuickHotkeyLabel,
+                        quick_hotkey.into(),
+                        quick_recording,
+                        &theme,
+                        move |_window, cx| {
+                            wm.update(cx, |wm, cx| wm.start_quick_hotkey_recording(cx));
+                            state.update(cx, |s, _cx| s.recording_quick_hotkey = true);
+                            this.update(cx, |_panel, cx| cx.notify());
+                        },
+                    ))
                 }
             })
             // 2. Shared foreground app info bar (always shows current foreground)
