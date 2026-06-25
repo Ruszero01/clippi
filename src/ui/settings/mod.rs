@@ -416,6 +416,35 @@ impl SettingsPanel {
             ))
     }
 
+    /// Render a toggle row with common boilerplate handled automatically.
+    ///
+    /// Handles entity cloning, dynamic description text, and `cx.notify()`.
+    /// The `on_changed` closure receives references to the cloned state and
+    /// settings-panel entities plus `&mut Window` and `&mut App`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_toggle_row(
+        &mut self,
+        label: I18nKey,
+        desc_on: I18nKey,
+        desc_off: I18nKey,
+        value: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        on_changed: impl Fn(&Entity<AppState>, &Entity<SettingsPanel>, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let state = self.state.clone();
+        let this = cx.entity().clone();
+        let desc = if value {
+            desc_on.text()
+        } else {
+            desc_off.text()
+        };
+        self.setting_row_with_toggle(label.text(), desc, value, window, cx, move |window, app| {
+            on_changed(&state, &this, window, app);
+            this.update(app, |_panel, cx| cx.notify());
+        })
+    }
+
     /// Render a settings row with an option button group on the right.
     fn setting_row_with_options(
         &self,

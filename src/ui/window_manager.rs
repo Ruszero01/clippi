@@ -928,7 +928,9 @@ impl WindowManager {
         self.capture_window_geometry(cx);
         let (sx, sy, sw, sh) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
         self.state.update(cx, |state, _cx| {
-            let _ = state.db.checkpoint();
+            if let Err(e) = state.db.checkpoint() {
+                log::error!("WAL checkpoint failed (save geometry): {e}");
+            }
             let settings = &mut state.settings;
             if sw > 0.0 && sh > 0.0 {
                 settings.saved_window_x = sx;
@@ -1227,7 +1229,9 @@ impl WindowManager {
         self.state.update(cx, |state, _cx| state.clear_items());
         cx.emit(WindowManagerEvent::ClipboardChanged);
         self.state.update(cx, |state, _cx| {
-            let _ = state.db.checkpoint();
+            if let Err(e) = state.db.checkpoint() {
+                log::error!("WAL checkpoint failed (clipboard changed): {e}");
+            }
         });
         crate::platform::util::trim_process_working_set();
     }

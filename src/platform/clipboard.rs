@@ -7,7 +7,7 @@ use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
 use crate::core::types::{
     is_email, is_image_extension, is_markdown_like, is_path, is_phone, is_url, ClipboardItem,
-    ContentType, FileData, FileInfo, RichData,
+    ContentType, FileData, FileInfo, RichData, SourceAppInfo,
 };
 use crate::platform::source;
 use crate::services::favicon;
@@ -78,8 +78,16 @@ pub trait ClipboardListener: Send {
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     // --- Capture source app info at detection time (only once, not on re-copy) ---
     let source_info = source::get_clipboard_owner_info();
+    detect_files(ctx, &source_info)
+        .or_else(|| detect_image(ctx, &source_info))
+        .or_else(|| detect_text_content(ctx, &source_info))
+}
 
-    // --- ── File list detection (CF_HDROP on Windows, NSFilenames on macOS) ── ---
+/// --- File list detection (CF_HDROP on Windows, NSFilenames on macOS) ---
+fn detect_files(
+    ctx: &ClipboardContext,
+    source_info: &Option<SourceAppInfo>,
+) -> Option<ClipboardItem> {
     let has_files = ctx.has(ContentFormat::Files);
     if has_files {
         let files_result = ctx.get_files();
@@ -168,7 +176,13 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             }
         }
     }
+    None
+}
 
+fn detect_image(
+    ctx: &ClipboardContext,
+    source_info: &Option<SourceAppInfo>,
+) -> Option<ClipboardItem> {
     if ctx.has(ContentFormat::Image) {
         if let Some((png_data, iw, ih)) = read_clipboard_image_png(ctx) {
             let mut hasher = DefaultHasher::new();
@@ -201,7 +215,13 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             ));
         }
     }
+    None
+}
 
+fn detect_text_content(
+    ctx: &ClipboardContext,
+    source_info: &Option<SourceAppInfo>,
+) -> Option<ClipboardItem> {
     if let Ok(text) = ctx.get_text() {
         if text.is_empty() {
             return None;

@@ -52,104 +52,87 @@ impl SettingsPanel {
             .gap(px(12.))
             .pt(px(8.))
             // --- Auto-start ---
-            .child({
-                let state = state.clone();
-                let this = this.clone();
-                self.setting_row_with_toggle(
-                    I18nKey::SettingAutoStart.text(),
-                    I18nKey::DescAutoStart.text(),
-                    auto_start,
-                    window,
-                    cx,
-                    move |_window, _cx| {
-                        let new_val = !state.read(_cx).settings.auto_start;
-                        if let Err(e) = set_auto_start(new_val) {
-                            log::error!("Failed to set auto-start: {e}");
-                            return;
-                        }
-                        state.update(_cx, |s, _cx| {
-                            s.settings.auto_start = new_val;
-                            s.settings.save();
-                        });
-                        this.update(_cx, |_panel, cx| cx.notify());
-                    },
-                )
-            })
+            .child(self.render_toggle_row(
+                I18nKey::SettingAutoStart,
+                I18nKey::DescAutoStart,
+                I18nKey::DescAutoStart,
+                auto_start,
+                window,
+                cx,
+                |state, _this, _window, _cx| {
+                    let new_val = !state.read(_cx).settings.auto_start;
+                    if let Err(e) = set_auto_start(new_val) {
+                        log::error!("Failed to set auto-start: {e}");
+                        return;
+                    }
+                    state.update(_cx, |s, _cx| {
+                        s.settings.auto_start = new_val;
+                        s.settings.save();
+                    });
+                },
+            ))
             // --- Auto-hide ---
             .child({
-                let state = state.clone();
                 let wm = wm.clone();
-                let this = this.clone();
-                self.setting_row_with_toggle(
-                    I18nKey::SettingAutoHide.text(),
-                    I18nKey::DescAutoHide.text(),
+                self.render_toggle_row(
+                    I18nKey::SettingAutoHide,
+                    I18nKey::DescAutoHide,
+                    I18nKey::DescAutoHide,
                     auto_hide,
                     window,
                     cx,
-                    move |_window, _cx| {
+                    move |state, _this, _window, _cx| {
                         let new_val = state.update(_cx, |s, _cx| {
                             s.settings.auto_hide = !s.settings.auto_hide;
                             s.settings.save();
                             s.settings.auto_hide
                         });
                         wm.update(_cx, |wm, _cx| wm.set_auto_hide(new_val));
-                        this.update(_cx, |_panel, cx| cx.notify());
                     },
                 )
             })
             // --- Silent start ---
-            .child({
-                let state = state.clone();
-                let this = this.clone();
-                self.setting_row_with_toggle(
-                    I18nKey::SettingSilentStart.text(),
-                    I18nKey::DescSilentStart.text(),
-                    silent_start,
-                    window,
-                    cx,
-                    move |_window, _cx| {
-                        state.update(_cx, |s, _cx| {
-                            s.settings.silent_start = !s.settings.silent_start;
-                            s.settings.save();
-                        });
-                        this.update(_cx, |_panel, cx| cx.notify());
-                    },
-                )
-            })
+            .child(self.render_toggle_row(
+                I18nKey::SettingSilentStart,
+                I18nKey::DescSilentStart,
+                I18nKey::DescSilentStart,
+                silent_start,
+                window,
+                cx,
+                |state, _this, _window, _cx| {
+                    state.update(_cx, |s, _cx| {
+                        s.settings.silent_start = !s.settings.silent_start;
+                        s.settings.save();
+                    });
+                },
+            ))
             // --- Quick paste window ---
             .child({
-                let state = state.clone();
                 let wm = wm.clone();
-                let this = this.clone();
                 let quick_enabled = self.state.read(cx).settings.quick_hotkey_enabled;
-                self.setting_row_with_toggle(
-                    I18nKey::SettingQuickWindow.text(),
-                    I18nKey::DescQuickWindow.text(),
+                self.render_toggle_row(
+                    I18nKey::SettingQuickWindow,
+                    I18nKey::DescQuickWindow,
+                    I18nKey::DescQuickWindow,
                     quick_enabled,
                     window,
                     cx,
-                    {
-                        let state = state.clone();
-                        let wm = wm.clone();
-                        let this = this.clone();
-                        move |_window, _cx| {
-                            let new_val = !state.read(_cx).settings.quick_hotkey_enabled;
-                            state.update(_cx, |s, _cx| {
-                                s.settings.quick_hotkey_enabled = new_val;
-                                if new_val && s.settings.quick_hotkey == s.settings.hotkey {
-                                    s.settings.quick_hotkey = "Alt+V".to_string();
-                                }
-                                s.settings.save();
-                            });
-                            wm.update(_cx, |wm, cx| {
-                                if new_val {
-                                    wm.reload_quick_hotkey(cx);
-                                } else {
-                                    wm.disable_quick_hotkey();
-                                }
-                            });
-                            this.update(_cx, |_panel, cx| cx.notify());
-                        }
+                    move |state, _this, _window, _cx| {
+                        let new_val = !state.read(_cx).settings.quick_hotkey_enabled;
+                        state.update(_cx, |s, _cx| {
+                            s.settings.quick_hotkey_enabled = new_val;
+                            if new_val && s.settings.quick_hotkey == s.settings.hotkey {
+                                s.settings.quick_hotkey = "Alt+V".to_string();
+                            }
+                            s.settings.save();
+                        });
+                        wm.update(_cx, |wm, cx| {
+                            if new_val {
+                                wm.reload_quick_hotkey(cx);
+                            } else {
+                                wm.disable_quick_hotkey();
+                            }
+                        });
                     },
                 )
             });
@@ -157,23 +140,21 @@ impl SettingsPanel {
         // --- Hide taskbar icon (Windows only — macOS tray apps already hide from Dock) ---
         #[cfg(target_os = "windows")]
         let container = container.child({
-            let state = state.clone();
             let wm = wm.clone();
-            let this = this.clone();
-            self.setting_row_with_toggle(
-                I18nKey::SettingHideTaskbar.text(),
-                I18nKey::DescHideTaskbar.text(),
+            self.render_toggle_row(
+                I18nKey::SettingHideTaskbar,
+                I18nKey::DescHideTaskbar,
+                I18nKey::DescHideTaskbar,
                 hide_taskbar_icon,
                 window,
                 cx,
-                move |_window, _cx| {
+                move |state, _this, _window, _cx| {
                     let new_val = state.update(_cx, |s, _cx| {
                         s.settings.hide_taskbar_icon = !s.settings.hide_taskbar_icon;
                         s.settings.save();
                         s.settings.hide_taskbar_icon
                     });
                     wm.update(_cx, |wm, cx| wm.set_hide_taskbar_icon(new_val, cx));
-                    this.update(_cx, |_panel, cx| cx.notify());
                 },
             )
         });
@@ -181,16 +162,15 @@ impl SettingsPanel {
         // --- Block system window behaviors (Windows only) ---
         #[cfg(target_os = "windows")]
         let container = container.child({
-            let state = state.clone();
             let wm = wm.clone();
-            let this = this.clone();
-            self.setting_row_with_toggle(
-                I18nKey::SettingBlockSysBehavior.text(),
-                I18nKey::DescBlockSysBehavior.text(),
+            self.render_toggle_row(
+                I18nKey::SettingBlockSysBehavior,
+                I18nKey::DescBlockSysBehavior,
+                I18nKey::DescBlockSysBehavior,
                 block_system_behaviors,
                 window,
                 cx,
-                move |_window, _cx| {
+                move |state, _this, _window, _cx| {
                     let new_val = state.update(_cx, |s, _cx| {
                         s.settings.block_system_window_behaviors =
                             !s.settings.block_system_window_behaviors;
@@ -200,7 +180,6 @@ impl SettingsPanel {
                     wm.update(_cx, |wm, cx| {
                         wm.set_block_system_window_behaviors(new_val, cx)
                     });
-                    this.update(_cx, |_panel, cx| cx.notify());
                 },
             )
         });
