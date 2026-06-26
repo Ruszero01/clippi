@@ -6,8 +6,10 @@ use gpui::{InteractiveElement, StatefulInteractiveElement};
 
 use crate::core::color::detect_color;
 use crate::core::types::{
-    format_relative_time, mask_sensitive_preview, ClipboardItem, ContentType, DisplayKind, FileData,
+    format_relative_time, mask_sensitive_preview, url_domain, url_path, url_site_name,
+    ClipboardItem, ContentType, DisplayKind, FileData, RichData,
 };
+use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
 use crate::ui::search_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
@@ -38,7 +40,7 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     h
 }
 
-/// (slot, id, icon, color_swatch, preview_text, note, relative_time, image_path)
+/// (slot, id, icon, color_swatch, preview_text, note, relative_time, image_path, favicon_path)
 type RowData = (
     usize,
     i64,
@@ -47,6 +49,7 @@ type RowData = (
     String,
     String,
     String,
+    Option<String>,
     Option<String>,
 );
 
@@ -172,6 +175,9 @@ impl QuickPasteView {
     }
 
     fn row_data(&self, cx: &Context<Self>) -> Vec<RowData> {
+        let settings = &self.state.read(cx).settings;
+        let auto_fetch_title = settings.auto_fetch_url_title;
+
         self.state
             .read(cx)
             .items
@@ -188,15 +194,27 @@ impl QuickPasteView {
                 } else {
                     None
                 };
+                // Favicon cache path for link-type items
+                let favicon_path = if item.meta_type == "link" {
+                    let domain = url_domain(&item.full_text);
+                    if !domain.is_empty() {
+                        favicon_cache_path(&domain)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 (
                     slot,
                     item.id,
                     type_icon(item),
                     color_swatch,
-                    preview_text(item),
+                    preview_text(item, auto_fetch_title),
                     item.note.clone(),
                     format_relative_time(&item.updated_at),
                     is_image.then(|| item.image_path.clone()),
+                    favicon_path,
                 )
             })
             .collect()
@@ -459,6 +477,7 @@ impl Render for QuickPasteView {
                                     note,
                                     time,
                                     img_path,
+                                    favicon_path,
                                 )| {
                                     let index = first_visible + slot;
                                     let selected = index == selected_index;
@@ -570,6 +589,13 @@ impl Render for QuickPasteView {
                                                 .border(px(1.0))
                                                 .border_color(swatch_border)
                                                 .into_any_element()
+                                        } else if let Some(ref fav_path) = favicon_path {
+                                            // Favicon image for link-type items
+                                            gpui::img(std::path::Path::new(fav_path))
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded(px(3.0))
+                                                .into_any_element()
                                         } else {
                                             div()
                                                 .w(px(16.0))
@@ -633,7 +659,7 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
     }
 }
 
-fn preview_text(item: &ClipboardItem) -> String {
+fn preview_text(item: &ClipboardItem, auto_fetch_title: bool) -> String {
     let raw = match item.content_type {
         ContentType::Image => {
             if item.image_width > 0 && item.image_height > 0 {
@@ -652,7 +678,36 @@ fn preview_text(item: &ClipboardItem) -> String {
                 format!("{} files", data.files.len())
             }
         }
-        _ => item.full_text.clone(),
+        _ => {
+            // ── URL: site name + page title (or domain + path fallback) ──
+            if item.meta_type == "link" {
+                let domain = url_domain(&item.full_text);
+                let path = url_path(&item.full_text);
+                if auto_fetch_title {
+                    let rd = RichData::from_json(&item.rich_data);
+                    if let Some(title) = rd.page_title {
+                        let site = url_site_name(&item.full_text);
+                        return format!("{} - {}", site, title);
+                    }
+                }
+                // Fallback: domain + path
+                if !domain.is_empty() {
+                    return domain + &path;
+                }
+                return item.full_text.clone();
+            }
+            // ── Path: leaf name - full path ──
+            if item.meta_type == "path" {
+                let path_text = item.full_text.trim_end_matches(['\\', '/']);
+                if let Some(pos) = path_text.rfind(['\\', '/']) {
+                    if pos + 1 < path_text.len() {
+                        return format!("{} - {}", &path_text[pos + 1..], item.full_text);
+                    }
+                }
+                return item.full_text.clone();
+            }
+            item.full_text.clone()
+        }
     };
     // Normalize whitespace in a single pass (avoid intermediate Vec allocation)
     let raw: String = {
