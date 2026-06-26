@@ -665,6 +665,9 @@ impl AppState {
         if item.image_path.is_empty() {
             return;
         }
+        // Skip self-recording: the path text we write to clipboard is an
+        // internal copy action, not a new clipboard history entry.
+        self.skip_next.store(true, Ordering::SeqCst);
         crate::services::clipboard_ops::write_text_to_clipboard(&item.image_path);
         restore_paste_target();
         let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
