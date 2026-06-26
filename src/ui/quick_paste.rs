@@ -6,8 +6,10 @@ use gpui::{InteractiveElement, StatefulInteractiveElement};
 
 use crate::core::color::detect_color;
 use crate::core::types::{
-    format_relative_time, mask_sensitive_preview, ClipboardItem, ContentType, DisplayKind, FileData,
+    format_relative_time, mask_sensitive_preview, path_is_native, url_domain, url_path,
+    url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, RichData,
 };
+use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
 use crate::ui::search_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
@@ -38,16 +40,20 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     h
 }
 
-/// (slot, id, icon, color_swatch, preview_text, note, relative_time, image_path)
+/// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, image_path, favicon_path, file_icon_path, path_color)
 type RowData = (
     usize,
     i64,
     &'static str,
     Option<Rgba>,
     String,
+    Option<String>,
     String,
     String,
     Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<Rgba>,
 );
 
 pub enum QuickPasteEvent {
@@ -172,6 +178,9 @@ impl QuickPasteView {
     }
 
     fn row_data(&self, cx: &Context<Self>) -> Vec<RowData> {
+        let settings = &self.state.read(cx).settings;
+        let auto_fetch_title = settings.auto_fetch_url_title;
+
         self.state
             .read(cx)
             .items
@@ -179,6 +188,22 @@ impl QuickPasteView {
             .skip(self.first_visible)
             .take(VISIBLE_ROWS)
             .enumerate()
+            .filter(|(_, item)| {
+                // Exclude items whose source file is gone — useless for quick paste.
+                if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+                    return std::path::Path::new(&item.image_path).exists();
+                }
+                if item.content_type == ContentType::File {
+                    let fd = FileData::from_json(&item.file_data);
+                    // Only filter single-file items; multi-file stays.
+                    if fd.files.len() == 1 {
+                        if let Some(fi) = fd.files.first() {
+                            return std::path::Path::new(&fi.path).exists();
+                        }
+                    }
+                }
+                true
+            })
             .map(|(slot, item)| {
                 let is_image =
                     item.content_type == ContentType::Image && !item.image_path.is_empty();
@@ -188,15 +213,57 @@ impl QuickPasteView {
                 } else {
                     None
                 };
+                // Favicon cache path for link-type items
+                let favicon_path = if item.meta_type == "link" {
+                    let domain = url_domain(&item.full_text);
+                    if !domain.is_empty() {
+                        favicon_cache_path(&domain)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let (preview_label, preview_subtitle) = preview_parts(item, auto_fetch_title);
+                // File icon cache path for file-type items
+                let file_icon_path = if item.content_type == ContentType::File {
+                    let data = FileData::from_json(&item.file_data);
+                    data.files
+                        .first()
+                        .and_then(|fi| {
+                            crate::ui::clipboard_card::cached_file_icon_path(&fi.path, fi.is_dir)
+                        })
+                        .map(|p| p.to_string_lossy().to_string())
+                } else {
+                    None
+                };
+                // Path color: invalid → danger, foreign → warn
+                let path_color = if item.meta_type == "path" {
+                    let foreign = !path_is_native(&item.full_text);
+                    let invalid = !foreign && !crate::core::types::path_exists(&item.full_text);
+                    if invalid {
+                        Some(rgb(0xef4444)) // danger
+                    } else if foreign {
+                        Some(rgb(0xeab308)) // path_warn
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 (
                     slot,
                     item.id,
                     type_icon(item),
                     color_swatch,
-                    preview_text(item),
+                    preview_label,
+                    preview_subtitle,
                     item.note.clone(),
                     format_relative_time(&item.updated_at),
                     is_image.then(|| item.image_path.clone()),
+                    favicon_path,
+                    file_icon_path,
+                    path_color,
                 )
             })
             .collect()
@@ -456,9 +523,13 @@ impl Render for QuickPasteView {
                                     icon,
                                     color_swatch,
                                     preview,
+                                    preview_subtitle,
                                     note,
                                     time,
                                     img_path,
+                                    favicon_path,
+                                    file_icon_path,
+                                    path_color,
                                 )| {
                                     let index = first_visible + slot;
                                     let selected = index == selected_index;
@@ -491,6 +562,38 @@ impl Render for QuickPasteView {
                                                 gpui::img(std::path::Path::new(path))
                                                     .h(px(thumb_h))
                                                     .object_fit(ObjectFit::Contain),
+                                            )
+                                            .into_any_element()
+                                    } else if let Some(subtitle) = preview_subtitle {
+                                        // Rich label + dimmed subtitle (URL / Path / File)
+                                        let label_color = path_color.unwrap_or(t.text_1);
+                                        div()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .overflow_hidden()
+                                            .child(
+                                                div()
+                                                    .text_size(px(13.0))
+                                                    .text_color(label_color)
+                                                    .whitespace_nowrap()
+                                                    .child(preview),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(13.0))
+                                                    .text_color(t.text_3)
+                                                    .whitespace_nowrap()
+                                                    .child(" - "),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(13.0))
+                                                    .text_color(t.text_3)
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child(subtitle),
                                             )
                                             .into_any_element()
                                     } else {
@@ -570,6 +673,20 @@ impl Render for QuickPasteView {
                                                 .border(px(1.0))
                                                 .border_color(swatch_border)
                                                 .into_any_element()
+                                        } else if let Some(ref fav_path) = favicon_path {
+                                            // Favicon image for link-type items
+                                            gpui::img(std::path::Path::new(fav_path))
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded(px(3.0))
+                                                .into_any_element()
+                                        } else if let Some(ref ficon_path) = file_icon_path {
+                                            // File extension icon
+                                            gpui::img(std::path::Path::new(ficon_path))
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded(px(3.0))
+                                                .into_any_element()
                                         } else {
                                             div()
                                                 .w(px(16.0))
@@ -633,26 +750,65 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
     }
 }
 
-fn preview_text(item: &ClipboardItem) -> String {
+/// Split preview into (label, optional_subtitle) for rich display.
+/// URL: (site/domain, page title or path)  Path: (leaf, full path)
+fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Option<String>) {
     let raw = match item.content_type {
         ContentType::Image => {
-            if item.image_width > 0 && item.image_height > 0 {
+            let label = if item.image_width > 0 && item.image_height > 0 {
                 format!("Image {}×{}", item.image_width, item.image_height)
             } else {
                 "Image".to_string()
-            }
+            };
+            return (label, None);
         }
         ContentType::File => {
             let data = FileData::from_json(&item.file_data);
             if data.files.is_empty() {
-                item.full_text.clone()
-            } else if data.files.len() == 1 {
-                data.files[0].name.clone()
-            } else {
-                format!("{} files", data.files.len())
+                return (item.full_text.clone(), None);
             }
+            let first_name = data.files[0].name.clone();
+            if data.files.len() == 1 {
+                return (first_name, None);
+            }
+            // Multiple files: first name as label, "等N个文件" as faded subtitle
+            let count_label = crate::core::i18n_keys::I18nKey::QuickFileCount
+                .fmt(&[&data.files.len().to_string()]);
+            return (first_name, Some(count_label));
         }
-        _ => item.full_text.clone(),
+        _ => {
+            // ── URL: site name + page title (or domain + path fallback) ──
+            if item.meta_type == "link" {
+                let domain = url_domain(&item.full_text);
+                let path = url_path(&item.full_text);
+                if auto_fetch_title {
+                    let rd = RichData::from_json(&item.rich_data);
+                    if let Some(title) = rd.page_title {
+                        let site = url_site_name(&item.full_text);
+                        return (site, Some(title));
+                    }
+                }
+                // Fallback: domain (label) + path (subtitle)
+                if !domain.is_empty() && !path.is_empty() && path != "/" {
+                    return (domain, Some(path));
+                }
+                return (item.full_text.clone(), None);
+            }
+            // ── Path: leaf name (label) + full path (subtitle) ──
+            if item.meta_type == "path" {
+                let path_text = item.full_text.trim_end_matches(['\\', '/']);
+                if let Some(pos) = path_text.rfind(['\\', '/']) {
+                    if pos + 1 < path_text.len() {
+                        return (
+                            path_text[pos + 1..].to_string(),
+                            Some(item.full_text.clone()),
+                        );
+                    }
+                }
+                return (item.full_text.clone(), None);
+            }
+            item.full_text.clone()
+        }
     };
     // Normalize whitespace in a single pass (avoid intermediate Vec allocation)
     let raw: String = {
@@ -668,7 +824,8 @@ fn preview_text(item: &ClipboardItem) -> String {
         s
     };
     // Mask sensitive content (email / phone) in preview
-    mask_sensitive_preview(&raw, &item.meta_type)
+    let masked = mask_sensitive_preview(&raw, &item.meta_type);
+    (masked, None)
 }
 
 fn parse_hex_for_tag(hex: &str) -> Rgba {

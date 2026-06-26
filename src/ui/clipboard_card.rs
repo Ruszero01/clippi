@@ -290,7 +290,7 @@ fn format_file_size(bytes: i64) -> String {
     }
 }
 
-fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std::path::PathBuf> {
+pub(crate) fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std::path::PathBuf> {
     use std::path::Path;
     let cache_key = if is_dir {
         "folder".to_string()

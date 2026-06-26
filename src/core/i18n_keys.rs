@@ -203,6 +203,7 @@ define_i18n! {
     CtxDeselectAll:     ("取消全选", "Deselect All"),
     CtxTag:             ("标签", "Tag"),
     CtxOpenImage:       ("打开图片", "Open image"),
+    CtxPasteImagePath:  ("粘贴图片路径", "Paste image path"),
     CtxPasteOcr:        ("粘贴 OCR 文本", "Paste OCR text"),
     CtxDetectQr:        ("识别二维码", "Detect QR Code"),
     CtxPasteAsRgb:      ("粘贴为 RGB", "Paste as RGB"),
@@ -401,6 +402,7 @@ define_i18n! {
     CardImageSize:          ("{0} × {1}", "{0} × {1}"),
     CardChars:              ("{0} 字符", "{0} chars"),
     CardFilesCount:         ("{0} 个文件", "{0} files"),
+    QuickFileCount:         ("等{0}个文件", "and {0} more"),
 
     // ─── Clipboard list ───
     ListNoItems:            ("暂无条目", "No items yet"),

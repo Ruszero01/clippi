@@ -722,6 +722,12 @@ impl ClipboardListView {
                         .update(cx, |s, _cx| s.open_original_image(item_id));
                 }
             }
+            "paste_image_path" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_image_path(item_id));
+                }
+            }
             "paste_ocr" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;

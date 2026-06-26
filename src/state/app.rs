@@ -647,6 +647,33 @@ impl AppState {
         }
     }
 
+    /// Paste the image file path as plain text.
+    pub fn paste_image_path(&self, id: i64) {
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("paste_image_path: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("paste_image_path: db error for {id}: {e}");
+                return;
+            }
+        };
+        if item.image_path.is_empty() {
+            return;
+        }
+        // Skip self-recording: the path text we write to clipboard is an
+        // internal copy action, not a new clipboard history entry.
+        self.skip_next.store(true, Ordering::SeqCst);
+        crate::services::clipboard_ops::write_text_to_clipboard(&item.image_path);
+        restore_paste_target();
+        let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+        paste_after_delay(shortcuts);
+    }
+
     pub fn open_item_location(&self, id: i64) {
         let item = match self.db.get_by_id(id) {
             Ok(Some(item)) => item,
