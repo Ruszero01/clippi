@@ -213,9 +213,9 @@ impl RenderOnce for TagPickerPanel {
                                         let trimmed = name.trim();
                                         if !trimmed.is_empty() {
                                             // Exact name match → toggle; no match → create
-                                            let exact = tags_for_search
-                                                .iter()
-                                                .find(|(t, _)| t.name.eq_ignore_ascii_case(trimmed));
+                                            let exact = tags_for_search.iter().find(|(t, _)| {
+                                                t.name.eq_ignore_ascii_case(trimmed)
+                                            });
                                             if let Some((tag, state)) = exact {
                                                 if let Some(ref handler) = on_toggle {
                                                     handler(tag.id, *state, window, cx);
@@ -293,30 +293,25 @@ impl RenderOnce for TagPickerPanel {
                         .flex_col()
                         .max_h(px(230.))
                         .overflow_y_scrollbar()
-                        .child(
-                            div()
-                                .pr(px(8.))
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.))
-                                .children(rows.into_iter().map(|row| {
-                                    let on_toggle = on_toggle.clone();
-                                    div()
-                                        .flex()
-                                .flex_row()
-                                .gap(px(4.))
-                                .children(row.into_iter().map(move |(tag, state)| {
-                                    let cell_colors = TagCellColors {
-                                        active_bg,
-                                        input_bg,
-                                        hover_bg: btn_hover,
+                        .child(div().pr(px(8.)).flex().flex_col().gap(px(4.)).children(
+                            rows.into_iter().map(|row| {
+                                let on_toggle = on_toggle.clone();
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(4.))
+                                    .children(row.into_iter().map(move |(tag, state)| {
+                                        let cell_colors = TagCellColors {
+                                            active_bg,
+                                            input_bg,
+                                            hover_bg: btn_hover,
                                             accent,
                                             text_1,
                                         };
-                                    tag_cell(tag, state, on_toggle.clone(), &cell_colors)
-                                }))
-                        })),
-                        ),
+                                        tag_cell(tag, state, on_toggle.clone(), &cell_colors)
+                                    }))
+                            }),
+                        )),
                 )
             })
     }
