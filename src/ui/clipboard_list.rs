@@ -56,6 +56,7 @@ pub struct ClipboardListView {
     pub(crate) search_bar: Option<Entity<SearchBar>>,
     // --- Hover tracking ---
     hovered_index: Option<usize>,
+    last_hover_pos: Option<Point<Pixels>>,
     // --- Context menu state ---
     context_menu_visible: bool,
     context_menu_x: f32,
@@ -108,6 +109,7 @@ impl ClipboardListView {
             state,
             search_bar: None,
             hovered_index: None,
+            last_hover_pos: None,
             context_menu_visible: false,
             context_menu_x: 0.0,
             context_menu_y: 0.0,
@@ -790,8 +792,12 @@ impl ClipboardListView {
             }
             "batch_tag" => {
                 self.tag_picker_visible = true;
-                self.tag_picker_x = 400.0;
-                self.tag_picker_y = 80.0;
+                let (px, py) = self
+                    .last_hover_pos
+                    .map(|p| (f32::from(p.x), f32::from(p.y)))
+                    .unwrap_or((400.0, 80.0));
+                self.tag_picker_x = px;
+                self.tag_picker_y = py;
                 self.tag_picker_is_batch = true;
                 self.tag_picker_item_id = -1;
                 cx.notify();
@@ -810,8 +816,12 @@ impl ClipboardListView {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
                         self.tag_picker_visible = true;
-                        self.tag_picker_x = 400.0;
-                        self.tag_picker_y = 80.0;
+                        let (px, py) = self
+                            .last_hover_pos
+                            .map(|p| (f32::from(p.x), f32::from(p.y)))
+                            .unwrap_or((400.0, 80.0));
+                        self.tag_picker_x = px;
+                        self.tag_picker_y = py;
                         self.tag_picker_is_batch = false;
                         self.tag_picker_item_id = item.id;
                         cx.notify();
@@ -1174,13 +1184,14 @@ impl Render for ClipboardListView {
                                                 .h_full()
                                                 .py(px(5.))
                                                 .on_mouse_move({
-                                                    move |_ev, _window, cx| {
+                                                    move |ev, _window, cx| {
                                                         cx.stop_propagation();
                                                         list_for_hover.update(cx, |this, cx| {
                                                             if this.hovered_index != Some(i) {
                                                                 this.hovered_index = Some(i);
                                                                 cx.notify();
                                                             }
+                                                            this.last_hover_pos = Some(ev.position);
                                                         });
                                                     }
                                                 })
