@@ -1340,18 +1340,59 @@ impl RenderOnce for ClipboardCard {
                                 .first()
                                 .is_some_and(|f| !std::path::Path::new(&f.path).exists());
                         if file_missing {
+                            let fi = &files[0];
+                            let (stem, ext) = if fi.is_dir {
+                                (fi.name.clone(), String::new())
+                            } else {
+                                split_name_ext(&fi.name)
+                            };
+                            let bad_icon = if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
                             div()
                                 .flex_1()
                                 .flex()
-                                .items_center()
-                                .justify_center()
-                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
+                                .flex_col()
+                                .gap(px(3.))
+                                .overflow_hidden()
                                 .child(
                                     div()
-                                        .text_size(px(24.))
-                                        .font_family("iconfont")
-                                        .text_color(rgba(0xff5f5780))
-                                        .child("\u{e607}"),
+                                        .rounded(px(4.))
+                                        .bg(subtle_row_bg)
+                                        .px(px(6.))
+                                        .py(px(4.))
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(4.))
+                                        .items_center()
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .font_family("iconfont")
+                                                .text_size(px(12.))
+                                                .text_color(danger)
+                                                .child(bad_icon),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .flex()
+                                                .flex_row()
+                                                .gap(px(0.))
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.))
+                                                        .text_color(danger)
+                                                        .whitespace_nowrap()
+                                                        .overflow_hidden()
+                                                        .child(stem),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.))
+                                                        .text_color(danger)
+                                                        .child(ext),
+                                                ),
+                                        ),
                                 )
                         } else {
                             div()
