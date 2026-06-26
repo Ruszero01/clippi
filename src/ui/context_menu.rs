@@ -188,6 +188,13 @@ impl ContextMenu {
                 fav: false,
             });
             items.push(RawMenuItem {
+                label: I18nKey::CtxPasteImagePath.text().into(),
+                action: "paste_image_path".into(),
+                icon: "\u{e60e}".into(),
+                danger: false,
+                fav: false,
+            });
+            items.push(RawMenuItem {
                 label: I18nKey::CtxPasteOcr.text().into(),
                 action: "paste_ocr".into(),
                 icon: "\u{e6a5}".into(),
