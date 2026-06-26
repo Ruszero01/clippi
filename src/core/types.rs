@@ -171,6 +171,9 @@ pub struct RichData {
     pub ocr_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qr_text: Option<String>,
+    /// Page title fetched from the URL target (only for link-type items).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_title: Option<String>,
 }
 
 impl RichData {
@@ -408,8 +411,12 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     }
 }
 
-/// Check if text is solely a web URL (http:// or https:// only).
-/// Rejects text that merely starts with a URL but contains extra content.
+/// Check if text is solely a web URL.
+///
+/// Recognises full URLs (`http://` / `https://`) as well as protocol-less URLs
+/// in the `domain.tld/path` form (e.g. `pic.ghxi.com/roadmap`).  Protocol-less
+/// detection requires a TLD that is at least two ASCII letters so that IP
+/// addresses and version-like tokens are not mistaken for URLs.
 pub fn is_url(text: &str) -> bool {
     let text = text.trim();
     if text.is_empty() {
@@ -418,7 +425,28 @@ pub fn is_url(text: &str) -> bool {
     if text.contains('\n') || text.contains(' ') {
         return false;
     }
-    (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10
+    // ── Full URL with scheme ──────────────────────────────────────────
+    if (text.starts_with("http://") || text.starts_with("https://")) && text.len() > 10 {
+        return true;
+    }
+    // ── Protocol-less URL: domain.tld/path ────────────────────────────
+    // Must have a '/' separating the domain from the path, the domain must
+    // contain at least one dot, and the TLD (after the last dot) must be
+    // purely alphabetic with a minimum length of 2.
+    if let Some(slash_pos) = text.find('/') {
+        let domain = &text[..slash_pos];
+        // Domain must be at least 4 chars (e.g. "a.co"), contain a dot,
+        // and NOT start with a dot (rejects "../file", "./script.sh").
+        if domain.len() >= 4 && domain.contains('.') && !domain.starts_with('.') {
+            if let Some(last_dot) = domain.rfind('.') {
+                let tld = &domain[last_dot + 1..];
+                if tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Check if text is solely an email address.
@@ -529,16 +557,34 @@ pub fn is_path(text: &str) -> bool {
     if text.is_empty() || text.contains('\n') {
         return false;
     }
-    // If the text contains a space, the content after the last path separator
-    // must not itself contain a space — otherwise it's likely "path + description".
-    if text.contains(' ') {
-        let last_sep = text.rfind('\\').or_else(|| text.rfind('/'));
-        if let Some(pos) = last_sep {
-            if text[pos + 1..].contains(' ') {
-                return false;
+
+    // Fast path: known prefixes bypass the generic space heuristic (they are
+    // unambiguously paths). The space heuristic still applies to unrecognised
+    // prefixes to avoid treating prose with slashes as a path.
+    let is_known_prefix = text.len() >= 3
+        && text.as_bytes()[0].is_ascii_alphabetic()
+        && text.as_bytes()[1] == b':'
+        && (text.as_bytes()[2] == b'\\' || text.as_bytes()[2] == b'/')  // C:\ or D:/
+        || text.starts_with("\\\\") && text.len() > 2                    // \\server
+        || text.starts_with('/')
+            && text.len() >= 3
+            && text.as_bytes()[1] != b'/'
+            && text[1..].contains('/')                                   // /abs/path
+        || looks_like_ipv4_path(text); // 192.168.x.x\…
+
+    if !is_known_prefix {
+        // If the text contains a space, the content after the last path separator
+        // must not itself contain a space — otherwise it's likely "path + description".
+        if text.contains(' ') {
+            let last_sep = text.rfind('\\').or_else(|| text.rfind('/'));
+            if let Some(pos) = last_sep {
+                if text[pos + 1..].contains(' ') {
+                    return false;
+                }
             }
         }
     }
+
     // --- Windows absolute path: C:\..., D:/... ---
     if text.len() >= 3
         && text.as_bytes()[0].is_ascii_alphabetic()
@@ -549,6 +595,10 @@ pub fn is_path(text: &str) -> bool {
     }
     // --- UNC network path: \\server\share\... or \\192.168.1.1\... ---
     if text.starts_with("\\\\") && text.len() > 2 {
+        return true;
+    }
+    // --- IP-address-based network path: 192.168.1.1\share\... ---
+    if looks_like_ipv4_path(text) {
         return true;
     }
     // --- Unix absolute path: /Users/..., /etc/..., /tmp/... ---
@@ -564,6 +614,38 @@ pub fn is_path(text: &str) -> bool {
     false
 }
 
+/// Returns `true` when `text` starts with an IPv4 address immediately followed
+/// by a backslash or forward slash (e.g. `192.168.1.1\share`).
+fn looks_like_ipv4_path(text: &str) -> bool {
+    // Find the first path separator.
+    let sep_pos = match text.find('\\').or_else(|| text.find('/')) {
+        Some(p) if p > 6 => p, // shortest IPv4: "1.1.1.1" = 7 chars
+        _ => return false,
+    };
+    let ip = &text[..sep_pos];
+    let mut octets = ip.split('.');
+    let mut count = 0;
+    for octet in octets.by_ref() {
+        if count >= 4 {
+            return false; // too many octets
+        }
+        // Each octet must be 1-3 digits and in the range 0-255.
+        if octet.is_empty() || octet.len() > 3 || !octet.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        let val: u32 = match octet.parse() {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if val > 255 {
+            return false;
+        }
+        count += 1;
+    }
+    // Exactly 4 octets and a trailing path separator.
+    count == 4
+}
+
 /// Extract the domain portion from a URL for display.
 /// "https://www.github.com/user/repo" -> "www.github.com"
 pub fn url_domain(text: &str) -> String {
@@ -575,6 +657,36 @@ pub fn url_domain(text: &str) -> String {
     match no_scheme.find(['/', '?', '#']) {
         Some(pos) => no_scheme[..pos].to_string(),
         None => no_scheme.to_string(),
+    }
+}
+
+/// Extract a human-readable site name from a URL.
+///
+/// Strips `www.`, takes the second-level domain (the segment before the
+/// TLD), and capitalises the first letter.
+///
+/// ```
+/// # use clippi::core::types::url_site_name;
+/// assert_eq!(url_site_name("https://www.github.com/user"), "Github");
+/// assert_eq!(url_site_name("github.com/repo"), "Github");
+/// assert_eq!(url_site_name("https://docs.rs/clippi"), "Docs");
+/// ```
+pub fn url_site_name(text: &str) -> String {
+    let domain = url_domain(text);
+    let domain = domain.strip_prefix("www.").unwrap_or(&domain);
+    let parts: Vec<&str> = domain.split('.').collect();
+    let name = if parts.len() >= 2 {
+        parts[parts.len() - 2] // segment just before TLD
+    } else {
+        domain
+    };
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => {
+            let rest: String = chars.as_str().to_lowercase();
+            format!("{}{}", first.to_uppercase(), rest)
+        }
+        None => String::new(),
     }
 }
 
@@ -630,5 +742,117 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
             format!("{}****{}", prefix, suffix)
         }
         _ => text.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_url ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_url_full_https() {
+        assert!(is_url("https://pic.ghxi.com/roadmap"));
+        assert!(is_url("https://github.com/user/repo"));
+        assert!(is_url("http://example.com/path?q=1"));
+    }
+
+    #[test]
+    fn test_is_url_protocol_less() {
+        assert!(is_url("pic.ghxi.com/roadmap"));
+        assert!(is_url("github.com/user/repo"));
+        assert!(is_url("example.co/path"));
+    }
+
+    #[test]
+    fn test_is_url_rejects_non_urls() {
+        assert!(!is_url("just text"));
+        assert!(!is_url("not.a.url")); // no slash after TLD
+        assert!(!is_url("../relative/path")); // starts with dot
+        assert!(!is_url("./script.sh")); // starts with dot
+        assert!(!is_url("192.168.1.1/share")); // IP: TLD is numeric
+        assert!(!is_url("v1.2.3/file")); // version-like, no alpha TLD
+        assert!(!is_url("C:\\Windows\\System32")); // Windows path
+        assert!(!is_url("")); // empty
+        assert!(!is_url("https://x")); // too short: 9 chars, len > 10 fails
+    }
+
+    #[test]
+    fn test_is_url_rejects_text_with_spaces() {
+        assert!(!is_url("https://example.com with description"));
+        assert!(!is_url("pic.ghxi.com /roadmap")); // space in domain
+        assert!(is_url("pic.ghxi.com/roadmap ")); // trailing space trimmed
+        assert!(is_url(" https://example.com/path")); // leading space trimmed
+    }
+
+    // ── is_path ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_path_windows_drive() {
+        assert!(is_path("C:\\Windows\\System32"));
+        assert!(is_path("D:/Projects/rust"));
+        assert!(is_path("E:\\folder\\file.txt"));
+    }
+
+    #[test]
+    fn test_is_path_unc() {
+        assert!(is_path("\\\\server\\share\\folder"));
+        assert!(is_path("\\\\192.168.1.1\\data"));
+    }
+
+    #[test]
+    fn test_is_path_ipv4() {
+        assert!(is_path("192.168.18.222\\mssv_share\\folder"));
+        assert!(is_path("10.0.0.1/data/path"));
+        assert!(is_path("172.16.254.1\\share"));
+    }
+
+    #[test]
+    fn test_is_path_unix_absolute() {
+        assert!(is_path("/Users/john/Documents"));
+        assert!(is_path("/etc/nginx/nginx.conf"));
+        assert!(is_path("/tmp/build/output"));
+    }
+
+    #[test]
+    fn test_is_path_rejects_non_paths() {
+        assert!(!is_path("not a path"));
+        assert!(!is_path("/")); // root only
+        assert!(!is_path("/clear")); // slash command
+        assert!(!is_path("")); // empty
+        assert!(!is_path("/a")); // too short (len < 3)
+        assert!(!is_path("//comment")); // double-slash without share
+    }
+
+    #[test]
+    fn test_is_path_rejects_invalid_ipv4() {
+        assert!(!is_path("256.1.1.1\\share")); // octet > 255
+        assert!(!is_path("1.2.3.4")); // no path separator
+        assert!(!is_path("1.2.3\\share")); // only 3 octets
+        assert!(!is_path("abc.def.ghi.jkl\\s")); // non-numeric octets
+    }
+
+    #[test]
+    fn test_is_path_ipv4_with_spaces() {
+        // IP path prefix bypasses the generic space heuristic.
+        assert!(is_path("192.168.18.222\\mssv_各组协同\\2025"));
+    }
+
+    // ── looks_like_ipv4_path ────────────────────────────────────────────
+
+    #[test]
+    fn test_looks_like_ipv4_path_valid() {
+        assert!(looks_like_ipv4_path("192.168.1.1\\share"));
+        assert!(looks_like_ipv4_path("10.0.0.1/data"));
+        assert!(looks_like_ipv4_path("172.16.254.1\\"));
+    }
+
+    #[test]
+    fn test_looks_like_ipv4_path_invalid() {
+        assert!(!looks_like_ipv4_path("192.168.1.1")); // no separator
+        assert!(!looks_like_ipv4_path("1.1.1")); // not IP
+        assert!(!looks_like_ipv4_path("999.1.1.1\\share")); // octet > 255
+        assert!(!looks_like_ipv4_path("1.2.3.4.5\\share")); // 5 octets
     }
 }

@@ -10,3 +10,4 @@ pub mod install;
 pub mod poll_loop;
 pub mod update;
 pub mod updater;
+pub mod url_title;

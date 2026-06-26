@@ -165,6 +165,23 @@ impl GpuiClipboardService {
             if need_ocr {
                 self.process_ocr(&item, &db_path);
             }
+
+            // ── Post-upsert: spawn page-title fetch for link items ──
+            if item.meta_type == "link" && state.settings.auto_fetch_url_title {
+                let url = item.full_text.clone();
+                let content_hash = item.content_hash;
+                let db_path = db_path.clone();
+                let needs_refresh = self.needs_refresh.clone();
+                std::thread::spawn(move || {
+                    if crate::services::url_title::fetch_and_store_title(
+                        &url,
+                        content_hash,
+                        &db_path,
+                    ) {
+                        needs_refresh.store(true, Ordering::SeqCst);
+                    }
+                });
+            }
         }
 
         if changed || needs_reload {

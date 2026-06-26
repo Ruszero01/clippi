@@ -650,31 +650,69 @@ impl AppState {
             }
         };
 
-        match item.content_type {
-            ContentType::PlainText
-                if !item.full_text.is_empty()
-                    && (item.meta_type == "link" || item.meta_type == "path") =>
-            {
-                let text = item.full_text.clone();
-                // --- Spawn on a background thread to avoid ShellExecuteW ---
-                // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
-                std::thread::spawn(move || {
-                    open_system_target(&text);
-                });
+        // ── Link / path: open in browser or Explorer ─────────────────
+        if item.meta_type == "link" || item.meta_type == "path" {
+            if item.full_text.is_empty() {
+                log::warn!("open_item_location: link/path item {id} has empty full_text");
+                return;
             }
-            ContentType::File => {
-                let file_data = FileData::from_json(&item.file_data);
-                if let Some(first) = file_data.files.first() {
-                    let path = first.path.clone();
-                    // --- Spawn on a background thread to avoid ShellExecuteW ---
-                    // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
+            let mut text = item.full_text.clone();
+            // Protocol-less URLs need a scheme for ShellExecuteW to
+            // dispatch them to the browser instead of treating them as
+            // file-system paths.
+            if item.meta_type == "link"
+                && !text.starts_with("http://")
+                && !text.starts_with("https://")
+            {
+                text = format!("https://{}", text);
+            }
+            let target = text;
+
+            // ── Lazy page-title fetch for old items without one ─────
+            if item.meta_type == "link" && self.settings.auto_fetch_url_title {
+                let rd = RichData::from_json(&item.rich_data);
+                if rd.page_title.is_none() {
+                    let url = item.full_text.clone();
+                    let content_hash = item.content_hash;
+                    let db_path = self.settings.db_path.clone();
                     std::thread::spawn(move || {
-                        reveal_file_location(&path);
+                        crate::services::url_title::fetch_and_store_title(
+                            &url,
+                            content_hash,
+                            &db_path,
+                        );
                     });
                 }
             }
-            _ => {}
+
+            // --- Spawn on a background thread to avoid ShellExecuteW ---
+            // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
+            std::thread::spawn(move || {
+                open_system_target(&target);
+            });
+            return;
         }
+
+        // ── File list: reveal first file in Explorer ─────────────────
+        if item.content_type == ContentType::File {
+            let file_data = FileData::from_json(&item.file_data);
+            if let Some(first) = file_data.files.first() {
+                let path = first.path.clone();
+                // --- Spawn on a background thread to avoid ShellExecuteW ---
+                // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
+                std::thread::spawn(move || {
+                    reveal_file_location(&path);
+                });
+            }
+            return;
+        }
+
+        log::warn!(
+            "open_item_location: item {id} has no openable location \
+             (content_type={:?}, meta_type={:?})",
+            item.content_type,
+            item.meta_type,
+        );
     }
 
     pub fn qr_action(&mut self, id: i64) {
@@ -1240,7 +1278,7 @@ fn open_system_target(target: &str) {
         let operation: Vec<u16> = "open\0".encode_utf16().collect();
         let target_utf16: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
-            ShellExecuteW(
+            let ret = ShellExecuteW(
                 std::ptr::null_mut(),
                 operation.as_ptr(),
                 target_utf16.as_ptr(),
@@ -1248,6 +1286,14 @@ fn open_system_target(target: &str) {
                 std::ptr::null(),
                 SW_SHOW,
             );
+            // ShellExecuteW returns a value > 32 on success; <= 32 is an error.
+            if (ret as isize) <= 32 {
+                log::error!(
+                    "ShellExecuteW failed for '{}': error code {}",
+                    target,
+                    ret as isize,
+                );
+            }
         }
     }
 

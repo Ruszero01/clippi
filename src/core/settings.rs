@@ -134,6 +134,8 @@ pub struct AppSettings {
     pub paste_shortcuts: Vec<PasteShortcutEntry>,
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
+    #[serde(default)]
+    pub auto_fetch_url_title: bool, // auto-fetch page title for link items
 }
 
 fn default_qr_enabled() -> bool {
@@ -198,6 +200,7 @@ impl Default for AppSettings {
             type_filter_config: Vec::new(),
             paste_shortcuts: Vec::new(),
             auto_check_updates: true,
+            auto_fetch_url_title: true,
         }
     }
 }

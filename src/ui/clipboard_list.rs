@@ -1134,6 +1134,7 @@ impl Render for ClipboardListView {
                                 let settings = &this.state.read(_cx).settings;
                                 let show_source_app = settings.show_source_app;
                                 let show_original_on_hover = settings.show_original_on_hover;
+                                let show_page_title = settings.auto_fetch_url_title;
                                 range
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
@@ -1248,6 +1249,7 @@ impl Render for ClipboardListView {
                                                     .hovered(is_hovered)
                                                     .show_source_app(show_source_app)
                                                     .show_original_on_hover(show_original_on_hover)
+                                                    .show_page_title(show_page_title)
                                                     .selected_count(selected_count)
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)

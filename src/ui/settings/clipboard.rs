@@ -27,6 +27,7 @@ impl SettingsPanel {
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
         let auto_focus_search = app.settings.auto_focus_search;
+        let auto_fetch_url_title = app.settings.auto_fetch_url_title;
         // --- borrow released here — `app` is a &AppState reference ---
 
         div()
@@ -174,6 +175,27 @@ impl SettingsPanel {
                 |state, this, _window, _cx| {
                     state.update(_cx, |s, _cx| {
                         s.settings.show_original_on_hover = !s.settings.show_original_on_hover;
+                        s.settings.save();
+                    });
+                    this.update(_cx, |_panel, cx| {
+                        cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                            reload_items: false,
+                            scroll_to_top: false,
+                        });
+                    });
+                },
+            ))
+            // --- Auto fetch URL title ---
+            .child(self.render_toggle_row(
+                I18nKey::SettingAutoFetchUrlTitle,
+                I18nKey::DescFetchUrlTitleOn,
+                I18nKey::DescFetchUrlTitleOff,
+                auto_fetch_url_title,
+                window,
+                cx,
+                |state, this, _window, _cx| {
+                    state.update(_cx, |s, _cx| {
+                        s.settings.auto_fetch_url_title = !s.settings.auto_fetch_url_title;
                         s.settings.save();
                     });
                     this.update(_cx, |_panel, cx| {

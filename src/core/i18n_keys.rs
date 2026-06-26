@@ -112,6 +112,9 @@ define_i18n! {
     SettingAutoFocusSearch: ("自动聚焦搜索框", "Auto-focus search"),
     DescAutoFocusSearchOn:  ("打开窗口时自动聚焦搜索框", "Auto-focus search bar on open"),
     DescAutoFocusSearchOff: ("手动点击聚焦搜索框", "Click to focus search bar"),
+    SettingAutoFetchUrlTitle: ("自动解析URL", "Auto-fetch URL"),
+    DescFetchUrlTitleOn:      ("复制链接时自动获取页面标题", "Fetch page title for URLs"),
+    DescFetchUrlTitleOff:     ("仅显示链接地址", "Show URL only"),
 
     // ─── Data settings ───
     SettingDbPath:      ("数据库路径", "Database path"),

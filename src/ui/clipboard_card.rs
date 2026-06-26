@@ -21,7 +21,7 @@ use crate::core::frontend::PANEL_OFFSET_X;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
     format_relative_time, is_email, is_phone, mask_sensitive_preview, parse_hex_color, url_domain,
-    url_path, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, RichData,
+    url_path, url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, RichData,
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
@@ -500,6 +500,9 @@ pub struct ClipboardCard {
     on_commit_note: Option<CardWindowHandler>,
     show_source_app: bool,
     show_original_on_hover: bool,
+    /// When true and a link item has a cached page title, show the title
+    /// instead of the URL path in the card content area.
+    show_page_title: bool,
 }
 
 impl ClipboardCard {
@@ -520,6 +523,7 @@ impl ClipboardCard {
             on_commit_note: None,
             show_source_app: false,
             show_original_on_hover: false,
+            show_page_title: false,
         }
     }
 
@@ -590,6 +594,11 @@ impl ClipboardCard {
         self.show_original_on_hover = value;
         self
     }
+
+    pub fn show_page_title(mut self, value: bool) -> Self {
+        self.show_page_title = value;
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -610,6 +619,7 @@ impl RenderOnce for ClipboardCard {
             on_commit_note,
             show_source_app,
             show_original_on_hover,
+            show_page_title,
         } = self;
 
         let surface = theme.surface;
@@ -1094,9 +1104,28 @@ impl RenderOnce for ClipboardCard {
             // must be checked before the catch-all PlainText arm below.
             if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
                 if matches!(content_kind, DisplayKind::Link) {
-                    // URL: bold domain + dimmed path
                     let domain = url_domain(full_text);
                     let path = url_path(full_text);
+
+                    // When page-title fetching is enabled and a title is cached,
+                    // simplify the domain to just the site name and show the
+                    // title separated by a dash.  Otherwise show the raw URL path
+                    // (which naturally starts with '/', no separator needed).
+                    let (label, subtitle, show_sep) = if show_page_title {
+                        let rd = RichData::from_json(&item.rich_data);
+                        match rd.page_title {
+                            Some(title) => (
+                                url_site_name(full_text),
+                                title,
+                                true, // "Site - Title"
+                            ),
+                            None => (domain, path, false), // fallback
+                        }
+                    } else {
+                        (domain, path, false)
+                    };
+
+                    // URL: bold domain/site-name + dimmed subtitle (title or path)
                     div()
                         .flex_1()
                         .flex()
@@ -1108,9 +1137,18 @@ impl RenderOnce for ClipboardCard {
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(text_1)
-                                .child(domain),
+                                .child(label),
                         )
-                        .child(div().text_size(px(13.)).text_color(text_3).child(path))
+                        .when(show_sep, |this| {
+                            this.child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(text_3)
+                                    .mx(px(2.))
+                                    .child(" - "),
+                            )
+                        })
+                        .child(div().text_size(px(13.)).text_color(text_3).child(subtitle))
                 } else {
                     // File system path: show full text as-is
                     div().flex_1().flex().items_center().child(

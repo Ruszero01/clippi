@@ -300,8 +300,7 @@ fn detect_text_content(
                 let rich = RichData {
                     html,
                     rtf,
-                    ocr_text: None,
-                    qr_text: None,
+                    ..Default::default()
                 };
                 return Some(ClipboardItem::new_text(
                     0,
