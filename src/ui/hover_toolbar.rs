@@ -195,6 +195,13 @@ impl RenderOnce for HoverToolbar {
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
+            // Tag
+            buttons.push((
+                "\u{ec07}",
+                "show_tag_picker",
+                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+            ));
+
             // --- Favorite (icon changes based on state) ---
             let fav_icon = if props.is_favorite {
                 "\u{e630}"
@@ -218,6 +225,12 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e600}",
                 "batch_paste",
+                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+            ));
+            // --- Batch tag ---
+            buttons.push((
+                "\u{ec07}",
+                "batch_tag",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
             // --- Batch favorite ---
