@@ -188,6 +188,20 @@ fn type_label(item: &ClipboardItem) -> String {
     }
 }
 
+/// Label shown on foreign-platform path items (e.g. "Mac" on Windows).
+#[cfg(target_os = "windows")]
+fn foreign_path_label() -> String {
+    "Mac".to_string()
+}
+#[cfg(target_os = "macos")]
+fn foreign_path_label() -> String {
+    "Windows".to_string()
+}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn foreign_path_label() -> String {
+    "跨平台".to_string()
+}
+
 fn has_qr_code(item: &ClipboardItem) -> bool {
     item.content_type == ContentType::Image
         && RichData::from_json(&item.rich_data).qr_text.is_some()
@@ -1490,18 +1504,7 @@ impl RenderOnce for ClipboardCard {
                     // will never exist here regardless of what's on disk.
                     if !crate::core::types::path_is_native(&item.full_text) {
                         size_label_warn = true;
-                        #[cfg(target_os = "windows")]
-                        {
-                            Some("Mac".to_string())
-                        }
-                        #[cfg(target_os = "macos")]
-                        {
-                            Some("Windows".to_string())
-                        }
-                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-                        {
-                            Some("跨平台".to_string())
-                        }
+                        Some(foreign_path_label())
                     } else if !crate::core::types::path_exists(&item.full_text) {
                         size_label_danger = true;
                         Some("已失效".to_string())
