@@ -243,12 +243,17 @@ fn detect_text_content(
         }
 
         if is_path(&text) {
+            let drive_label = crate::core::types::path_drive_label(&text);
+            let rich = drive_label.as_ref().map(|label| RichData {
+                drive_label: Some(label.clone()),
+                ..Default::default()
+            });
             let mut item = ClipboardItem::new_text(
                 0,
                 &text,
                 ContentType::PlainText,
                 source_info.as_ref(),
-                None,
+                rich.as_ref(),
             );
             item.meta_type = "path".to_string();
             return Some(item);

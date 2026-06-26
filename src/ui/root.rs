@@ -977,7 +977,7 @@ impl Render for RootView {
                 let is_batch = list.read(cx).context_menu_is_batch();
                 let item = list.read(cx).context_menu_item().cloned();
 
-                // --- Backdrop — click to dismiss ---
+                // --- Backdrop — click / scroll to dismiss ---
                 root.child(
                     div()
                         .absolute()
@@ -986,6 +986,12 @@ impl Render for RootView {
                             let l = list.clone();
                             move |_ev, _window, cx| {
                                 cx.stop_propagation();
+                                l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
+                            }
+                        })
+                        .on_scroll_wheel({
+                            let l = list.clone();
+                            move |_ev, _window, cx| {
                                 l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
                             }
                         }),

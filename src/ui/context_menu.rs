@@ -51,7 +51,9 @@ impl MenuItemContext {
             is_hex,
             is_favorite: item.is_favorite,
             is_link: item.meta_type == "link",
-            is_path: item.meta_type == "path",
+            is_path: item.meta_type == "path"
+                && crate::core::types::path_is_native(&item.full_text)
+                && crate::core::types::path_exists(&item.full_text),
         }
     }
 }

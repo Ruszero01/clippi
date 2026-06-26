@@ -28,6 +28,7 @@ impl SettingsPanel {
         let qr_enabled = app.settings.qr_enabled;
         let auto_focus_search = app.settings.auto_focus_search;
         let auto_fetch_url_title = app.settings.auto_fetch_url_title;
+        let filter_foreign_paths = app.settings.filter_foreign_paths;
         // --- borrow released here — `app` is a &AppState reference ---
 
         div()
@@ -100,6 +101,28 @@ impl SettingsPanel {
                     });
                 },
             ))
+            // --- Scroll to top ---
+            .child(self.render_toggle_row(
+                I18nKey::SettingScrollTop,
+                I18nKey::DescScrollTopOn,
+                I18nKey::DescScrollTopOff,
+                auto_scroll_to_top,
+                window,
+                cx,
+                |state, this, _window, _cx| {
+                    let scroll_to_top = state.update(_cx, |s, _cx| {
+                        s.settings.auto_scroll_to_top = !s.settings.auto_scroll_to_top;
+                        s.settings.save();
+                        s.settings.auto_scroll_to_top
+                    });
+                    this.update(_cx, |_panel, cx| {
+                        cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                            reload_items: false,
+                            scroll_to_top,
+                        });
+                    });
+                },
+            ))
             // --- Show source app ---
             .child(self.render_toggle_row(
                 I18nKey::SettingShowSource,
@@ -121,24 +144,23 @@ impl SettingsPanel {
                     });
                 },
             ))
-            // --- Scroll to top ---
+            // --- Filter foreign paths ---
             .child(self.render_toggle_row(
-                I18nKey::SettingScrollTop,
-                I18nKey::DescScrollTopOn,
-                I18nKey::DescScrollTopOff,
-                auto_scroll_to_top,
+                I18nKey::SettingFilterForeignPaths,
+                I18nKey::DescFilterForeignPathsOn,
+                I18nKey::DescFilterForeignPathsOff,
+                filter_foreign_paths,
                 window,
                 cx,
                 |state, this, _window, _cx| {
-                    let scroll_to_top = state.update(_cx, |s, _cx| {
-                        s.settings.auto_scroll_to_top = !s.settings.auto_scroll_to_top;
+                    state.update(_cx, |s, _cx| {
+                        s.settings.filter_foreign_paths = !s.settings.filter_foreign_paths;
                         s.settings.save();
-                        s.settings.auto_scroll_to_top
                     });
                     this.update(_cx, |_panel, cx| {
                         cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
-                            reload_items: false,
-                            scroll_to_top,
+                            reload_items: true,
+                            scroll_to_top: false,
                         });
                     });
                 },

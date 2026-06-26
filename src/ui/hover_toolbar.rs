@@ -20,6 +20,7 @@ use super::theme::ClippiTheme;
 pub struct HoverToolbarProps {
     pub content_type: ContentType,
     pub meta_type: String,
+    pub full_text: String,
     pub has_rich_content: bool,
     pub has_qr_code: bool,
     pub is_favorite: bool,
@@ -37,6 +38,7 @@ impl HoverToolbarProps {
         Self {
             content_type: item.content_type,
             meta_type: item.meta_type.clone(),
+            full_text: item.full_text.clone(),
             has_rich_content: matches!(
                 item.display_kind(),
                 crate::core::types::DisplayKind::Html
@@ -162,8 +164,11 @@ impl RenderOnce for HoverToolbar {
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
-            // --- Jump to directory (path only) ---
-            if props.meta_type == "path" {
+            // --- Jump to directory (path only, native platform only) ---
+            if props.meta_type == "path"
+                && crate::core::types::path_is_native(&props.full_text)
+                && crate::core::types::path_exists(&props.full_text)
+            {
                 buttons.push((
                     "\u{e609}",
                     "open_location",

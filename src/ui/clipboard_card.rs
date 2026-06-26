@@ -631,6 +631,7 @@ impl RenderOnce for ClipboardCard {
         let text_1 = theme.text_1;
         let text_2 = theme.text_2;
         let text_3 = theme.text_3;
+        let danger = theme.danger;
         let is_dark = theme.bg == rgb(0x191a1b);
         let pill_bg = if is_dark {
             rgba(0x232425e8)
@@ -1150,15 +1151,51 @@ impl RenderOnce for ClipboardCard {
                         })
                         .child(div().text_size(px(13.)).text_color(text_3).child(subtitle))
                 } else {
-                    // File system path: show full text as-is
-                    div().flex_1().flex().items_center().child(
+                    // File system path: bold last component + dimmed full path.
+                    // Non-existent paths get a red tint + reduced opacity
+                    // (UNC network paths skip the existence check).
+                    let path_invalid = !crate::core::types::path_exists(&item.full_text);
+                    let label_color = if path_invalid { danger } else { text_1 };
+                    let path_text = item.full_text.trim_end_matches(['\\', '/']).to_string();
+                    let (leaf, show_full) = match path_text.rfind(['\\', '/']) {
+                        Some(pos) if pos + 1 < path_text.len() => {
+                            (path_text[pos + 1..].to_string(), true)
+                        }
+                        _ => (path_text, false),
+                    };
+                    if show_full {
+                        let full = item.full_text.clone();
                         div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(text_1)
+                            .flex_1()
+                            .flex()
+                            .flex_row()
+                            .items_center()
                             .overflow_hidden()
-                            .child(item.full_text.clone()),
-                    )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(label_color)
+                                    .child(leaf),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(text_3)
+                                    .mx(px(2.))
+                                    .child(" - "),
+                            )
+                            .child(div().text_size(px(13.)).text_color(text_3).child(full))
+                    } else {
+                        div().flex_1().flex().items_center().child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(label_color)
+                                .overflow_hidden()
+                                .child(item.full_text.clone()),
+                        )
+                    }
                 }
             } else if matches!(content_kind, DisplayKind::Color) {
                 div().flex_1().flex().items_center().child(
@@ -1172,8 +1209,11 @@ impl RenderOnce for ClipboardCard {
             } else {
                 match content_type {
                     ContentType::Image => {
-                        // Show image preview if path is available, otherwise show dimensions
-                        if !img_path.is_empty() {
+                        let img_missing = !item.image_path.is_empty()
+                            && !std::path::Path::new(&item.image_path).exists();
+                        // Show image preview if path is available, otherwise show dimensions.
+                        // When the source file is gone, show the path text instead of a blank preview.
+                        if !img_path.is_empty() && !img_missing {
                             let object_fit = if has_qr {
                                 ObjectFit::Contain
                             } else {
@@ -1208,6 +1248,21 @@ impl RenderOnce for ClipboardCard {
                                         .rounded(px(11.))
                                         .border(px(4.))
                                         .border_color(surface),
+                                )
+                        } else if img_missing {
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
+                                .child(
+                                    div()
+                                        .text_size(px(24.))
+                                        .font_family("iconfont")
+                                        .text_color(rgba(0xff5f5780))
+                                        .child("\u{e607}"),
                                 )
                         } else {
                             div()
@@ -1280,93 +1335,164 @@ impl RenderOnce for ClipboardCard {
                             serde_json::from_str(&item.file_data).unwrap_or_default();
                         let files: Vec<FileInfo> = file_data.files;
                         let multi = files.len() > 1;
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .overflow_hidden()
-                            .children(files.iter().take(4).map(|fi| {
-                                let (stem, ext) = if fi.is_dir {
-                                    (fi.name.clone(), String::new())
-                                } else {
-                                    split_name_ext(&fi.name)
-                                };
-                                let cached_icon = cached_file_icon_path(&fi.path, fi.is_dir);
-                                let fallback_icon = if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
-                                let row = div()
-                                    .rounded(px(4.))
-                                    .bg(subtle_row_bg)
-                                    .px(px(6.))
-                                    .py(px(4.))
-                                    .flex()
-                                    .flex_row()
-                                    .gap(px(4.))
-                                    .items_center()
-                                    .overflow_hidden();
-                                let row = if multi {
-                                    row.child(
-                                        div()
-                                            .w(px(14.))
-                                            .h(px(14.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(if let Some(path) = cached_icon {
-                                                gpui::img(path)
-                                                    .w(px(14.))
-                                                    .h(px(14.))
-                                                    .rounded(px(2.))
-                                                    .into_any_element()
-                                            } else {
-                                                div()
-                                                    .font_family("iconfont")
-                                                    .text_size(px(12.))
-                                                    .text_color(text_3)
-                                                    .child(fallback_icon)
-                                                    .into_any_element()
-                                            }),
-                                    )
-                                } else {
-                                    row
-                                };
-                                row.child(
+                        let file_missing = !multi
+                            && files
+                                .first()
+                                .is_some_and(|f| !std::path::Path::new(&f.path).exists());
+                        if file_missing {
+                            div()
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
+                                .child(
                                     div()
-                                        .flex_1()
+                                        .text_size(px(24.))
+                                        .font_family("iconfont")
+                                        .text_color(rgba(0xff5f5780))
+                                        .child("\u{e607}"),
+                                )
+                        } else {
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.))
+                                .overflow_hidden()
+                                .children(files.iter().take(4).map(|fi| {
+                                    let (stem, ext) = if fi.is_dir {
+                                        (fi.name.clone(), String::new())
+                                    } else {
+                                        split_name_ext(&fi.name)
+                                    };
+                                    let cached_icon = cached_file_icon_path(&fi.path, fi.is_dir);
+                                    let fallback_icon =
+                                        if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
+                                    let row = div()
+                                        .rounded(px(4.))
+                                        .bg(subtle_row_bg)
+                                        .px(px(6.))
+                                        .py(px(4.))
                                         .flex()
                                         .flex_row()
-                                        .gap(px(0.))
-                                        .overflow_hidden()
-                                        .child(
+                                        .gap(px(4.))
+                                        .items_center()
+                                        .overflow_hidden();
+                                    let row = if multi {
+                                        row.child(
                                             div()
-                                                .text_size(px(10.))
-                                                .text_color(text_1)
-                                                .whitespace_nowrap()
-                                                .overflow_hidden()
-                                                .child(stem),
+                                                .w(px(14.))
+                                                .h(px(14.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(if let Some(path) = cached_icon {
+                                                    gpui::img(path)
+                                                        .w(px(14.))
+                                                        .h(px(14.))
+                                                        .rounded(px(2.))
+                                                        .into_any_element()
+                                                } else {
+                                                    div()
+                                                        .font_family("iconfont")
+                                                        .text_size(px(12.))
+                                                        .text_color(text_3)
+                                                        .child(fallback_icon)
+                                                        .into_any_element()
+                                                }),
                                         )
-                                        .child(
-                                            div().text_size(px(10.)).text_color(text_2).child(ext),
-                                        ),
-                                )
-                            }))
-                    }
+                                    } else {
+                                        row
+                                    };
+                                    row.child(
+                                        div()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_row()
+                                            .gap(px(0.))
+                                            .overflow_hidden()
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(text_1)
+                                                    .whitespace_nowrap()
+                                                    .overflow_hidden()
+                                                    .child(stem),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(if file_missing {
+                                                        danger
+                                                    } else {
+                                                        text_2
+                                                    })
+                                                    .child(ext),
+                                            ),
+                                    )
+                                }))
+                        }
+                    } // else: multi-file or normal single file
                 }
             } // closes if-else block
         };
 
         // --- Size label for types that have measurable content ---
+        let mut size_label_danger = false;
+        let mut size_label_warn = false;
         let size_label: Option<String> = match content_type {
             ContentType::PlainText | ContentType::RichText => {
-                let count = item.size.max(0) as u64;
-                if count > 0 {
-                    Some(I18nKey::CardChars.fmt(&[&count.to_string()]))
+                // Path items show the drive label (or "已失效" / platform label).
+                if item.meta_type == "path" {
+                    // Check foreign platform first — a Mac path on Windows
+                    // will never exist here regardless of what's on disk.
+                    if !crate::core::types::path_is_native(&item.full_text) {
+                        size_label_warn = true;
+                        #[cfg(target_os = "windows")]
+                        {
+                            Some("Mac".to_string())
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            Some("Windows".to_string())
+                        }
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        {
+                            Some("跨平台".to_string())
+                        }
+                    } else if !crate::core::types::path_exists(&item.full_text) {
+                        size_label_danger = true;
+                        Some("已失效".to_string())
+                    } else {
+                        let rd = RichData::from_json(&item.rich_data);
+                        rd.drive_label
+                    }
+                // Link items show the protocol instead of character count.
+                } else if item.meta_type == "link" {
+                    if item.full_text.starts_with("https://") {
+                        Some("HTTPS".to_string())
+                    } else if item.full_text.starts_with("http://") {
+                        Some("HTTP".to_string())
+                    } else {
+                        None
+                    }
                 } else {
-                    None
+                    let count = item.size.max(0) as u64;
+                    if count > 0 {
+                        Some(I18nKey::CardChars.fmt(&[&count.to_string()]))
+                    } else {
+                        None
+                    }
                 }
             }
             ContentType::Image => {
-                if img_w > 0 && img_h > 0 {
+                let img_missing =
+                    !item.image_path.is_empty() && !std::path::Path::new(&item.image_path).exists();
+                if img_missing {
+                    size_label_danger = true;
+                    Some("已失效".to_string())
+                } else if img_w > 0 && img_h > 0 {
                     Some(format!("{}×{}", img_w, img_h))
                 } else {
                     None
@@ -1375,7 +1501,16 @@ impl RenderOnce for ClipboardCard {
             ContentType::File => {
                 let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
                 let count = fd.files.len();
-                if count > 1 {
+                // Only check single-file items for missing sources.
+                let file_missing = count == 1
+                    && fd
+                        .files
+                        .first()
+                        .is_some_and(|f| !std::path::Path::new(&f.path).exists());
+                if file_missing {
+                    size_label_danger = true;
+                    Some("已失效".to_string())
+                } else if count > 1 {
                     Some(I18nKey::CardFilesCount.fmt(&[&count.to_string()]))
                 } else if item.size > 0 {
                     Some(format_file_size(item.size))
@@ -1452,6 +1587,13 @@ impl RenderOnce for ClipboardCard {
                     )
             }))
             .when_some(size_label, |el, label| {
+                let pill_text_color = if size_label_danger {
+                    danger
+                } else if size_label_warn {
+                    rgb(0xeab308)
+                } else {
+                    text_2
+                };
                 el.child(
                     div()
                         .h(px(18.))
@@ -1462,7 +1604,12 @@ impl RenderOnce for ClipboardCard {
                         .px(px(5.))
                         .flex()
                         .items_center()
-                        .child(div().text_size(px(9.)).text_color(text_2).child(label)),
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(pill_text_color)
+                                .child(label),
+                        ),
                 )
             })
             .child(
@@ -1534,7 +1681,7 @@ impl RenderOnce for ClipboardCard {
         if is_hovered && !editing {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected);
             card.child(
-                div().absolute().top(px(3.)).right(px(4.)).occlude().child(
+                div().absolute().top(px(3.)).right(px(4.)).child(
                     HoverToolbar::new(toolbar_props)
                         .theme(theme.clone())
                         .on_action(move |action, _window, cx| {

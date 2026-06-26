@@ -174,6 +174,9 @@ pub struct RichData {
     /// Page title fetched from the URL target (only for link-type items).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_title: Option<String>,
+    /// Drive / volume label for file-system paths (e.g. "配置(D:)").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drive_label: Option<String>,
 }
 
 impl RichData {
@@ -708,6 +711,136 @@ pub fn url_path(text: &str) -> String {
 /// Extract the domain from a URL for favicon lookup (same as url_domain).
 pub fn url_to_domain(text: &str) -> String {
     url_domain(text)
+}
+
+/// Extract the drive root from a file-system path.
+///
+/// Windows: `C:\foo\bar` → `Some("C:")`
+/// UNC:     `\\server\share\dir` → `Some("\\server")`
+/// Unix:    `/home/user` → `None`
+pub fn path_drive_root(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // ── UNC path: \\server\... → "\\server" ──
+    if let Some(rest) = text.strip_prefix("\\\\") {
+        match rest.find('\\') {
+            Some(pos) => Some(format!("\\\\{}", &rest[..pos])),
+            None => Some(text.to_string()), // entire thing is server name
+        }
+    }
+    // ── Windows drive letter: C:\... or D:/... → "C:" ──
+    else if text.len() >= 2
+        && text.as_bytes()[0].is_ascii_alphabetic()
+        && text.as_bytes()[1] == b':'
+    {
+        Some(text[..2].to_string())
+    }
+    // ── Unix / IP-based: no obvious drive root ──
+    else {
+        None
+    }
+}
+
+/// Get the volume name for a Windows drive root (e.g. "C:" → "系统").
+/// Returns empty string on failure or non-Windows platforms.
+fn volume_name(drive_root: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        // drive_root is e.g. "C:" — need "C:\" for GetVolumeInformationW
+        let root_path = format!("{}\\", drive_root);
+        let root_utf16: Vec<u16> = root_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut name_buf = [0u16; 128]; // MAX_PATH + 1
+        unsafe {
+            let ok = windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW(
+                root_utf16.as_ptr(),
+                name_buf.as_mut_ptr(),
+                name_buf.len() as u32,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            );
+            if ok != 0 {
+                let end = name_buf
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(name_buf.len());
+                return String::from_utf16_lossy(&name_buf[..end]);
+            }
+        }
+        String::new()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = drive_root;
+        String::new()
+    }
+}
+
+/// Build a human-readable drive label for a file-system path.
+///
+/// Returns `"配置(D:)"` when the volume name is available,
+/// `"D:"` as a fallback, or `None` if the path has no drive root.
+pub fn path_drive_label(text: &str) -> Option<String> {
+    let root = path_drive_root(text)?;
+    let name = volume_name(&root);
+    // UNC paths: strip leading \\ for display (user doesn't need to see it).
+    let display_root = root.strip_prefix("\\\\").unwrap_or(&root);
+    let label = if name.is_empty() {
+        display_root.to_uppercase()
+    } else {
+        format!("{}({})", name, display_root.to_uppercase())
+    };
+    Some(label)
+}
+
+/// Whether a file-system path matches the *current* platform's native format.
+///
+/// Used to hide jump buttons for foreign paths (they can't be opened) and
+/// optionally filter them from the list.
+pub fn path_is_native(text: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let text = text.trim();
+        // Windows drive letter: C:\...
+        (text.len() >= 3
+            && text.as_bytes()[0].is_ascii_alphabetic()
+            && text.as_bytes()[1] == b':'
+            && (text.as_bytes()[2] == b'\\' || text.as_bytes()[2] == b'/'))
+        // UNC path: \\server\...
+        || text.starts_with("\\\\")
+        // IP-based path: 192.168.x.x\...
+        || looks_like_ipv4_path(text)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS native: Unix absolute paths (/Users/...), exclude //
+        let text = text.trim();
+        text.starts_with('/') && !text.starts_with("//")
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = text;
+        true // Linux: accept all paths
+    }
+}
+
+/// Check whether a path still exists on disk.
+/// UNC paths (starting with `\\\\`) skip the check and always return `true`
+/// to avoid network delays.
+pub fn path_exists(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    // UNC network paths — skip existence check
+    if text.starts_with("\\\\") {
+        return true;
+    }
+    std::path::Path::new(text).exists()
 }
 
 /// Mask sensitive content for preview display.

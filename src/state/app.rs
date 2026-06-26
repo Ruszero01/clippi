@@ -223,6 +223,16 @@ impl AppState {
                 if let Some(kw) = self.filters.keyword() {
                     items.retain(|item| item_matches_keyword(item, kw));
                 }
+                // Hide non-native platform paths when the setting is enabled.
+                if self.settings.filter_foreign_paths {
+                    items.retain(|item| {
+                        if item.meta_type == "path" {
+                            crate::core::types::path_is_native(&item.full_text)
+                        } else {
+                            true
+                        }
+                    });
+                }
                 self.items = items;
             }
             Err(e) => log::error!("Failed to reload items: {e}"),
@@ -682,6 +692,22 @@ impl AppState {
                             &db_path,
                         );
                     });
+                }
+            }
+
+            // ── Lazy drive-label fill for old path items ──────────
+            if item.meta_type == "path" {
+                let rd = RichData::from_json(&item.rich_data);
+                if rd.drive_label.is_none() {
+                    if let Some(label) = crate::core::types::path_drive_label(&item.full_text) {
+                        let resolved = crate::core::paths::resolve_db_path(&self.settings.db_path);
+                        if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy())
+                        {
+                            let mut new_rd = rd;
+                            new_rd.drive_label = Some(label);
+                            let _ = db.update_rich_data(item.id, &new_rd.to_json());
+                        }
+                    }
                 }
             }
 

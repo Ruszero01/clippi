@@ -136,6 +136,8 @@ pub struct AppSettings {
     pub auto_check_updates: bool,
     #[serde(default)]
     pub auto_fetch_url_title: bool, // auto-fetch page title for link items
+    #[serde(default)]
+    pub filter_foreign_paths: bool, // hide non-native platform paths
 }
 
 fn default_qr_enabled() -> bool {
@@ -201,6 +203,7 @@ impl Default for AppSettings {
             paste_shortcuts: Vec::new(),
             auto_check_updates: true,
             auto_fetch_url_title: true,
+            filter_foreign_paths: false,
         }
     }
 }
