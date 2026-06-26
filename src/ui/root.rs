@@ -231,7 +231,12 @@ impl RootView {
                         },
                         crate::ui::components::toast::ToastAction {
                             label: I18nKey::BtnLater.text().to_string(),
-                            on_click: Rc::new(|_window, _cx| {}),
+                            on_click: {
+                                let state = this.state.clone();
+                                Rc::new(move |_window, cx| {
+                                    state.update(cx, |s, _cx| s.clear_toast());
+                                })
+                            },
                             primary: false,
                         },
                     ]);
