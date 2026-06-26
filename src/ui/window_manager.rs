@@ -2371,6 +2371,7 @@ impl WindowManager {
     /// Quit and let the prepared platform installer replace the application.
     pub fn do_update_restart(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.state.read(cx).update_available.clone() else {
+            log::error!("do_update_restart called but update_available is None");
             return;
         };
         if let Err(error) = crate::services::updater::launch_prepared_update(&info) {

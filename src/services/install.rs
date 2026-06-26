@@ -13,37 +13,45 @@ pub fn update_temp_dir() -> PathBuf {
 
 // ─── Windows ──────────────────────────────────────────────────────────
 
-/// Run the NSIS installer with admin privileges, non-silent.
-/// Uses ShellExecuteW with the `runas` verb to trigger a UAC prompt.
-/// The user goes through the installer wizard manually.
-/// The installer handles restarting Clippi after installation completes.
+/// Launch the NSIS installer directly.
+///
+/// Uses `ShellExecuteW` with the default `open` verb. The installer has
+/// `RequestExecutionLevel admin` in its manifest, so Windows automatically
+/// triggers UAC elevation without us needing the `runas` verb.
+/// The installer detects a running Clippi and prompts the user to close it,
+/// then handles restarting after installation completes.
 #[cfg(target_os = "windows")]
 pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
 
-    let exe = installer_path.to_str().ok_or("Invalid installer path")?;
+    let exe = installer_path
+        .to_str()
+        .ok_or_else(|| format!("Invalid installer path: {}", installer_path.display()))?;
     let exe_wide: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
-    let verb = "runas\0".encode_utf16().collect::<Vec<u16>>();
 
-    // SAFETY: ShellExecuteW with known string pointers — safe call.
-    let result = unsafe {
+    // SAFETY: All string arguments are NUL-terminated UTF-16. ShellExecuteW
+    // spawns a child process and returns immediately; the installer runs
+    // independently after our process exits.
+    let ret = unsafe {
         ShellExecuteW(
-            std::ptr::null_mut(), // parent window
-            verb.as_ptr(),        // "runas" — triggers UAC elevation
-            exe_wide.as_ptr(),    // installer path
-            std::ptr::null(),     // no silent flag — user runs installer manually
-            std::ptr::null(),     // working directory
-            SW_SHOW,
+            std::ptr::null_mut(), // hwnd: no parent
+            std::ptr::null(), // lpOperation: NULL = default verb (installer manifest triggers UAC)
+            exe_wide.as_ptr(), // lpFile: installer path
+            std::ptr::null(), // lpParameters: none
+            std::ptr::null(), // lpDirectory: default
+            SW_SHOW,          // nShowCmd
         )
     } as isize;
 
-    // ShellExecuteW returns a value > 32 on success
-    if result > 32 {
+    // ShellExecuteW returns a value > 32 on success; <= 32 is an error code.
+    if ret > 32 {
+        log::info!("Installer launched: {}", installer_path.display());
         Ok(())
     } else {
         Err(format!(
-            "Failed to launch installer (ShellExecuteW returned {result})"
+            "ShellExecuteW failed for '{}': error code {ret}",
+            installer_path.display(),
         ))
     }
 }
