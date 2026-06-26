@@ -4,6 +4,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui::{InteractiveElement, StatefulInteractiveElement};
 
+use crate::core::color::detect_color;
 use crate::core::types::{
     format_relative_time, mask_sensitive_preview, ClipboardItem, ContentType, DisplayKind, FileData,
 };
@@ -37,11 +38,12 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     h
 }
 
-/// (slot, id, icon, preview_text, note, relative_time, image_path)
+/// (slot, id, icon, color_swatch, preview_text, note, relative_time, image_path)
 type RowData = (
     usize,
     i64,
     &'static str,
+    Option<Rgba>,
     String,
     String,
     String,
@@ -180,10 +182,17 @@ impl QuickPasteView {
             .map(|(slot, item)| {
                 let is_image =
                     item.content_type == ContentType::Image && !item.image_path.is_empty();
+                let color_swatch = if item.display_kind() == DisplayKind::Color {
+                    detect_color(&item.full_text)
+                        .map(|c| rgb(((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32))
+                } else {
+                    None
+                };
                 (
                     slot,
                     item.id,
                     type_icon(item),
+                    color_swatch,
                     preview_text(item),
                     item.note.clone(),
                     format_relative_time(&item.updated_at),
@@ -441,7 +450,16 @@ impl Render for QuickPasteView {
                         self.row_data(cx)
                             .into_iter()
                             .map(
-                                move |(slot, item_id, icon, preview, note, time, img_path)| {
+                                move |(
+                                    slot,
+                                    item_id,
+                                    icon,
+                                    color_swatch,
+                                    preview,
+                                    note,
+                                    time,
+                                    img_path,
+                                )| {
                                     let index = first_visible + slot;
                                     let selected = index == selected_index;
                                     let t = t.clone();
@@ -541,8 +559,18 @@ impl Render for QuickPasteView {
                                                 .font_weight(FontWeight::BOLD)
                                                 .child((slot + 1).to_string()),
                                         )
-                                        // Type icon
-                                        .child(
+                                        // Type icon / color swatch
+                                        .child(if let Some(swatch) = color_swatch {
+                                            let swatch_border = color_border_for_swatch(swatch);
+                                            div()
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded(px(3.0))
+                                                .bg(swatch)
+                                                .border(px(1.0))
+                                                .border_color(swatch_border)
+                                                .into_any_element()
+                                        } else {
                                             div()
                                                 .w(px(16.0))
                                                 .flex()
@@ -555,8 +583,9 @@ impl Render for QuickPasteView {
                                                 } else {
                                                     t.text_2
                                                 })
-                                                .child(icon),
-                                        )
+                                                .child(icon)
+                                                .into_any_element()
+                                        })
                                         .child(content_cell)
                                         // Relative time
                                         .child(
@@ -647,4 +676,19 @@ fn parse_hex_for_tag(hex: &str) -> Rgba {
     parse_hex_color(hex)
         .map(|(r, g, b)| rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32))
         .unwrap_or(rgb(0x3b82f6))
+}
+
+/// Pick a border color that contrasts with the swatch's perceived brightness.
+/// Light colors get a dark border, dark colors get a light border — so the
+/// swatch is always visible regardless of theme or color value.
+fn color_border_for_swatch(swatch: Rgba) -> Rgba {
+    // ITU-R BT.601 perceived brightness (gpui Rgba uses 0.0–1.0 floats)
+    let lum = 0.299 * swatch.r + 0.587 * swatch.g + 0.114 * swatch.b;
+    if lum > 0.55 {
+        // Light swatch → dark semi-transparent border
+        rgba(0x00000030)
+    } else {
+        // Dark swatch → light semi-transparent border
+        rgba(0xffffff30)
+    }
 }
