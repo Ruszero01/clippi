@@ -773,6 +773,16 @@ impl ClipboardListView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !action.starts_with("batch_") {
+            let Some(index) = self.hovered_index else {
+                return;
+            };
+            if self.items.get(index).is_none() {
+                return;
+            }
+            self.select_index_without_scroll(index, cx);
+        }
+
         let plain = self.state.read(cx).settings.copy_as_plain_text;
         match action {
             "copy" => {
@@ -1189,6 +1199,7 @@ impl Render for ClipboardListView {
                                             div()
                                                 .w_full()
                                                 .h_full()
+                                                .overflow_hidden()
                                                 .py(px(5.))
                                                 .on_mouse_move({
                                                     move |ev, _window, cx| {
@@ -1326,7 +1337,8 @@ impl Render for ClipboardListView {
                                     .collect::<Vec<_>>()
                             },
                         )
-                        .track_scroll(&self.scroll_handle),
+                        .track_scroll(&self.scroll_handle)
+                        .overflow_x_hidden(),
                     )
                     .child(
                         div()

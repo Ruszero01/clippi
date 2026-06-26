@@ -301,6 +301,7 @@ impl RenderOnce for HoverToolbar {
                     .on_mouse_down(MouseButton::Left, {
                         let action = action.clone();
                         move |_ev, _window, cx| {
+                            cx.stop_propagation();
                             if let Some(ref handler) = on_action {
                                 handler(&action, _window, cx);
                             }
