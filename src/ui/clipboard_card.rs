@@ -646,6 +646,7 @@ impl RenderOnce for ClipboardCard {
         let text_2 = theme.text_2;
         let text_3 = theme.text_3;
         let danger = theme.danger;
+        let path_warn = rgb(0xeab308);
         let is_dark = theme.bg == rgb(0x191a1b);
         let pill_bg = if is_dark {
             rgba(0x232425e8)
@@ -1168,8 +1169,16 @@ impl RenderOnce for ClipboardCard {
                     // File system path: bold last component + dimmed full path.
                     // Non-existent paths get a red tint + reduced opacity
                     // (UNC network paths skip the existence check).
-                    let path_invalid = !crate::core::types::path_exists(&item.full_text);
-                    let label_color = if path_invalid { danger } else { text_1 };
+                    let path_foreign = !crate::core::types::path_is_native(&item.full_text);
+                    let path_invalid =
+                        !path_foreign && !crate::core::types::path_exists(&item.full_text);
+                    let label_color = if path_invalid {
+                        danger
+                    } else if path_foreign {
+                        path_warn
+                    } else {
+                        text_1
+                    };
                     let path_text = item.full_text.trim_end_matches(['\\', '/']).to_string();
                     let (leaf, show_full) = match path_text.rfind(['\\', '/']) {
                         Some(pos) if pos + 1 < path_text.len() => {
@@ -1634,7 +1643,7 @@ impl RenderOnce for ClipboardCard {
                 let pill_text_color = if size_label_danger {
                     danger
                 } else if size_label_warn {
-                    rgb(0xeab308)
+                    path_warn
                 } else {
                     text_2
                 };

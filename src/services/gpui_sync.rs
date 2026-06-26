@@ -402,7 +402,13 @@ fn run_sync_cycle_for_backend(
         Ok(mut remote) => {
             remote_hash = Some(sync::payload_semantic_hash(&remote));
             match sync::merge_remote_into_local(db, &mut remote, &local_device) {
-                Ok(merge_stats) => stats = merge_stats,
+                Ok(merge_stats) => {
+                    stats = merge_stats;
+                    let fetched = crate::services::url_assets::backfill_link_favicons_from_db(db);
+                    if fetched > 0 {
+                        log::debug!("sync: backfilled {fetched} URL favicon(s)");
+                    }
+                }
                 Err(error) => {
                     return SyncCycleResult {
                         success: false,

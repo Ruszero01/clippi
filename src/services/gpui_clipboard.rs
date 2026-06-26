@@ -166,12 +166,19 @@ impl GpuiClipboardService {
                 self.process_ocr(&item, &db_path);
             }
 
-            // ── Post-upsert: spawn page-title fetch for link items ──
+            // ── Post-upsert: spawn URL metadata fetch for link items ──
+            if item.meta_type == "link" {
+                crate::services::url_assets::spawn_ensure_url_favicon_cached(
+                    item.full_text.clone(),
+                );
+            }
             if item.meta_type == "link" && state.settings.auto_fetch_url_title {
                 let url = item.full_text.clone();
                 let content_hash = item.content_hash;
                 let db_path = db_path.clone();
                 let needs_refresh = self.needs_refresh.clone();
+                let sync_dirty = state.sync_dirty.clone();
+                let mark_sync_dirty = state.should_mark_sync_dirty(&item);
                 std::thread::spawn(move || {
                     if crate::services::url_title::fetch_and_store_title(
                         &url,
@@ -179,6 +186,9 @@ impl GpuiClipboardService {
                         &db_path,
                     ) {
                         needs_refresh.store(true, Ordering::SeqCst);
+                        if mark_sync_dirty {
+                            sync_dirty.store(true, Ordering::SeqCst);
+                        }
                     }
                 });
             }

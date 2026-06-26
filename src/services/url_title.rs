@@ -39,13 +39,14 @@ pub fn fetch_and_store_title(url: &str, content_hash: u64, db_path: &str) -> boo
 
 /// HTTP GET `url`, read the first 64 KB of HTML, and extract the `<title>`.
 fn fetch_page_title(url: &str) -> Option<String> {
+    let url = normalize_http_url(url)?;
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(10))
         .build();
 
     let response = agent
-        .get(url)
+        .get(&url)
         .set(
             "User-Agent",
             &format!("Clippi/{}", env!("CARGO_PKG_VERSION")),
@@ -61,6 +62,18 @@ fn fetch_page_title(url: &str) -> Option<String> {
 
     let html = String::from_utf8_lossy(&body);
     extract_title(&html)
+}
+
+fn normalize_http_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    if url.starts_with("http://") || url.starts_with("https://") {
+        Some(url.to_string())
+    } else {
+        Some(format!("https://{url}"))
+    }
 }
 
 /// Extract the content of the first `<title>...</title>` tag (case-insensitive).
@@ -136,5 +149,30 @@ mod tests {
         assert_eq!(extract_title("<html><head></head></html>"), None);
         assert_eq!(extract_title(""), None);
         assert_eq!(extract_title("no title here"), None);
+    }
+
+    #[test]
+    fn test_normalize_http_url_keeps_existing_scheme() {
+        assert_eq!(
+            normalize_http_url("https://example.com/path"),
+            Some("https://example.com/path".to_string())
+        );
+        assert_eq!(
+            normalize_http_url("http://example.com/path"),
+            Some("http://example.com/path".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_http_url_adds_https_for_protocol_less_url() {
+        assert_eq!(
+            normalize_http_url("example.com/path"),
+            Some("https://example.com/path".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_http_url_rejects_empty_url() {
+        assert_eq!(normalize_http_url("  "), None);
     }
 }

@@ -678,21 +678,18 @@ impl AppState {
             }
             let target = text;
 
-            // ── Lazy page-title fetch for old items without one ─────
-            if item.meta_type == "link" && self.settings.auto_fetch_url_title {
-                let rd = RichData::from_json(&item.rich_data);
-                if rd.page_title.is_none() {
-                    let url = item.full_text.clone();
-                    let content_hash = item.content_hash;
-                    let db_path = self.settings.db_path.clone();
-                    std::thread::spawn(move || {
-                        crate::services::url_title::fetch_and_store_title(
-                            &url,
-                            content_hash,
-                            &db_path,
-                        );
-                    });
-                }
+            // ── Lazy URL metadata backfill for old/synced link items ─────
+            if item.meta_type == "link" {
+                let mark_sync_dirty = self.should_mark_sync_dirty(&item);
+                crate::services::url_assets::spawn_link_open_backfill(
+                    item.full_text.clone(),
+                    item.content_hash,
+                    self.settings.db_path.clone(),
+                    item.rich_data.clone(),
+                    self.settings.auto_fetch_url_title,
+                    self.sync_dirty.clone(),
+                    mark_sync_dirty,
+                );
             }
 
             // ── Lazy drive-label fill for old path items ──────────

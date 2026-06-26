@@ -2,6 +2,7 @@
 //! Non-critical: all failures are silent and callers fall back to chain icon.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::core::paths::images_dir;
 
@@ -53,7 +54,12 @@ pub fn ensure_favicon_cached(domain: &str) -> Option<String> {
 
     let url = format!("https://www.google.com/s2/favicons?domain={}&sz=32", domain);
 
-    match ureq::get(&url).call() {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(3))
+        .timeout_read(Duration::from_secs(5))
+        .build();
+
+    match agent.get(&url).call() {
         Ok(response) => {
             let mut body = Vec::new();
             if response.into_reader().read_to_end(&mut body).is_err() {

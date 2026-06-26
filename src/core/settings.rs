@@ -134,7 +134,7 @@ pub struct AppSettings {
     pub paste_shortcuts: Vec<PasteShortcutEntry>,
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
-    #[serde(default)]
+    #[serde(default = "default_auto_fetch_url_title")]
     pub auto_fetch_url_title: bool, // auto-fetch page title for link items
     #[serde(default)]
     pub filter_foreign_paths: bool, // hide non-native platform paths
@@ -153,6 +153,10 @@ fn default_sync_interval() -> u64 {
 }
 
 fn default_auto_check_updates() -> bool {
+    true
+}
+
+fn default_auto_fetch_url_title() -> bool {
     true
 }
 
@@ -598,6 +602,21 @@ mod tests {
         assert!(merged.auto_hide); // source wins
         assert_eq!(merged.max_items, 500); // source wins
         assert_eq!(merged.db_path, "/new/path/clippi.db"); // explicit override
+    }
+
+    #[test]
+    fn missing_auto_fetch_url_title_defaults_to_enabled() {
+        let settings = AppSettings::default();
+        let toml = toml::to_string(&settings).unwrap();
+        let legacy_toml = toml
+            .lines()
+            .filter(|line| !line.starts_with("auto_fetch_url_title"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let loaded: AppSettings = toml::from_str(&legacy_toml).unwrap();
+
+        assert!(loaded.auto_fetch_url_title);
     }
 
     fn bk(id: &str, name: &str) -> BackendConfig {
