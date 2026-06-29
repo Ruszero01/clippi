@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::Datelike;
 use gpui::*;
 
 use crate::core::frontend::{
@@ -511,6 +512,9 @@ impl WindowManager {
 
         // --- 9. Auto-update ---
         self.poll_update(cx);
+
+        // --- 10. Periodic cache cleanup ---
+        self.poll_cleanup(cx);
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
@@ -2397,6 +2401,64 @@ impl WindowManager {
         if let Some(ref mut fw) = self.focus_watcher {
             fw.stop();
         }
+    }
+
+    /// Check if periodic cache cleanup is due and spawn a background thread.
+    fn poll_cleanup(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.read(cx).settings.clone();
+        let interval = settings.cleanup_interval.as_str();
+        if interval == "never" {
+            return;
+        }
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let should_run = match interval {
+            "daily" => settings.cleanup_last_date != today,
+            "weekly" => {
+                // ISO week-based comparison
+                let current_week = chrono::Local::now().iso_week();
+                let current_week_str =
+                    format!("{}-W{:02}", current_week.year(), current_week.week());
+                settings.cleanup_last_date != current_week_str
+            }
+            _ => false,
+        };
+
+        if !should_run {
+            return;
+        }
+
+        let db_path = settings.resolve_db_path();
+        std::thread::spawn(move || {
+            match crate::core::db::Database::open(&db_path.to_string_lossy()) {
+                Ok(db) => {
+                    let stats = crate::core::cache_cleanup::run_cleanup(&db);
+                    if !stats.is_empty() {
+                        log::info!(
+                            "periodic cleanup: {} orphan images, {} expired icons, {} expired tombstones",
+                            stats.orphan_images,
+                            stats.expired_icons,
+                            stats.expired_tombstones,
+                        );
+                    }
+                }
+                Err(e) => log::error!("periodic cleanup: failed to open DB: {e}"),
+            }
+        });
+
+        // Update last cleanup date immediately (don't wait for thread).
+        let new_date = match interval {
+            "daily" => today,
+            "weekly" => {
+                let wk = chrono::Local::now().iso_week();
+                format!("{}-W{:02}", wk.year(), wk.week())
+            }
+            _ => return,
+        };
+        self.state.update(cx, |s, _cx| {
+            s.settings.cleanup_last_date = new_date;
+            s.settings.save();
+        });
     }
 }
 

@@ -3,6 +3,7 @@
 //! --- Mirrors the original Slint `SettingsTabData.slint` layout. ---
 //! Includes the reset-data-directory dialog for portable mode.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::Input;
 
@@ -367,6 +368,179 @@ impl SettingsPanel {
                                 )
                         }
                     })
+            })
+            // --- ── Cache cleanup card ── ---
+            .child({
+                let state = self.state.clone();
+                let this = cx.entity().clone();
+                let cleanup_interval = self.state.read(cx).settings.cleanup_interval.clone();
+
+                let surface = self.theme.surface;
+                let divider = self.theme.divider;
+                let text_1 = self.theme.text_1;
+                let text_2 = self.theme.text_2;
+                let text_3 = self.theme.text_3;
+                let accent = self.theme.accent;
+
+                div()
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .px(px(14.))
+                    .pt(px(14.))
+                    .pb(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    // --- Label + description ---
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::SettingCleanup.text()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(text_3)
+                                    .child(I18nKey::DescCleanup.text()),
+                            ),
+                    )
+                    // --- Frequency buttons + clean-now button ---
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            // Frequency selector buttons
+                            .child({
+                                let state = state.clone();
+                                let options: &[(&str, &str)] = &[
+                                    ("never", I18nKey::CleanupIntervalNever.text()),
+                                    ("daily", I18nKey::CleanupIntervalDaily.text()),
+                                    ("weekly", I18nKey::CleanupIntervalWeekly.text()),
+                                ];
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(4.))
+                                    .children(options.iter().map({
+                                        let cleanup_interval = cleanup_interval.clone();
+                                        move |(key, label)| {
+                                            let selected = *key == cleanup_interval;
+                                            let btn_bg =
+                                                if selected { accent } else { rgba(0x00000000) };
+                                            let btn_text =
+                                                if selected { rgb(0xffffff) } else { text_2 };
+                                            let btn_weight = if selected {
+                                                FontWeight::BOLD
+                                            } else {
+                                                FontWeight::default()
+                                            };
+                                            let key = *key;
+                                            let state = state.clone();
+
+                                            div()
+                                                .h(px(26.))
+                                                .rounded(px(7.))
+                                                .px(px(8.))
+                                                .bg(btn_bg)
+                                                .when(!selected, |d| {
+                                                    d.border(px(1.)).border_color(divider)
+                                                })
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .cursor(CursorStyle::PointingHand)
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_ev, _window, cx| {
+                                                        cx.stop_propagation();
+                                                        state.update(cx, |s, _cx| {
+                                                            s.settings.cleanup_interval =
+                                                                key.to_string();
+                                                            s.settings.save();
+                                                        });
+                                                    },
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .font_weight(btn_weight)
+                                                        .text_color(btn_text)
+                                                        .child(*label),
+                                                )
+                                        }
+                                    }))
+                            })
+                            // Clean now button
+                            .child({
+                                let state = state.clone();
+                                let this = this.clone();
+                                div()
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .rounded(px(7.))
+                                    .bg(accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|s| s.opacity(0.85))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                        let db_path = state.read(cx).settings.resolve_db_path();
+                                        let stats = match crate::core::db::Database::open(
+                                            &db_path.to_string_lossy(),
+                                        ) {
+                                            Ok(db) => crate::core::cache_cleanup::run_cleanup(&db),
+                                            Err(e) => {
+                                                log::error!("cleanup: failed to open DB: {e}");
+                                                return;
+                                            }
+                                        };
+                                        // Update last cleanup date
+                                        let today =
+                                            chrono::Local::now().format("%Y-%m-%d").to_string();
+                                        state.update(cx, |s, _cx| {
+                                            s.settings.cleanup_last_date = today;
+                                            s.settings.save();
+                                        });
+                                        // Show toast
+                                        if stats.is_empty() {
+                                            this.update(cx, |_panel, cx| {
+                                                cx.emit(SettingsEvent::DataError(
+                                                    I18nKey::ToastCleanupNone.text().to_string(),
+                                                ));
+                                            });
+                                        } else {
+                                            let msg = I18nKey::ToastCleanupDone.fmt(&[
+                                                &stats.orphan_images.to_string(),
+                                                &stats.expired_icons.to_string(),
+                                                &stats.expired_tombstones.to_string(),
+                                            ]);
+                                            this.update(cx, |_panel, cx| {
+                                                cx.emit(SettingsEvent::DataError(msg));
+                                            });
+                                        }
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(0xffffff))
+                                            .child(I18nKey::BtnCleanupNow.text()),
+                                    )
+                            }),
+                    )
             })
     }
 

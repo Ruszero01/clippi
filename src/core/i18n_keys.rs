@@ -179,6 +179,16 @@ define_i18n! {
     BackendPhUser:      ("用户名", "Username"),
     BackendPhPass:      ("密码", "Password"),
 
+    // ─── Cache cleanup ───
+    SettingCleanup:         ("缓存清理", "Cache cleanup"),
+    DescCleanup:            ("自动清理未引用的孤儿文件和过期同步数据", "Auto-clean unreferenced orphan files and expired sync data"),
+    CleanupIntervalNever:   ("从不", "Never"),
+    CleanupIntervalDaily:   ("每天", "Daily"),
+    CleanupIntervalWeekly:  ("每周", "Weekly"),
+    BtnCleanupNow:          ("立即清理", "Clean now"),
+    ToastCleanupNone:       ("没有需要清理的文件", "No files to clean up"),
+    ToastCleanupDone:       ("清理完成：{0}张图片、{1}个图标、{2}条过期记录", "Cleaned: {0} images, {1} icons, {2} expired records"),
+
     // ─── Root view / Clipboard list ───
     ClipboardEmpty:     ("剪贴板为空", "Clipboard is empty"),
     ClipboardHint:      ("复制内容后将显示在这里", "Copied content will appear here"),

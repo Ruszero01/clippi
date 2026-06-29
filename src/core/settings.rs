@@ -138,6 +138,10 @@ pub struct AppSettings {
     pub auto_fetch_url_title: bool, // auto-fetch page title for link items
     #[serde(default)]
     pub filter_foreign_paths: bool, // hide non-native platform paths
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval: String, // cache cleanup frequency: "daily" | "weekly" | "never"
+    #[serde(default)]
+    pub cleanup_last_date: String, // last cleanup date "YYYY-MM-DD" for periodic scheduling
 }
 
 fn default_qr_enabled() -> bool {
@@ -146,6 +150,10 @@ fn default_qr_enabled() -> bool {
 
 fn default_ocr_enabled() -> bool {
     false
+}
+
+fn default_cleanup_interval() -> String {
+    "weekly".to_string()
 }
 
 fn default_sync_interval() -> u64 {
@@ -208,6 +216,8 @@ impl Default for AppSettings {
             auto_check_updates: true,
             auto_fetch_url_title: true,
             filter_foreign_paths: false,
+            cleanup_interval: default_cleanup_interval(),
+            cleanup_last_date: String::new(),
         }
     }
 }
