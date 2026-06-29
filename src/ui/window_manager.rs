@@ -1226,6 +1226,7 @@ impl WindowManager {
                         state.settings.save();
                         state.toast_message =
                             Some(I18nKey::HotkeyFallbackToast.fmt(&[&hotkey_str, &actual]));
+                        state.toast_is_warning = true;
                     });
                 }
                 if hk.quick_fallback_used() {
@@ -1235,6 +1236,7 @@ impl WindowManager {
                         state.settings.save();
                         state.toast_message =
                             Some(I18nKey::HotkeyFallbackToast.fmt(&[&quick_hotkey_str, &actual]));
+                        state.toast_is_warning = true;
                     });
                 }
                 Some(hk)
@@ -1955,6 +1957,7 @@ impl WindowManager {
                     state.settings.quick_hotkey_enabled = false;
                     state.settings.save();
                     state.toast_message = Some(e);
+                    state.toast_is_warning = true;
                 });
             }
             hk.set_quick_actions_enabled(false);

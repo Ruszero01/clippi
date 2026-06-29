@@ -32,16 +32,20 @@ fn is_style_container_tag(tag: &str) -> bool {
 /// Returns `None` when the HTML contains no recognised styles, so the caller
 /// can fall back to `TextView::html()`.
 pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
-    if !html.contains("style=") || !html.contains("color") {
-        // Also catch classic <font color="..."> (no style= attribute).
-        if !html.contains("color=") {
-            return None;
-        }
+    let html_lower = html.to_ascii_lowercase();
+    if !html_lower.contains("style=")
+        && !html_lower.contains("color=")
+        && !html_lower.contains("<b")
+        && !html_lower.contains("<strong")
+        && !html_lower.contains("<i")
+        && !html_lower.contains("<em")
+    {
+        return None;
     }
 
     let mut lines: Vec<Vec<StyledHtmlSpan>> = vec![Vec::new()];
     let mut style_stack: Vec<ParsedInlineStyle> = vec![ParsedInlineStyle::default()];
-    let mut found_color = false;
+    let mut found_style = false;
     let mut idx = 0usize;
 
     while idx < html.len() {
@@ -63,14 +67,20 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
                 if is_style_container_tag(tag_name) && style_stack.len() > 1 {
                     style_stack.pop();
                 }
+                if tag_lower.starts_with("/div")
+                    || tag_lower.starts_with("/p")
+                    || tag_lower.starts_with("/pre")
+                {
+                    push_newline(&mut lines);
+                }
             } else {
                 // Opening tag — extract pure tag name (first token before space / > / /)
                 let tag_name = tag_lower
                     .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
                     .next()
                     .unwrap_or("");
-                let tag_style = parse_inline_style(tag);
-                found_color |= tag_style.color.is_some();
+                let tag_style = parse_inline_style(tag_name, tag);
+                found_style |= tag_style.has_any_style();
 
                 if is_style_container_tag(tag_name) {
                     // Inherit from parent for properties not set on this tag
@@ -103,7 +113,7 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
 
     trim_empty_styled_lines(&mut lines);
 
-    if found_color && !lines.is_empty() {
+    if found_style && !lines.is_empty() {
         Some(lines)
     } else {
         None
@@ -465,10 +475,25 @@ struct ParsedInlineStyle {
     background_color: Option<Rgba>,
 }
 
-fn parse_inline_style(tag: &str) -> ParsedInlineStyle {
+impl ParsedInlineStyle {
+    fn has_any_style(&self) -> bool {
+        self.color.is_some()
+            || self.font_weight.is_some()
+            || self.font_style.is_some()
+            || self.background_color.is_some()
+    }
+}
+
+fn parse_inline_style(tag_name: &str, tag: &str) -> ParsedInlineStyle {
     let mut color = None;
-    let mut font_weight = None;
-    let mut font_style = None;
+    let mut font_weight = match tag_name {
+        "b" | "strong" => Some(FontWeight::BOLD),
+        _ => None,
+    };
+    let mut font_style = match tag_name {
+        "i" | "em" => Some(FontStyle::Italic),
+        _ => None,
+    };
     let mut background_color = None;
 
     // ── CSS style="..." attribute ──
@@ -591,14 +616,17 @@ fn parse_css_color(value: &str) -> Option<Rgba> {
         }
     }
 
-    let rgb_values = value
+    let Some(rgb_values) = value
         .strip_prefix("rgb(")
         .and_then(|s| s.strip_suffix(')'))
         .or_else(|| {
             value
                 .strip_prefix("rgba(")
                 .and_then(|s| s.strip_suffix(')'))
-        })?;
+        })
+    else {
+        return parse_named_html_color(value);
+    };
     let channels: Vec<u8> = rgb_values
         .split(',')
         .take(3)
@@ -635,4 +663,56 @@ fn looks_like_url(after_paren: &str) -> bool {
         || s.starts_with('#')   // anchor
         || s.starts_with('/')   // absolute path
         || s.contains("://") // any other protocol
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_styled_html_lines, strip_html_links};
+    use gpui::{rgb, FontStyle, FontWeight};
+
+    #[test]
+    fn parses_semantic_weight_and_style_without_color() {
+        let lines = parse_styled_html_lines("<strong>Bold</strong> <em>Italic</em>").unwrap();
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0][0].text, "Bold");
+        assert_eq!(lines[0][0].font_weight, Some(FontWeight::BOLD));
+        assert_eq!(lines[0][1].text, " ");
+        assert_eq!(lines[0][2].text, "Italic");
+        assert_eq!(lines[0][2].font_style, Some(FontStyle::Italic));
+    }
+
+    #[test]
+    fn parses_background_only_styles() {
+        let lines =
+            parse_styled_html_lines(r#"<span style="background-color: yellow">Marked</span>"#)
+                .unwrap();
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0][0].text, "Marked");
+        assert_eq!(lines[0][0].background_color, Some(rgb(0xFFFF00)));
+    }
+
+    #[test]
+    fn closing_block_tags_split_lines() {
+        let lines = parse_styled_html_lines(
+            r#"<div><span style="color:#ff0000">One</span></div><div><span style="color:#00ff00">Two</span></div>"#,
+        )
+        .unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][0].text, "One");
+        assert_eq!(lines[1][0].text, "Two");
+    }
+
+    #[test]
+    fn styled_links_keep_style_when_links_are_stripped() {
+        let stripped =
+            strip_html_links(r#"<a href="https://example.com" style="color: red">Link</a>"#);
+        let lines = parse_styled_html_lines(&stripped).unwrap();
+
+        assert_eq!(stripped, r#"<span style="color: red">Link</span>"#);
+        assert_eq!(lines[0][0].text, "Link");
+        assert_eq!(lines[0][0].color, Some(rgb(0xFF0000)));
+    }
 }

@@ -611,13 +611,19 @@ impl Render for QuickPasteView {
                                             .items_center()
                                             .whitespace_nowrap()
                                             .children(spans.into_iter().map(|span| {
-                                                div()
+                                                let mut d = div()
                                                     .text_size(px(13.0))
                                                     .text_color(span.color.unwrap_or(t.text_1))
                                                     .font_weight(
                                                         span.font_weight.unwrap_or_default(),
-                                                    )
-                                                    .child(span.text)
+                                                    );
+                                                if span.font_style == Some(FontStyle::Italic) {
+                                                    d = d.italic();
+                                                }
+                                                if let Some(bg) = span.background_color {
+                                                    d = d.text_bg(bg);
+                                                }
+                                                d.child(span.text)
                                             }))
                                             .into_any_element()
                                     } else {

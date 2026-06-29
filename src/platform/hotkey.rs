@@ -290,9 +290,19 @@ mod tests {
 }
 
 /// Fallback hotkey chain for the main window (V for clipboard).
+#[cfg(target_os = "macos")]
+const MAIN_FALLBACKS: &[&str] = &["Option+Shift+V", "Ctrl+Option+V", "Cmd+Shift+V"];
+
+/// Fallback hotkey chain for the main window (V for clipboard).
+#[cfg(not(target_os = "macos"))]
 const MAIN_FALLBACKS: &[&str] = &["Alt+Shift+V", "Ctrl+Alt+V", "Win+Shift+V"];
 
 /// Fallback hotkey chain for the quick paste window (C for clipboard).
+#[cfg(target_os = "macos")]
+const QUICK_FALLBACKS: &[&str] = &["Option+Shift+C", "Ctrl+Option+C", "Cmd+Shift+C"];
+
+/// Fallback hotkey chain for the quick paste window (C for clipboard).
+#[cfg(not(target_os = "macos"))]
 const QUICK_FALLBACKS: &[&str] = &["Alt+Shift+C", "Ctrl+Alt+C", "Win+Shift+C"];
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -327,8 +337,10 @@ impl DesktopHotkeyListener {
         let mut main_fallback = false;
         let mut hotkey = parse_hotkey(hotkey_str)?;
         let mut registered = true;
+        let mut main_register_error = None;
         if let Err(e) = manager.register(hotkey) {
             log::warn!("main hotkey register failed ({hotkey_str}): {e}");
+            main_register_error = Some(e.to_string());
             registered = false;
             // Walk the fallback chain.
             for &fb in MAIN_FALLBACKS {
@@ -344,6 +356,10 @@ impl DesktopHotkeyListener {
                     }
                 }
             }
+        }
+        if !registered {
+            let detail = main_register_error.unwrap_or_else(|| hotkey_str.to_string());
+            return Err(format!("{}: {detail}", I18nKey::HotkeyErrRegister.text()));
         }
 
         // ── Quick hotkey: try configured → fallback chain ──
@@ -368,6 +384,7 @@ impl DesktopHotkeyListener {
                 actual_quick = quick_hotkey_str.to_string();
             }
             if !quick_registered {
+                let mut quick_register_error = None;
                 for &fb in QUICK_FALLBACKS {
                     if let Ok(fb_key) = parse_hotkey(fb) {
                         // Also skip if it collides with the actual main hotkey.
@@ -376,6 +393,7 @@ impl DesktopHotkeyListener {
                         }
                         if let Err(e) = manager.register(fb_key) {
                             log::warn!("quick fallback register failed ({fb}): {e}");
+                            quick_register_error = Some(e.to_string());
                         } else {
                             quick_hotkey = fb_key;
                             actual_quick = fb.to_string();
@@ -384,6 +402,12 @@ impl DesktopHotkeyListener {
                             break;
                         }
                     }
+                }
+                if !quick_registered {
+                    let _ = manager.unregister(hotkey);
+                    let detail =
+                        quick_register_error.unwrap_or_else(|| quick_hotkey_str.to_string());
+                    return Err(format!("{}: {detail}", I18nKey::HotkeyErrRegister.text()));
                 }
             }
         }

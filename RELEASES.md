@@ -3,8 +3,8 @@
 ### 优化
 
 - **富文本 HTML 内联样式增强** — 从 IDE 或浏览器复制的富文本内容现在能正确渲染更多内联样式：`font-weight: bold`（加粗）、`font-style: italic`（斜体）、`background-color`（背景色）；支持 `<font color="red">` 等经典 HTML 颜色属性；带内联颜色的 `<a>` 链接标签移除链接后保留文字颜色；`<div>`、`<p>`、`<b>`、`<i>` 等更多标签参与样式继承
-- **快速粘贴窗口富文本渲染** — 快捷粘贴窗口现在同样支持富文本的内联颜色和加粗渲染，与主窗口行为一致
-- **快捷键冲突检测与回退链** — 录制时主快捷键与快速窗口快捷键相同会明确提示冲突并保留旧键位；与第三方应用快捷键冲突时旧键位不受影响；首次启动时若配置快捷键被占用，自动从回退链（V 链：Alt+Shift+V→Ctrl+Alt+V→Win+Shift+V，C 链：Alt+Shift+C→Ctrl+Alt+C→Win+Shift+C）选取可用键位并 toast 提示
+- **快速粘贴窗口富文本渲染** — 快捷粘贴窗口现在同样支持富文本的内联颜色、加粗、斜体和背景色渲染，与主窗口行为一致
+- **快捷键冲突检测与回退链** — 录制时主快捷键与快速窗口快捷键相同会明确提示冲突并保留旧键位；与第三方应用快捷键冲突时旧键位不受影响；首次启动时若配置快捷键被占用，自动从回退链（Windows：V 链 Alt+Shift+V→Ctrl+Alt+V→Win+Shift+V，C 链 Alt+Shift+C→Ctrl+Alt+C→Win+Shift+C；macOS：V 链 Option+Shift+V→Ctrl+Option+V→Cmd+Shift+V，C 链 Option+Shift+C→Ctrl+Option+C→Cmd+Shift+C）选取可用键位并 toast 提示
 - **Toast 通知优化** — 错误提示使用红色文字，信息提示使用绿色文字；toast 在设置页面也能正常显示；连续触发时自动重置倒计时
 
 ### Bug 修复
