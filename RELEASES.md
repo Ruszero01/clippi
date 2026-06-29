@@ -2,7 +2,7 @@
 
 ### 优化
 
-- **富文本 HTML 渲染增强** — 扩展内联样式解析能力，现在支持 `font-weight: bold`（加粗）、`font-style: italic`（斜体）、`background-color`（背景色）等 CSS 属性；支持 `<font color="red">` 等经典 HTML 颜色属性；带内联颜色的 `<a>` 链接标签移除链接后保留文字颜色；`<b>`、`<i>`、`<strong>`、`<em>`、`<u>` 等语义标签正确继承父级样式
+- **富文本 HTML 渲染增强** — 扩展内联样式解析能力，支持 `font-weight: bold`（加粗）、`font-style: italic`（斜体）、`background-color`（背景色）等 CSS 属性；支持 `<font color="red">` 等经典 HTML 颜色属性；带内联颜色的 `<a>` 链接标签移除链接后保留文字颜色；`<b>`、`<i>`、`<strong>`、`<em>`、`<u>` 等语义标签正确继承父级样式；快速粘贴窗口同样支持富文本内联颜色和加粗渲染
 
 ---
 
