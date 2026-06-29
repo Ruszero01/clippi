@@ -5,24 +5,42 @@
 
 use gpui::*;
 
-/// A single styled text span with optional color.
+/// A single styled text span with optional color, font weight, font style,
+/// and background color.
 #[derive(Clone)]
 pub struct StyledHtmlSpan {
     pub text: String,
     pub color: Option<Rgba>,
+    pub font_weight: Option<FontWeight>,
+    pub font_style: Option<FontStyle>,
+    pub background_color: Option<Rgba>,
 }
 
-/// Parse an HTML string and extract colored `<span style="color:...">` lines.
+/// Tags whose inline styles we track for inheritance. Closing tags
+/// pop the stack so styling is scoped correctly.
+fn is_style_container_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "span" | "a" | "font" | "b" | "strong" | "i" | "em" | "u"
+    )
+}
+
+/// Parse an HTML string and extract styled lines with color, font-weight,
+/// font-style, and background-color from inline `style` attributes as well
+/// as classic HTML `color` attributes (e.g. `<font color="red">`).
 ///
-/// Returns `None` when the HTML contains no color styles, so the caller can
-/// fall back to `TextView::html()`.
+/// Returns `None` when the HTML contains no recognised styles, so the caller
+/// can fall back to `TextView::html()`.
 pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
     if !html.contains("style=") || !html.contains("color") {
-        return None;
+        // Also catch classic <font color="..."> (no style= attribute).
+        if !html.contains("color=") {
+            return None;
+        }
     }
 
     let mut lines: Vec<Vec<StyledHtmlSpan>> = vec![Vec::new()];
-    let mut color_stack: Vec<Option<Rgba>> = vec![None];
+    let mut style_stack: Vec<ParsedInlineStyle> = vec![ParsedInlineStyle::default()];
     let mut found_color = false;
     let mut idx = 0usize;
 
@@ -30,7 +48,7 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
         let rest = &html[idx..];
         if let Some(tag_start_rel) = rest.find('<') {
             let text = &rest[..tag_start_rel];
-            push_html_text(&mut lines, text, *color_stack.last().unwrap_or(&None));
+            push_html_text(&mut lines, text, style_stack.last().unwrap());
             idx += tag_start_rel;
 
             let Some(tag_end_rel) = html[idx..].find('>') else {
@@ -39,25 +57,42 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
             let tag = &html[idx + 1..idx + tag_end_rel];
             let tag_lower = tag.trim().to_ascii_lowercase();
 
-            if tag_lower.starts_with("span") {
-                let color = parse_style_color(tag);
-                found_color |= color.is_some();
-                color_stack.push(color.or_else(|| *color_stack.last().unwrap_or(&None)));
-            } else if tag_lower.starts_with("/span") {
-                if color_stack.len() > 1 {
-                    color_stack.pop();
+            if tag_lower.starts_with('/') {
+                // Closing tag — pop style stack for container tags
+                let tag_name = tag_lower.trim_start_matches('/');
+                if is_style_container_tag(tag_name) && style_stack.len() > 1 {
+                    style_stack.pop();
                 }
-            } else if tag_lower.starts_with("br")
-                || tag_lower.starts_with("/div")
-                || tag_lower.starts_with("/p")
-                || tag_lower.starts_with("/pre")
-            {
-                push_newline(&mut lines);
+            } else {
+                // Opening tag
+                let tag_style = parse_inline_style(tag);
+                found_color |= tag_style.color.is_some();
+
+                if is_style_container_tag(&tag_lower) {
+                    // Inherit from parent for properties not set on this tag
+                    let parent = style_stack.last().unwrap();
+                    let merged = ParsedInlineStyle {
+                        color: tag_style.color.or(parent.color),
+                        font_weight: tag_style.font_weight.or(parent.font_weight),
+                        font_style: tag_style.font_style.or(parent.font_style),
+                        background_color: tag_style.background_color.or(parent.background_color),
+                    };
+                    style_stack.push(merged);
+                }
+                // Non-container tags: transparent, no stack change.
+
+                if tag_lower.starts_with("br")
+                    || tag_lower.starts_with("/div")
+                    || tag_lower.starts_with("/p")
+                    || tag_lower.starts_with("/pre")
+                {
+                    push_newline(&mut lines);
+                }
             }
 
             idx += tag_end_rel + 1;
         } else {
-            push_html_text(&mut lines, rest, *color_stack.last().unwrap_or(&None));
+            push_html_text(&mut lines, rest, style_stack.last().unwrap());
             break;
         }
     }
@@ -148,8 +183,15 @@ pub fn strip_markdown_links(md: &str) -> String {
 /// Same rationale as `strip_markdown_links` — GPUI's `TextView::html` renders
 /// clickable links whose hit areas leak past `overflow_hidden`.
 ///
+/// `<a>` tags that carry inline `style` attributes (e.g. `color`) are
+/// converted to `<span>` tags so the styling is preserved.
+///
 /// Works at the **character** level to preserve multi-byte UTF-8 sequences.
 pub fn strip_html_links(html: &str) -> String {
+    // ── Pass 1: convert styled <a> tags to <span> so their inline styles ──
+    // ── survive the link-stripping pass below.                           ──
+    let html = convert_styled_anchors(html);
+
     let chars: Vec<char> = html.chars().collect();
     let len = chars.len();
     let mut result = String::with_capacity(html.len());
@@ -201,6 +243,68 @@ pub fn strip_html_links(html: &str) -> String {
     }
 
     result
+}
+
+/// Convert `<a ... style="...">` / `</a>` pairs to `<span ...>` / `</span>`
+/// when the `<a>` tag has an inline style attribute. Only the style is kept;
+/// other attributes (`href`, `target`, etc.) are dropped.
+fn convert_styled_anchors(html: &str) -> String {
+    if !html.contains("<a ") && !html.contains("<A ") {
+        return html.to_string();
+    }
+
+    let chars: Vec<char> = html.chars().collect();
+    let len = chars.len();
+    let mut out = String::with_capacity(html.len());
+    let mut style_stack: Vec<bool> = Vec::new(); // true = this <a> had style
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '<' && tag_is_a(&chars, i) {
+            let tag_start = i;
+            while i < len && chars[i] != '>' {
+                i += 1;
+            }
+            let tag_end = if i < len { i + 1 } else { i };
+
+            let tag_str: String = chars[tag_start..tag_end].iter().collect();
+            if let Some(style) = extract_style_attr(&tag_str) {
+                style_stack.push(true);
+                out.push_str(&format!("<span style=\"{}\">", style));
+            } else {
+                style_stack.push(false);
+                out.push_str(&tag_str); // keep as-is, will be stripped later
+            }
+            i = tag_end;
+        } else if chars[i] == '<' && tag_is_close_a(&chars, i) {
+            while i < len && chars[i] != '>' {
+                i += 1;
+            }
+            if i < len {
+                i += 1;
+            }
+            let had_style = style_stack.pop().unwrap_or(false);
+            out.push_str(if had_style { "</span>" } else { "</a>" });
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    out
+}
+
+/// Extract the value of the `style` attribute from an opening HTML tag.
+/// Returns `None` when the tag has no style attribute.
+fn extract_style_attr(tag: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let style_pos = lower.find("style=")?;
+    let after_style = &tag[style_pos + "style=".len()..];
+    let quote = after_style.chars().next()?;
+    let value_start = quote.len_utf8();
+    let rest = &after_style[value_start..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
 }
 
 /// Check if chars starting at `i` form `<a ` or `<a>` (case-insensitive).
@@ -270,18 +374,25 @@ pub fn render_styled_html_lines(
                 .flex_row()
                 .flex_wrap()
                 .children(line.into_iter().map(|span| {
-                    div()
+                    let mut d = div()
                         .text_size(px(12.))
                         .font_family("Consolas")
                         .text_color(span.color.unwrap_or(fallback))
-                        .child(span.text)
+                        .font_weight(span.font_weight.unwrap_or_default());
+                    if span.font_style == Some(FontStyle::Italic) {
+                        d = d.italic();
+                    }
+                    if let Some(bg) = span.background_color {
+                        d = d.text_bg(bg);
+                    }
+                    d.child(span.text)
                 }))
         }))
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────
 
-fn push_html_text(lines: &mut Vec<Vec<StyledHtmlSpan>>, text: &str, color: Option<Rgba>) {
+fn push_html_text(lines: &mut Vec<Vec<StyledHtmlSpan>>, text: &str, style: &ParsedInlineStyle) {
     let decoded = decode_html_text(text);
     if decoded.is_empty() {
         return;
@@ -300,7 +411,10 @@ fn push_html_text(lines: &mut Vec<Vec<StyledHtmlSpan>>, text: &str, color: Optio
                 .expect("styled html lines should contain a row")
                 .push(StyledHtmlSpan {
                     text: part.to_string(),
-                    color,
+                    color: style.color,
+                    font_weight: style.font_weight,
+                    font_style: style.font_style,
+                    background_color: style.background_color,
                 });
         }
     }
@@ -337,28 +451,132 @@ fn decode_html_text(text: &str) -> String {
         .replace("&#39;", "'")
 }
 
-fn parse_style_color(tag: &str) -> Option<Rgba> {
-    let style_pos = tag.find("style=")?;
-    let style = &tag[style_pos + "style=".len()..];
-    let quote = style.chars().next()?;
-    let style_body = if quote == '"' || quote == '\'' {
-        let rest = &style[quote.len_utf8()..];
-        let end = rest.find(quote)?;
-        &rest[..end]
-    } else {
-        style.split_whitespace().next().unwrap_or("")
-    };
+/// Parsed inline CSS properties from an HTML tag's style attribute,
+/// plus classic HTML presentational attributes (e.g. `<font color="...">`).
+#[derive(Clone, Default)]
+struct ParsedInlineStyle {
+    color: Option<Rgba>,
+    font_weight: Option<FontWeight>,
+    font_style: Option<FontStyle>,
+    background_color: Option<Rgba>,
+}
 
-    style_body.split(';').find_map(|decl| {
-        let mut parts = decl.splitn(2, ':');
-        let key = parts.next()?.trim().to_ascii_lowercase();
-        let value = parts.next()?.trim();
-        if key == "color" {
-            parse_css_color(value)
-        } else {
-            None
+fn parse_inline_style(tag: &str) -> ParsedInlineStyle {
+    let mut color = None;
+    let mut font_weight = None;
+    let mut font_style = None;
+    let mut background_color = None;
+
+    // ── CSS style="..." attribute ──
+    if let Some(style_body) = extract_style_body(tag) {
+        for decl in style_body.split(';') {
+            let mut parts = decl.splitn(2, ':');
+            let key = match parts.next() {
+                Some(k) => k.trim().to_ascii_lowercase(),
+                None => continue,
+            };
+            let value = match parts.next() {
+                Some(v) => v.trim(),
+                None => continue,
+            };
+            match key.as_str() {
+                "color" => color = parse_css_color(value),
+                "font-weight" => font_weight = parse_css_font_weight(value),
+                "font-style" => font_style = parse_css_font_style(value),
+                "background-color" => background_color = parse_css_color(value),
+                _ => {}
+            }
         }
-    })
+    }
+
+    // ── Classic HTML color="..." attribute (e.g. <font color="red">) ──
+    if color.is_none() {
+        color = parse_html_color_attr(tag);
+    }
+
+    ParsedInlineStyle {
+        color,
+        font_weight,
+        font_style,
+        background_color,
+    }
+}
+
+/// Extract the body of a `style="..."` attribute from an HTML tag.
+fn extract_style_body(tag: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let style_pos = lower.find("style=")?;
+    let after_style = &tag[style_pos + "style=".len()..];
+    let quote = after_style.chars().next()?;
+    let value_start = quote.len_utf8();
+    let rest = &after_style[value_start..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+/// Parse a classic HTML `color="..."` attribute value (named colors and hex).
+fn parse_html_color_attr(tag: &str) -> Option<Rgba> {
+    let lower = tag.to_ascii_lowercase();
+    let color_pos = lower.find("color=")?;
+    let after_color = &tag[color_pos + "color=".len()..];
+    let quote = after_color.chars().next()?;
+    // Only parse quoted attribute values
+    let value_start = quote.len_utf8();
+    let rest = &after_color[value_start..];
+    let end = rest.find(quote)?;
+    let value = rest[..end].trim();
+    // Try hex first, then named colors
+    parse_css_color(value).or_else(|| parse_named_html_color(value))
+}
+
+/// Map common HTML named colors to their RGB values.
+fn parse_named_html_color(name: &str) -> Option<Rgba> {
+    match name.to_ascii_lowercase().as_str() {
+        "red" => Some(rgb(0xFF0000)),
+        "green" => Some(rgb(0x008000)),
+        "blue" => Some(rgb(0x0000FF)),
+        "yellow" => Some(rgb(0xFFFF00)),
+        "orange" => Some(rgb(0xFFA500)),
+        "purple" => Some(rgb(0x800080)),
+        "pink" => Some(rgb(0xFFC0CB)),
+        "brown" => Some(rgb(0xA52A2A)),
+        "black" => Some(rgb(0x000000)),
+        "white" => Some(rgb(0xFFFFFF)),
+        "gray" | "grey" => Some(rgb(0x808080)),
+        "silver" => Some(rgb(0xC0C0C0)),
+        "maroon" => Some(rgb(0x800000)),
+        "navy" => Some(rgb(0x000080)),
+        "teal" => Some(rgb(0x008080)),
+        "aqua" | "cyan" => Some(rgb(0x00FFFF)),
+        "lime" => Some(rgb(0x00FF00)),
+        "fuchsia" | "magenta" => Some(rgb(0xFF00FF)),
+        "olive" => Some(rgb(0x808000)),
+        _ => None,
+    }
+}
+
+fn parse_css_font_weight(value: &str) -> Option<FontWeight> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "bold" | "700" => Some(FontWeight::BOLD),
+        "normal" | "400" => Some(FontWeight::NORMAL),
+        "100" => Some(FontWeight::THIN),
+        "200" => Some(FontWeight::EXTRA_LIGHT),
+        "300" => Some(FontWeight::LIGHT),
+        "500" => Some(FontWeight::MEDIUM),
+        "600" => Some(FontWeight::SEMIBOLD),
+        "800" => Some(FontWeight::EXTRA_BOLD),
+        "900" => Some(FontWeight::BLACK),
+        _ => None,
+    }
+}
+
+fn parse_css_font_style(value: &str) -> Option<FontStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "italic" => Some(FontStyle::Italic),
+        "oblique" => Some(FontStyle::Oblique),
+        "normal" => Some(FontStyle::Normal),
+        _ => None,
+    }
 }
 
 fn parse_css_color(value: &str) -> Option<Rgba> {
