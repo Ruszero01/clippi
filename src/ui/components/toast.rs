@@ -34,12 +34,20 @@ impl Clone for ToastAction {
     }
 }
 
+/// Toast visual style — errors use danger (red), info uses accent (green/blue).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    Info,
+    Warn,
+}
+
 #[derive(IntoElement)]
 pub struct Toast {
     message: String,
     theme: ClippiTheme,
     icon: Option<String>,
     actions: Vec<ToastAction>,
+    kind: ToastKind,
 }
 
 impl Toast {
@@ -49,6 +57,7 @@ impl Toast {
             theme: ClippiTheme::dark(),
             icon: None,
             actions: Vec::new(),
+            kind: ToastKind::Info,
         }
     }
 
@@ -61,6 +70,11 @@ impl Toast {
         self.actions = actions;
         self
     }
+
+    pub fn kind(mut self, kind: ToastKind) -> Self {
+        self.kind = kind;
+        self
+    }
 }
 
 /// Default auto-dismiss duration for toast notifications.
@@ -69,9 +83,13 @@ pub const TOAST_DURATION: std::time::Duration = std::time::Duration::from_secs(3
 impl RenderOnce for Toast {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let bg = self.theme.toast_bg;
-        let text_color = self.theme.accent;
+        let text_color = match self.kind {
+            ToastKind::Info => self.theme.accent,
+            ToastKind::Warn => self.theme.danger,
+        };
         let border_color = self.theme.surface_press;
 
+        let has_actions = !self.actions.is_empty();
         let mut row = div()
             .w_full()
             .px(px(16.))
@@ -84,8 +102,15 @@ impl RenderOnce for Toast {
             .flex()
             .flex_row()
             .items_center()
-            .justify_between()
             .gap(px(8.));
+
+        // Centre the message when there are no action buttons; spread
+        // left (message) / right (buttons) when actions are present.
+        if has_actions {
+            row = row.justify_between();
+        } else {
+            row = row.justify_center();
+        }
 
         // Left: icon + message
         let mut left = div().flex().flex_row().items_center().gap(px(8.));

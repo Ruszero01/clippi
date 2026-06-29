@@ -73,6 +73,9 @@ pub struct RootView {
     toast_actions: Option<Vec<crate::ui::components::toast::ToastAction>>,
     /// When the toast should auto-dismiss (None = use default, Some = custom).
     toast_timer_expiry: Option<std::time::Instant>,
+    /// Last toast message — used to detect when a new toast replaces the current
+    /// one, cancelling the old timer and restarting a fresh one.
+    last_toast_message: Option<String>,
     /// Set to true on WindowHidden, cleared after auto-focusing the search bar.
     needs_auto_focus: bool,
     _wm_subscription: Subscription,
@@ -584,6 +587,7 @@ impl RootView {
             toast_dismissing: false,
             toast_actions: None,
             toast_timer_expiry: None,
+            last_toast_message: None,
             needs_auto_focus: true,
             _wm_subscription,
             _subscriptions,
@@ -791,7 +795,16 @@ impl Render for RootView {
         // Exit: same generation, update target to 0 / slide-down → smooth reverse.
         // --- Cleanup: after transition completes, clear the message. ---
         {
-            let has_toast = self.state.read(cx).toast_message.is_some();
+            let current = self.state.read(cx).toast_message.clone();
+            let has_toast = current.is_some();
+            let is_new_toast = current != self.last_toast_message;
+            if is_new_toast {
+                // Cancel any running timer from the previous toast.
+                self._toast_timer = None;
+                self.toast_dismissing = false;
+            }
+            self.last_toast_message = current;
+
             if has_toast && !self.toast_dismissing && self._toast_timer.is_none() {
                 // Determine duration:
                 //   Some(expiry) → dismiss at that moment
@@ -1367,7 +1380,9 @@ impl Render for RootView {
                 {
                     let toast_visible = self.state.read(cx).toast_message.is_some();
                     // --- Keep the toast rendered during the exit animation so it can fade out. ---
-                    (toast_visible || self.toast_dismissing) && is_clipboard
+                    // Show toast regardless of active view so recording conflict /
+                    // fallback messages are visible from the settings panel.
+                    toast_visible || self.toast_dismissing
                 },
                 |root| {
                     let state = self.state.clone();
@@ -1448,7 +1463,14 @@ impl Render for RootView {
                                     })
                                     .when(has_actions, |el| el.occlude())
                                     .when(dismiss_state, |el| el.cursor(CursorStyle::Arrow))
-                                    .child(Toast::new(message).theme(theme).actions(actions)),
+                                    .child({
+                                        let kind = if self.state.read(cx).toast_is_warning {
+                                            super::components::toast::ToastKind::Warn
+                                        } else {
+                                            super::components::toast::ToastKind::Info
+                                        };
+                                        Toast::new(message).theme(theme).actions(actions).kind(kind)
+                                    }),
                             ),
                     )
                 },

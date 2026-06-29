@@ -16,6 +16,7 @@ use crate::core::frontend::{
     clamp_to_work_area, PositionMode, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, PANEL_OFFSET_X,
     SUPPRESS_DURATION_MS,
 };
+use crate::core::i18n_keys::I18nKey;
 use crate::platform::focus::{start_focus_watcher, FocusWatcher};
 use crate::platform::hotkey::{create_hotkey_listener, HotkeyEvent, HotkeyListener, QuickAction};
 use crate::platform::monitor;
@@ -590,6 +591,7 @@ impl WindowManager {
                             Err(e) => {
                                 self.state.update(cx, |state, _cx| {
                                     state.toast_message = Some(e);
+                                    state.toast_is_warning = true;
                                     state.recording_quick_hotkey = false;
                                 });
                             }
@@ -624,6 +626,7 @@ impl WindowManager {
                             self.state.update(cx, |state, _cx| {
                                 state.hotkey_recording = false;
                                 state.toast_message = Some(e);
+                                state.toast_is_warning = true;
                             });
                             cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
                         }
@@ -1214,7 +1217,28 @@ impl WindowManager {
             String::new()
         };
         self.hotkey = match create_hotkey_listener(&hotkey_str, &quick_hotkey_str) {
-            Ok(hk) => Some(hk),
+            Ok(hk) => {
+                // If a fallback was used, persist the new hotkey and notify the user.
+                if hk.main_fallback_used() {
+                    let actual = hk.actual_main_hotkey().to_string();
+                    self.state.update(cx, |state, _cx| {
+                        state.settings.hotkey = actual.clone();
+                        state.settings.save();
+                        state.toast_message =
+                            Some(I18nKey::HotkeyFallbackToast.fmt(&[&hotkey_str, &actual]));
+                    });
+                }
+                if hk.quick_fallback_used() {
+                    let actual = hk.actual_quick_hotkey().to_string();
+                    self.state.update(cx, |state, _cx| {
+                        state.settings.quick_hotkey = actual.clone();
+                        state.settings.save();
+                        state.toast_message =
+                            Some(I18nKey::HotkeyFallbackToast.fmt(&[&quick_hotkey_str, &actual]));
+                    });
+                }
+                Some(hk)
+            }
             Err(e) => {
                 log::error!("Failed to create hotkey listener: {e}");
                 None

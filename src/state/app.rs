@@ -60,6 +60,8 @@ pub struct AppState {
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
     pub toast_message: Option<String>,
+    /// true = warning (red), false = info (green).
+    pub toast_is_warning: bool,
     /// Foreground app info (updated by WindowManager poll loop, consumed by hotkey settings tab).
     pub foreground_app_name: String,
     pub foreground_window_title: String,
@@ -185,6 +187,7 @@ impl AppState {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
             toast_message: None,
+            toast_is_warning: false,
             foreground_app_name: String::new(),
             foreground_window_title: String::new(),
             foreground_app_icon_base64: String::new(),
@@ -473,10 +476,12 @@ impl AppState {
 
     pub fn clear_toast(&mut self) {
         self.toast_message = None;
+        self.toast_is_warning = false;
     }
 
     fn show_toast(&mut self, message: impl Into<String>) {
         self.toast_message = Some(message.into());
+        self.toast_is_warning = false;
     }
 
     pub fn toggle_item_tag(&mut self, item_id: i64, tag_id: i64) {
@@ -1458,6 +1463,7 @@ mod tests {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
             toast_message: None,
+            toast_is_warning: false,
             foreground_app_name: String::new(),
             foreground_window_title: String::new(),
             foreground_app_icon_base64: String::new(),

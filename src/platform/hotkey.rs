@@ -41,6 +41,23 @@ pub trait HotkeyListener {
     /// Re-register the hotkey after unregister().
     /// Does nothing if already registered.
     fn register(&mut self);
+    /// The actual main hotkey string (may differ from config if fallback was
+    /// used during construction).
+    fn actual_main_hotkey(&self) -> &str {
+        ""
+    }
+    /// The actual quick hotkey string.
+    fn actual_quick_hotkey(&self) -> &str {
+        ""
+    }
+    /// Whether the main hotkey fell back to an alternative.
+    fn main_fallback_used(&self) -> bool {
+        false
+    }
+    /// Whether the quick hotkey fell back to an alternative.
+    fn quick_fallback_used(&self) -> bool {
+        false
+    }
 }
 
 /// Shared keycode mapping: name string → Code variant (platform-agnostic).
@@ -272,6 +289,12 @@ mod tests {
     }
 }
 
+/// Fallback hotkey chain for the main window (V for clipboard).
+const MAIN_FALLBACKS: &[&str] = &["Alt+Shift+V", "Ctrl+Alt+V", "Win+Shift+V"];
+
+/// Fallback hotkey chain for the quick paste window (C for clipboard).
+const QUICK_FALLBACKS: &[&str] = &["Alt+Shift+C", "Ctrl+Alt+C", "Win+Shift+C"];
+
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 struct DesktopHotkeyListener {
     manager: GlobalHotKeyManager,
@@ -283,6 +306,14 @@ struct DesktopHotkeyListener {
     quick_registered: bool,
     quick_action_hotkeys: Vec<(QuickAction, HotKey)>,
     quick_actions_registered: bool,
+    /// Actual main hotkey string (may differ from config if fallback used).
+    actual_main_hotkey: String,
+    /// Actual quick hotkey string (may differ from config if fallback used).
+    actual_quick_hotkey: String,
+    /// True when the configured main hotkey was unavailable → fallback used.
+    main_fallback_used: bool,
+    /// True when the configured quick hotkey was unavailable → fallback used.
+    quick_fallback_used: bool,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -290,23 +321,71 @@ impl DesktopHotkeyListener {
     fn new(hotkey_str: &str, quick_hotkey_str: &str) -> Result<Self, String> {
         let manager = GlobalHotKeyManager::new()
             .map_err(|e| format!("Failed to create hotkey manager: {e}"))?;
-        let hotkey = parse_hotkey(hotkey_str)?;
-        manager
-            .register(hotkey)
-            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
 
-        let quick_hotkey;
-        let quick_registered;
-        if quick_hotkey_str.is_empty() {
-            // Quick hotkey disabled — use a placeholder that won't match any key.
+        // ── Main hotkey: try configured → fallback chain ──
+        let mut actual_main = hotkey_str.to_string();
+        let mut main_fallback = false;
+        let mut hotkey = parse_hotkey(hotkey_str)?;
+        let mut registered = true;
+        if let Err(e) = manager.register(hotkey) {
+            log::warn!("main hotkey register failed ({hotkey_str}): {e}");
+            registered = false;
+            // Walk the fallback chain.
+            for &fb in MAIN_FALLBACKS {
+                if let Ok(fb_key) = parse_hotkey(fb) {
+                    if let Err(e) = manager.register(fb_key) {
+                        log::warn!("main fallback register failed ({fb}): {e}");
+                    } else {
+                        hotkey = fb_key;
+                        actual_main = fb.to_string();
+                        main_fallback = true;
+                        registered = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // ── Quick hotkey: try configured → fallback chain ──
+        let mut actual_quick = quick_hotkey_str.to_string();
+        let mut quick_fallback = false;
+        let mut quick_registered = false;
+        let quick_enabled = !quick_hotkey_str.is_empty();
+        let mut quick_hotkey;
+        if !quick_enabled {
             quick_hotkey = HotKey::new(None, global_hotkey::hotkey::Code::F24);
-            quick_registered = false;
         } else {
             quick_hotkey = parse_hotkey(quick_hotkey_str)?;
-            manager
-                .register(quick_hotkey)
-                .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
-            quick_registered = true;
+            // Skip if same as the already-registered main hotkey.
+            if registered && quick_hotkey.id() == hotkey.id() {
+                log::warn!("quick hotkey conflicts with main hotkey, trying fallbacks");
+                quick_registered = false;
+            } else if let Err(e) = manager.register(quick_hotkey) {
+                log::warn!("quick hotkey register failed ({quick_hotkey_str}): {e}");
+                quick_registered = false;
+            } else {
+                quick_registered = true;
+                actual_quick = quick_hotkey_str.to_string();
+            }
+            if !quick_registered {
+                for &fb in QUICK_FALLBACKS {
+                    if let Ok(fb_key) = parse_hotkey(fb) {
+                        // Also skip if it collides with the actual main hotkey.
+                        if registered && fb_key.id() == hotkey.id() {
+                            continue;
+                        }
+                        if let Err(e) = manager.register(fb_key) {
+                            log::warn!("quick fallback register failed ({fb}): {e}");
+                        } else {
+                            quick_hotkey = fb_key;
+                            actual_quick = fb.to_string();
+                            quick_fallback = true;
+                            quick_registered = true;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(Self {
@@ -314,11 +393,15 @@ impl DesktopHotkeyListener {
             hotkey,
             quick_hotkey,
             is_recording: false,
-            registered: true,
-            quick_enabled: !quick_hotkey_str.is_empty(),
+            registered,
+            quick_enabled,
             quick_registered,
             quick_action_hotkeys: quick_action_hotkeys(),
             quick_actions_registered: false,
+            actual_main_hotkey: actual_main,
+            actual_quick_hotkey: actual_quick,
+            main_fallback_used: main_fallback,
+            quick_fallback_used: quick_fallback,
         })
     }
 
@@ -372,13 +455,18 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
         let new_hotkey = parse_hotkey(hotkey_str)?;
-        if self.registered {
-            let _ = self.manager.unregister(self.hotkey);
-            self.registered = false;
+        // Refuse to shadow the quick-window hotkey.
+        if self.quick_enabled && new_hotkey.id() == self.quick_hotkey.id() {
+            return Err(I18nKey::HotkeyErrConflictQuick.text().to_string());
         }
+        // Register the new hotkey *before* dropping the old one so a
+        // conflict with another application leaves the current hotkey intact.
         self.manager
             .register(new_hotkey)
             .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+        if self.registered {
+            let _ = self.manager.unregister(self.hotkey);
+        }
         self.hotkey = new_hotkey;
         self.registered = true;
         Ok(())
@@ -396,6 +484,10 @@ impl HotkeyListener for DesktopHotkeyListener {
         }
 
         let new_hotkey = parse_hotkey(hotkey_str)?;
+        // Refuse to shadow the main hotkey.
+        if self.registered && new_hotkey.id() == self.hotkey.id() {
+            return Err(I18nKey::HotkeyErrConflictMain.text().to_string());
+        }
         if self.quick_registered && new_hotkey.id() == self.quick_hotkey.id() {
             self.quick_enabled = true;
             return Ok(());
@@ -411,6 +503,22 @@ impl HotkeyListener for DesktopHotkeyListener {
         self.quick_enabled = true;
         self.quick_registered = true;
         Ok(())
+    }
+
+    fn actual_main_hotkey(&self) -> &str {
+        &self.actual_main_hotkey
+    }
+
+    fn actual_quick_hotkey(&self) -> &str {
+        &self.actual_quick_hotkey
+    }
+
+    fn main_fallback_used(&self) -> bool {
+        self.main_fallback_used
+    }
+
+    fn quick_fallback_used(&self) -> bool {
+        self.quick_fallback_used
     }
 
     fn start_recording(&mut self) {
