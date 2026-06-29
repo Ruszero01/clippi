@@ -22,13 +22,32 @@ pub fn update_temp_dir() -> PathBuf {
 /// then handles restarting after installation completes.
 #[cfg(target_os = "windows")]
 pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
 
-    let exe = installer_path
-        .to_str()
-        .ok_or_else(|| format!("Invalid installer path: {}", installer_path.display()))?;
-    let exe_wide: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
+    if !installer_path.is_file() {
+        return Err(format!(
+            "Prepared installer not found: {}",
+            installer_path.display()
+        ));
+    }
+
+    let operation: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    let exe_wide: Vec<u16> = installer_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let directory_wide: Option<Vec<u16>> = installer_path.parent().map(|dir| {
+        dir.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    });
+    let directory_ptr = directory_wide
+        .as_ref()
+        .map_or(std::ptr::null(), |dir| dir.as_ptr());
 
     // SAFETY: All string arguments are NUL-terminated UTF-16. ShellExecuteW
     // spawns a child process and returns immediately; the installer runs
@@ -36,11 +55,11 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
     let ret = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(), // hwnd: no parent
-            std::ptr::null(), // lpOperation: NULL = default verb (installer manifest triggers UAC)
-            exe_wide.as_ptr(), // lpFile: installer path
-            std::ptr::null(), // lpParameters: none
-            std::ptr::null(), // lpDirectory: default
-            SW_SHOW,          // nShowCmd
+            operation.as_ptr(),   // lpOperation: open (installer manifest triggers UAC)
+            exe_wide.as_ptr(),    // lpFile: installer path
+            std::ptr::null(),     // lpParameters: none
+            directory_ptr,        // lpDirectory: installer folder
+            SW_SHOW,              // nShowCmd
         )
     } as isize;
 
@@ -50,9 +69,29 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "ShellExecuteW failed for '{}': error code {ret}",
+            "ShellExecuteW failed for '{}': error code {ret} ({})",
             installer_path.display(),
+            shell_execute_error_message(ret),
         ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn shell_execute_error_message(code: isize) -> &'static str {
+    match code {
+        0 => "the operating system is out of memory or resources",
+        2 => "the installer file was not found",
+        3 => "the installer path was not found",
+        5 => "access denied or UAC was cancelled",
+        8 => "not enough memory",
+        26 => "a sharing violation occurred",
+        27 => "the file association is incomplete or invalid",
+        28 => "the DDE transaction timed out",
+        29 => "the DDE transaction failed",
+        30 => "the DDE transaction is busy",
+        31 => "no application is associated with this file",
+        32 => "a required DLL was not found",
+        _ => "unknown ShellExecuteW error",
     }
 }
 // ─── macOS ────────────────────────────────────────────────────────────

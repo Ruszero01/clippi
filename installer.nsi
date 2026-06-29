@@ -125,8 +125,8 @@ Section "!Clippi" SectionCore
 
 SectionEnd
 
-; Automatic updates use silent mode. Restart only after every selected
-; section has completed successfully.
+; Silent installs restart only after every selected section has completed.
+; Normal in-app updates use the visible installer wizard.
 Function .onInstSuccess
   ${If} ${Silent}
     Exec '"$INSTDIR\${APP_EXE}"'
