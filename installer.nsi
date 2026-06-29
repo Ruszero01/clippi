@@ -20,6 +20,7 @@ ManifestDPIAware true
 Name "${APP_NAME} ${VERSION}"
 OutFile "${STAGING}\Clippi_${VERSION}_x64-setup.exe"
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
+InstallDirRegKey HKLM "${REG_UNINST}" "InstallLocation"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
@@ -125,8 +126,8 @@ Section "!Clippi" SectionCore
 
 SectionEnd
 
-; Silent installs restart only after every selected section has completed.
-; Normal in-app updates use the visible installer wizard.
+; Automatic updates use silent mode. Restart only after every selected
+; section has completed successfully.
 Function .onInstSuccess
   ${If} ${Silent}
     Exec '"$INSTDIR\${APP_EXE}"'

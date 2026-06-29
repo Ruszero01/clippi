@@ -67,8 +67,11 @@ fn prepare_asset(asset_path: &Path, temp_dir: &Path) -> Result<(), String> {
     }
 }
 
-/// Launch the prepared platform installer. The caller must quit immediately
-/// after this returns successfully.
+/// Launch the prepared platform installer.
+///
+/// On Windows this starts the NSIS installer in silent mode. On macOS the
+/// caller must quit after this returns successfully so the helper can replace
+/// the application bundle.
 pub fn launch_prepared_update(info: &UpdateInfo) -> Result<(), String> {
     let temp_dir = super::install::update_temp_dir();
     #[cfg(target_os = "windows")]
@@ -100,7 +103,76 @@ pub fn cleanup_temp() {
                 .status();
         }
     }
-    if temp_dir.exists() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    if temp_dir.exists() && std::fs::remove_dir_all(&temp_dir).is_err() {
+        #[cfg(target_os = "windows")]
+        {
+            terminate_processes_in_dir(&temp_dir);
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_processes_in_dir(dir: &Path) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::ProcessStatus::EnumProcesses;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
+        PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        PROCESS_TERMINATE,
+    };
+
+    let Ok(dir) = std::fs::canonicalize(dir) else {
+        return;
+    };
+
+    let mut pids = vec![0u32; 2048];
+    let mut bytes_needed = 0u32;
+    let ok = unsafe {
+        EnumProcesses(
+            pids.as_mut_ptr(),
+            (pids.len() * std::mem::size_of::<u32>()) as u32,
+            &mut bytes_needed,
+        )
+    };
+    if ok == 0 {
+        return;
+    }
+
+    let count = (bytes_needed as usize) / std::mem::size_of::<u32>();
+    for pid in pids.into_iter().take(count).filter(|pid| *pid != 0) {
+        // SAFETY: Process handles are opened with the minimum rights needed to
+        // query, terminate, and wait. Every non-null handle is closed exactly
+        // once. We only terminate executables whose canonical path is inside
+        // Clippi's update temp directory.
+        unsafe {
+            let process = OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            );
+            if process.is_null() {
+                continue;
+            }
+
+            let mut buf = [0u16; 32768];
+            let mut len = buf.len() as u32;
+            let queried =
+                QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+            if queried != 0 {
+                let exe = std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len as usize]));
+                if exe.starts_with(&dir) {
+                    log::warn!(
+                        "cleanup_temp: terminating stale update process {} ({})",
+                        pid,
+                        exe.display()
+                    );
+                    if TerminateProcess(process, 1) != 0 {
+                        let _ = WaitForSingleObject(process, 3000);
+                    }
+                }
+            }
+            CloseHandle(process);
+        }
     }
 }

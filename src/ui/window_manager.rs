@@ -2372,12 +2372,48 @@ impl WindowManager {
         });
     }
 
-    /// Quit and let the prepared platform installer replace the application.
+    /// Launch the prepared platform installer.
     pub fn do_update_restart(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.state.read(cx).update_available.clone() else {
             log::error!("do_update_restart called but update_available is None");
             return;
         };
+        #[cfg(target_os = "windows")]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = crate::services::updater::launch_prepared_update(&info);
+                let _ = tx.send(result);
+            });
+            match rx.recv() {
+                Ok(Ok(())) => {
+                    log::info!("Windows silent update installer launched");
+                    self.prepare_shutdown(cx);
+                    cx.quit();
+                }
+                Ok(Err(error)) => {
+                    log::error!("Failed to launch prepared update: {error}");
+                    self.state.update(cx, |state, _| {
+                        state.update_phase = update::UpdatePhase::Error(error.clone())
+                    });
+                    cx.emit(WindowManagerEvent::UpdateProgress(
+                        update::UpdatePhase::Error(error),
+                    ));
+                }
+                Err(error) => {
+                    let message = format!("Failed to launch update thread: {error}");
+                    log::error!("{message}");
+                    self.state.update(cx, |state, _| {
+                        state.update_phase = update::UpdatePhase::Error(message.clone())
+                    });
+                    cx.emit(WindowManagerEvent::UpdateProgress(
+                        update::UpdatePhase::Error(message),
+                    ));
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
         if let Err(error) = crate::services::updater::launch_prepared_update(&info) {
             log::error!("Failed to launch prepared update: {error}");
             self.state.update(cx, |state, _| {
@@ -2388,8 +2424,12 @@ impl WindowManager {
             ));
             return;
         }
-        self.prepare_shutdown(cx);
-        cx.quit();
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.prepare_shutdown(cx);
+            cx.quit();
+        }
     }
 
     /// Release platform resources on shutdown.

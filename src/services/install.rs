@@ -13,13 +13,11 @@ pub fn update_temp_dir() -> PathBuf {
 
 // ─── Windows ──────────────────────────────────────────────────────────
 
-/// Launch the NSIS installer directly.
+/// Run the NSIS installer silently with admin privileges.
 ///
-/// Uses `ShellExecuteW` with the default `open` verb. The installer has
-/// `RequestExecutionLevel admin` in its manifest, so Windows automatically
-/// triggers UAC elevation without us needing the `runas` verb.
-/// The installer detects a running Clippi and prompts the user to close it,
-/// then handles restarting after installation completes.
+/// Uses `ShellExecuteW` with the `runas` verb to trigger UAC and `/S` for the
+/// NSIS silent install mode. The installer waits for Clippi to exit, then
+/// installs and restarts it after all selected sections complete.
 #[cfg(target_os = "windows")]
 pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
@@ -33,7 +31,8 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
         ));
     }
 
-    let operation: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    let operation: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+    let parameters: Vec<u16> = "/S".encode_utf16().chain(std::iter::once(0)).collect();
     let exe_wide: Vec<u16> = installer_path
         .as_os_str()
         .encode_wide()
@@ -55,9 +54,9 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
     let ret = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(), // hwnd: no parent
-            operation.as_ptr(),   // lpOperation: open (installer manifest triggers UAC)
+            operation.as_ptr(),   // lpOperation: runas (request elevation)
             exe_wide.as_ptr(),    // lpFile: installer path
-            std::ptr::null(),     // lpParameters: none
+            parameters.as_ptr(),  // lpParameters: silent NSIS install
             directory_ptr,        // lpDirectory: installer folder
             SW_SHOW,              // nShowCmd
         )
