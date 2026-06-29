@@ -748,21 +748,21 @@ impl Database {
     }
 
     /// Clean up tombstones older than N days.
-    pub fn cleanup_old_tombstones(&self, days: i64) -> SqlResult<()> {
+    pub fn cleanup_old_tombstones(&self, days: i64) -> SqlResult<u32> {
         let cutoff = format!("-{days} days");
-        self.conn.execute(
+        let deleted_items = self.conn.execute(
             "DELETE FROM deleted_items WHERE deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
             params![&cutoff],
         )?;
-        self.conn.execute(
+        let deleted_tags = self.conn.execute(
             "DELETE FROM deleted_tags WHERE deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
             params![&cutoff],
         )?;
-        self.conn.execute(
+        let unfavorited_items = self.conn.execute(
             "DELETE FROM unfavorited_items WHERE unfavorited_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
             params![&cutoff],
         )?;
-        Ok(())
+        Ok((deleted_items + deleted_tags + unfavorited_items) as u32)
     }
 
     /// Record an unfavorite marker for sync propagation.

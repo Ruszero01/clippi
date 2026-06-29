@@ -151,7 +151,9 @@ impl AppState {
         };
         let db = Database::open(&db_path.to_string_lossy())
             .unwrap_or_else(|e| panic!("Failed to open database at {db_path:?}: {e}"));
-        crate::core::cache_cleanup::cleanup_unused_cache(&db);
+        if settings.cleanup_interval != "never" {
+            crate::core::cache_cleanup::cleanup_unused_cache(&db);
+        }
 
         let items = db
             .load_filtered_with_tags(&ClipboardFilters::default(), query_limit, order_by)

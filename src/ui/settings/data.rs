@@ -3,6 +3,7 @@
 //! --- Mirrors the original Slint `SettingsTabData.slint` layout. ---
 //! Includes the reset-data-directory dialog for portable mode.
 
+use chrono::Datelike;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::Input;
@@ -507,11 +508,21 @@ impl SettingsPanel {
                                                 return;
                                             }
                                         };
-                                        // Update last cleanup date
-                                        let today =
-                                            chrono::Local::now().format("%Y-%m-%d").to_string();
+                                        // Update last cleanup marker using the active interval format.
+                                        let interval =
+                                            state.read(cx).settings.cleanup_interval.clone();
+                                        let last_cleanup = match interval.as_str() {
+                                            "weekly" => {
+                                                let wk = chrono::Local::now().iso_week();
+                                                format!("{}-W{:02}", wk.year(), wk.week())
+                                            }
+                                            "daily" => {
+                                                chrono::Local::now().format("%Y-%m-%d").to_string()
+                                            }
+                                            _ => String::new(),
+                                        };
                                         state.update(cx, |s, _cx| {
-                                            s.settings.cleanup_last_date = today;
+                                            s.settings.cleanup_last_date = last_cleanup;
                                             s.settings.save();
                                         });
                                         // Show toast

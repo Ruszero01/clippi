@@ -88,14 +88,11 @@ fn clean_orphan_images(db: &Database) -> u32 {
     removed
 }
 
-/// Remove icon cache files (favicon, source-app icons) that haven't been
+/// Remove icon cache files (favicon, source-app icons, file icons) that haven't been
 /// accessed in `ICON_EXPIRY_DAYS` days.
 fn clean_expired_icons() -> u32 {
     let images_dir = crate::core::paths::images_dir();
-    let icons_dir = images_dir.join("icons");
-    if !icons_dir.exists() {
-        return 0;
-    }
+    let icon_dirs = [images_dir.join("icons"), images_dir.join("file_icons")];
 
     let cutoff = SystemTime::now()
         .checked_sub(Duration::from_secs(ICON_EXPIRY_DAYS * 86400))
@@ -103,7 +100,11 @@ fn clean_expired_icons() -> u32 {
 
     let mut removed: u32 = 0;
 
-    if let Ok(entries) = fs::read_dir(&icons_dir) {
+    for icons_dir in icon_dirs.iter().filter(|dir| dir.exists()) {
+        let Ok(entries) = fs::read_dir(icons_dir) else {
+            continue;
+        };
+
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file() {
@@ -136,11 +137,7 @@ fn clean_expired_icons() -> u32 {
 /// Remove sync tombstones older than `TOMBSTONE_EXPIRY_DAYS` days.
 fn clean_expired_tombstones(db: &Database) -> u32 {
     match db.cleanup_old_tombstones(TOMBSTONE_EXPIRY_DAYS) {
-        Ok(()) => {
-            // We can't easily get the exact count from the batch DELETE,
-            // but the operation succeeded.
-            0 // The caller can check db changes if needed.
-        }
+        Ok(deleted) => deleted,
         Err(e) => {
             log::error!("clean_expired_tombstones: {e}");
             0
