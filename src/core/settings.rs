@@ -153,7 +153,7 @@ fn default_ocr_enabled() -> bool {
 }
 
 fn default_cleanup_interval() -> String {
-    "weekly".to_string()
+    "daily".to_string()
 }
 
 fn default_sync_interval() -> u64 {
