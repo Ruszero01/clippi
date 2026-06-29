@@ -94,27 +94,6 @@ Function .onInit
   Call RestoreExistingShortcutSections
 FunctionEnd
 
-Function RestoreExistingShortcutSections
-  IfFileExists "$INSTDIR\${APP_EXE}" 0 done
-
-  IfFileExists "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" 0 no_start_menu
-  SectionSetFlags ${SectionStartMenu} 1
-  Goto desktop
-
-no_start_menu:
-  SectionSetFlags ${SectionStartMenu} 0
-
-desktop:
-  IfFileExists "$DESKTOP\${APP_NAME}.lnk" 0 no_desktop
-  SectionSetFlags ${SectionDesktop} 1
-  Goto done
-
-no_desktop:
-  SectionSetFlags ${SectionDesktop} 0
-
-done:
-FunctionEnd
-
 ; Uninstaller un.onInit
 !insertmacro CheckAndCloseApp "un."
 
@@ -165,6 +144,27 @@ SectionEnd
 Section "桌面快捷方式" SectionDesktop
   CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 SectionEnd
+
+Function RestoreExistingShortcutSections
+  IfFileExists "$INSTDIR\${APP_EXE}" 0 done
+
+  IfFileExists "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" 0 no_start_menu
+  SectionSetFlags ${SectionStartMenu} 1
+  Goto desktop
+
+no_start_menu:
+  SectionSetFlags ${SectionStartMenu} 0
+
+desktop:
+  IfFileExists "$DESKTOP\${APP_NAME}.lnk" 0 no_desktop
+  SectionSetFlags ${SectionDesktop} 1
+  Goto done
+
+no_desktop:
+  SectionSetFlags ${SectionDesktop} 0
+
+done:
+FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SectionCore} $(DESC_Core)
