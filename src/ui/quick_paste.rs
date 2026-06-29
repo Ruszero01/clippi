@@ -4,6 +4,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui::{InteractiveElement, StatefulInteractiveElement};
 
+use super::rich_preview;
 use crate::core::color::detect_color;
 use crate::core::types::{
     format_relative_time, mask_sensitive_preview, path_is_native, url_domain, url_path,
@@ -40,7 +41,7 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     h
 }
 
-/// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, image_path, favicon_path, file_icon_path, path_color)
+/// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, image_path, favicon_path, file_icon_path, path_color, styled_first_line)
 type RowData = (
     usize,
     i64,
@@ -54,6 +55,7 @@ type RowData = (
     Option<String>,
     Option<String>,
     Option<Rgba>,
+    Option<Vec<rich_preview::StyledHtmlSpan>>,
 );
 
 pub enum QuickPasteEvent {
@@ -251,6 +253,7 @@ impl QuickPasteView {
                 } else {
                     None
                 };
+                let styled_first_line = styled_preview(item);
                 (
                     slot,
                     item.id,
@@ -264,6 +267,7 @@ impl QuickPasteView {
                     favicon_path,
                     file_icon_path,
                     path_color,
+                    styled_first_line,
                 )
             })
             .collect()
@@ -530,6 +534,7 @@ impl Render for QuickPasteView {
                                     favicon_path,
                                     file_icon_path,
                                     path_color,
+                                    styled_first_line,
                                 )| {
                                     let index = first_visible + slot;
                                     let selected = index == selected_index;
@@ -595,6 +600,25 @@ impl Render for QuickPasteView {
                                                     .text_ellipsis()
                                                     .child(subtitle),
                                             )
+                                            .into_any_element()
+                                    } else if let Some(spans) = styled_first_line {
+                                        // Rich text with inline colours — render styled spans inline
+                                        div()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .whitespace_nowrap()
+                                            .children(spans.into_iter().map(|span| {
+                                                div()
+                                                    .text_size(px(13.0))
+                                                    .text_color(span.color.unwrap_or(t.text_1))
+                                                    .font_weight(
+                                                        span.font_weight.unwrap_or_default(),
+                                                    )
+                                                    .child(span.text)
+                                            }))
                                             .into_any_element()
                                     } else {
                                         // No note, or selected with show_original_on_hover → show original (masked)
@@ -752,6 +776,19 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
 
 /// Split preview into (label, optional_subtitle) for rich display.
 /// URL: (site/domain, page title or path)  Path: (leaf, full path)
+/// Extract the first line of styled HTML for quick-window preview.
+/// Returns `None` when the item has no colour-inline HTML → falls back to plain text.
+fn styled_preview(item: &ClipboardItem) -> Option<Vec<rich_preview::StyledHtmlSpan>> {
+    let rich = RichData::from_json(&item.rich_data);
+    let html = rich.html.as_deref()?;
+    if html.trim().is_empty() {
+        return None;
+    }
+    let html = rich_preview::normalize_clipboard_html_for_render(html);
+    let lines = rich_preview::parse_styled_html_lines(&html)?;
+    lines.into_iter().next()
+}
+
 fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Option<String>) {
     let raw = match item.content_type {
         ContentType::Image => {

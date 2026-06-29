@@ -64,11 +64,15 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
                     style_stack.pop();
                 }
             } else {
-                // Opening tag
+                // Opening tag — extract pure tag name (first token before space / > / /)
+                let tag_name = tag_lower
+                    .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                    .next()
+                    .unwrap_or("");
                 let tag_style = parse_inline_style(tag);
                 found_color |= tag_style.color.is_some();
 
-                if is_style_container_tag(&tag_lower) {
+                if is_style_container_tag(tag_name) {
                     // Inherit from parent for properties not set on this tag
                     let parent = style_stack.last().unwrap();
                     let merged = ParsedInlineStyle {
