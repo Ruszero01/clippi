@@ -368,22 +368,11 @@ pub fn test_webdav_connection(url: &str, username: &str, password: &str) -> bool
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(raw)
     );
-    let file_url = format!("{}/clippi_sync.json", url.trim_end_matches('/'));
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(5))
         .build();
-
-    for test_url in [file_url.as_str(), url.trim_end_matches('/')] {
-        match agent.head(test_url).set("Authorization", &auth).call() {
-            Ok(response) if (200..400).contains(&response.status()) => return true,
-            Ok(response) if response.status() == 401 || response.status() == 403 => return false,
-            Err(ureq::Error::Status(404, _)) => continue,
-            Err(_) => return false,
-            _ => {}
-        }
-    }
-    false
+    crate::services::backends::webdav::check_webdav_connection(&agent, url, &auth).is_ok()
 }
 
 fn run_sync_cycle_for_backend(

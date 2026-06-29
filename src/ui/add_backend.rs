@@ -16,6 +16,8 @@ use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
 
 const BACKEND_PANEL_ANIM_DURATION: Duration = Duration::from_millis(150);
+const NUTSTORE_WEBDAV_ROOT: &str = "https://dav.jianguoyun.com/dav/";
+const NUTSTORE_WEBDAV_PATH: &str = "我的坚果云/Clippi";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditorStep {
@@ -36,6 +38,7 @@ pub struct AddBackendPanel {
     name_input: Entity<InputState>,
     folder_input: Entity<InputState>,
     url_input: Entity<InputState>,
+    webdav_path_input: Entity<InputState>,
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
     test_pending: bool,
@@ -68,6 +71,9 @@ impl AddBackendPanel {
                 .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhFolder.text())),
             url_input: cx
                 .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUrl.text())),
+            webdav_path_input: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(I18nKey::BackendPhWebdavPath.text())
+            }),
             username_input: cx
                 .new(|cx| InputState::new(window, cx).placeholder(I18nKey::BackendPhUser.text())),
             password_input: cx.new(|cx| {
@@ -125,7 +131,12 @@ impl AddBackendPanel {
             input.set_value(&config.folder_path, window, cx)
         });
         self.url_input.update(cx, |input, cx| {
-            input.set_value(&config.webdav_url, window, cx)
+            let (root, _path) = split_webdav_form_url(&config.webdav_url);
+            input.set_value(&root, window, cx)
+        });
+        self.webdav_path_input.update(cx, |input, cx| {
+            let (_root, path) = split_webdav_form_url(&config.webdav_url);
+            input.set_value(&path, window, cx)
         });
         self.username_input.update(cx, |input, cx| {
             input.set_value(&config.webdav_username, window, cx)
@@ -150,6 +161,7 @@ impl AddBackendPanel {
             &self.name_input,
             &self.folder_input,
             &self.url_input,
+            &self.webdav_path_input,
             &self.username_input,
             &self.password_input,
         ] {
@@ -187,7 +199,10 @@ impl AddBackendPanel {
     }
 
     fn start_webdav_test(&mut self, cx: &mut Context<Self>) {
-        let url = self.url_input.read(cx).value().to_string();
+        let url = compose_webdav_url(
+            self.url_input.read(cx).value(),
+            self.webdav_path_input.read(cx).value(),
+        );
         if url.trim().is_empty() || self.test_pending {
             return;
         }
@@ -455,15 +470,72 @@ impl AddBackendPanel {
         let editing = self.edit_id.is_some();
         let accent = self.theme.accent;
         let accent_soft = self.theme.accent_soft;
+        let divider = self.theme.divider;
         let text_2 = self.theme.text_2;
+        let text_1 = self.theme.text_1;
+        let card_bg = if self.theme.bg == rgb(0x191a1b) {
+            rgb(0x2a2b2c)
+        } else {
+            rgb(0xf0f1f5)
+        };
         let this = cx.entity().clone();
 
         div()
             .flex()
             .flex_col()
             .gap(px(8.))
+            .when(!editing, |form| {
+                let name_input = self.name_input.clone();
+                let url_input = self.url_input.clone();
+                let path_input = self.webdav_path_input.clone();
+                form.child(field_label(I18nKey::BackendQuickAdd.text(), text_2))
+                    .child(
+                        div()
+                            .h(px(34.))
+                            .px(px(12.))
+                            .rounded(px(7.))
+                            .bg(card_bg)
+                            .border(px(1.))
+                            .border_color(divider)
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.border_color(accent))
+                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                if name_input.read(cx).value().is_empty() {
+                                    name_input.update(cx, |input, cx| {
+                                        input.set_value(I18nKey::BackendNutstore.text(), window, cx)
+                                    });
+                                }
+                                url_input.update(cx, |input, cx| {
+                                    input.set_value(NUTSTORE_WEBDAV_ROOT, window, cx)
+                                });
+                                path_input.update(cx, |input, cx| {
+                                    input.set_value(NUTSTORE_WEBDAV_PATH, window, cx)
+                                });
+                            })
+                            .child(
+                                div()
+                                    .font_family("iconfont")
+                                    .text_size(px(14.))
+                                    .text_color(text_2)
+                                    .child("\u{e60a}"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::BackendNutstore.text()),
+                            ),
+                    )
+                    .child(div().h(px(1.)).bg(divider))
+            })
             .child(field_label(I18nKey::BackendServerUrl.text(), text_2))
             .child(input_box(&self.url_input, &self.theme, false))
+            .child(field_label(I18nKey::BackendWebdavPath.text(), text_2))
+            .child(input_box(&self.webdav_path_input, &self.theme, false))
             .child(field_label(I18nKey::BackendName.text(), text_2))
             .child(input_box(&self.name_input, &self.theme, false))
             .child(field_label(I18nKey::BackendUsername.text(), text_2))
@@ -510,13 +582,17 @@ impl AddBackendPanel {
                     {
                         let name_input = self.name_input.clone();
                         let url_input = self.url_input.clone();
+                        let path_input = self.webdav_path_input.clone();
                         let username_input = self.username_input.clone();
                         let password_input = self.password_input.clone();
                         let edit_id = self.edit_id.clone();
                         let wm = self.window_manager.clone();
                         move |_window, cx| {
                             let name = name_input.read(cx).value().to_string();
-                            let url = url_input.read(cx).value().to_string();
+                            let url = compose_webdav_url(
+                                url_input.read(cx).value(),
+                                path_input.read(cx).value(),
+                            );
                             if name.trim().is_empty() || url.trim().is_empty() {
                                 return;
                             }
@@ -552,6 +628,9 @@ impl Render for AddBackendPanel {
             });
             self.url_input.update(cx, |state, cx| {
                 state.set_placeholder(I18nKey::BackendPhUrl.text(), window, cx);
+            });
+            self.webdav_path_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::BackendPhWebdavPath.text(), window, cx);
             });
             self.username_input.update(cx, |state, cx| {
                 state.set_placeholder(I18nKey::BackendPhUser.text(), window, cx);
@@ -692,6 +771,28 @@ impl Render for AddBackendPanel {
             )
             .into_any_element()
     }
+}
+
+fn compose_webdav_url(root: impl AsRef<str>, path: impl AsRef<str>) -> String {
+    let root = root.as_ref().trim();
+    let path = path.as_ref().trim().trim_matches('/');
+    if root.is_empty() || path.is_empty() {
+        root.to_string()
+    } else {
+        format!("{}/{}", root.trim_end_matches('/'), path)
+    }
+}
+
+fn split_webdav_form_url(url: &str) -> (String, String) {
+    let trimmed = url.trim();
+    if let Some(path) = trimmed.strip_prefix(NUTSTORE_WEBDAV_ROOT) {
+        return (
+            NUTSTORE_WEBDAV_ROOT.to_string(),
+            path.trim_matches('/').to_string(),
+        );
+    }
+
+    (trimmed.to_string(), String::new())
 }
 
 fn field_label(label: &'static str, color: Rgba) -> impl IntoElement {

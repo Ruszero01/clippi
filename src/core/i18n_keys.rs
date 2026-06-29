@@ -166,6 +166,7 @@ define_i18n! {
     BackendName:        ("名称", "Name"),
     BackendFolder:      ("文件夹", "Folder"),
     BackendServerUrl:   ("服务器地址", "Server URL"),
+    BackendWebdavPath:  ("子目录", "Subdirectory"),
     BackendUsername:    ("用户名", "Username"),
     BackendPassword:    ("密码", "Password"),
     BackendBrowse:      ("浏览", "Browse"),
@@ -176,8 +177,10 @@ define_i18n! {
     BackendPhName:      ("后端名称", "Backend name"),
     BackendPhFolder:    ("文件夹路径", "Folder path"),
     BackendPhUrl:       ("https://example.com/dav", "https://example.com/dav"),
+    BackendPhWebdavPath: ("例如：我的坚果云/Clippi", "e.g. My Files/Clippi"),
     BackendPhUser:      ("用户名", "Username"),
     BackendPhPass:      ("密码", "Password"),
+    BackendNutstore:    ("坚果云", "Nutstore"),
 
     // ─── Cache cleanup ───
     SettingCleanup:         ("缓存清理", "Cache cleanup"),
