@@ -10,6 +10,7 @@ use gpui_transitions::WindowUseTransition;
 use crate::core::i18n_keys::I18nKey;
 use crate::services::gpui_sync::format_last_sync;
 use crate::state::sync::BackendStatus;
+use crate::ui::components::confirm_dialog::ConfirmDialog;
 use crate::ui::components::toggle::{render_toggle, ToggleColors};
 
 use super::{BackendCollapseState, SettingsPanel};
@@ -41,7 +42,14 @@ impl SettingsPanel {
             })
             .collect();
 
+        let delete_dialog_gen = if self.delete_backend_confirm.is_some() {
+            self.delete_backend_confirm_gen
+        } else {
+            0
+        };
+
         div()
+            .relative()
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -163,11 +171,45 @@ impl SettingsPanel {
                                 .p(px(8.))
                                 .flex()
                                 .flex_col()
-                                .gap(px(6.))
                                 .children(backend_cards),
                         )
                     }),
             )
+            .when(self.delete_backend_confirm.is_some(), |root| {
+                let wm = self.window_manager.clone();
+                let this = cx.entity().clone();
+                let theme = self.theme.clone();
+                root.child(
+                    ConfirmDialog::new()
+                        .title(I18nKey::ConfirmDeleteSingleTitle.text())
+                        .message(I18nKey::BackendDeleteConfirmMsg.text())
+                        .confirm_label(I18nKey::ConfirmDeleteLabel.text())
+                        .danger(true)
+                        .theme(theme)
+                        .on_confirm({
+                            let id = self.delete_backend_confirm.clone().unwrap_or_default();
+                            let wm = wm.clone();
+                            let this = this.clone();
+                            move |_window, cx| {
+                                wm.update(cx, |wm, cx| wm.remove_sync_backend(&id, cx));
+                                this.update(cx, |panel, cx| {
+                                    panel.delete_backend_confirm = None;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let this = this.clone();
+                            move |_window, cx| {
+                                this.update(cx, |panel, cx| {
+                                    panel.delete_backend_confirm = None;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render_animated(window, cx, delete_dialog_gen),
+                )
+            })
     }
 
     fn render_backend_card(
@@ -267,6 +309,7 @@ impl SettingsPanel {
         );
 
         div()
+            .mb(px(8.))
             .h(px(height))
             .rounded(px(8.))
             .border(px(1.))
@@ -360,10 +403,16 @@ impl SettingsPanel {
                                     }))
                                     .child(icon_button("\u{e8b6}", text_3, danger, {
                                         let id = id.clone();
-                                        let wm = wm.clone();
+                                        let this = cx.entity().clone();
                                         move |_window, cx| {
-                                            wm.update(cx, |wm, cx| {
-                                                wm.remove_sync_backend(&id, cx);
+                                            this.update(cx, |panel, cx| {
+                                                panel.delete_backend_confirm = Some(id.clone());
+                                                panel.delete_backend_confirm_gen = panel
+                                                    .delete_backend_confirm_gen
+                                                    .wrapping_add(1);
+                                                panel.delete_backend_confirm_started =
+                                                    Some(std::time::Instant::now());
+                                                cx.notify();
                                             });
                                         }
                                     })),

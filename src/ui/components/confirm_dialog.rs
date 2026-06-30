@@ -7,25 +7,28 @@
 //! --- # Usage ---
 //!
 //! --- ```ignore ---
-//! --- ConfirmDialog::delete_single("example text") ---
+//! --- ConfirmDialog::delete_single() ---
 //! --- .on_confirm(|_window, cx| { /* delete logic */ }) ---
 //! --- .on_cancel(|_window, cx| { /* dismiss */ }) ---
-//! --- .into_any_element() ---
+//! --- .render_animated(window, cx, generation) // generation: u64, bump on each show ---
 //! --- ``` ---
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::core::i18n_keys::I18nKey;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_transitions::WindowUseTransition;
 
 use crate::ui::theme::ClippiTheme;
 
 type DialogHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
+const DIALOG_ANIM_DURATION: Duration = Duration::from_millis(150);
+
 // --- Component ---
 
-#[derive(IntoElement)]
 pub struct ConfirmDialog {
     title: String,
     message: String,
@@ -33,7 +36,6 @@ pub struct ConfirmDialog {
     cancel_label: String,
     danger: bool,
     theme: ClippiTheme,
-    scale: f32,
     on_confirm: Option<DialogHandler>,
     on_cancel: Option<DialogHandler>,
     focus_handle: Option<FocusHandle>,
@@ -48,7 +50,6 @@ impl ConfirmDialog {
             cancel_label: I18nKey::BtnCancel.text().into(),
             danger: false,
             theme: ClippiTheme::dark(),
-            scale: 1.0,
             on_confirm: None,
             on_cancel: None,
             focus_handle: None,
@@ -79,11 +80,6 @@ impl ConfirmDialog {
 
     pub fn theme(mut self, theme: ClippiTheme) -> Self {
         self.theme = theme;
-        self
-    }
-
-    pub fn scale(mut self, scale: f32) -> Self {
-        self.scale = scale;
         self
     }
 
@@ -160,8 +156,13 @@ impl ConfirmDialog {
     }
 }
 
-impl RenderOnce for ConfirmDialog {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+impl ConfirmDialog {
+    /// Render the dialog with built-in enter animation (opacity + scale).
+    ///
+    /// `generation` should be bumped each time the dialog appears, so the
+    /// animation restarts.  Use 0 to skip animation (dialog renders at full
+    /// opacity / scale 1.0 immediately).
+    pub fn render_animated(self, window: &mut Window, cx: &mut App, generation: u64) -> AnyElement {
         let Self {
             title,
             message,
@@ -169,11 +170,39 @@ impl RenderOnce for ConfirmDialog {
             cancel_label,
             danger: is_danger,
             theme,
-            scale,
             on_confirm,
             on_cancel,
             focus_handle,
         } = self;
+
+        let animating = generation != 0;
+        let (opacity, scale) = if animating {
+            let t_op = window.use_keyed_transition(
+                ("cd-opacity", generation),
+                cx,
+                DIALOG_ANIM_DURATION,
+                move |_, _| 0.0,
+            );
+            t_op.update(cx, |v, cx| {
+                *v = 1.0;
+                cx.notify();
+            });
+            let op = *t_op.evaluate(window, cx);
+            let t_sc = window.use_keyed_transition(
+                ("cd-scale", generation),
+                cx,
+                DIALOG_ANIM_DURATION,
+                move |_, _| 0.96,
+            );
+            t_sc.update(cx, |v, cx| {
+                *v = 1.0;
+                cx.notify();
+            });
+            let sc = *t_sc.evaluate(window, cx);
+            (op, sc)
+        } else {
+            (1.0, 1.0)
+        };
 
         let confirm_color = if is_danger {
             theme.danger
@@ -181,19 +210,17 @@ impl RenderOnce for ConfirmDialog {
             theme.accent
         };
 
-        // --- Transparent overlay (covers parent) + centered modal card. ---
-        // --- Backdrop is fully transparent — the user sees through to the ---
-        // --- panel content below. Clicking the backdrop cancels the dialog. ---
-        // --- Auto-focus the backdrop so it receives keyboard events (Enter/Esc). ---
         if let Some(ref handle) = focus_handle {
-            handle.focus(_window);
+            handle.focus(window);
         }
+
         div()
             .absolute()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
+            .opacity(opacity)
             .when_some(focus_handle.as_ref(), |d, handle| d.track_focus(handle))
             .on_key_down({
                 let on_confirm = on_confirm.clone();
@@ -214,7 +241,6 @@ impl RenderOnce for ConfirmDialog {
                     _ => {}
                 }
             })
-            // --- Backdrop click → cancel ---
             .on_mouse_down(MouseButton::Left, {
                 let on_cancel = on_cancel.clone();
                 move |_ev, _window, cx| {
@@ -225,7 +251,6 @@ impl RenderOnce for ConfirmDialog {
                 }
             })
             .child(
-                // --- Modal card — occluded to prevent click-through to backdrop ---
                 div()
                     .w(px(280. * scale))
                     .bg(theme.panel_surface)
@@ -234,7 +259,6 @@ impl RenderOnce for ConfirmDialog {
                     .border_color(theme.panel_sep_line)
                     .p(px(16. * scale))
                     .occlude()
-                    // --- Title — 14px bold, text_1 ---
                     .child(
                         div()
                             .text_size(px(14.))
@@ -242,7 +266,6 @@ impl RenderOnce for ConfirmDialog {
                             .text_color(theme.text_1)
                             .child(title),
                     )
-                    // --- Message — 12px, text_2, 8px top margin ---
                     .child(
                         div()
                             .text_size(px(12.))
@@ -250,7 +273,6 @@ impl RenderOnce for ConfirmDialog {
                             .mt(px(8.))
                             .child(message),
                     )
-                    // --- Button row — flex row, justify_end, 8px gap, 16px top margin ---
                     .child(
                         div()
                             .flex()
@@ -258,7 +280,6 @@ impl RenderOnce for ConfirmDialog {
                             .justify_end()
                             .gap(px(8.))
                             .mt(px(16.))
-                            // --- Cancel button ---
                             .child({
                                 let label = cancel_label.clone();
                                 let on_cancel = on_cancel.clone();
@@ -287,7 +308,6 @@ impl RenderOnce for ConfirmDialog {
                                     })
                                     .child(label)
                             })
-                            // --- Confirm button ---
                             .child({
                                 let label = confirm_label.clone();
                                 let on_confirm = on_confirm.clone();
@@ -313,5 +333,6 @@ impl RenderOnce for ConfirmDialog {
                             }),
                     ),
             )
+            .into_any_element()
     }
 }

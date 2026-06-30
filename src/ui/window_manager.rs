@@ -2010,8 +2010,27 @@ impl WindowManager {
                 return None;
             }
             state.settings.sync_auto_enabled = next;
+            if next {
+                // 重新打开：按记忆恢复后端启用状态
+                let saved_ids = &state.settings.saved_enabled_backend_ids;
+                for backend in state.settings.sync_backends.iter_mut() {
+                    backend.enabled = saved_ids.contains(&backend.id);
+                }
+            } else {
+                // 关闭：保存当前启用状态，再全部关闭
+                state.settings.saved_enabled_backend_ids = state
+                    .settings
+                    .sync_backends
+                    .iter()
+                    .filter(|b| b.enabled)
+                    .map(|b| b.id.clone())
+                    .collect();
+                for backend in state.settings.sync_backends.iter_mut() {
+                    backend.enabled = false;
+                }
+            }
             state.settings.save();
-            state.sync.auto_enabled = next;
+            state.sync = crate::state::sync::SyncState::from_settings(&state.settings);
             Some(state.settings.clone())
         });
         if let Some(settings) = settings {

@@ -78,6 +78,10 @@ pub struct SettingsPanel {
     pub pending_paste_shortcut: Option<(String, String)>,
     /// Reset-data-directory dialog state (portable mode only).
     pub reset_data_dialog: Option<ResetDataDirState>,
+    /// Pending backend deletion confirmation (backend id).
+    pub delete_backend_confirm: Option<String>,
+    delete_backend_confirm_gen: u64,
+    delete_backend_confirm_started: Option<Instant>,
     /// Whether the max-items field is in editing mode.
     editing_max_items: bool,
     /// Input entity for the max-items editor (created once in constructor).
@@ -151,6 +155,9 @@ impl SettingsPanel {
             recording_paste_shortcut: None,
             pending_paste_shortcut: None,
             reset_data_dialog: None,
+            delete_backend_confirm: None,
+            delete_backend_confirm_gen: 0,
+            delete_backend_confirm_started: None,
             editing_max_items: false,
             max_items_input,
             _db_path_dialog_task: None,

@@ -109,6 +109,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub sync_auto_enabled: bool, // auto-sync toggle (dirty flag + interval)
     #[serde(default)]
+    pub saved_enabled_backend_ids: Vec<String>, // remember state before master off
+    #[serde(default)]
     pub sync_favorites_only: bool, // only sync favorited items
     #[serde(default)]
     pub max_items: u32, // max saved items (0=unlimited, default 0)
@@ -201,6 +203,7 @@ impl Default for AppSettings {
             sync_interval_secs: 60,
             sync_backends: Vec::new(),
             sync_auto_enabled: false,
+            saved_enabled_backend_ids: Vec::new(),
             sync_favorites_only: true,
             max_items: 0,
             hotkey_blacklist: Vec::new(),

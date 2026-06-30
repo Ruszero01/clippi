@@ -181,7 +181,8 @@ define_i18n! {
     BackendPhUser:      ("用户名", "Username"),
     BackendPhPass:      ("密码", "Password"),
     BackendNutstore:        ("坚果云", "Nutstore"),
-    BackendNameRequired:    ("请输入后端名称", "Please enter a backend name"),
+    BackendNameRequired:        ("请输入后端名称", "Please enter a backend name"),
+    BackendDeleteConfirmMsg:    ("确定要删除此后端吗？此操作不可撤销", "Delete this backend? This cannot be undone."),
 
     // ─── Cache cleanup ───
     SettingCleanup:         ("缓存清理", "Cache cleanup"),

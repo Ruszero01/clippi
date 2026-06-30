@@ -699,8 +699,8 @@ impl Render for RootView {
         let edit_tag_animating = self.overlay_animating("tag-edit");
         let context_menu_animating = self.overlay_animating("context-menu");
         let tag_picker_animating = self.overlay_animating("tag-picker");
-        let confirm_dialog_animating = self.overlay_animating("confirm-dialog");
-        let hotkey_confirm_animating = self.overlay_animating("hotkey-confirm");
+        let _confirm_dialog_animating = self.overlay_animating("confirm-dialog");
+        let _hotkey_confirm_animating = self.overlay_animating("hotkey-confirm");
         let backend_panel_animating = self.overlay_animating("backend-panel");
 
         let tag_panel_opacity = if tag_panel_visible && tag_panel_animating {
@@ -752,26 +752,6 @@ impl Render for RootView {
             Self::overlay_offset(window, cx, tag_picker_gen, "tag-picker")
         } else {
             0.0
-        };
-        let confirm_dialog_opacity = if confirm_dialog_visible && confirm_dialog_animating {
-            Self::overlay_opacity(window, cx, confirm_dialog_gen, "confirm-dialog")
-        } else {
-            1.0
-        };
-        let confirm_dialog_scale = if confirm_dialog_visible && confirm_dialog_animating {
-            Self::overlay_scale(window, cx, confirm_dialog_gen, "confirm-dialog")
-        } else {
-            1.0
-        };
-        let hotkey_confirm_opacity = if hotkey_confirm_visible && hotkey_confirm_animating {
-            Self::overlay_opacity(window, cx, hotkey_confirm_gen, "hotkey-confirm")
-        } else {
-            1.0
-        };
-        let hotkey_confirm_scale = if hotkey_confirm_visible && hotkey_confirm_animating {
-            Self::overlay_scale(window, cx, hotkey_confirm_gen, "hotkey-confirm")
-        } else {
-            1.0
         };
         let backend_panel_opacity = if backend_panel_visible && backend_panel_animating {
             Self::overlay_opacity(window, cx, backend_panel_gen, "backend-panel")
@@ -1147,7 +1127,6 @@ impl Render for RootView {
                 let dialog_element: AnyElement = match dialog {
                     Some(ConfirmDialogState::DeleteSingle { id }) => ConfirmDialog::delete_single()
                         .theme(self.theme.clone())
-                        .scale(confirm_dialog_scale)
                         .on_confirm({
                             let s = app_state.clone();
                             let l = list.clone();
@@ -1165,11 +1144,10 @@ impl Render for RootView {
                                 l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
                             }
                         })
-                        .into_any_element(),
+                        .render_animated(window, cx, confirm_dialog_gen),
                     Some(ConfirmDialogState::DeleteBatch { count }) => {
                         ConfirmDialog::delete_batch(count)
                             .theme(self.theme.clone())
-                            .scale(confirm_dialog_scale)
                             .on_confirm({
                                 let s = app_state.clone();
                                 let l = list.clone();
@@ -1187,7 +1165,7 @@ impl Render for RootView {
                                     l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
                                 }
                             })
-                            .into_any_element()
+                            .render_animated(window, cx, confirm_dialog_gen)
                     }
                     None => div().into_any_element(),
                 };
@@ -1201,7 +1179,6 @@ impl Render for RootView {
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
-                        .opacity(confirm_dialog_opacity)
                         .child(dialog_element),
                 )
             })
@@ -1217,7 +1194,6 @@ impl Render for RootView {
                     Some(hotkey::HotkeyConfirmAction::AddBlacklist { app_name }) => {
                         ConfirmDialog::add_blacklist(&app_name)
                             .theme(self.theme.clone())
-                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let wm = wm.clone();
                                 let app_state = app_state.clone();
@@ -1251,12 +1227,11 @@ impl Render for RootView {
                                 }
                             })
                             .focus_handle(dialog_focus.clone())
-                            .into_any_element()
+                            .render_animated(window, cx, hotkey_confirm_gen)
                     }
                     Some(hotkey::HotkeyConfirmAction::RemoveBlacklist { app_name }) => {
                         ConfirmDialog::remove_blacklist(&app_name)
                             .theme(self.theme.clone())
-                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let wm = wm.clone();
                                 let app_state = app_state.clone();
@@ -1287,12 +1262,11 @@ impl Render for RootView {
                                 }
                             })
                             .focus_handle(dialog_focus.clone())
-                            .into_any_element()
+                            .render_animated(window, cx, hotkey_confirm_gen)
                     }
                     Some(hotkey::HotkeyConfirmAction::AddPasteShortcut { app_name, shortcut }) => {
                         ConfirmDialog::add_paste_shortcut(&app_name, &shortcut)
                             .theme(self.theme.clone())
-                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let settings = settings.clone();
                                 let app_name = app_name.clone();
@@ -1318,12 +1292,11 @@ impl Render for RootView {
                                 }
                             })
                             .focus_handle(dialog_focus.clone())
-                            .into_any_element()
+                            .render_animated(window, cx, hotkey_confirm_gen)
                     }
                     Some(hotkey::HotkeyConfirmAction::RemovePasteShortcut { app_name }) => {
                         ConfirmDialog::remove_paste_shortcut(&app_name)
                             .theme(self.theme.clone())
-                            .scale(hotkey_confirm_scale)
                             .on_confirm({
                                 let settings = settings.clone();
                                 let app_name = app_name.clone();
@@ -1348,7 +1321,7 @@ impl Render for RootView {
                                 }
                             })
                             .focus_handle(dialog_focus.clone())
-                            .into_any_element()
+                            .render_animated(window, cx, hotkey_confirm_gen)
                     }
                     None => div().into_any_element(),
                 };
@@ -1360,7 +1333,6 @@ impl Render for RootView {
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
-                        .opacity(hotkey_confirm_opacity)
                         .child(dialog_element),
                 )
             })
