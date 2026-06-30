@@ -206,6 +206,13 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::UpdateAvailable => {
+                    // Don't show the toast when the user is already looking at
+                    // the version tab — the update info is right there on screen.
+                    let on_version_tab = this.current_view == "settings"
+                        && this.settings_panel.read(cx).active_tab() == 5;
+                    if on_version_tab {
+                        return;
+                    }
                     // A newly discovered update must not inherit the timer from
                     // an unrelated toast that happened to be visible already.
                     this._toast_timer = None;

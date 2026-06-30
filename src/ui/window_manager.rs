@@ -334,6 +334,8 @@ pub struct WindowManager {
     pending_update: Arc<Mutex<Option<update::UpdateInfo>>>,
     /// Pending update phase from background download/install thread.
     pending_update_phase: Arc<Mutex<update::UpdatePhase>>,
+    /// Result of the restart installer launch (consumed by poll_update).
+    pending_restart_result: Arc<Mutex<Option<Result<(), String>>>>,
     /// Last update check time for 24h periodic check throttling.
     last_update_check: Option<Instant>,
 }
@@ -412,6 +414,7 @@ impl WindowManager {
             _recording_poll_task: None,
             pending_update: Arc::new(Mutex::new(None)),
             pending_update_phase: Arc::new(Mutex::new(update::UpdatePhase::Idle)),
+            pending_restart_result: Arc::new(Mutex::new(None)),
             last_update_check: None,
         };
 
@@ -2335,7 +2338,37 @@ impl WindowManager {
             }
         }
 
-        // 2. Read update info from background thread
+        // 2. Check restart installer result (non-blocking — see do_update_restart)
+        let is_installing = self.state.read(cx).update_phase == update::UpdatePhase::Installing;
+        let restart_result: Option<Result<(), String>> = if is_installing {
+            self.pending_restart_result
+                .lock()
+                .ok()
+                .and_then(|mut p| p.take())
+        } else {
+            None
+        };
+        if let Some(result) = restart_result {
+            match result {
+                Ok(()) => {
+                    log::info!("Windows silent update installer launched");
+                    self.prepare_shutdown(cx);
+                    cx.quit();
+                    return; // Don't continue polling after quit
+                }
+                Err(error) => {
+                    log::error!("Failed to launch prepared update: {error}");
+                    self.state.update(cx, |state, _| {
+                        state.update_phase = update::UpdatePhase::Error(error.clone())
+                    });
+                    cx.emit(WindowManagerEvent::UpdateProgress(
+                        update::UpdatePhase::Error(error),
+                    ));
+                }
+            }
+        }
+
+        // 3. Read update info from background thread
         if let Ok(mut pending) = self.pending_update.lock() {
             if let Some(info) = pending.take() {
                 log::info!(
@@ -2353,7 +2386,7 @@ impl WindowManager {
             }
         }
 
-        // 3. Periodic check: every 24 hours
+        // 4. Periodic check: every 24 hours
         let auto_check = self.state.read(cx).settings.auto_check_updates;
         if auto_check {
             let should_check = match self.last_update_check {
@@ -2372,9 +2405,12 @@ impl WindowManager {
         if matches!(
             self.state.read(cx).update_phase,
             update::UpdatePhase::Checking
+                | update::UpdatePhase::UpdateAvailable
+                | update::UpdatePhase::UpToDate
                 | update::UpdatePhase::Downloading { .. }
                 | update::UpdatePhase::Verifying
                 | update::UpdatePhase::Installing
+                | update::UpdatePhase::ReadyToRestart
         ) {
             return;
         }
@@ -2454,63 +2490,44 @@ impl WindowManager {
         });
     }
 
-    /// Launch the prepared platform installer.
+    /// Launch the prepared platform installer (non-blocking).
+    ///
+    /// Spawns the installer in a background thread and sets the phase to
+    /// `Installing`. The result is picked up by `poll_update` so the UI
+    /// stays responsive while waiting for the UAC dialog or platform prompt.
     pub fn do_update_restart(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.state.read(cx).update_available.clone() else {
             log::error!("do_update_restart called but update_available is None");
             return;
         };
+
+        self.state
+            .update(cx, |s, _| s.update_phase = update::UpdatePhase::Installing);
+        cx.emit(WindowManagerEvent::UpdateProgress(
+            update::UpdatePhase::Installing,
+        ));
+
         #[cfg(target_os = "windows")]
         {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let hwnd = self.hwnd;
+            let pending = self.pending_restart_result.clone();
             std::thread::spawn(move || {
-                let result = crate::services::updater::launch_prepared_update(&info);
-                let _ = tx.send(result);
+                let result = crate::services::updater::launch_prepared_update(&info, hwnd);
+                if let Ok(mut p) = pending.lock() {
+                    *p = Some(result);
+                }
             });
-            match rx.recv() {
-                Ok(Ok(())) => {
-                    log::info!("Windows silent update installer launched");
-                    self.prepare_shutdown(cx);
-                    cx.quit();
-                }
-                Ok(Err(error)) => {
-                    log::error!("Failed to launch prepared update: {error}");
-                    self.state.update(cx, |state, _| {
-                        state.update_phase = update::UpdatePhase::Error(error.clone())
-                    });
-                    cx.emit(WindowManagerEvent::UpdateProgress(
-                        update::UpdatePhase::Error(error),
-                    ));
-                }
-                Err(error) => {
-                    let message = format!("Failed to launch update thread: {error}");
-                    log::error!("{message}");
-                    self.state.update(cx, |state, _| {
-                        state.update_phase = update::UpdatePhase::Error(message.clone())
-                    });
-                    cx.emit(WindowManagerEvent::UpdateProgress(
-                        update::UpdatePhase::Error(message),
-                    ));
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        if let Err(error) = crate::services::updater::launch_prepared_update(&info) {
-            log::error!("Failed to launch prepared update: {error}");
-            self.state.update(cx, |state, _| {
-                state.update_phase = update::UpdatePhase::Error(error.clone())
-            });
-            cx.emit(WindowManagerEvent::UpdateProgress(
-                update::UpdatePhase::Error(error),
-            ));
-            return;
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            self.prepare_shutdown(cx);
-            cx.quit();
+            let pending = self.pending_restart_result.clone();
+            std::thread::spawn(move || {
+                let result = crate::services::updater::launch_prepared_update(&info, 0);
+                if let Ok(mut p) = pending.lock() {
+                    *p = Some(result);
+                }
+            });
         }
     }
 

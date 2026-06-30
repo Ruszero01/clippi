@@ -72,20 +72,20 @@ fn prepare_asset(asset_path: &Path, temp_dir: &Path) -> Result<(), String> {
 /// On Windows this starts the NSIS installer in silent mode. On macOS the
 /// caller must quit after this returns successfully so the helper can replace
 /// the application bundle.
-pub fn launch_prepared_update(info: &UpdateInfo) -> Result<(), String> {
+pub fn launch_prepared_update(info: &UpdateInfo, parent_hwnd: isize) -> Result<(), String> {
     let temp_dir = super::install::update_temp_dir();
     #[cfg(target_os = "windows")]
     {
-        super::install::launch_nsis_installer(&temp_dir.join(&info.asset_name))
+        super::install::launch_nsis_installer(&temp_dir.join(&info.asset_name), parent_hwnd)
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = info;
+        let _ = (info, parent_hwnd);
         super::install::launch_macos_installer(&temp_dir.join("Clippi.app"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = (info, temp_dir);
+        let _ = (info, temp_dir, parent_hwnd);
         Err("Platform not supported".into())
     }
 }

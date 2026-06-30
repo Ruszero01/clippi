@@ -10,7 +10,12 @@ pub fn download_file(
     expected_size: u64,
     mut on_progress: impl FnMut(u8),
 ) -> Result<(), String> {
-    let response = ureq::get(url)
+    let http = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(300))
+        .build();
+    let response = http
+        .get(url)
         .set(
             "User-Agent",
             &format!("Clippi/{}", env!("CARGO_PKG_VERSION")),
@@ -94,7 +99,12 @@ pub fn fetch_checksum(sha256_url: &str) -> Result<String, String> {
     if sha256_url.is_empty() {
         return Err("Release checksum URL is missing".into());
     }
-    let response = ureq::get(sha256_url)
+    let http = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .build();
+    let response = http
+        .get(sha256_url)
         .set(
             "User-Agent",
             &format!("Clippi/{}", env!("CARGO_PKG_VERSION")),

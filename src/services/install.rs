@@ -19,7 +19,7 @@ pub fn update_temp_dir() -> PathBuf {
 /// NSIS silent install mode. The installer waits for Clippi to exit, then
 /// installs and restarts it after all selected sections complete.
 #[cfg(target_os = "windows")]
-pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
+pub fn launch_nsis_installer(installer_path: &Path, parent_hwnd: isize) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
@@ -53,12 +53,12 @@ pub fn launch_nsis_installer(installer_path: &Path) -> Result<(), String> {
     // independently after our process exits.
     let ret = unsafe {
         ShellExecuteW(
-            std::ptr::null_mut(), // hwnd: no parent
-            operation.as_ptr(),   // lpOperation: runas (request elevation)
-            exe_wide.as_ptr(),    // lpFile: installer path
-            parameters.as_ptr(),  // lpParameters: silent NSIS install
-            directory_ptr,        // lpDirectory: installer folder
-            SW_SHOW,              // nShowCmd
+            parent_hwnd as *mut std::ffi::c_void, // hwnd: parent window for UAC prompt
+            operation.as_ptr(),                   // lpOperation: runas (request elevation)
+            exe_wide.as_ptr(),                    // lpFile: installer path
+            parameters.as_ptr(),                  // lpParameters: silent NSIS install
+            directory_ptr,                        // lpDirectory: installer folder
+            SW_SHOW,                              // nShowCmd
         )
     } as isize;
 
