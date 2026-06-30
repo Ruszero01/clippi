@@ -77,6 +77,11 @@ const DB_MIGRATIONS: &[DbMigration] = &[
             "UPDATE clipboard_items SET meta_type = 'color', content_type = 'plain_text' WHERE content_type = 'color';",
         ),
     },
+    DbMigration {
+        version: 5,
+        description: "Add index on created_at for sort-by-created query performance",
+        sql: "CREATE INDEX IF NOT EXISTS idx_created ON clipboard_items(created_at DESC)",
+    },
 ];
 
 /// Run all pending database migrations, updating `PRAGMA user_version`.

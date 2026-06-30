@@ -57,6 +57,7 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_hash ON clipboard_items(content_hash);
             CREATE INDEX IF NOT EXISTS idx_updated ON clipboard_items(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_created ON clipboard_items(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_content_type ON clipboard_items(content_type);
             CREATE INDEX IF NOT EXISTS idx_is_favorite ON clipboard_items(is_favorite);",
         )?;
