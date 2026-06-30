@@ -26,7 +26,17 @@ use ui::root::RootView;
 use ui::window_manager::WindowManager;
 
 fn ensure_single_instance() -> bool {
-    std::net::TcpListener::bind("127.0.0.1:19876").is_ok()
+    // Bind a TCP port and leak the listener so the port stays held for the
+    // entire process lifetime.  Without the leak the listener is dropped
+    // immediately after is_ok(), the OS reclaims the port, and the next
+    // instance can bind it — defeating the single-instance guard.
+    match std::net::TcpListener::bind("127.0.0.1:19876") {
+        Ok(listener) => {
+            Box::leak(Box::new(listener));
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn init_logging() {
