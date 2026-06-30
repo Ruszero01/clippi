@@ -2406,7 +2406,6 @@ impl WindowManager {
             self.state.read(cx).update_phase,
             update::UpdatePhase::Checking
                 | update::UpdatePhase::UpdateAvailable
-                | update::UpdatePhase::UpToDate
                 | update::UpdatePhase::Downloading { .. }
                 | update::UpdatePhase::Verifying
                 | update::UpdatePhase::Installing

@@ -22,7 +22,6 @@
 - **Windows 自动更新弹窗 UAC 缺少父窗口** — 修复 release 构建（无控制台）下 `ShellExecuteW("runas")` 传入空窗口句柄导致 UAC 无提示静默失败的问题，现在传入 Clippi 主窗口 HWND 确保 UAC 弹窗正常显示
 - **更新安装流程主线程阻塞** — 修复 `do_update_restart` 使用同步通道阻塞 GPUI 主线程等待安装程序结果的问题，改为异步轮询模式，UAC 弹窗期间 UI 保持响应
 - **更新网络请求无超时保护** — 为 GitHub API 查询、安装包下载、SHA256 校验和请求添加连接和读取超时，避免网络异常时后台线程永久阻塞
-- **更新检查重复触发** — 修复已有更新结果时仍可重复发起 API 请求的问题，现在 `UpdateAvailable`/`UpToDate`/`ReadyToRestart` 状态下不再接受新的检查请求
 - **更新提示 Toast 与更新页面重复显示** — 当用户已在设置→版本页面时，不再弹出更新 Toast 通知，避免重复展示
 
 ---
