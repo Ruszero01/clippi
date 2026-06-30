@@ -41,6 +41,10 @@ pub struct BackendConfig {
     #[serde(default)]
     pub webdav_url: String,
     #[serde(default)]
+    pub webdav_root_url: String,
+    #[serde(default)]
+    pub webdav_path: String,
+    #[serde(default)]
     pub webdav_username: String,
     #[serde(default)]
     pub webdav_password: String,
@@ -251,6 +255,10 @@ impl AppSettings {
         };
         // --- Migrate old flat sync fields → BackendConfig list ---
         settings.migrate_sync_fields();
+        // --- Migrate old single WebDAV URL configs to split form fields ---
+        if settings.migrate_webdav_fields() {
+            settings.save();
+        }
         // --- Migrate type filter config (seed from BUILTIN_TYPE_KEYS) ---
         settings.migrate_type_filter_config();
         settings
@@ -278,6 +286,8 @@ impl AppSettings {
                 last_tag_count: 0,
                 sync_interval_secs: None,
                 webdav_url: String::new(),
+                webdav_root_url: String::new(),
+                webdav_path: String::new(),
                 webdav_username: String::new(),
                 webdav_password: String::new(),
             });
@@ -289,6 +299,52 @@ impl AppSettings {
             // --- Save migrated state ---
             self.save();
         }
+    }
+
+    fn migrate_webdav_fields(&mut self) -> bool {
+        let mut changed = false;
+        for backend in &mut self.sync_backends {
+            if backend.backend_type != "webdav" {
+                continue;
+            }
+
+            let has_split_fields = !backend.webdav_root_url.trim().is_empty()
+                || !backend.webdav_path.trim().is_empty();
+            if has_split_fields {
+                let root = backend
+                    .webdav_root_url
+                    .trim()
+                    .trim_end_matches('/')
+                    .to_string();
+                let path = backend.webdav_path.trim().trim_matches('/').to_string();
+                let url = compose_webdav_url(&root, &path);
+                if backend.webdav_root_url != root {
+                    backend.webdav_root_url = root;
+                    changed = true;
+                }
+                if backend.webdav_path != path {
+                    backend.webdav_path = path;
+                    changed = true;
+                }
+                if backend.webdav_url != url {
+                    backend.webdav_url = url;
+                    changed = true;
+                }
+                continue;
+            }
+
+            let legacy_url = backend.webdav_url.trim();
+            if !legacy_url.is_empty() {
+                backend.webdav_root_url = legacy_url.to_string();
+                backend.webdav_path.clear();
+                if backend.webdav_url != legacy_url {
+                    backend.webdav_url = legacy_url.to_string();
+                }
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     /// Seed or merge type filter config from `BUILTIN_TYPE_KEYS`.
@@ -343,6 +399,16 @@ impl AppSettings {
 
     pub fn resolve_db_path(&self) -> PathBuf {
         super::paths::resolve_db_path(&self.db_path)
+    }
+}
+
+pub fn compose_webdav_url(root: impl AsRef<str>, path: impl AsRef<str>) -> String {
+    let root = root.as_ref().trim();
+    let path = path.as_ref().trim().trim_matches('/');
+    if root.is_empty() || path.is_empty() {
+        root.to_string()
+    } else {
+        format!("{}/{}", root.trim_end_matches('/'), path)
     }
 }
 
@@ -645,9 +711,72 @@ mod tests {
             last_tag_count: 0,
             sync_interval_secs: None,
             webdav_url: String::new(),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
             webdav_username: String::new(),
             webdav_password: String::new(),
         }
+    }
+
+    #[test]
+    fn migrate_webdav_fields_preserves_legacy_url_as_root() {
+        let mut settings = AppSettings::default();
+        settings.sync_backends.push(BackendConfig {
+            id: "webdav".into(),
+            enabled: true,
+            backend_type: "webdav".into(),
+            name: "Nextcloud".into(),
+            folder_path: String::new(),
+            device_name: String::new(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: Some(600),
+            webdav_url: "https://cloud.example.com/remote.php/dav/files/rains/Clippi".into(),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        });
+
+        settings.migrate_webdav_fields();
+
+        let backend = &settings.sync_backends[0];
+        assert_eq!(
+            backend.webdav_root_url,
+            "https://cloud.example.com/remote.php/dav/files/rains/Clippi"
+        );
+        assert!(backend.webdav_path.is_empty());
+        assert_eq!(backend.webdav_url, backend.webdav_root_url);
+    }
+
+    #[test]
+    fn migrate_webdav_fields_rebuilds_url_from_split_fields() {
+        let mut settings = AppSettings::default();
+        settings.sync_backends.push(BackendConfig {
+            id: "webdav".into(),
+            enabled: true,
+            backend_type: "webdav".into(),
+            name: "WebDAV".into(),
+            folder_path: String::new(),
+            device_name: String::new(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: Some(600),
+            webdav_url: String::new(),
+            webdav_root_url: "https://cloud.example.com/dav/".into(),
+            webdav_path: "/Clippi/".into(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        });
+
+        settings.migrate_webdav_fields();
+
+        let backend = &settings.sync_backends[0];
+        assert_eq!(backend.webdav_root_url, "https://cloud.example.com/dav");
+        assert_eq!(backend.webdav_path, "Clippi");
+        assert_eq!(backend.webdav_url, "https://cloud.example.com/dav/Clippi");
     }
 
     #[test]

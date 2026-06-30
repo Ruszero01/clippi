@@ -34,6 +34,14 @@ use crate::ui::quick_paste::{
 /// Shared foreground app name for cross-service coordination.
 pub type ForegroundAppName = Arc<Mutex<String>>;
 
+pub struct WebDavBackendForm {
+    pub name: String,
+    pub root_url: String,
+    pub path: String,
+    pub username: String,
+    pub password: String,
+}
+
 #[cfg(target_os = "windows")]
 static BLOCK_SYSTEM_WINDOW_BEHAVIORS: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
@@ -2079,6 +2087,9 @@ impl WindowManager {
         config: crate::core::settings::BackendConfig,
         cx: &mut Context<Self>,
     ) {
+        if !self.state.read(cx).settings.sync_auto_enabled {
+            return;
+        }
         let settings = self.state.update(cx, |state, _cx| {
             state.settings.sync_backends.push(config);
             state.settings.save();
@@ -2118,6 +2129,8 @@ impl WindowManager {
                 last_tag_count: 0,
                 sync_interval_secs: Some(60),
                 webdav_url: String::new(),
+                webdav_root_url: String::new(),
+                webdav_path: String::new(),
                 webdav_username: String::new(),
                 webdav_password: String::new(),
             },
@@ -2125,20 +2138,14 @@ impl WindowManager {
         );
     }
 
-    pub fn add_webdav_backend(
-        &mut self,
-        name: String,
-        url: String,
-        username: String,
-        password: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn add_webdav_backend(&mut self, form: WebDavBackendForm, cx: &mut Context<Self>) {
+        let url = crate::core::settings::compose_webdav_url(&form.root_url, &form.path);
         self._add_backend_config(
             crate::core::settings::BackendConfig {
                 id: crate::core::settings::generate_id(),
                 enabled: true,
                 backend_type: "webdav".into(),
-                name,
+                name: form.name,
                 folder_path: String::new(),
                 device_name: crate::services::backends::local_folder::hostname(),
                 last_sync_at: String::new(),
@@ -2146,8 +2153,10 @@ impl WindowManager {
                 last_tag_count: 0,
                 sync_interval_secs: Some(600),
                 webdav_url: url,
-                webdav_username: username,
-                webdav_password: password,
+                webdav_root_url: form.root_url.trim().trim_end_matches('/').to_string(),
+                webdav_path: form.path.trim().trim_matches('/').to_string(),
+                webdav_username: form.username,
+                webdav_password: form.password,
             },
             cx,
         );
@@ -2160,6 +2169,9 @@ impl WindowManager {
         folder_path: String,
         cx: &mut Context<Self>,
     ) {
+        if !self.state.read(cx).settings.sync_auto_enabled {
+            return;
+        }
         self.state.update(cx, |state, _cx| {
             if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
                 config.name = name;
@@ -2173,19 +2185,22 @@ impl WindowManager {
     pub fn edit_webdav_backend(
         &mut self,
         id: &str,
-        name: String,
-        url: String,
-        username: String,
-        password: String,
+        form: WebDavBackendForm,
         cx: &mut Context<Self>,
     ) {
+        if !self.state.read(cx).settings.sync_auto_enabled {
+            return;
+        }
+        let url = crate::core::settings::compose_webdav_url(&form.root_url, &form.path);
         self.state.update(cx, |state, _cx| {
             if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {
-                config.name = name;
+                config.name = form.name;
                 config.webdav_url = url;
-                config.webdav_username = username;
-                if !password.is_empty() {
-                    config.webdav_password = password;
+                config.webdav_root_url = form.root_url.trim().trim_end_matches('/').to_string();
+                config.webdav_path = form.path.trim().trim_matches('/').to_string();
+                config.webdav_username = form.username;
+                if !form.password.is_empty() {
+                    config.webdav_password = form.password;
                 }
                 state.settings.save();
             }
@@ -2194,6 +2209,9 @@ impl WindowManager {
     }
 
     pub fn remove_sync_backend(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.state.read(cx).settings.sync_auto_enabled {
+            return;
+        }
         let settings = self.state.update(cx, |state, _cx| {
             state
                 .settings
@@ -2208,6 +2226,9 @@ impl WindowManager {
     }
 
     pub fn toggle_sync_backend(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.state.read(cx).settings.sync_auto_enabled {
+            return;
+        }
         let (settings, enabled) = self.state.update(cx, |state, _cx| {
             let mut enabled = false;
             if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {

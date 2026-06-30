@@ -148,12 +148,18 @@ impl SettingsPanel {
                             .items_center()
                             .justify_center()
                             .gap(px(6.))
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.bg(accent_soft))
-                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                backend_panel.update(cx, |panel, cx| {
-                                    panel.open_add(_window, cx);
-                                });
+                            .when(sync.auto_enabled, |button| {
+                                button
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| style.bg(accent_soft))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        backend_panel.update(cx, |panel, cx| {
+                                            panel.open_add(_window, cx);
+                                        });
+                                    })
+                            })
+                            .when(!sync.auto_enabled, |button| {
+                                button.opacity(0.45).cursor(CursorStyle::Arrow)
                             })
                             .child(div().text_size(px(14.)).text_color(accent).child("+"))
                             .child(
@@ -284,6 +290,7 @@ impl SettingsPanel {
         let text_2 = self.theme.text_2;
         let text_3 = self.theme.text_3;
         let danger = self.theme.danger;
+        let auto_enabled = self.state.read(cx).sync.auto_enabled;
         let wm = self.window_manager.clone();
         let backend_panel = self.backend_panel();
         let status_color = match backend.status.as_str() {
@@ -392,51 +399,66 @@ impl SettingsPanel {
                                     .flex()
                                     .items_center()
                                     .gap(px(4.))
-                                    .child(icon_button("\u{e648}", text_3, accent, {
-                                        let config = backend.config.clone();
-                                        let backend_panel = backend_panel.clone();
-                                        move |window, cx| {
-                                            backend_panel.update(cx, |panel, cx| {
-                                                panel.open_edit(&config, window, cx);
-                                            });
-                                        }
-                                    }))
-                                    .child(icon_button("\u{e8b6}", text_3, danger, {
-                                        let id = id.clone();
-                                        let this = cx.entity().clone();
-                                        move |_window, cx| {
-                                            this.update(cx, |panel, cx| {
-                                                panel.delete_backend_confirm = Some(id.clone());
-                                                panel.delete_backend_confirm_gen = panel
-                                                    .delete_backend_confirm_gen
-                                                    .wrapping_add(1);
-                                                panel.delete_backend_confirm_started =
-                                                    Some(std::time::Instant::now());
-                                                cx.notify();
-                                            });
-                                        }
-                                    })),
+                                    .child(if auto_enabled {
+                                        icon_button("\u{e648}", text_3, accent, {
+                                            let config = backend.config.clone();
+                                            let backend_panel = backend_panel.clone();
+                                            move |window, cx| {
+                                                backend_panel.update(cx, |panel, cx| {
+                                                    panel.open_edit(&config, window, cx);
+                                                });
+                                            }
+                                        })
+                                        .into_any_element()
+                                    } else {
+                                        disabled_icon_button("\u{e648}", text_3).into_any_element()
+                                    })
+                                    .child(if auto_enabled {
+                                        icon_button("\u{e8b6}", text_3, danger, {
+                                            let id = id.clone();
+                                            let this = cx.entity().clone();
+                                            move |_window, cx| {
+                                                this.update(cx, |panel, cx| {
+                                                    panel.delete_backend_confirm = Some(id.clone());
+                                                    panel.delete_backend_confirm_gen = panel
+                                                        .delete_backend_confirm_gen
+                                                        .wrapping_add(1);
+                                                    panel.delete_backend_confirm_started =
+                                                        Some(std::time::Instant::now());
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })
+                                        .into_any_element()
+                                    } else {
+                                        disabled_icon_button("\u{e8b6}", text_3).into_any_element()
+                                    }),
                             )
-                            .child(render_toggle(
-                                enabled,
-                                &format!("sync-backend-{id}"),
-                                ToggleColors {
-                                    accent,
-                                    track_off: divider,
-                                },
-                                &mut self.toggle_states,
-                                window,
-                                cx,
-                                {
-                                    let id = id.clone();
-                                    let wm = wm.clone();
-                                    move |_window, cx| {
-                                        wm.update(cx, |wm, cx| {
-                                            wm.toggle_sync_backend(&id, cx);
-                                        });
-                                    }
-                                },
-                            )),
+                            .child(if auto_enabled {
+                                render_toggle(
+                                    enabled,
+                                    &format!("sync-backend-{id}"),
+                                    ToggleColors {
+                                        accent,
+                                        track_off: divider,
+                                    },
+                                    &mut self.toggle_states,
+                                    window,
+                                    cx,
+                                    {
+                                        let id = id.clone();
+                                        let wm = wm.clone();
+                                        move |_window, cx| {
+                                            wm.update(cx, |wm, cx| {
+                                                wm.toggle_sync_backend(&id, cx);
+                                            });
+                                        }
+                                    },
+                                )
+                                .into_any_element()
+                            } else {
+                                disabled_toggle(enabled, divider).into_any_element()
+                            }),
                     ),
             )
             .child(
@@ -544,6 +566,43 @@ fn icon_button(
             on_click(window, cx);
         })
         .child(icon)
+}
+
+fn disabled_icon_button(icon: &'static str, color: Rgba) -> impl IntoElement {
+    div()
+        .w(px(24.))
+        .h(px(24.))
+        .rounded(px(5.))
+        .font_family("iconfont")
+        .text_size(px(12.))
+        .text_color(color)
+        .opacity(0.35)
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor(CursorStyle::Arrow)
+        .child(icon)
+}
+
+fn disabled_toggle(value: bool, track_off: Rgba) -> impl IntoElement {
+    let knob_x = if value { 20.0 } else { 2.0 };
+    div()
+        .w(px(40.))
+        .h(px(22.))
+        .rounded(px(11.))
+        .bg(track_off)
+        .opacity(0.45)
+        .flex()
+        .items_center()
+        .cursor(CursorStyle::Arrow)
+        .child(
+            div()
+                .w(px(18.))
+                .h(px(18.))
+                .rounded(px(9.))
+                .bg(rgb(0xffffff))
+                .ml(px(knob_x)),
+        )
 }
 
 fn transition_f32(

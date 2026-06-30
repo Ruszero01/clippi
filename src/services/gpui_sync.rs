@@ -568,6 +568,8 @@ mod tests {
             last_tag_count: 0,
             sync_interval_secs: Some(60),
             webdav_url: String::new(),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
             webdav_username: String::new(),
             webdav_password: String::new(),
         };

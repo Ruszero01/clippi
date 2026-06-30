@@ -9,15 +9,13 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_transitions::WindowUseTransition;
 
 use crate::core::i18n_keys::I18nKey;
-use crate::core::settings::BackendConfig;
+use crate::core::settings::{compose_webdav_url, BackendConfig};
 use crate::services::backends::local_folder::detect_presets;
 use crate::services::gpui_sync::test_webdav_connection;
 use crate::ui::theme::ClippiTheme;
-use crate::ui::window_manager::WindowManager;
+use crate::ui::window_manager::{WebDavBackendForm, WindowManager};
 
 const BACKEND_PANEL_ANIM_DURATION: Duration = Duration::from_millis(150);
-const NUTSTORE_WEBDAV_ROOT: &str = "https://dav.jianguoyun.com/dav/";
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditorStep {
     SelectType,
@@ -130,12 +128,15 @@ impl AddBackendPanel {
             input.set_value(&config.folder_path, window, cx)
         });
         self.url_input.update(cx, |input, cx| {
-            let (root, _path) = split_webdav_form_url(&config.webdav_url);
-            input.set_value(&root, window, cx)
+            let root = if config.webdav_root_url.trim().is_empty() {
+                config.webdav_url.clone()
+            } else {
+                config.webdav_root_url.clone()
+            };
+            input.set_value(root, window, cx)
         });
         self.webdav_path_input.update(cx, |input, cx| {
-            let (_root, path) = split_webdav_form_url(&config.webdav_url);
-            input.set_value(&path, window, cx)
+            input.set_value(config.webdav_path.clone(), window, cx)
         });
         self.username_input.update(cx, |input, cx| {
             input.set_value(&config.webdav_username, window, cx)
@@ -586,20 +587,26 @@ impl AddBackendPanel {
                                 });
                                 return;
                             }
-                            let url = compose_webdav_url(
-                                url_input.read(cx).value(),
-                                path_input.read(cx).value(),
-                            );
+                            let root_url = url_input.read(cx).value().to_string();
+                            let path = path_input.read(cx).value().to_string();
+                            let url = compose_webdav_url(&root_url, &path);
                             if url.trim().is_empty() {
                                 return;
                             }
                             let username = username_input.read(cx).value().to_string();
                             let password = password_input.read(cx).unmask_value().to_string();
                             wm.update(cx, |wm, cx| {
+                                let form = WebDavBackendForm {
+                                    name,
+                                    root_url,
+                                    path,
+                                    username,
+                                    password,
+                                };
                                 if let Some(id) = edit_id.as_deref() {
-                                    wm.edit_webdav_backend(id, name, url, username, password, cx);
+                                    wm.edit_webdav_backend(id, form, cx);
                                 } else {
-                                    wm.add_webdav_backend(name, url, username, password, cx);
+                                    wm.add_webdav_backend(form, cx);
                                 }
                             });
                             this.update(cx, |panel, cx| panel.close(cx));
@@ -772,28 +779,6 @@ impl Render for AddBackendPanel {
             )
             .into_any_element()
     }
-}
-
-fn compose_webdav_url(root: impl AsRef<str>, path: impl AsRef<str>) -> String {
-    let root = root.as_ref().trim();
-    let path = path.as_ref().trim().trim_matches('/');
-    if root.is_empty() || path.is_empty() {
-        root.to_string()
-    } else {
-        format!("{}/{}", root.trim_end_matches('/'), path)
-    }
-}
-
-fn split_webdav_form_url(url: &str) -> (String, String) {
-    let trimmed = url.trim();
-    if let Some(path) = trimmed.strip_prefix(NUTSTORE_WEBDAV_ROOT) {
-        return (
-            NUTSTORE_WEBDAV_ROOT.to_string(),
-            path.trim_matches('/').to_string(),
-        );
-    }
-
-    (trimmed.to_string(), String::new())
 }
 
 fn header_name_input(input: &Entity<InputState>, theme: &ClippiTheme) -> AnyElement {
