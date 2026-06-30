@@ -1199,6 +1199,21 @@ impl WindowManager {
         cx.notify();
     }
 
+    #[allow(dead_code)]
+    pub fn show_toast(&self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.show_toast(message);
+            cx.notify();
+        });
+    }
+
+    pub fn show_warning_toast(&self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.show_warning_toast(message);
+            cx.notify();
+        });
+    }
+
     /// Initialise the hotkey listener after GPUI has finished its first render.
     ///
     /// Creating the hotkey during `WindowManager::new()` (inside the `open_window`

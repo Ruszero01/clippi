@@ -479,9 +479,14 @@ impl AppState {
         self.toast_is_warning = false;
     }
 
-    fn show_toast(&mut self, message: impl Into<String>) {
+    pub fn show_toast(&mut self, message: impl Into<String>) {
         self.toast_message = Some(message.into());
         self.toast_is_warning = false;
+    }
+
+    pub fn show_warning_toast(&mut self, message: impl Into<String>) {
+        self.toast_message = Some(message.into());
+        self.toast_is_warning = true;
     }
 
     pub fn toggle_item_tag(&mut self, item_id: i64, tag_id: i64) {
