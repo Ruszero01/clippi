@@ -182,6 +182,10 @@ impl SettingsPanel {
         }
     }
 
+    pub fn active_tab(&self) -> usize {
+        self.active_tab
+    }
+
     pub fn backend_panel(&self) -> Entity<AddBackendPanel> {
         self.backend_panel.clone()
     }

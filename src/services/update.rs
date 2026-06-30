@@ -59,10 +59,15 @@ impl UpdateChecker {
             self.repo_owner, self.repo_name
         );
 
-        let agent = format!("Clippi/{}", self.current_version);
+        let user_agent = format!("Clippi/{}", self.current_version);
 
-        let response = ureq::get(&url)
-            .set("User-Agent", &agent)
+        let http = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout_read(std::time::Duration::from_secs(30))
+            .build();
+        let response = http
+            .get(&url)
+            .set("User-Agent", &user_agent)
             .set("Accept", "application/vnd.github.v3+json")
             .call()
             .map_err(|e| format!("Failed to query GitHub Releases: {e}"))?;
