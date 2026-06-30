@@ -483,65 +483,109 @@ impl AddBackendPanel {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(7.))
             .when(!editing, |form| {
                 let name_input = self.name_input.clone();
                 let url_input = self.url_input.clone();
                 let path_input = self.webdav_path_input.clone();
                 form.child(field_label(I18nKey::BackendQuickAdd.text(), text_2))
                     .child(
-                        div()
-                            .h(px(34.))
-                            .px(px(12.))
-                            .rounded(px(7.))
-                            .bg(card_bg)
-                            .border(px(1.))
-                            .border_color(divider)
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.border_color(accent))
-                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                                if name_input.read(cx).value().is_empty() {
-                                    name_input.update(cx, |input, cx| {
-                                        input.set_value(I18nKey::BackendNutstore.text(), window, cx)
+                        div().flex().child(
+                            div()
+                                .w(px(116.))
+                                .max_w(px(132.))
+                                .h(px(30.))
+                                .px(px(12.))
+                                .rounded(px(7.))
+                                .bg(card_bg)
+                                .border(px(1.))
+                                .border_color(divider)
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |style| style.border_color(accent))
+                                .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                    if name_input.read(cx).value().is_empty() {
+                                        name_input.update(cx, |input, cx| {
+                                            input.set_value(
+                                                I18nKey::BackendNutstore.text(),
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    }
+                                    url_input.update(cx, |input, cx| {
+                                        input.set_value(NUTSTORE_WEBDAV_ROOT, window, cx)
                                     });
-                                }
-                                url_input.update(cx, |input, cx| {
-                                    input.set_value(NUTSTORE_WEBDAV_ROOT, window, cx)
-                                });
-                                path_input.update(cx, |input, cx| {
-                                    input.set_value(NUTSTORE_WEBDAV_PATH, window, cx)
-                                });
-                            })
-                            .child(
-                                div()
-                                    .font_family("iconfont")
-                                    .text_size(px(14.))
-                                    .text_color(text_2)
-                                    .child("\u{e60a}"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(text_1)
-                                    .child(I18nKey::BackendNutstore.text()),
-                            ),
+                                    path_input.update(cx, |input, cx| {
+                                        input.set_value(NUTSTORE_WEBDAV_PATH, window, cx)
+                                    });
+                                })
+                                .child(
+                                    div()
+                                        .font_family("iconfont")
+                                        .text_size(px(14.))
+                                        .text_color(text_2)
+                                        .child("\u{e60a}"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(text_1)
+                                        .child(I18nKey::BackendNutstore.text()),
+                                ),
+                        ),
                     )
                     .child(div().h(px(1.)).bg(divider))
             })
-            .child(field_label(I18nKey::BackendServerUrl.text(), text_2))
-            .child(input_box(&self.url_input, &self.theme, false))
-            .child(field_label(I18nKey::BackendWebdavPath.text(), text_2))
-            .child(input_box(&self.webdav_path_input, &self.theme, false))
-            .child(field_label(I18nKey::BackendName.text(), text_2))
-            .child(input_box(&self.name_input, &self.theme, false))
-            .child(field_label(I18nKey::BackendUsername.text(), text_2))
-            .child(input_box(&self.username_input, &self.theme, false))
-            .child(field_label(I18nKey::BackendPassword.text(), text_2))
-            .child(input_box(&self.password_input, &self.theme, true))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(7.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .child(field_label(I18nKey::BackendServerUrl.text(), text_2))
+                            .child(input_box(&self.url_input, &self.theme, false)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .child(field_label(I18nKey::BackendWebdavPath.text(), text_2))
+                            .child(input_box(&self.webdav_path_input, &self.theme, false)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(7.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .child(field_label(I18nKey::BackendUsername.text(), text_2))
+                            .child(input_box(&self.username_input, &self.theme, false)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .child(field_label(I18nKey::BackendPassword.text(), text_2))
+                            .child(input_box(&self.password_input, &self.theme, true)),
+                    ),
+            )
             .when(!self.test_error.is_empty(), |form| {
                 form.child(
                     div()
@@ -705,6 +749,7 @@ impl Render for AddBackendPanel {
                             .child(
                                 div()
                                     .flex()
+                                    .flex_1()
                                     .items_center()
                                     .gap(px(6.))
                                     .when(show_back, |header| {
@@ -735,13 +780,16 @@ impl Render for AddBackendPanel {
                                                 .child("\u{e62b}"),
                                         )
                                     })
-                                    .child(
+                                    .child(if self.step == EditorStep::WebDav {
+                                        header_name_input(&self.name_input, &self.theme)
+                                    } else {
                                         div()
                                             .text_size(px(13.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(self.theme.text_1)
-                                            .child(self.title()),
-                                    ),
+                                            .child(self.title())
+                                            .into_any_element()
+                                    }),
                             )
                             .child(
                                 div()
@@ -793,6 +841,26 @@ fn split_webdav_form_url(url: &str) -> (String, String) {
     }
 
     (trimmed.to_string(), String::new())
+}
+
+fn header_name_input(input: &Entity<InputState>, theme: &ClippiTheme) -> AnyElement {
+    div()
+        .w(px(164.))
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .child(
+            Input::new(input)
+                .appearance(false)
+                .bordered(false)
+                .focus_bordered(false)
+                .w_full()
+                .h(px(20.))
+                .text_size(px(13.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.text_1),
+        )
+        .into_any_element()
 }
 
 fn field_label(label: &'static str, color: Rgba) -> impl IntoElement {
