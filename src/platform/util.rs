@@ -227,32 +227,19 @@ mod macos_geometry {
 #[cfg(target_os = "macos")]
 pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, _size: i32) -> Option<String> {
     unsafe {
-        use base64::Engine;
-        use objc2::class;
-        use objc2::msg_send;
-        use objc2::rc::Retained;
+        use std::ffi::{c_char, c_void, CStr};
 
-        // --- 1. TIFF → NSBitmapImageRep (thread-safe, no lockFocus needed) ---
-        let tiff: Option<Retained<objc2::runtime::NSObject>> = msg_send![image, TIFFRepresentation];
-        let tiff = tiff?;
-        let rep: Retained<objc2::runtime::NSObject> = msg_send![
-            msg_send![class!(NSBitmapImageRep), alloc],
-            initWithData: &*tiff
-        ];
-        let png_data: Option<Retained<objc2::runtime::NSObject>> = msg_send![
-            &rep,
-            representationUsingType: 4usize,
-            properties: std::ptr::null::<objc2::runtime::NSObject>()
-        ];
-        let png_data = png_data?;
+        extern "C" {
+            fn clippi_nsimage_to_png_base64(image: *const c_void, target_size: i32) -> *mut c_char;
+            fn clippi_ocr_free_string(s: *mut c_char);
+        }
 
-        // --- 2. Base64 encode PNG bytes directly (no image crate round-trip) ---
-        let bytes: *const std::ffi::c_void = msg_send![&png_data, bytes];
-        let len: usize = msg_send![&png_data, length];
-        if bytes.is_null() || len == 0 {
+        let ptr = clippi_nsimage_to_png_base64(image as *const _ as *const c_void, _size);
+        if ptr.is_null() {
             return None;
         }
-        let png_bytes = std::slice::from_raw_parts(bytes as *const u8, len);
-        Some(base64::engine::general_purpose::STANDARD.encode(png_bytes))
+        let result = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+        clippi_ocr_free_string(ptr);
+        Some(result)
     }
 }

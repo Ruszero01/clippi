@@ -7,12 +7,106 @@
 //! --- - QR code detection (synchronous — rqrr is fast) ---
 //! --- - OCR text recognition (asynchronous — spawned on background thread) ---
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
 
 use crate::core::types::{ClipboardItem, ContentType, RichData};
 use crate::platform::clipboard::{create_listener, ClipboardListener, ClipboardShared};
 use crate::state::app::AppState;
+
+const MAX_IMAGE_ANALYSIS_QUEUE: usize = 64;
+
+#[derive(Clone)]
+struct ImageAnalysisJob {
+    img_path: String,
+    content_hash: u64,
+    db_path: String,
+    do_qr: bool,
+    do_ocr: bool,
+}
+
+struct ImageAnalysisWorker {
+    queue: Arc<(Mutex<VecDeque<ImageAnalysisJob>>, Condvar)>,
+    running: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl ImageAnalysisWorker {
+    fn new(needs_refresh: Arc<AtomicBool>) -> Self {
+        let queue = Arc::new((
+            Mutex::new(VecDeque::<ImageAnalysisJob>::new()),
+            Condvar::new(),
+        ));
+        let running = Arc::new(AtomicBool::new(true));
+        let worker_queue = queue.clone();
+        let worker_running = running.clone();
+
+        let handle = thread::spawn(move || {
+            while worker_running.load(Ordering::SeqCst) {
+                let job = {
+                    let (lock, condvar) = &*worker_queue;
+                    let mut jobs = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    while jobs.is_empty() && worker_running.load(Ordering::SeqCst) {
+                        jobs = condvar.wait(jobs).unwrap_or_else(|e| e.into_inner());
+                    }
+                    if !worker_running.load(Ordering::SeqCst) && jobs.is_empty() {
+                        None
+                    } else {
+                        jobs.pop_front()
+                    }
+                };
+
+                let Some(job) = job else {
+                    break;
+                };
+
+                if job.do_qr {
+                    run_qr_analysis(&job, &needs_refresh);
+                }
+                if job.do_ocr {
+                    run_ocr_analysis(&job, &needs_refresh);
+                }
+            }
+        });
+
+        Self {
+            queue,
+            running,
+            handle: Some(handle),
+        }
+    }
+
+    fn enqueue(&self, job: ImageAnalysisJob) {
+        let (lock, condvar) = &*self.queue;
+        let mut jobs = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = jobs
+            .iter_mut()
+            .find(|existing| existing.content_hash == job.content_hash)
+        {
+            existing.do_qr |= job.do_qr;
+            existing.do_ocr |= job.do_ocr;
+            return;
+        }
+        if jobs.len() >= MAX_IMAGE_ANALYSIS_QUEUE {
+            jobs.pop_front();
+            log::warn!("Image analysis queue is full; dropped the oldest pending job");
+        }
+        jobs.push_back(job);
+        condvar.notify_one();
+    }
+}
+
+impl Drop for ImageAnalysisWorker {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+        self.queue.1.notify_one();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 pub struct GpuiClipboardService {
     shared: ClipboardShared,
@@ -20,6 +114,7 @@ pub struct GpuiClipboardService {
     /// Set to true by async OCR threads when results are written to DB.
     /// Checked at the start of each poll cycle to trigger a UI refresh.
     needs_refresh: Arc<AtomicBool>,
+    image_analysis: ImageAnalysisWorker,
 }
 
 impl GpuiClipboardService {
@@ -29,11 +124,14 @@ impl GpuiClipboardService {
         if let Err(err) = listener.start(&shared) {
             log::error!("Failed to start clipboard listener: {err}");
         }
+        let needs_refresh = Arc::new(AtomicBool::new(false));
+        let image_analysis = ImageAnalysisWorker::new(needs_refresh.clone());
 
         Self {
             shared,
             listener,
-            needs_refresh: Arc::new(AtomicBool::new(false)),
+            needs_refresh,
+            image_analysis,
         }
     }
 
@@ -167,11 +265,8 @@ impl GpuiClipboardService {
             changed = true;
 
             // ── Post-upsert: run detection for items that need it ──
-            if need_qr {
-                self.process_qr(&item, &db_path);
-            }
-            if need_ocr {
-                self.process_ocr(&item, &db_path);
+            if need_qr || need_ocr {
+                self.process_image_analysis(&item, &db_path, need_qr, need_ocr);
             }
 
             // ── Post-upsert: spawn URL metadata fetch for link items ──
@@ -218,67 +313,19 @@ impl GpuiClipboardService {
         changed || needs_reload
     }
 
-    /// Spawn a background thread for QR detection on an image item.
-    fn process_qr(&self, item: &ClipboardItem, db_path: &str) {
-        let img_path = item.image_path.clone();
-        let content_hash = item.content_hash;
-        let needs_refresh = self.needs_refresh.clone();
-        let db_path = db_path.to_string();
-
-        std::thread::spawn(move || {
-            match crate::core::qr::detect_qr(std::path::Path::new(&img_path)) {
-                Ok(Some(text)) => {
-                    let resolved = crate::core::paths::resolve_db_path(&db_path);
-                    if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
-                        if let Ok(Some(existing)) = db.get_by_hash(content_hash) {
-                            let mut rd = RichData::from_json(&existing.rich_data);
-                            if rd.qr_text.is_none() {
-                                rd.qr_text = Some(text);
-                                let json = rd.to_json();
-                                let _ = db.update_rich_data(existing.id, &json);
-                                needs_refresh.store(true, Ordering::SeqCst);
-                            }
-                        }
-                    }
-                }
-                Ok(None) => { /* no QR code found in this image */ }
-                Err(e) => log::error!("QR detection error: {e}"),
-            }
-        });
-    }
-
-    /// Spawn a background thread for OCR on an image item.
-    /// Results are written to DB asynchronously; the needs_refresh flag
-    /// triggers a UI reload on the next poll cycle.
-    ///
-    /// `db_path` is the user-configured database path from settings (empty
-    /// string means use the default platform data directory).
-    fn process_ocr(&self, item: &ClipboardItem, db_path: &str) {
-        let img_path = item.image_path.clone();
-        let content_hash = item.content_hash;
-        let needs_refresh = self.needs_refresh.clone();
-        let db_path = db_path.to_string();
-
-        std::thread::spawn(move || {
-            let engine = crate::core::ocr::create_ocr_engine();
-            match engine.recognize(std::path::Path::new(&img_path)) {
-                Ok(text) if !text.trim().is_empty() => {
-                    let resolved = crate::core::paths::resolve_db_path(&db_path);
-                    if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
-                        if let Ok(Some(existing)) = db.get_by_hash(content_hash) {
-                            let mut rd = RichData::from_json(&existing.rich_data);
-                            if rd.ocr_text.is_none() {
-                                rd.ocr_text = Some(text);
-                                let json = rd.to_json();
-                                let _ = db.update_rich_data(existing.id, &json);
-                                needs_refresh.store(true, Ordering::SeqCst);
-                            }
-                        }
-                    }
-                }
-                Ok(_) => { /* empty result, skip */ }
-                Err(e) => log::error!("OCR error: {e}"),
-            }
+    fn process_image_analysis(
+        &self,
+        item: &ClipboardItem,
+        db_path: &str,
+        do_qr: bool,
+        do_ocr: bool,
+    ) {
+        self.image_analysis.enqueue(ImageAnalysisJob {
+            img_path: item.image_path.clone(),
+            content_hash: item.content_hash,
+            db_path: db_path.to_string(),
+            do_qr,
+            do_ocr,
         });
     }
 }
@@ -300,5 +347,48 @@ fn compute_size(item: &ClipboardItem) -> i64 {
             }
         }
         ContentType::Image => 0,
+    }
+}
+
+fn run_qr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
+    match crate::core::qr::detect_qr(std::path::Path::new(&job.img_path)) {
+        Ok(Some(text)) => {
+            let resolved = crate::core::paths::resolve_db_path(&job.db_path);
+            if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
+                if let Ok(Some(existing)) = db.get_by_hash(job.content_hash) {
+                    let mut rd = RichData::from_json(&existing.rich_data);
+                    if rd.qr_text.is_none() {
+                        rd.qr_text = Some(text);
+                        let json = rd.to_json();
+                        let _ = db.update_rich_data(existing.id, &json);
+                        needs_refresh.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+        Ok(None) => { /* no QR code found in this image */ }
+        Err(e) => log::error!("QR detection error: {e}"),
+    }
+}
+
+fn run_ocr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
+    let engine = crate::core::ocr::create_ocr_engine();
+    match engine.recognize(std::path::Path::new(&job.img_path)) {
+        Ok(text) if !text.trim().is_empty() => {
+            let resolved = crate::core::paths::resolve_db_path(&job.db_path);
+            if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
+                if let Ok(Some(existing)) = db.get_by_hash(job.content_hash) {
+                    let mut rd = RichData::from_json(&existing.rich_data);
+                    if rd.ocr_text.is_none() {
+                        rd.ocr_text = Some(text);
+                        let json = rd.to_json();
+                        let _ = db.update_rich_data(existing.id, &json);
+                        needs_refresh.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+        Ok(_) => { /* empty result, skip */ }
+        Err(e) => log::error!("OCR error: {e}"),
     }
 }

@@ -28,12 +28,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(target_os = "windows")]
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 #[cfg(target_os = "macos")]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Foreground application information used by the hotkey blacklist UI.
 #[derive(Debug, Clone)]
@@ -56,9 +56,31 @@ static CLIPPI_HWND: AtomicUsize = AtomicUsize::new(0);
 #[cfg(target_os = "windows")]
 static LAST_FOREGROUND_TITLE: Mutex<[u16; 512]> = Mutex::new([0u16; 512]);
 
+#[cfg(target_os = "windows")]
+static FOREGROUND_INFO_CACHE: OnceLock<Mutex<Option<CachedWindowsForegroundAppInfo>>> =
+    OnceLock::new();
+
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct CachedWindowsForegroundAppInfo {
+    pid: u32,
+    app_name: String,
+    icon_base64: String,
+}
+
 /// Last non-Clippi foreground PID (paste target)
 #[cfg(target_os = "macos")]
 static LAST_NON_CLIPPI_PID: AtomicI32 = AtomicI32::new(0);
+
+#[cfg(target_os = "macos")]
+static FOREGROUND_INFO_CACHE: OnceLock<Mutex<Option<CachedForegroundAppInfo>>> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct CachedForegroundAppInfo {
+    pid: i32,
+    info: ForegroundAppInfo,
+}
 
 /// FocusWatcher handle
 pub struct FocusWatcher {
@@ -343,6 +365,17 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             return None;
         }
 
+        let cache = FOREGROUND_INFO_CACHE.get_or_init(|| Mutex::new(None));
+        if let Ok(cache_guard) = cache.lock() {
+            if let Some(cached) = cache_guard.as_ref().filter(|cached| cached.pid == pid) {
+                return Some(ForegroundAppInfo {
+                    app_name: cached.app_name.clone(),
+                    window_title,
+                    icon_base64: cached.icon_base64.clone(),
+                });
+            }
+        }
+
         // --- Get exe path ---
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if process.is_null() {
@@ -399,6 +432,14 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
             String::new()
         };
 
+        if let Ok(mut cache_guard) = cache.lock() {
+            *cache_guard = Some(CachedWindowsForegroundAppInfo {
+                pid,
+                app_name: app_name.clone(),
+                icon_base64: icon_base64.clone(),
+            });
+        }
+
         Some(ForegroundAppInfo {
             app_name,
             window_title,
@@ -411,10 +452,18 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
 fn macos_foreground_info() -> Option<ForegroundAppInfo> {
     let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
     let app = workspace.frontmostApplication()?;
+    let pid = app.processIdentifier();
 
-    if app.processIdentifier() == std::process::id() as i32 {
+    if pid == std::process::id() as i32 {
         // --- Clippi itself — no foreground info to show ---
         return None;
+    }
+
+    let cache = FOREGROUND_INFO_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(cache_guard) = cache.lock() {
+        if let Some(cached) = cache_guard.as_ref().filter(|cached| cached.pid == pid) {
+            return Some(cached.info.clone());
+        }
     }
 
     // --- Use generated methods (nil-safe via Option) ---
@@ -431,5 +480,13 @@ fn macos_foreground_info() -> Option<ForegroundAppInfo> {
         app_name,
         window_title: String::new(), // macOS window title extraction requires extra permissions
         icon_base64,
+    })
+    .inspect(|info| {
+        if let Ok(mut cache_guard) = cache.lock() {
+            *cache_guard = Some(CachedForegroundAppInfo {
+                pid,
+                info: info.clone(),
+            });
+        }
     })
 }

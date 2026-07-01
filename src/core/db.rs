@@ -18,6 +18,14 @@ pub struct Database {
     conn: Connection,
 }
 
+const SOURCE_APP_ICON_INLINE_LIMIT: usize = 256 * 1024;
+
+fn item_select_columns() -> String {
+    format!(
+        "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type"
+    )
+}
+
 impl Database {
     pub fn open(path: &str) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
@@ -27,6 +35,7 @@ impl Database {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA cache_size = -2000;")?;
         let db = Self { conn };
         db.init_schema()?;
+        db.prune_oversized_source_icons()?;
         Ok(db)
     }
 
@@ -104,6 +113,18 @@ impl Database {
         )?;
 
         crate::core::migration::run_db_migrations(&self.conn)?;
+        Ok(())
+    }
+
+    fn prune_oversized_source_icons(&self) -> SqlResult<()> {
+        let changed = self.conn.execute(
+            "UPDATE clipboard_items SET source_app_icon = ''
+             WHERE length(source_app_icon) > ?1",
+            params![SOURCE_APP_ICON_INLINE_LIMIT as i64],
+        )?;
+        if changed > 0 {
+            log::info!("Cleared {changed} oversized source app icon(s)");
+        }
         Ok(())
     }
 
@@ -199,8 +220,9 @@ impl Database {
         let order_col = Self::validate_order_by(order_by);
         let (where_clause, mut filter_params) = filters.db_where();
         let limit_clause = if limit.is_some() { " LIMIT ?" } else { "" };
+        let columns = item_select_columns();
         let query = format!(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size, meta_type
+            "SELECT {columns}
              FROM clipboard_items {} ORDER BY {} DESC{}",
             where_clause, order_col, limit_clause
         );
@@ -213,10 +235,11 @@ impl Database {
     }
 
     pub fn get_by_id(&self, id: i64) -> SqlResult<Option<ClipboardItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size, meta_type
-             FROM clipboard_items WHERE id = ?1",
-        )?;
+        let query = format!(
+            "SELECT {} FROM clipboard_items WHERE id = ?1",
+            item_select_columns()
+        );
+        let mut stmt = self.conn.prepare(&query)?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row_to_item(row)?))
@@ -226,10 +249,11 @@ impl Database {
     }
 
     pub fn get_by_hash(&self, hash: u64) -> SqlResult<Option<ClipboardItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size, meta_type
-             FROM clipboard_items WHERE content_hash = ?1",
-        )?;
+        let query = format!(
+            "SELECT {} FROM clipboard_items WHERE content_hash = ?1",
+            item_select_columns()
+        );
+        let mut stmt = self.conn.prepare(&query)?;
         let mut rows = stmt.query(params![hash as i64])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row_to_item(row)?))
@@ -509,13 +533,14 @@ impl Database {
 
     /// Get all items (excluding image and file types) with tags for sync snapshot.
     pub fn get_all_sync_items_with_tags(&self) -> SqlResult<Vec<ClipboardItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, content_type, full_text, content_hash, created_at, updated_at,
-             image_path, rich_data, file_data, is_favorite, note, source_app_name, source_app_icon, image_width, image_height, size, meta_type
+        let query = format!(
+            "SELECT {}
              FROM clipboard_items
              WHERE content_type NOT IN ('image', 'file')
              ORDER BY updated_at DESC",
-        )?;
+            item_select_columns()
+        );
+        let mut stmt = self.conn.prepare(&query)?;
         let mut items: Vec<ClipboardItem> = stmt
             .query_map([], row_to_item)?
             .collect::<SqlResult<Vec<_>>>()?;

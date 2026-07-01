@@ -29,6 +29,7 @@ static CLIPBOARD_ACCESS: Mutex<()> = Mutex::new(());
 static THUMBNAIL_READY: AtomicBool = AtomicBool::new(false);
 static RECENT_IMAGE_FILE_REFERENCE: Mutex<Option<Instant>> = Mutex::new(None);
 static THUMBNAIL_JOBS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+const MAX_THUMBNAIL_JOBS: usize = 2;
 
 pub(crate) fn take_thumbnail_ready() -> bool {
     THUMBNAIL_READY.swap(false, Ordering::SeqCst)
@@ -48,6 +49,9 @@ pub(crate) fn ensure_thumbnail_for_image(image_path: &str, hash: u64) {
     {
         let mut jobs = THUMBNAIL_JOBS.lock().unwrap_or_else(|e| e.into_inner());
         if jobs.contains(&hash) {
+            return;
+        }
+        if jobs.len() >= MAX_THUMBNAIL_JOBS {
             return;
         }
         jobs.push(hash);
