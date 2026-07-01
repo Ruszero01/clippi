@@ -379,6 +379,7 @@ impl SettingsPanel {
                                     let is_selected = filename == current;
                                     let num = nums.get(i).copied().unwrap_or("●");
                                     let state = state.clone();
+                                    let this = this.clone();
                                     div()
                                         .flex_1()
                                         .h(px(20.))
@@ -415,6 +416,7 @@ impl SettingsPanel {
                                                         filename.to_string();
                                                     s.settings.save();
                                                 });
+                                                this.update(cx, |_panel, cx| cx.notify());
                                             },
                                         )
                                         .child(num.to_string())
