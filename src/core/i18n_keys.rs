@@ -233,6 +233,7 @@ define_i18n! {
     CtxTag:             ("标签", "Tag"),
     CtxOpenImage:       ("打开图片", "Open image"),
     CtxPasteImagePath:  ("粘贴图片路径", "Paste image path"),
+    CtxPasteImageBitmap: ("粘贴为位图", "Paste as bitmap"),
     CtxPasteOcr:        ("粘贴 OCR 文本", "Paste OCR text"),
     CtxDetectQr:        ("识别二维码", "Detect QR Code"),
     CtxPasteAsRgb:      ("粘贴为 RGB", "Paste as RGB"),
@@ -248,6 +249,7 @@ define_i18n! {
     CtxOpenLink:        ("打开链接", "Open Link"),
     CtxOpenFile:        ("打开文件", "Open File"),
     CtxOpenFolder:      ("打开文件夹", "Open Folder"),
+    ToastPreparingBitmapImage: ("正在准备位图图片...", "Preparing bitmap image..."),
 
     // ─── Edit panel ───
     EditTitle:          ("编辑", "Edit"),

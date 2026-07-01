@@ -12,11 +12,11 @@ use crate::core::types::{
 use crate::platform::source;
 use crate::services::favicon;
 use clipboard_rs::common::RustImage;
-use clipboard_rs::common::RustImageData;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,6 +26,55 @@ use std::time::{Duration, Instant};
 use objc2_app_kit::NSPasteboard;
 
 static CLIPBOARD_ACCESS: Mutex<()> = Mutex::new(());
+static THUMBNAIL_READY: AtomicBool = AtomicBool::new(false);
+static RECENT_IMAGE_FILE_REFERENCE: Mutex<Option<Instant>> = Mutex::new(None);
+static THUMBNAIL_JOBS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+pub(crate) fn take_thumbnail_ready() -> bool {
+    THUMBNAIL_READY.swap(false, Ordering::SeqCst)
+}
+
+pub(crate) fn image_thumbnail_path(hash: u64) -> Option<std::path::PathBuf> {
+    let thumb_path = images_dir().join(format!("thumb_{hash:016x}.png"));
+    thumbnail_file_is_valid(&thumb_path).then_some(thumb_path)
+}
+
+pub(crate) fn ensure_thumbnail_for_image(image_path: &str, hash: u64) {
+    let source = std::path::PathBuf::from(image_path);
+    if !source.exists() || image_thumbnail_path(hash).is_some() {
+        return;
+    }
+
+    {
+        let mut jobs = THUMBNAIL_JOBS.lock().unwrap_or_else(|e| e.into_inner());
+        if jobs.contains(&hash) {
+            return;
+        }
+        jobs.push(hash);
+    }
+
+    let img_dir = images_dir();
+    std::thread::spawn(move || {
+        generate_thumbnail(&source, &img_dir, hash);
+        THUMBNAIL_JOBS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|job_hash| *job_hash != hash);
+    });
+}
+
+fn mark_recent_image_file_reference() {
+    *RECENT_IMAGE_FILE_REFERENCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+}
+
+fn has_recent_image_file_reference() -> bool {
+    RECENT_IMAGE_FILE_REFERENCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some_and(|at| at.elapsed() < Duration::from_millis(1500))
+}
 
 pub(crate) fn with_clipboard_access<T>(operation: impl FnOnce() -> T) -> T {
     let _guard = CLIPBOARD_ACCESS
@@ -117,45 +166,20 @@ fn detect_files(
                 // Single image file → treat as Image type for thumbnail preview
                 if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path)
                 {
-                    if let Ok(img) = RustImageData::from_path(&entries[0].path) {
-                        if !img.is_empty() {
-                            let (iw, ih) = img.get_size();
-                            if let Ok(png_bytes) = img.to_png() {
-                                let mut hasher = DefaultHasher::new();
-                                hasher.write(png_bytes.get_bytes());
-                                let hash = hasher.finish();
+                    let path = entries[0].path.clone();
+                    let hash = hash_image_file_reference(&path);
+                    let (iw, ih) = image::image_dimensions(&path).unwrap_or((0, 0));
+                    ensure_thumbnail_for_image(&path, hash);
 
-                                let img_dir = images_dir();
-                                let file_name = format!("{:016x}.png", hash);
-                                let file_path = img_dir.join(&file_name);
-
-                                if !file_path.exists() {
-                                    let path = file_path.clone();
-                                    let dir = img_dir.clone();
-                                    std::thread::spawn(move || {
-                                        if png_bytes
-                                            .save_to_path(path.to_str().unwrap_or(""))
-                                            .is_ok()
-                                        {
-                                            generate_thumbnail(&path, &dir, hash);
-                                        }
-                                    });
-                                } else {
-                                    generate_thumbnail(&file_path, &img_dir, hash);
-                                }
-
-                                return Some(ClipboardItem::new_image(
-                                    0,
-                                    file_path.to_str().unwrap_or(""),
-                                    hash,
-                                    iw,
-                                    ih,
-                                    source_info.as_ref(),
-                                ));
-                            }
-                        }
-                    }
-                    // --- On any failure, fall through to File type below ---
+                    mark_recent_image_file_reference();
+                    return Some(ClipboardItem::new_image(
+                        0,
+                        &path,
+                        hash,
+                        iw,
+                        ih,
+                        source_info.as_ref(),
+                    ));
                 }
 
                 // --- Multi-file, single directory, or single non-image file → File type ---
@@ -179,6 +203,22 @@ fn detect_files(
     None
 }
 
+fn hash_image_file_reference(path: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+
+    if let Ok(meta) = std::fs::metadata(path) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                duration.as_nanos().hash(&mut hasher);
+            }
+        }
+    }
+
+    hasher.finish()
+}
+
 fn detect_image(
     ctx: &ClipboardContext,
     source_info: &Option<SourceAppInfo>,
@@ -194,16 +234,16 @@ fn detect_image(
             let file_path = img_dir.join(&file_name);
 
             if !file_path.exists() {
-                let path = file_path.clone();
-                let dir = img_dir.clone();
-                std::thread::spawn(move || {
-                    if std::fs::write(&path, &png_data).is_ok() {
-                        generate_thumbnail(&path, &dir, hash);
-                    }
-                });
-            } else {
-                generate_thumbnail(&file_path, &img_dir, hash);
+                if let Err(e) = std::fs::write(&file_path, &png_data) {
+                    log::warn!(
+                        "detect_image: failed to save clipboard image cache {}: {e}",
+                        file_path.display()
+                    );
+                    return None;
+                }
             }
+
+            ensure_thumbnail_for_image(file_path.to_str().unwrap_or(""), hash);
 
             return Some(ClipboardItem::new_image(
                 0,
@@ -397,6 +437,9 @@ fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(Vec<u8>, u32, u32
             return Some((raw_png, w, h));
         }
     }
+    if has_recent_image_file_reference() {
+        return None;
+    }
     // --- Fallback: decode + re-encode (e.g. TIFF screenshots on macOS) ---
     let img = ctx.get_image().ok()?;
     if img.is_empty() {
@@ -410,11 +453,32 @@ fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(Vec<u8>, u32, u32
 /// Target thumbnail width matching the card content area logical-pixel width.
 const THUMB_WIDTH: u32 = 310;
 
+fn thumbnail_file_is_valid(path: &std::path::Path) -> bool {
+    let mut header = [0_u8; 24];
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    file.read_exact(&mut header).is_ok() && png_dimensions(&header).is_some()
+}
+
 /// Generate a thumbnail by scaling the full image to match the card width,
 /// preserving aspect ratio. Small images (≤ target width) are kept as-is.
 fn generate_thumbnail(image_path: &std::path::Path, img_dir: &std::path::Path, hash: u64) {
     let thumb_path = img_dir.join(format!("thumb_{:016x}.png", hash));
-    if thumb_path.exists() || !image_path.exists() {
+    if !image_path.exists() {
+        return;
+    }
+    if thumb_path.exists() {
+        if thumbnail_file_is_valid(&thumb_path) {
+            return;
+        }
+        let _ = std::fs::remove_file(&thumb_path);
+    }
+    if let Err(e) = std::fs::create_dir_all(img_dir) {
+        log::warn!(
+            "generate_thumbnail: failed to create image cache dir {}: {e}",
+            img_dir.display()
+        );
         return;
     }
     if let Ok(img) = image::open(image_path) {
@@ -427,7 +491,23 @@ fn generate_thumbnail(image_path: &std::path::Path, img_dir: &std::path::Path, h
             let nh = (h as f64 * ratio) as u32;
             img.resize(THUMB_WIDTH, nh, image::imageops::FilterType::Lanczos3)
         };
-        let _ = thumb.save(&thumb_path);
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = img_dir.join(format!("thumb_{hash:016x}.{unique}.tmp.png"));
+
+        if thumb
+            .save_with_format(&tmp_path, image::ImageFormat::Png)
+            .is_ok()
+            && thumbnail_file_is_valid(&tmp_path)
+            && std::fs::rename(&tmp_path, &thumb_path).is_ok()
+        {
+            THUMBNAIL_READY.store(true, Ordering::SeqCst);
+        } else {
+            let _ = std::fs::remove_file(&tmp_path);
+        }
     }
 }
 

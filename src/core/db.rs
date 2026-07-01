@@ -684,22 +684,17 @@ impl Database {
         rows.collect()
     }
 
-    /// Collect all image file hashes (stem of image_path) currently referenced in the database.
+    /// Collect all image content hashes currently referenced in the database.
     pub fn get_all_image_hashes(&self) -> SqlResult<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT image_path FROM clipboard_items WHERE image_path != ''")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut hashes = Vec::new();
-        for path in rows.flatten() {
-            if let Some(hash) = std::path::Path::new(&path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-            {
-                hashes.push(hash.to_string());
-            }
-        }
-        Ok(hashes)
+        let mut stmt = self.conn.prepare(
+            "SELECT content_hash FROM clipboard_items
+             WHERE content_type = 'image' AND image_path != ''",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        Ok(rows
+            .flatten()
+            .map(|hash| format!("{:016x}", hash as u64))
+            .collect())
     }
 
     /// Prune oldest non-favorite items when total exceeds max_items.

@@ -191,6 +191,23 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    pub(crate) fn sync_items_from_state_for_usage(&mut self, cx: &mut Context<Self>) {
+        self.sync_items_from_state(cx);
+        if self.state.read(cx).settings.auto_scroll_to_top && !self.items.is_empty() {
+            let latest_idx = self
+                .items
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, item)| &item.updated_at)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.select_index_without_scroll(latest_idx, cx);
+            self.scroll_handle
+                .scroll_to_item(latest_idx, ScrollStrategy::Top);
+            cx.notify();
+        }
+    }
+
     pub(crate) fn refresh_settings_from_state(
         &mut self,
         scroll_to_top: bool,
@@ -359,6 +376,7 @@ impl ClipboardListView {
                 }
             }
         }
+        self.sync_items_from_state(cx);
     }
 
     /// Toggle favorite on selected item(s).
@@ -656,35 +674,41 @@ impl ClipboardListView {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.copy_item(item_id, plain));
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "paste" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_item(item_id, plain));
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "paste_plain" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_item_plain(item_id));
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "paste_as_rgb" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_as_rgb(item_id));
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "paste_as_hex" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_as_hex(item_id));
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "batch_paste" => {
                 let ids = self.selected_ids.clone();
                 self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
+                self.sync_items_from_state_for_usage(cx);
             }
             "edit_note" => {
                 if let Some(ref item) = self.context_menu_item {
@@ -726,13 +750,22 @@ impl ClipboardListView {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_image_path(item_id));
+                    self.sync_items_from_state_for_usage(cx);
+                }
+            }
+            "paste_image_bitmap" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state
+                        .update(cx, |s, _cx| s.paste_image_as_bitmap(item_id));
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "paste_ocr" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_ocr(item_id));
-                    self.sync_items_from_state(cx);
+                    self.sync_items_from_state_for_usage(cx);
                 }
             }
             "qr_detect" => {
@@ -790,6 +823,7 @@ impl ClipboardListView {
                     if let Some(item) = self.items.get(index) {
                         let item_id = item.id;
                         self.state.update(cx, |s, _cx| s.copy_item(item_id, plain));
+                        self.sync_items_from_state_for_usage(cx);
                     }
                 }
             }
@@ -798,6 +832,7 @@ impl ClipboardListView {
                     if let Some(item) = self.items.get(index) {
                         let item_id = item.id;
                         self.state.update(cx, |s, _cx| s.paste_item_plain(item_id));
+                        self.sync_items_from_state_for_usage(cx);
                     }
                 }
             }
@@ -805,6 +840,7 @@ impl ClipboardListView {
             "batch_paste" => {
                 let ids = self.selected_ids.clone();
                 self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
+                self.sync_items_from_state_for_usage(cx);
             }
             "batch_tag" => {
                 self.tag_picker_visible = true;
@@ -1306,6 +1342,7 @@ impl Render for ClipboardListView {
                                                                             );
                                                                         },
                                                                     );
+                                                                    this.sync_items_from_state_for_usage(cx);
                                                                 } else if let Some(item) =
                                                                     this.items.get(idx)
                                                                 {
@@ -1318,6 +1355,7 @@ impl Render for ClipboardListView {
                                                                             );
                                                                         },
                                                                     );
+                                                                    this.sync_items_from_state_for_usage(cx);
                                                                 }
                                                             });
                                                         })

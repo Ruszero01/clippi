@@ -6,6 +6,7 @@
 
 use crate::core::db::Database;
 use crate::core::filters::ClipboardFilters;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::AppSettings;
 use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
@@ -59,6 +60,7 @@ pub struct AppState {
     /// remove_unfavorite) is already handled in the data mutation methods
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
+    pub bitmap_paste_finished: Arc<AtomicBool>,
     pub toast_message: Option<String>,
     /// true = warning (red), false = info (green).
     pub toast_is_warning: bool,
@@ -186,6 +188,7 @@ impl AppState {
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
+            bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
             toast_is_warning: false,
             foreground_app_name: String::new(),
@@ -489,6 +492,34 @@ impl AppState {
         self.toast_is_warning = true;
     }
 
+    pub fn take_bitmap_paste_finished(&self) -> bool {
+        self.bitmap_paste_finished.swap(false, Ordering::SeqCst)
+    }
+
+    fn touch_item_usage(&mut self, id: i64) {
+        let mark_dirty = match self.db.get_by_id(id) {
+            Ok(Some(item)) => self.should_mark_sync_dirty(&item),
+            Ok(None) => {
+                log::warn!("touch_item_usage: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("touch_item_usage: db error for {id}: {e}");
+                return;
+            }
+        };
+
+        match self.db.touch_item(id) {
+            Ok(_) => {
+                if mark_dirty {
+                    self.sync_dirty.store(true, Ordering::SeqCst);
+                }
+                self.reload_items();
+            }
+            Err(e) => log::error!("touch_item_usage({id}): {e}"),
+        }
+    }
+
     pub fn toggle_item_tag(&mut self, item_id: i64, tag_id: i64) {
         let item = match self.items.iter().find(|item| item.id == item_id) {
             Some(item) => item,
@@ -660,7 +691,7 @@ impl AppState {
     }
 
     /// Paste the image file path as plain text.
-    pub fn paste_image_path(&self, id: i64) {
+    pub fn paste_image_path(&mut self, id: i64) {
         use crate::platform::paste::{paste_after_delay, restore_paste_target};
 
         let item = match self.db.get_by_id(id) {
@@ -677,10 +708,8 @@ impl AppState {
         if item.image_path.is_empty() {
             return;
         }
-        // Skip self-recording: the path text we write to clipboard is an
-        // internal copy action, not a new clipboard history entry.
-        self.skip_next.store(true, Ordering::SeqCst);
-        crate::services::clipboard_ops::write_text_to_clipboard(&item.image_path);
+        self.touch_item_usage(id);
+        self.write_text_to_clipboard_internal(&item.image_path);
         restore_paste_target();
         let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
         paste_after_delay(shortcuts);
@@ -895,8 +924,8 @@ impl AppState {
             // --- clipboard is internal and should be "consumed" by the listener ---
             // --- (skip one cycle + update baseline seq#) rather than recorded ---
             // as a new history entry. This matches the Slint-era behaviour.
-            self.skip_next.store(true, Ordering::SeqCst);
-            crate::services::clipboard_ops::write_text_to_clipboard(&text);
+            self.touch_item_usage(id);
+            self.write_text_to_clipboard_internal(&text);
             crate::platform::paste::restore_paste_target();
             let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
             crate::platform::paste::paste_after_delay(shortcuts);
@@ -916,13 +945,37 @@ impl AppState {
             });
             return;
         }
-        if crate::services::clipboard_ops::write_text_to_clipboard(&text) {
+        if self.write_text_to_clipboard_internal(&text) {
             self.show_toast("QR code content copied to clipboard");
         }
     }
 
+    fn with_internal_clipboard_write<T>(
+        batch_pasting: &Arc<AtomicBool>,
+        skip_next: &Arc<AtomicBool>,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        batch_pasting.store(true, Ordering::SeqCst);
+        let result = operation();
+        skip_next.store(true, Ordering::SeqCst);
+        batch_pasting.store(false, Ordering::SeqCst);
+        result
+    }
+
+    fn write_item_to_clipboard_internal(&self, item: &ClipboardItem, copy_as_plain_text: bool) {
+        Self::with_internal_clipboard_write(&self.batch_pasting, &self.skip_next, || {
+            crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
+        });
+    }
+
+    fn write_text_to_clipboard_internal(&self, text: &str) -> bool {
+        Self::with_internal_clipboard_write(&self.batch_pasting, &self.skip_next, || {
+            crate::services::clipboard_ops::write_text_to_clipboard(text)
+        })
+    }
+
     /// Copy a single item to the system clipboard (no paste simulation).
-    pub fn copy_item(&self, id: i64, copy_as_plain_text: bool) {
+    pub fn copy_item(&mut self, id: i64, copy_as_plain_text: bool) {
         let item = match self.db.get_by_id(id) {
             Ok(Some(item)) => item,
             Ok(None) => {
@@ -934,11 +987,12 @@ impl AppState {
                 return;
             }
         };
-        crate::services::clipboard_ops::write_item_to_clipboard(&item, copy_as_plain_text);
+        self.touch_item_usage(id);
+        self.write_item_to_clipboard_internal(&item, copy_as_plain_text);
     }
 
     /// Paste a single item: write to clipboard, restore focus, simulate Ctrl+V.
-    pub fn paste_item(&self, id: i64, copy_as_plain_text: bool) {
+    pub fn paste_item(&mut self, id: i64, copy_as_plain_text: bool) {
         use crate::core::types::ContentType;
         use crate::platform::paste::{paste_after_delay, restore_paste_target};
 
@@ -954,9 +1008,11 @@ impl AppState {
             }
         };
 
-        let is_file = item.content_type == ContentType::File;
+        self.touch_item_usage(id);
+        let is_file = item.content_type == ContentType::File
+            || (item.content_type == ContentType::Image && !item.image_path.is_empty());
         let expected = item.full_text.clone();
-        crate::services::clipboard_ops::write_item_to_clipboard(&item, copy_as_plain_text);
+        self.write_item_to_clipboard_internal(&item, copy_as_plain_text);
 
         if !expected.is_empty() && !is_file {
             crate::services::clipboard_ops::verify_clipboard_content(&expected, 200);
@@ -970,8 +1026,67 @@ impl AppState {
         paste_after_delay(shortcuts);
     }
 
+    /// Paste an image as bitmap data for apps that do not accept file references.
+    pub fn paste_image_as_bitmap(&mut self, id: i64) {
+        use crate::core::types::ContentType;
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("paste_image_as_bitmap: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("paste_image_as_bitmap: db error for {id}: {e}");
+                return;
+            }
+        };
+
+        if item.content_type != ContentType::Image || item.image_path.is_empty() {
+            return;
+        }
+
+        self.touch_item_usage(id);
+        self.bitmap_paste_finished.store(false, Ordering::SeqCst);
+        self.show_toast(I18nKey::ToastPreparingBitmapImage.text());
+        let image_path = item.image_path.clone();
+        let item_id = item.id;
+        let batch_pasting = self.batch_pasting.clone();
+        let skip_next = self.skip_next.clone();
+        let bitmap_paste_finished = self.bitmap_paste_finished.clone();
+        let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+
+        std::thread::spawn(move || {
+            let Some(img_data) = crate::services::clipboard_ops::load_image_bitmap(&image_path)
+            else {
+                bitmap_paste_finished.store(true, Ordering::SeqCst);
+                return;
+            };
+
+            let wrote = Self::with_internal_clipboard_write(&batch_pasting, &skip_next, || {
+                crate::services::clipboard_ops::write_bitmap_image_to_clipboard(img_data)
+            });
+
+            if !wrote {
+                log::warn!("paste_image_as_bitmap: failed to write image for item {item_id}");
+                bitmap_paste_finished.store(true, Ordering::SeqCst);
+                return;
+            }
+
+            if !crate::services::clipboard_ops::verify_clipboard_image(500) {
+                log::warn!("paste_image_as_bitmap: image verification failed for item {item_id}");
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            bitmap_paste_finished.store(true, Ordering::SeqCst);
+            restore_paste_target();
+            paste_after_delay(shortcuts);
+        });
+    }
+
     /// Paste a single item as plain text: write plain text to clipboard, restore focus, simulate Ctrl+V.
-    pub fn paste_item_plain(&self, id: i64) {
+    pub fn paste_item_plain(&mut self, id: i64) {
         use crate::platform::paste::{paste_after_delay, restore_paste_target};
 
         let item = match self.db.get_by_id(id) {
@@ -986,8 +1101,9 @@ impl AppState {
             }
         };
 
+        self.touch_item_usage(id);
         let expected = item.full_text.clone();
-        crate::services::clipboard_ops::write_item_to_clipboard(&item, true);
+        self.write_item_to_clipboard_internal(&item, true);
 
         if !expected.is_empty() {
             crate::services::clipboard_ops::verify_clipboard_content(&expected, 200);
@@ -999,7 +1115,7 @@ impl AppState {
     }
 
     /// Convert a color item from HEX to RGB and paste.
-    pub fn paste_as_rgb(&self, id: i64) {
+    pub fn paste_as_rgb(&mut self, id: i64) {
         use crate::core::color::detect_color;
         use crate::platform::paste::{paste_after_delay, restore_paste_target};
 
@@ -1012,8 +1128,9 @@ impl AppState {
         };
 
         if let Some(color) = detect_color(&item.full_text) {
+            self.touch_item_usage(id);
             let rgb_text = color.to_rgb();
-            crate::services::clipboard_ops::write_text_to_clipboard(&rgb_text);
+            self.write_text_to_clipboard_internal(&rgb_text);
             crate::services::clipboard_ops::verify_clipboard_content(&rgb_text, 200);
             restore_paste_target();
             let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
@@ -1022,7 +1139,7 @@ impl AppState {
     }
 
     /// Convert a color item from RGB to HEX and paste.
-    pub fn paste_as_hex(&self, id: i64) {
+    pub fn paste_as_hex(&mut self, id: i64) {
         use crate::core::color::detect_color;
         use crate::platform::paste::{paste_after_delay, restore_paste_target};
 
@@ -1035,8 +1152,9 @@ impl AppState {
         };
 
         if let Some(color) = detect_color(&item.full_text) {
+            self.touch_item_usage(id);
             let hex_text = color.to_css_hex();
-            crate::services::clipboard_ops::write_text_to_clipboard(&hex_text);
+            self.write_text_to_clipboard_internal(&hex_text);
             crate::services::clipboard_ops::verify_clipboard_content(&hex_text, 200);
             restore_paste_target();
             let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
@@ -1045,7 +1163,7 @@ impl AppState {
     }
 
     /// Batch paste multiple items sequentially.
-    pub fn batch_paste(&self, ids: &[i64], copy_as_plain_text: bool) {
+    pub fn batch_paste(&mut self, ids: &[i64], copy_as_plain_text: bool) {
         use crate::core::types::ContentType;
         use crate::platform::paste::{paste_after_delay, paste_sync, restore_paste_target};
 
@@ -1058,6 +1176,10 @@ impl AppState {
             .iter()
             .filter_map(|&id| self.db.get_by_id(id).ok().flatten())
             .collect();
+
+        for item in &items {
+            self.touch_item_usage(item.id);
+        }
 
         let n = items.len();
         for (i, item) in items.iter().enumerate() {
@@ -1075,18 +1197,10 @@ impl AppState {
             crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
 
             // --- Verify clipboard before pasting ---
-            if item.content_type == ContentType::Image {
-                if let Ok(meta) = std::fs::metadata(&item.image_path) {
-                    let size = meta.len();
-                    if !crate::services::clipboard_ops::verify_clipboard_image(size, 300) {
-                        log::warn!(
-                            "batch_paste: image verification failed for item {}",
-                            item.id
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                } else {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+            if item.content_type == ContentType::Image || item.content_type == ContentType::File {
+                if !crate::services::clipboard_ops::verify_clipboard_files(300) {
+                    log::warn!("batch_paste: file verification failed for item {}", item.id);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             } else if item.content_type != ContentType::File {
                 if !crate::services::clipboard_ops::verify_clipboard_content(&expected, 300) {
@@ -1104,22 +1218,15 @@ impl AppState {
             if i < n - 1 {
                 let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
                 paste_sync(shortcuts);
-                let delay = if item.content_type == ContentType::Image {
-                    let file_size = std::fs::metadata(&item.image_path)
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-                    let size_delay = (file_size / 10_000) as u64;
-                    size_delay.clamp(200, 3000)
-                } else {
-                    100
-                };
-                std::thread::sleep(std::time::Duration::from_millis(delay));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             } else {
                 let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
                 paste_after_delay(shortcuts);
             }
         }
         // --- Restore clipboard recording — batch paste is complete. ---
+        self.skip_next
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.batch_pasting
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
@@ -1467,6 +1574,7 @@ mod tests {
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
+            bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
             toast_is_warning: false,
             foreground_app_name: String::new(),

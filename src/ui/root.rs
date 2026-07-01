@@ -330,6 +330,17 @@ impl RootView {
                     }
                     cx.notify();
                 }
+                WindowManagerEvent::BitmapPasteFinished => {
+                    let preparing = I18nKey::ToastPreparingBitmapImage.text();
+                    let current = this.state.read(cx).toast_message.clone();
+                    if current.as_deref() == Some(preparing) {
+                        this._toast_timer = None;
+                        this.toast_timer_expiry = None;
+                        this.toast_actions = None;
+                        this.state.update(cx, |s, _cx| s.clear_toast());
+                        cx.notify();
+                    }
+                }
             },
         );
 
@@ -794,45 +805,54 @@ impl Render for RootView {
                 self._toast_timer = None;
                 self.toast_dismissing = false;
             }
-            self.last_toast_message = current;
+            self.last_toast_message = current.clone();
 
             if has_toast && !self.toast_dismissing && self._toast_timer.is_none() {
-                // Determine duration:
-                //   Some(expiry) → dismiss at that moment
-                //   None          → never auto-dismiss (pinned toast)
-                let expiry = self.toast_timer_expiry.unwrap_or(
-                    std::time::Instant::now() + super::components::toast::TOAST_DURATION,
-                );
-                let dur = expiry
-                    .checked_duration_since(std::time::Instant::now())
-                    .map(|d| d.saturating_sub(TOAST_ANIM_DURATION))
-                    .unwrap_or(Duration::from_secs(0));
-                if dur > Duration::from_secs(0) {
-                    // Bump generation so the enter animation replays for a new message.
-                    self.toast_generation = self.toast_generation.wrapping_add(1);
-                    self._toast_timer =
-                        Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
-                            Timer::after(dur).await;
-                            if let Some(this) = weak_self.upgrade() {
-                                let _ = this.update(cx, |root, root_cx| {
-                                    // --- Start exit animation — same generation so the ---
-                                    // --- transition smoothly reverses from its current value. ---
-                                    root.toast_dismissing = true;
-                                    root_cx.notify();
-                                });
-                                // --- Cleanup after the exit transition finishes, plus a ---
-                                // --- small grace period so the visual zero point is stable. ---
-                                Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60)).await;
+                if current.as_deref() == Some(I18nKey::ToastPreparingBitmapImage.text()) {
+                    if is_new_toast {
+                        self.toast_generation = self.toast_generation.wrapping_add(1);
+                    }
+                    self.toast_timer_expiry = None;
+                    self.toast_actions = None;
+                } else {
+                    // Determine duration:
+                    //   Some(expiry) → dismiss at that moment
+                    //   None          → never auto-dismiss (pinned toast)
+                    let expiry = self.toast_timer_expiry.unwrap_or(
+                        std::time::Instant::now() + super::components::toast::TOAST_DURATION,
+                    );
+                    let dur = expiry
+                        .checked_duration_since(std::time::Instant::now())
+                        .map(|d| d.saturating_sub(TOAST_ANIM_DURATION))
+                        .unwrap_or(Duration::from_secs(0));
+                    if dur > Duration::from_secs(0) {
+                        // Bump generation so the enter animation replays for a new message.
+                        self.toast_generation = self.toast_generation.wrapping_add(1);
+                        self._toast_timer =
+                            Some(cx.spawn(async move |weak_self: WeakEntity<RootView>, cx| {
+                                Timer::after(dur).await;
                                 if let Some(this) = weak_self.upgrade() {
                                     let _ = this.update(cx, |root, root_cx| {
-                                        root.state.update(root_cx, |s, _cx| s.clear_toast());
-                                        root.toast_dismissing = false;
-                                        root.toast_actions = None;
-                                        root.toast_timer_expiry = None;
+                                        // --- Start exit animation — same generation so the ---
+                                        // --- transition smoothly reverses from its current value. ---
+                                        root.toast_dismissing = true;
+                                        root_cx.notify();
                                     });
+                                    // --- Cleanup after the exit transition finishes, plus a ---
+                                    // --- small grace period so the visual zero point is stable. ---
+                                    Timer::after(TOAST_ANIM_DURATION + Duration::from_millis(60))
+                                        .await;
+                                    if let Some(this) = weak_self.upgrade() {
+                                        let _ = this.update(cx, |root, root_cx| {
+                                            root.state.update(root_cx, |s, _cx| s.clear_toast());
+                                            root.toast_dismissing = false;
+                                            root.toast_actions = None;
+                                            root.toast_timer_expiry = None;
+                                        });
+                                    }
                                 }
-                            }
-                        }));
+                            }));
+                    }
                 }
             } else if !has_toast {
                 self._toast_timer = None;

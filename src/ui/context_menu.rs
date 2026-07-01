@@ -195,6 +195,13 @@ impl ContextMenu {
                 fav: false,
             });
             items.push(RawMenuItem {
+                label: I18nKey::CtxPasteImageBitmap.text().into(),
+                action: "paste_image_bitmap".into(),
+                icon: "\u{e626}".into(),
+                danger: false,
+                fav: false,
+            });
+            items.push(RawMenuItem {
                 label: I18nKey::CtxPasteOcr.text().into(),
                 action: "paste_ocr".into(),
                 icon: "\u{e6a5}".into(),

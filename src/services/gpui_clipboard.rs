@@ -55,7 +55,8 @@ impl GpuiClipboardService {
 
     pub fn poll_state(&mut self, state: &mut AppState) -> bool {
         // --- ── Handle async OCR completion ── ---
-        let needs_reload = self.needs_refresh.swap(false, Ordering::SeqCst);
+        let needs_reload = self.needs_refresh.swap(false, Ordering::SeqCst)
+            || crate::platform::clipboard::take_thumbnail_ready();
 
         if self
             .shared
@@ -167,7 +168,7 @@ impl GpuiClipboardService {
 
             // ── Post-upsert: run detection for items that need it ──
             if need_qr {
-                self.process_qr(&item, state);
+                self.process_qr(&item, &db_path);
             }
             if need_ocr {
                 self.process_ocr(&item, &db_path);
@@ -217,21 +218,33 @@ impl GpuiClipboardService {
         changed || needs_reload
     }
 
-    /// Run QR code detection on an image item and persist the result to DB.
-    /// Called synchronously from the poll loop (rqrr is fast enough for this).
-    fn process_qr(&self, item: &ClipboardItem, state: &mut AppState) {
-        match crate::core::qr::detect_qr(std::path::Path::new(&item.image_path)) {
-            Ok(Some(text)) => {
-                let mut rd = RichData::from_json(&item.rich_data);
-                rd.qr_text = Some(text);
-                let json = rd.to_json();
-                if let Ok(Some(existing)) = state.db.get_by_hash(item.content_hash) {
-                    let _ = state.db.update_rich_data(existing.id, &json);
+    /// Spawn a background thread for QR detection on an image item.
+    fn process_qr(&self, item: &ClipboardItem, db_path: &str) {
+        let img_path = item.image_path.clone();
+        let content_hash = item.content_hash;
+        let needs_refresh = self.needs_refresh.clone();
+        let db_path = db_path.to_string();
+
+        std::thread::spawn(move || {
+            match crate::core::qr::detect_qr(std::path::Path::new(&img_path)) {
+                Ok(Some(text)) => {
+                    let resolved = crate::core::paths::resolve_db_path(&db_path);
+                    if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
+                        if let Ok(Some(existing)) = db.get_by_hash(content_hash) {
+                            let mut rd = RichData::from_json(&existing.rich_data);
+                            if rd.qr_text.is_none() {
+                                rd.qr_text = Some(text);
+                                let json = rd.to_json();
+                                let _ = db.update_rich_data(existing.id, &json);
+                                needs_refresh.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
                 }
+                Ok(None) => { /* no QR code found in this image */ }
+                Err(e) => log::error!("QR detection error: {e}"),
             }
-            Ok(None) => { /* no QR code found in this image */ }
-            Err(e) => log::error!("QR detection error: {e}"),
-        }
+        });
     }
 
     /// Spawn a background thread for OCR on an image item.

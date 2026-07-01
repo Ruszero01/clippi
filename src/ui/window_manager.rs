@@ -234,7 +234,10 @@ pub enum WindowManagerEvent {
     /// Sync backend status or settings changed.
     SyncChanged,
     /// Paste shortcut recording completed for an app.
-    PasteShortcutRecorded { app_name: String, shortcut: String },
+    PasteShortcutRecorded {
+        app_name: String,
+        shortcut: String,
+    },
     /// Window was hidden — RootView should dismiss all floating panels.
     WindowHidden,
     /// Main window DPI changed — RootView should force a re-render.
@@ -246,6 +249,7 @@ pub enum WindowManagerEvent {
     UpdateAvailable,
     /// Update progress changed — RootView should refresh toast / settings page.
     UpdateProgress(update::UpdatePhase),
+    BitmapPasteFinished,
     /// Reset RootView to clipboard history page (when always_reset_to_clipboard is on).
     ResetToClipboard,
 }
@@ -512,6 +516,8 @@ impl WindowManager {
         // --- 4. Clipboard changes -> update state + notify ---
         self.poll_clipboard(cx);
 
+        self.poll_bitmap_paste(cx);
+
         // 5. Focus / auto-hide logic (also updates foreground app info in AppState)
         self.poll_focus(cx);
 
@@ -672,6 +678,12 @@ impl WindowManager {
             .update(cx, |state, _cx| self.clipboard_service.poll_state(state));
         if changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
+    }
+
+    fn poll_bitmap_paste(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).take_bitmap_paste_finished() {
+            cx.emit(WindowManagerEvent::BitmapPasteFinished);
         }
     }
 

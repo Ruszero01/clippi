@@ -197,8 +197,12 @@ pub fn delete_item_images(image_path: &str) -> u32 {
     let original = Path::new(image_path);
     let mut deleted: u32 = 0;
 
-    // --- Delete original ---
-    if original.exists() {
+    // Only delete original image files owned by Clippi's cache directory.
+    let img_dir = crate::core::paths::images_dir();
+    let can_delete_original = original
+        .parent()
+        .is_some_and(|parent| parent == img_dir.as_path());
+    if can_delete_original && original.exists() {
         if let Err(e) = fs::remove_file(original) {
             log::warn!("delete_item_images: failed to remove {image_path}: {e}");
         } else {

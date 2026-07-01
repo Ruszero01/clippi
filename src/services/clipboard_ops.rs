@@ -1,79 +1,35 @@
-//! --- Platform-agnostic clipboard write and verification utilities. ---
-//!
-//! Extracted from the Slint `app.rs` callback layer so both the Slint and
-//! --- GPUI frontends can share clipboard write logic. ---
+//! Platform-agnostic clipboard write and verification utilities.
 
 use crate::core::types::{ClipboardItem, ContentType, RichData};
 use crate::platform::clipboard::with_clipboard_context;
-use clipboard_rs::{Clipboard, ClipboardContent};
+use clipboard_rs::common::{RustImage, RustImageData};
+use clipboard_rs::{Clipboard, ClipboardContent, ContentFormat};
 
 /// Write a clipboard item's content to the system clipboard.
 ///
 /// When `copy_as_plain_text` is true, only plain text is written; otherwise
 /// HTML and RTF formats are also restored from `rich_data`.
-/// For images, the PNG file is loaded and written as an image format.
+/// For images, the backing image file is written as a file reference.
 /// For files, file paths are written via `ClipboardContent::Files` (CF_HDROP).
 pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
     with_clipboard_context(|ctx| {
         if item.content_type == ContentType::Image && !item.image_path.is_empty() {
-            #[cfg(target_os = "windows")]
-            {
-                use windows_sys::Win32::System::DataExchange::{
-                    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW,
-                    SetClipboardData,
-                };
-                use windows_sys::Win32::System::Memory::{
-                    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
-                };
-
-                let png_bytes = std::fs::read(&item.image_path).unwrap_or_default();
-                if !png_bytes.is_empty() {
-                    let png_name: Vec<u16> = "PNG\0".encode_utf16().collect();
-                    // SAFETY: `png_name` is a NUL-terminated UTF-16 string.
-                    // `RegisterClipboardFormatW` is a read-only string lookup
-                    // that returns a format ID (non-zero on success).
-                    let png_fmt = unsafe { RegisterClipboardFormatW(png_name.as_ptr()) };
-
-                    // SAFETY: All clipboard API calls here follow the standard
-                    // Windows clipboard sequence: OpenClipboard → EmptyClipboard →
-                    // SetClipboardData → CloseClipboard. `GlobalAlloc`/`GlobalLock`/
-                    // `GlobalUnlock` manage the HGLOBAL memory correctly – ownership
-                    // is transferred to the clipboard via `SetClipboardData` and
-                    // will be freed by the system. The `png_bytes` buffer is
-                    // `copy_nonoverlapping`'d into the HGLOBAL before unlock.
-                    unsafe {
-                        if OpenClipboard(std::ptr::null_mut()) != 0 {
-                            EmptyClipboard();
-                            if png_fmt != 0 {
-                                let mem = GlobalAlloc(GMEM_MOVEABLE, png_bytes.len());
-                                if !mem.is_null() {
-                                    let ptr = GlobalLock(mem);
-                                    if !ptr.is_null() {
-                                        std::ptr::copy_nonoverlapping(
-                                            png_bytes.as_ptr(),
-                                            ptr as *mut u8,
-                                            png_bytes.len(),
-                                        );
-                                        GlobalUnlock(mem);
-                                        SetClipboardData(png_fmt as u32, mem);
-                                    }
-                                }
-                            }
-                            CloseClipboard();
-                        }
-                    }
+            if std::path::Path::new(&item.image_path).is_file() {
+                let contents = vec![ClipboardContent::Files(vec![item.image_path.clone()])];
+                if let Err(e) = Clipboard::set(ctx, contents) {
+                    log::warn!(
+                        "write_item_to_clipboard: failed to set image file clipboard data for {}: {e}",
+                        item.image_path
+                    );
                 }
-            }
-
-            #[cfg(not(target_os = "windows"))]
-            {
-                use clipboard_rs::common::{RustImage, RustImageData};
-                if let Ok(img_data) = RustImageData::from_path(&item.image_path) {
-                    let _ = ctx.set_image(img_data);
-                }
+            } else {
+                log::warn!(
+                    "write_item_to_clipboard: image file does not exist: {}",
+                    item.image_path
+                );
             }
         } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
-            // --- Write file paths to clipboard (CF_HDROP on Windows) ---
+            // Write file paths to clipboard (CF_HDROP on Windows).
             let file_data = crate::core::types::FileData::from_json(&item.file_data);
             let paths: Vec<String> = file_data.files.iter().map(|f| f.path.clone()).collect();
             let contents = vec![ClipboardContent::Files(paths)];
@@ -92,6 +48,30 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
             let _ = Clipboard::set(ctx, contents);
         }
     });
+}
+
+/// Decode an image file for compatibility paste targets that require bitmap data.
+pub fn load_image_bitmap(image_path: &str) -> Option<RustImageData> {
+    match RustImageData::from_path(image_path) {
+        Ok(img_data) => Some(img_data),
+        Err(e) => {
+            log::warn!("load_image_bitmap: failed to load image {image_path}: {e}");
+            None
+        }
+    }
+}
+
+/// Write decoded image data as native image clipboard formats.
+pub fn write_bitmap_image_to_clipboard(img_data: RustImageData) -> bool {
+    with_clipboard_context(|ctx| {
+        if let Err(e) = ctx.set_image(img_data) {
+            log::warn!("write_bitmap_image_to_clipboard: failed to set image data: {e}");
+            false
+        } else {
+            true
+        }
+    })
+    .unwrap_or(false)
 }
 
 /// Write plain text while sharing the same access guard as the listener.
@@ -116,15 +96,26 @@ pub fn verify_clipboard_content(expected: &str, timeout_ms: u64) -> bool {
     }
 }
 
-/// Poll-read clipboard PNG buffer until its length matches `expected_size` or `timeout_ms` expires.
-pub fn verify_clipboard_image(expected_size: u64, timeout_ms: u64) -> bool {
+/// Poll-read the clipboard until a file list is available or `timeout_ms` expires.
+pub fn verify_clipboard_files(timeout_ms: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
-        let matches = with_clipboard_context(|ctx| {
-            ctx.get_buffer("PNG")
-                .is_ok_and(|png_bytes| png_bytes.len() as u64 == expected_size)
-        })
-        .unwrap_or(false);
+        let matches = with_clipboard_context(|ctx| ctx.has(ContentFormat::Files)).unwrap_or(false);
+        if matches {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Poll-read the clipboard until an image format is available or `timeout_ms` expires.
+pub fn verify_clipboard_image(timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let matches = with_clipboard_context(|ctx| ctx.has(ContentFormat::Image)).unwrap_or(false);
         if matches {
             return true;
         }

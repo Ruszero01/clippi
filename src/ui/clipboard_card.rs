@@ -273,6 +273,31 @@ fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
+fn image_preview_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
+    if let Some(thumb) = crate::platform::clipboard::image_thumbnail_path(item.content_hash) {
+        return Some(thumb);
+    }
+    if !item.image_path.is_empty() {
+        crate::platform::clipboard::ensure_thumbnail_for_image(&item.image_path, item.content_hash);
+    }
+    None
+}
+
+fn image_display_name(item: &ClipboardItem) -> String {
+    std::path::Path::new(&item.image_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            std::path::Path::new(&item.full_text)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+        })
+        .unwrap_or("Image")
+        .to_string()
+}
+
 /// Get a cached file system icon for a given file path.
 /// Icons are cached by extension (or "folder" for dirs) in `images_dir()/file_icons/`.
 /// Check if a favicon is cached for a URL's domain.
@@ -680,7 +705,8 @@ impl RenderOnce for ClipboardCard {
         let full_text = &item.full_text; // borrowed — only cloned in the branches that own it
         let img_w = item.image_width;
         let img_h = item.image_height;
-        let img_path = item.image_path.clone();
+        let preview_img_path = image_preview_path(&item);
+        let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
         let tags = item.tags.clone();
         let icon = type_icon(&item);
@@ -1236,7 +1262,9 @@ impl RenderOnce for ClipboardCard {
                             && !std::path::Path::new(&item.image_path).exists();
                         // Show image preview if path is available, otherwise show dimensions.
                         // When the source file is gone, show the path text instead of a blank preview.
-                        if !img_path.is_empty() && !img_missing {
+                        if let Some(preview_img_path) =
+                            preview_img_path.clone().filter(|_| !img_missing)
+                        {
                             let object_fit = if has_qr {
                                 ObjectFit::Contain
                             } else {
@@ -1254,7 +1282,7 @@ impl RenderOnce for ClipboardCard {
                                 .items_center()
                                 .justify_center()
                                 .child(
-                                    gpui::img(std::path::Path::new(&img_path))
+                                    gpui::img(preview_img_path)
                                         .w_full()
                                         .h_full()
                                         .rounded(px(8.))
@@ -1291,22 +1319,48 @@ impl RenderOnce for ClipboardCard {
                             div()
                                 .flex_1()
                                 .flex()
-                                .flex_col()
                                 .items_center()
                                 .justify_center()
-                                .gap(px(4.))
+                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
                                 .child(
                                     div()
-                                        .text_size(px(22.))
-                                        .font_family("iconfont")
-                                        .text_color(text_2)
-                                        .child("\u{e626}"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(text_3)
-                                        .child(format!("{} × {}", img_w, img_h)),
+                                        .w_full()
+                                        .mb(px(6.))
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .h(px(24.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(22.))
+                                                .font_family("iconfont")
+                                                .text_color(text_2)
+                                                .child("\u{e626}"),
+                                        )
+                                        .child(
+                                            div()
+                                                .w_full()
+                                                .h(px(15.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(
+                                                    div()
+                                                        .max_w_full()
+                                                        .text_size(px(11.))
+                                                        .line_height(px(14.))
+                                                        .text_color(text_3)
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .truncate()
+                                                        .child(image_name),
+                                                ),
+                                        ),
                                 )
                         }
                     }
