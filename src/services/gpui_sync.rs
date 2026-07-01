@@ -385,11 +385,15 @@ fn run_sync_cycle_for_backend(
     let local_device = crate::services::backends::local_folder::hostname();
     let mut stats = MergeStats::default();
     let mut remote_hash = None;
+    let mut remote_for_push = None;
     let mut remote_unchanged = false;
 
     match backend.pull(force_push) {
         Ok(mut remote) => {
+            crate::core::migration::migrate_sync_payload(&mut remote);
+            sync::sanitize_payload(&mut remote);
             remote_hash = Some(sync::payload_semantic_hash(&remote));
+            remote_for_push = Some(remote.clone());
             match sync::merge_remote_into_local(db, &mut remote, &local_device) {
                 Ok(merge_stats) => {
                     stats = merge_stats;
@@ -441,7 +445,7 @@ fn run_sync_cycle_for_backend(
         };
     }
 
-    let payload = match sync::build_snapshot(db, &local_device, favorites_only) {
+    let mut payload = match sync::build_snapshot(db, &local_device, favorites_only) {
         Ok(payload) => payload,
         Err(error) => {
             return SyncCycleResult {
@@ -453,6 +457,11 @@ fn run_sync_cycle_for_backend(
             };
         }
     };
+    if let Some(remote) = remote_for_push {
+        payload = sync::merge_payloads(remote, payload);
+        payload.device_name = local_device.clone();
+        payload.synced_at = chrono::Utc::now().to_rfc3339();
+    }
     let snapshot_counts = (payload.items.len() as u32, payload.tags.len() as u32);
 
     if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
@@ -547,6 +556,59 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.snapshot_counts, Some((1, 0)));
+        assert!(!result.did_push);
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn remote_snapshot_is_merged_before_push_in_favorites_only_mode() {
+        let db = Database::open(":memory:").expect("open in-memory database");
+        db.insert_sync_item_raw(&SyncItem {
+            content_type: "plain_text".into(),
+            full_text: "same content".into(),
+            content_hash: 42,
+            created_at: "2026-06-10T08:00:00Z".into(),
+            updated_at: "2026-06-10T08:00:00Z".into(),
+            rich_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            size: 12,
+            tags: vec![],
+            meta_type: String::new(),
+        })
+        .expect("insert local item");
+        let db = Mutex::new(db);
+        let remote = SyncPayload {
+            version: crate::core::migration::SYNC_VERSION,
+            device_name: "remote-device".into(),
+            synced_at: "2026-06-10T09:00:00Z".into(),
+            items: vec![SyncItem {
+                content_type: "plain_text".into(),
+                full_text: "same content".into(),
+                content_hash: 42,
+                created_at: "2026-06-10T08:00:00Z".into(),
+                updated_at: "2026-06-10T09:00:00Z".into(),
+                rich_data: String::new(),
+                is_favorite: false,
+                note: String::new(),
+                size: 12,
+                tags: vec![],
+                meta_type: String::new(),
+            }],
+            tags: vec![],
+            deleted_items: vec![],
+            deleted_tags: vec![],
+            unfavorited_items: vec![],
+        };
+        let backend = MemoryBackend {
+            payload: remote,
+            pushes: AtomicUsize::new(0),
+        };
+
+        let result =
+            run_sync_cycle_for_backend(&backend, &db, &AtomicBool::new(false), true, false);
+
+        assert!(result.success);
         assert!(!result.did_push);
         assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
     }
