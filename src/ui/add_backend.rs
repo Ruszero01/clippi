@@ -391,7 +391,7 @@ impl AddBackendPanel {
                     .child(
                         div()
                             .flex_1()
-                            .child(input_box(&self.folder_input, &self.theme, false)),
+                            .child(input_box(&self.folder_input, &self.theme)),
                     )
                     .child(
                         div()
@@ -498,7 +498,7 @@ impl AddBackendPanel {
                     .flex_col()
                     .gap(px(5.))
                     .child(field_label(I18nKey::BackendServerUrl.text(), text_2))
-                    .child(input_box(&self.url_input, &self.theme, false)),
+                    .child(input_box(&self.url_input, &self.theme)),
             )
             .child(
                 div()
@@ -506,7 +506,7 @@ impl AddBackendPanel {
                     .flex_col()
                     .gap(px(5.))
                     .child(field_label(I18nKey::BackendWebdavPath.text(), text_2))
-                    .child(input_box(&self.webdav_path_input, &self.theme, false)),
+                    .child(input_box(&self.webdav_path_input, &self.theme)),
             )
             .child(
                 div()
@@ -519,7 +519,7 @@ impl AddBackendPanel {
                             .flex_col()
                             .gap(px(5.))
                             .child(field_label(I18nKey::BackendUsername.text(), text_2))
-                            .child(input_box(&self.username_input, &self.theme, false)),
+                            .child(input_box(&self.username_input, &self.theme)),
                     )
                     .child(
                         div()
@@ -528,7 +528,7 @@ impl AddBackendPanel {
                             .flex_col()
                             .gap(px(5.))
                             .child(field_label(I18nKey::BackendPassword.text(), text_2))
-                            .child(input_box(&self.password_input, &self.theme, true)),
+                            .child(input_box(&self.password_input, &self.theme)),
                     ),
             )
             .child(div().h(px(1.)).bg(divider))
@@ -809,7 +809,7 @@ fn field_label(label: &'static str, color: Rgba) -> impl IntoElement {
         .child(label)
 }
 
-fn input_box(input: &Entity<InputState>, theme: &ClippiTheme, password: bool) -> AnyElement {
+fn input_box(input: &Entity<InputState>, theme: &ClippiTheme) -> AnyElement {
     div()
         .h(px(30.))
         .rounded(px(6.))
@@ -826,7 +826,6 @@ fn input_box(input: &Entity<InputState>, theme: &ClippiTheme, password: bool) ->
                 .appearance(false)
                 .bordered(false)
                 .focus_bordered(false)
-                .when(password, |input| input.mask_toggle())
                 .w_full()
                 .h(px(22.))
                 .text_size(px(11.))
