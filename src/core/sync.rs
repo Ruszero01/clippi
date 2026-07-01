@@ -22,7 +22,6 @@ pub enum BackendStatus {
 /// (local folder, WebDAV, etc.). The merge logic lives outside the trait
 /// and is shared across all backends.
 pub trait SyncBackend: Send + Sync {
-    fn name(&self) -> &str;
     fn check_status(&self) -> BackendStatus;
     /// Pull the remote payload. When `bypass_cache` is true, the backend
     /// should skip any mtime/etag optimization and always read the file.
@@ -154,6 +153,9 @@ pub fn build_snapshot(
     favorites_only: bool,
 ) -> Result<SyncPayload, String> {
     let db = db.lock().map_err(|e| format!("db lock: {e}"))?;
+    let _ = db.cleanup_sync_residue().inspect_err(|e| {
+        log::warn!("sync: cleanup_sync_residue failed before snapshot: {e}");
+    });
 
     // --- Collect all live synced items ---
     let items = db
@@ -212,7 +214,7 @@ pub fn build_snapshot(
     }
 
     // --- Only include tags that are referenced by the synced items ---
-    let mut all_tags: Vec<SyncTag> = if used_tag_names.is_empty() {
+    let all_tags: Vec<SyncTag> = if used_tag_names.is_empty() {
         Vec::new()
     } else {
         db.get_all_tags()
@@ -228,7 +230,7 @@ pub fn build_snapshot(
     };
 
     // --- Collect recent tombstones (30-day window) ---
-    let mut deleted_items: Vec<SyncDeletedItem> = db
+    let deleted_items: Vec<SyncDeletedItem> = db
         .get_deleted_items_recent(30)
         .map_err(|e| format!("query item tombstones: {e}"))?
         .into_iter()
@@ -239,7 +241,7 @@ pub fn build_snapshot(
         })
         .collect();
 
-    let mut deleted_tags: Vec<SyncDeletedTag> = db
+    let deleted_tags: Vec<SyncDeletedTag> = db
         .get_deleted_tags_recent(30)
         .map_err(|e| format!("query tag tombstones: {e}"))?
         .into_iter()
@@ -250,7 +252,7 @@ pub fn build_snapshot(
         })
         .collect();
 
-    let mut unfavorited_items: Vec<SyncUnfavoritedItem> = db
+    let unfavorited_items: Vec<SyncUnfavoritedItem> = db
         .get_unfavorited_recent(30)
         .map_err(|e| format!("query unfavorite markers: {e}"))?
         .into_iter()
@@ -265,16 +267,7 @@ pub fn build_snapshot(
     // --- SQL queries return rows in undefined order, and HashMap iteration is ---
     // non-deterministic — without sorting, two devices with identical logical
     // --- state produce different hashes and endlessly overwrite each other. ---
-    for item in &mut sync_items {
-        item.tags.sort_by(|a, b| a.name.cmp(&b.name));
-    }
-    sync_items.sort_by_key(|i| i.content_hash);
-    all_tags.sort_by(|a, b| a.name.cmp(&b.name));
-    deleted_items.sort_by_key(|d| d.content_hash);
-    deleted_tags.sort_by(|a, b| a.name.cmp(&b.name));
-    unfavorited_items.sort_by_key(|u| u.content_hash);
-
-    Ok(SyncPayload {
+    let mut payload = SyncPayload {
         version: crate::core::migration::SYNC_VERSION,
         device_name: device_name.to_string(),
         synced_at: chrono::Utc::now().to_rfc3339(),
@@ -283,7 +276,9 @@ pub fn build_snapshot(
         deleted_items,
         deleted_tags,
         unfavorited_items,
-    })
+    };
+    sanitize_payload(&mut payload);
+    Ok(payload)
 }
 
 // --- ── Merge logic ── ---
@@ -302,6 +297,7 @@ pub fn merge_remote_into_local(
     local_device_name: &str,
 ) -> Result<MergeStats, String> {
     crate::core::migration::migrate_sync_payload(remote);
+    sanitize_payload(remote);
     let mut db = db.lock().map_err(|e| format!("db lock: {e}"))?;
     let mut stats = MergeStats::default();
 
@@ -606,27 +602,51 @@ pub fn merge_remote_into_local(
             }
             Some(local_item) => {
                 let remote_ts = parse_rfc3339(&remote_item.updated_at);
-                let local_ts = Some(local_item.updated_at);
+                let local_ts = local_item.updated_at;
 
-                if remote_ts > local_ts {
-                    db.update_sync_item(local_item.id, remote_item)
-                        .map_err(|e| format!("update item: {e}"))?;
+                let should_promote_remote_favorite = remote_item.is_favorite
+                    && !local_item.is_favorite
+                    && !local_unfavorite_is_at_least_as_new(
+                        &db,
+                        remote_item.content_hash,
+                        &remote_item.updated_at,
+                    );
 
-                    db.clear_item_tags(local_item.id)
-                        .map_err(|e| format!("clear tags: {e}"))?;
-                    for tag_ref in &remote_item.tags {
-                        if let Ok(Some(tag)) = db.get_tag_by_name(&tag_ref.name) {
-                            if let Err(e) = db.add_item_tag(local_item.id, tag.id) {
-                                log::warn!("sync: add_item_tag (update) failed: {e}");
-                            }
-                        }
+                if should_promote_remote_favorite
+                    && remote_ts.is_none_or(|remote| remote <= local_ts)
+                {
+                    let mut promoted = remote_item.clone();
+                    promoted.updated_at = local_ts.to_rfc3339();
+                    db.update_sync_item(local_item.id, &promoted)
+                        .map_err(|e| format!("promote favorite item: {e}"))?;
+                    replace_item_tags(&db, local_item.id, &promoted)?;
+                    if let Err(e) = db.set_item_updated_at(local_item.id, &promoted.updated_at) {
+                        log::error!("sync: set_item_updated_at (promote favorite) failed: {e}");
                     }
+                    if let Err(e) = db.remove_unfavorite(remote_item.content_hash) {
+                        log::warn!("sync: remove_unfavorite (promote favorite) failed: {e}");
+                    }
+                    stats.items_updated += 1;
+                } else if remote_ts.is_some_and(|remote| remote > local_ts) {
+                    let mut incoming = remote_item.clone();
+                    if local_item.is_favorite && !remote_item.is_favorite {
+                        incoming.is_favorite = true;
+                    }
+
+                    db.update_sync_item(local_item.id, &incoming)
+                        .map_err(|e| format!("update item: {e}"))?;
+                    replace_item_tags(&db, local_item.id, &incoming)?;
 
                     // --- Restore remote timestamp: tag operations above may have ---
                     // --- bumped updated_at via touch_item, but the item data is ---
                     // --- semantically identical to what we just pulled from remote. ---
-                    if let Err(e) = db.set_item_updated_at(local_item.id, &remote_item.updated_at) {
+                    if let Err(e) = db.set_item_updated_at(local_item.id, &incoming.updated_at) {
                         log::error!("sync: set_item_updated_at (update) failed: {e}");
+                    }
+                    if incoming.is_favorite {
+                        if let Err(e) = db.remove_unfavorite(remote_item.content_hash) {
+                            log::warn!("sync: remove_unfavorite (update favorite) failed: {e}");
+                        }
                     }
 
                     stats.items_updated += 1;
@@ -681,6 +701,150 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
     }
     payload.unfavorited_items.len().hash(&mut h);
     h.finish()
+}
+
+/// Normalize legacy or conflicted cloud payloads before merge/hash decisions.
+pub fn sanitize_payload(payload: &mut SyncPayload) {
+    let mut item_map: std::collections::HashMap<u64, SyncItem> =
+        std::collections::HashMap::with_capacity(payload.items.len());
+    for item in std::mem::take(&mut payload.items) {
+        match item_map.get(&item.content_hash) {
+            Some(existing) if !rfc3339_newer(&item.updated_at, &existing.updated_at) => {}
+            _ => {
+                item_map.insert(item.content_hash, item);
+            }
+        }
+    }
+
+    let mut tag_map: std::collections::HashMap<String, SyncTag> =
+        std::collections::HashMap::with_capacity(payload.tags.len());
+    for tag in std::mem::take(&mut payload.tags) {
+        match tag_map.get(&tag.name) {
+            Some(existing) if !rfc3339_newer(&tag.updated_at, &existing.updated_at) => {}
+            _ => {
+                tag_map.insert(tag.name.clone(), tag);
+            }
+        }
+    }
+
+    let mut deleted_item_map: std::collections::HashMap<u64, SyncDeletedItem> =
+        std::collections::HashMap::with_capacity(payload.deleted_items.len());
+    for tombstone in std::mem::take(&mut payload.deleted_items) {
+        match deleted_item_map.get(&tombstone.content_hash) {
+            Some(existing) if !rfc3339_newer(&tombstone.deleted_at, &existing.deleted_at) => {}
+            _ => {
+                deleted_item_map.insert(tombstone.content_hash, tombstone);
+            }
+        }
+    }
+
+    let mut deleted_tag_map: std::collections::HashMap<String, SyncDeletedTag> =
+        std::collections::HashMap::with_capacity(payload.deleted_tags.len());
+    for tombstone in std::mem::take(&mut payload.deleted_tags) {
+        match deleted_tag_map.get(&tombstone.name) {
+            Some(existing) if !rfc3339_newer(&tombstone.deleted_at, &existing.deleted_at) => {}
+            _ => {
+                deleted_tag_map.insert(tombstone.name.clone(), tombstone);
+            }
+        }
+    }
+
+    let mut unfavorite_map: std::collections::HashMap<u64, SyncUnfavoritedItem> =
+        std::collections::HashMap::with_capacity(payload.unfavorited_items.len());
+    for marker in std::mem::take(&mut payload.unfavorited_items) {
+        match unfavorite_map.get(&marker.content_hash) {
+            Some(existing) if !rfc3339_newer(&marker.unfavorited_at, &existing.unfavorited_at) => {}
+            _ => {
+                unfavorite_map.insert(marker.content_hash, marker);
+            }
+        }
+    }
+
+    item_map.retain(|hash, item| {
+        if let Some(tombstone) = deleted_item_map.get(hash) {
+            if rfc3339_newer(&item.updated_at, &tombstone.deleted_at) {
+                deleted_item_map.remove(hash);
+            } else {
+                unfavorite_map.remove(hash);
+                return false;
+            }
+        }
+
+        if let Some(marker) = unfavorite_map.get(hash) {
+            if rfc3339_newer(&item.updated_at, &marker.unfavorited_at) {
+                unfavorite_map.remove(hash);
+            } else {
+                item.is_favorite = false;
+                return false;
+            }
+        }
+
+        true
+    });
+
+    tag_map.retain(|name, tag| {
+        if let Some(tombstone) = deleted_tag_map.get(name) {
+            if rfc3339_newer(&tag.updated_at, &tombstone.deleted_at) {
+                deleted_tag_map.remove(name);
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    });
+
+    for (hash, marker) in unfavorite_map.clone() {
+        if deleted_item_map.get(&hash).is_some_and(|deleted| {
+            rfc3339_newer_or_equal(&deleted.deleted_at, &marker.unfavorited_at)
+        }) {
+            unfavorite_map.remove(&hash);
+        }
+    }
+
+    payload.items = item_map.into_values().collect();
+    payload.tags = tag_map.into_values().collect();
+    payload.deleted_items = deleted_item_map.into_values().collect();
+    payload.deleted_tags = deleted_tag_map.into_values().collect();
+    payload.unfavorited_items = unfavorite_map.into_values().collect();
+
+    sort_payload(payload);
+}
+
+fn sort_payload(payload: &mut SyncPayload) {
+    for item in &mut payload.items {
+        item.tags.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    payload.items.sort_by_key(|i| i.content_hash);
+    payload.tags.sort_by(|a, b| a.name.cmp(&b.name));
+    payload.deleted_items.sort_by_key(|d| d.content_hash);
+    payload.deleted_tags.sort_by(|a, b| a.name.cmp(&b.name));
+    payload.unfavorited_items.sort_by_key(|u| u.content_hash);
+}
+
+fn local_unfavorite_is_at_least_as_new(
+    db: &Database,
+    content_hash: u64,
+    remote_updated_at: &str,
+) -> bool {
+    db.get_unfavorite_deleted_at(content_hash)
+        .ok()
+        .flatten()
+        .is_some_and(|unfavorited_at| !rfc3339_newer(remote_updated_at, &unfavorited_at))
+}
+
+fn replace_item_tags(db: &Database, item_id: i64, item: &SyncItem) -> Result<(), String> {
+    db.clear_item_tags(item_id)
+        .map_err(|e| format!("clear tags: {e}"))?;
+    for tag_ref in &item.tags {
+        if let Ok(Some(tag)) = db.get_tag_by_name(&tag_ref.name) {
+            if let Err(e) = db.add_item_tag(item_id, tag.id) {
+                log::warn!("sync: add_item_tag (update) failed: {e}");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Merge `other` into `base`. For items (by content_hash) and tags (by name),
@@ -792,15 +956,7 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
         base.synced_at = other.synced_at;
     }
 
-    // Sort deterministically so semantic hashes match across devices.
-    for item in &mut base.items {
-        item.tags.sort_by(|a, b| a.name.cmp(&b.name));
-    }
-    base.items.sort_by_key(|i| i.content_hash);
-    base.tags.sort_by(|a, b| a.name.cmp(&b.name));
-    base.deleted_items.sort_by_key(|d| d.content_hash);
-    base.deleted_tags.sort_by(|a, b| a.name.cmp(&b.name));
-    base.unfavorited_items.sort_by_key(|u| u.content_hash);
+    sanitize_payload(&mut base);
 
     base
 }
@@ -822,6 +978,19 @@ fn rfc3339_newer(a: &str, b: &str) -> bool {
                  falling back to lexical: a={a:?}, b={b:?}"
             );
             a > b
+        }
+    }
+}
+
+fn rfc3339_newer_or_equal(a: &str, b: &str) -> bool {
+    match (parse_rfc3339(a), parse_rfc3339(b)) {
+        (Some(ta), Some(tb)) => ta >= tb,
+        _ => {
+            log::warn!(
+                "[sync] unparseable RFC3339 timestamp in LWW comparison — \
+                 falling back to lexical: a={a:?}, b={b:?}"
+            );
+            a >= b
         }
     }
 }
@@ -1374,6 +1543,78 @@ mod tests {
 
         // --- Should ignore own tombstone ---
         assert_eq!(stats.items_updated, 0);
+    }
+
+    #[test]
+    fn test_merge_remote_favorite_promotes_newer_local_duplicate() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        insert_item(&db, "same content", 100, false, "2026-06-06T10:00:00Z");
+        let db = std::sync::Mutex::new(db);
+
+        let mut remote = make_remote_payload(
+            vec![SyncItem {
+                content_type: "plain_text".into(),
+                full_text: "same content".into(),
+                content_hash: 100,
+                created_at: "2026-05-01T08:00:00Z".into(),
+                updated_at: "2026-05-01T10:00:00Z".into(),
+                rich_data: String::new(),
+                is_favorite: true,
+                note: "saved on device A".into(),
+                size: 12,
+                tags: vec![],
+                meta_type: String::new(),
+            }],
+            vec![],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        assert_eq!(stats.items_updated, 1);
+        let db = db.lock().unwrap();
+        let item = db.get_by_hash(100).unwrap().unwrap();
+        assert!(item.is_favorite);
+        assert_eq!(item.note, "saved on device A");
+        assert_eq!(
+            item.updated_at,
+            "2026-06-06T10:00:00Z"
+                .parse::<chrono::DateTime<chrono::Utc>>()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_merge_remote_favorite_respects_newer_local_unfavorite() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        insert_item(&db, "same content", 100, false, "2026-06-06T10:00:00Z");
+        db.record_unfavorite(100, "2026-06-06T09:00:00Z", "local-device")
+            .unwrap();
+        let db = std::sync::Mutex::new(db);
+
+        let mut remote = make_remote_payload(
+            vec![SyncItem {
+                content_type: "plain_text".into(),
+                full_text: "same content".into(),
+                content_hash: 100,
+                created_at: "2026-05-01T08:00:00Z".into(),
+                updated_at: "2026-05-01T10:00:00Z".into(),
+                rich_data: String::new(),
+                is_favorite: true,
+                note: "saved on device A".into(),
+                size: 12,
+                tags: vec![],
+                meta_type: String::new(),
+            }],
+            vec![],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local-device").unwrap();
+
+        assert_eq!(stats.items_updated, 0);
+        let db = db.lock().unwrap();
+        let item = db.get_by_hash(100).unwrap().unwrap();
+        assert!(!item.is_favorite);
+        assert!(item.note.is_empty());
     }
 
     #[test]

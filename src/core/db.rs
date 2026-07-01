@@ -766,6 +766,78 @@ impl Database {
         Ok((deleted_items + deleted_tags + unfavorited_items) as u32)
     }
 
+    /// Remove stale sync markers that have been superseded by newer local data.
+    pub fn cleanup_sync_residue(&self) -> SqlResult<u32> {
+        let mut removed = 0;
+
+        let item_tombstones: Vec<(u64, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT content_hash, deleted_at FROM deleted_items")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<SqlResult<Vec<_>>>()?
+        };
+        for (hash, deleted_at) in item_tombstones {
+            if let Some(item) = self.get_by_hash(hash)? {
+                if rfc3339_newer_str(&item.updated_at.to_rfc3339(), &deleted_at) {
+                    removed += self.conn.execute(
+                        "DELETE FROM deleted_items WHERE content_hash = ?1",
+                        params![hash as i64],
+                    )?;
+                }
+            }
+        }
+
+        let unfavorite_markers: Vec<(u64, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT content_hash, unfavorited_at FROM unfavorited_items")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<SqlResult<Vec<_>>>()?
+        };
+        for (hash, unfavorited_at) in unfavorite_markers {
+            let newer_item_refavorite = self.get_by_hash(hash)?.is_some_and(|item| {
+                item.is_favorite
+                    && rfc3339_newer_str(&item.updated_at.to_rfc3339(), &unfavorited_at)
+            });
+            let newer_item_delete = self
+                .get_item_tombstone_deleted_at(hash)?
+                .is_some_and(|deleted_at| rfc3339_newer_or_equal_str(&deleted_at, &unfavorited_at));
+
+            if newer_item_refavorite || newer_item_delete {
+                removed += self.conn.execute(
+                    "DELETE FROM unfavorited_items WHERE content_hash = ?1",
+                    params![hash as i64],
+                )?;
+            }
+        }
+
+        let tag_tombstones: Vec<(String, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT name, deleted_at FROM deleted_tags")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<SqlResult<Vec<_>>>()?
+        };
+        for (name, deleted_at) in tag_tombstones {
+            if let Some(tag) = self.get_tag_by_name(&name)? {
+                if rfc3339_newer_str(&tag.updated_at, &deleted_at) {
+                    removed += self
+                        .conn
+                        .execute("DELETE FROM deleted_tags WHERE name = ?1", params![name])?;
+                }
+            }
+        }
+
+        Ok(removed as u32)
+    }
+
     /// Record an unfavorite marker for sync propagation.
     pub fn record_unfavorite(
         &self,
@@ -1099,6 +1171,26 @@ impl Database {
             tags_added,
             tags_updated,
         })
+    }
+}
+
+fn rfc3339_newer_str(a: &str, b: &str) -> bool {
+    match (
+        a.parse::<chrono::DateTime<chrono::Utc>>(),
+        b.parse::<chrono::DateTime<chrono::Utc>>(),
+    ) {
+        (Ok(a), Ok(b)) => a > b,
+        _ => a > b,
+    }
+}
+
+fn rfc3339_newer_or_equal_str(a: &str, b: &str) -> bool {
+    match (
+        a.parse::<chrono::DateTime<chrono::Utc>>(),
+        b.parse::<chrono::DateTime<chrono::Utc>>(),
+    ) {
+        (Ok(a), Ok(b)) => a >= b,
+        _ => a >= b,
     }
 }
 

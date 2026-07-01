@@ -20,6 +20,14 @@ enum CollectionCheck {
     Error(BackendStatus),
 }
 
+fn is_success_status(status: u16) -> bool {
+    (200..400).contains(&status)
+}
+
+fn is_auth_status(status: u16) -> bool {
+    status == 401 || status == 403
+}
+
 pub fn check_webdav_connection(
     agent: &ureq::Agent,
     url: &str,
@@ -45,11 +53,11 @@ pub fn check_webdav_connection(
         .set("Depth", "0")
         .call()
     {
-        Ok(response) if (200..400).contains(&response.status()) => return Ok(()),
-        Ok(response) if response.status() == 401 || response.status() == 403 => {
+        Ok(response) if is_success_status(response.status()) => return Ok(()),
+        Ok(response) if is_auth_status(response.status()) => {
             return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
         }
-        Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+        Err(ureq::Error::Status(code, _)) if is_auth_status(code) => {
             return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
         }
         _ => {}
@@ -57,12 +65,13 @@ pub fn check_webdav_connection(
 
     for test_url in [file_url.as_str(), base] {
         match agent.head(test_url).set("Authorization", auth).call() {
-            Ok(response) if (200..400).contains(&response.status()) => return Ok(()),
-            Ok(response) if response.status() == 401 || response.status() == 403 => {
+            Ok(response) if is_success_status(response.status()) => return Ok(()),
+            Ok(response) if is_auth_status(response.status()) => {
                 return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
             }
             Err(ureq::Error::Status(404, _)) => continue,
-            Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+            Err(ureq::Error::Status(405, _)) if test_url == base => return Ok(()),
+            Err(ureq::Error::Status(code, _)) if is_auth_status(code) => {
                 return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
             }
             Err(error) => {
@@ -85,14 +94,15 @@ fn check_collection(agent: &ureq::Agent, url: &str, auth: &str) -> CollectionChe
         .set("Depth", "0")
         .call()
     {
-        Ok(response) if (200..400).contains(&response.status()) => CollectionCheck::Exists,
-        Ok(response) if response.status() == 401 || response.status() == 403 => {
+        Ok(response) if is_success_status(response.status()) => CollectionCheck::Exists,
+        Ok(response) if is_auth_status(response.status()) => {
             CollectionCheck::Error(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()))
         }
         Err(ureq::Error::Status(404, _)) | Err(ureq::Error::Status(409, _)) => {
             CollectionCheck::Missing
         }
-        Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+        Err(ureq::Error::Status(405, _)) => CollectionCheck::Exists,
+        Err(ureq::Error::Status(code, _)) if is_auth_status(code) => {
             CollectionCheck::Error(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()))
         }
         Err(error) => CollectionCheck::Error(BackendStatus::Error(format!(
@@ -140,7 +150,8 @@ fn create_collection_path(agent: &ureq::Agent, url: &str, auth: &str) -> Result<
         {
             Ok(response) if (200..300).contains(&response.status()) => {}
             Err(ureq::Error::Status(405, _)) => {}
-            Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+            Err(ureq::Error::Status(409, _)) => {}
+            Err(ureq::Error::Status(code, _)) if is_auth_status(code) => {
                 return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
             }
             Err(error) => {
@@ -225,10 +236,6 @@ impl WebDAVBackend {
 }
 
 impl SyncBackend for WebDAVBackend {
-    fn name(&self) -> &str {
-        &self.config.name
-    }
-
     fn sync_interval(&self) -> u64 {
         self.config.sync_interval_secs.unwrap_or(600)
     }
@@ -248,40 +255,59 @@ impl SyncBackend for WebDAVBackend {
         let url = self.file_url();
         let auth = self.auth_header();
 
-        let mut req = self.agent.get(&url).set("Authorization", &auth);
-
-        // Use If-None-Match for etag-based caching
-        if !bypass_cache {
-            if let Some(etag) = self
-                .last_etag
+        let cached_etag = if bypass_cache {
+            None
+        } else {
+            self.last_etag
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-            {
-                req = req.set("If-None-Match", etag);
+                .clone()
+        };
+        let attempts = if cached_etag.is_some() { 2 } else { 1 };
+
+        for attempt in 0..attempts {
+            let use_cached_etag = attempt == 0;
+            let mut req = self.agent.get(&url).set("Authorization", &auth);
+            if use_cached_etag {
+                if let Some(etag) = cached_etag.as_deref() {
+                    req = req.set("If-None-Match", etag);
+                }
+            }
+
+            match req.call() {
+                Ok(resp) => {
+                    // --- Cache the new ETag ---
+                    if let Some(etag) = resp.header("ETag") {
+                        *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(etag.to_string());
+                    }
+                    let body = resp
+                        .into_string()
+                        .map_err(|e| format!("{}: {e}", I18nKey::SyncErrReadResp.text()))?;
+                    return serde_json::from_str::<SyncPayload>(&body)
+                        .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()));
+                }
+                Err(ureq::Error::Status(304, _)) => {
+                    // --- Not Modified — no changes ---
+                    return Err("@@unchanged".into());
+                }
+                Err(ureq::Error::Status(404, _)) => {
+                    return Err(I18nKey::SyncErrNotFound.text().into());
+                }
+                Err(ureq::Error::Status(code, response))
+                    if use_cached_etag && !is_auth_status(code) =>
+                {
+                    log::warn!(
+                        "[sync] WebDAV conditional GET failed with status {}; retrying without ETag",
+                        response.status()
+                    );
+                    continue;
+                }
+                Err(e) => return Err(format!("{}: {e}", I18nKey::SyncErrPull.text())),
             }
         }
 
-        match req.call() {
-            Ok(resp) => {
-                // --- Cache the new ETag ---
-                if let Some(etag) = resp.header("ETag") {
-                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some(etag.to_string());
-                }
-                let body = resp
-                    .into_string()
-                    .map_err(|e| format!("{}: {e}", I18nKey::SyncErrReadResp.text()))?;
-                serde_json::from_str::<SyncPayload>(&body)
-                    .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))
-            }
-            Err(ureq::Error::Status(304, _)) => {
-                // --- Not Modified — no changes ---
-                Err("@@unchanged".into())
-            }
-            Err(ureq::Error::Status(404, _)) => Err(I18nKey::SyncErrNotFound.text().into()),
-            Err(e) => Err(format!("{}: {e}", I18nKey::SyncErrPull.text())),
-        }
+        Err(I18nKey::SyncErrPull.text().into())
     }
 
     fn push(&self, payload: &SyncPayload) -> Result<(), String> {

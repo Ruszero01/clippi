@@ -441,7 +441,7 @@ fn run_sync_cycle_for_backend(
         };
     }
 
-    let payload = match sync::build_snapshot(db, backend.name(), favorites_only) {
+    let payload = match sync::build_snapshot(db, &local_device, favorites_only) {
         Ok(payload) => payload,
         Err(error) => {
             return SyncCycleResult {
@@ -456,6 +456,7 @@ fn run_sync_cycle_for_backend(
     let snapshot_counts = (payload.items.len() as u32, payload.tags.len() as u32);
 
     if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
+        let _ = backend.post_push_cleanup();
         return SyncCycleResult {
             success: true,
             message: "Up to date".into(),
@@ -500,10 +501,6 @@ mod tests {
     }
 
     impl SyncBackend for MemoryBackend {
-        fn name(&self) -> &str {
-            "test-backend"
-        }
-
         fn check_status(&self) -> BackendStatus {
             BackendStatus::Online
         }

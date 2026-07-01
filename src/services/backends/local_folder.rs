@@ -66,10 +66,6 @@ impl LocalFolderBackend {
 }
 
 impl SyncBackend for LocalFolderBackend {
-    fn name(&self) -> &str {
-        &self.config.name
-    }
-
     fn sync_interval(&self) -> u64 {
         self.config.sync_interval_secs.unwrap_or(60)
     }
