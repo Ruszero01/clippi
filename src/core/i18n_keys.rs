@@ -28,8 +28,6 @@ define_i18n! {
     TabVersion:         ("版本", "Version"),
 
     // ─── Version settings ───
-    VersionCurrent:         ("当前版本", "Current version"),
-    VersionLatest:          ("最新版本", "Latest version"),
     VersionCheckNow:        ("检查更新", "Check now"),
     VersionChecking:        ("正在检查...", "Checking..."),
     VersionUpToDate:        ("已是最新版本", "You're up to date"),
@@ -125,13 +123,6 @@ define_i18n! {
     SettingCopySound:      ("复制音效", "Copy sound"),
     DescCopySoundOn:       ("复制时播放音效提示", "Audible feedback on copy"),
     DescCopySoundOff:      ("静默复制，不播放音效", "Silent copy, no sound"),
-    BtnPreviewSound:       ("试听", "Preview"),
-    SoundKacha:            ("咔嚓", "Crisp"),
-    SoundPenclick:         ("按动笔", "Pen click"),
-    SoundClack:            ("清脆键盘", "Keyboard"),
-    SoundMechkb:           ("机械键盘", "Mechanical"),
-    SoundBlip:             ("小啾啾", "Chirp"),
-    SoundBubble:           ("泡泡", "Bubble"),
 
     // ─── Data settings ───
     SettingDbPath:      ("数据库路径", "Database path"),
@@ -147,22 +138,13 @@ define_i18n! {
     DescMaxItems:       ("设为 0 不限制条目数", "Set to 0 for unlimited items"),
     Unlimited:          ("不限制", "Unlimited"),
     SystemDefault:      ("系统默认", "System default"),
-    DescResetData:      ("将数据和配置恢复到默认位置，原文件不会删除", "Restore data and config to default location. Old files won't be deleted"),
     DescStorageChoose:  ("选择数据库和缓存文件的存储位置：", "Choose where to store the database and cache files:"),
     StoragePortable:    ("便携（安装目录）", "Portable (install directory)"),
-    StorageSystem:      ("系统（AppData）", "System (AppData)"),
-    ConfirmResetTitle:  ("确认重置", "Confirm Reset"),
-    ConfirmResetMsg:    ("确定要恢复默认数据目录吗？应用将自动重启。", "Restore default data directory? The app will restart."),
 
     // ─── Hotkey settings ───
-    HotkeyCurrent:      ("当前快捷键", "Current hotkey"),
-    HotkeyPressHint:    ("按下组合键...", "Press keys..."),
     HotkeyBlacklist:    ("快捷键黑名单", "Hotkey blacklist"),
-    HotkeyAddBlacklist: ("添加应用", "Add app"),
-    HotkeyClear:        ("清除", "Clear"),
 
     // ─── Sync settings ───
-    SyncTitle:          ("同步", "Sync"),
     SyncFavoritesOnly:  ("仅同步收藏", "Favorites only"),
     SyncAddBackend:     ("添加后端", "Add backend"),
     SyncNow:            ("立即同步", "Sync now"),
@@ -177,7 +159,6 @@ define_i18n! {
     BackendLocalDesc:   ("OneDrive、iCloud 等", "OneDrive, iCloud, etc."),
     BackendWebdavDesc:  ("NAS、Nextcloud 等", "NAS, Nextcloud, etc."),
     BackendQuickAdd:    ("快速添加", "Quick add"),
-    BackendName:        ("名称", "Name"),
     BackendFolder:      ("文件夹", "Folder"),
     BackendServerUrl:   ("服务器地址", "Server URL"),
     BackendWebdavPath:  ("同步目录", "Sync directory"),
@@ -194,7 +175,6 @@ define_i18n! {
     BackendPhWebdavPath: ("例如：我的坚果云/Clippi", "e.g. My Files/Clippi"),
     BackendPhUser:      ("用户名", "Username"),
     BackendPhPass:      ("密码", "Password"),
-    BackendNutstore:        ("坚果云", "Nutstore"),
     BackendNameRequired:        ("请输入后端名称", "Please enter a backend name"),
     BackendDeleteConfirmMsg:    ("确定要删除此后端吗？此操作不可撤销", "Delete this backend? This cannot be undone."),
 
@@ -208,28 +188,12 @@ define_i18n! {
     ToastCleanupNone:       ("没有需要清理的文件", "No files to clean up"),
     ToastCleanupDone:       ("清理完成：{0}张图片、{1}个图标、{2}条过期记录", "Cleaned: {0} images, {1} icons, {2} expired records"),
 
-    // ─── Root view / Clipboard list ───
-    ClipboardEmpty:     ("剪贴板为空", "Clipboard is empty"),
-    ClipboardHint:      ("复制内容后将显示在这里", "Copied content will appear here"),
-    SearchPlaceholder:  ("搜索...", "Search..."),
-    FilterAll:          ("全部", "All"),
-    FilterText:         ("文本", "Text"),
-    FilterImage:        ("图片", "Image"),
-    FilterFile:         ("文件", "File"),
-    FilterLink:         ("链接", "Link"),
-    FilterColor:        ("颜色", "Color"),
-    FilterFav:          ("收藏", "Fav"),
-
     // ─── Context menu ───
     CtxCopy:            ("复制", "Copy"),
     CtxPaste:           ("粘贴", "Paste"),
     CtxPastePlain:      ("粘贴纯文本", "Paste Plain Text"),
     CtxEdit:            ("编辑", "Edit"),
-    CtxFavorite:        ("收藏", "Favorite"),
-    CtxUnfavorite:      ("取消收藏", "Unfavorite"),
     CtxDelete:          ("删除", "Delete"),
-    CtxSelectAll:       ("全选", "Select All"),
-    CtxDeselectAll:     ("取消全选", "Deselect All"),
     CtxTag:             ("标签", "Tag"),
     CtxOpenImage:       ("打开图片", "Open image"),
     CtxPasteImagePath:  ("粘贴图片路径", "Paste image path"),
@@ -242,58 +206,59 @@ define_i18n! {
     CtxBatchTag:        ("批量标签", "Batch tag"),
     CtxBatchFav:        ("批量收藏", "Batch fav"),
     CtxBatchDelete:     ("批量删除", "Batch delete"),
-    CtxAddTag:          ("添加标签", "Add Tag"),
-    CtxCopyPlain:       ("复制纯文本", "Copy Plain Text"),
-    CtxCopyHtml:        ("复制 HTML", "Copy HTML"),
-    CtxSaveImage:       ("保存图片", "Save Image"),
     CtxOpenLink:        ("打开链接", "Open Link"),
-    CtxOpenFile:        ("打开文件", "Open File"),
     CtxOpenFolder:      ("打开文件夹", "Open Folder"),
+    CtxFav:             ("收藏", "Fav"),
+    CtxUnfav:           ("取消收藏", "Unfav"),
     ToastPreparingBitmapImage: ("正在准备位图图片...", "Preparing bitmap image..."),
 
     // ─── Edit panel ───
-    EditTitle:          ("编辑", "Edit"),
     EditSave:           ("保存", "Save"),
     EditNote:           ("备注", "Note"),
-    EditContent:        ("内容", "Content"),
+    EditPanelTitle:     ("编辑", "Edit"),
+    EditContentPlaceholder: ("内容...", "Content..."),
+    EditTypeText:       ("纯文本", "Text"),
+    EditTypeColor:      ("颜色", "Color"),
+    EditTypeMarkdown:   ("Markdown", "Markdown"),
+    EditTypeHtml:       ("HTML", "HTML"),
+    EditTypeUrl:        ("链接", "URL"),
+    EditTypePath:       ("路径", "Path"),
+    EditTypeEmail:      ("邮件", "Email"),
+    EditTypePhone:      ("电话", "Phone"),
+    EditTooltipBack:    ("返回", "Back"),
+    EditTooltipUrlDecode:   ("URL解码", "URL Decode"),
+    EditTooltipBase64Decode:("Base64解码", "Base64 Decode"),
+    EditTooltipJsonFormat:  ("JSON格式化", "Format JSON"),
+    EditTooltipTrim:        ("文本修剪", "Trim Text"),
 
     // ─── Tag management ───
     TagNew:             ("新建标签", "New Tag"),
     TagNameLabel:       ("标签名", "Tag name"),
     TagColor:           ("颜色", "Color"),
-    TagDelete:          ("删除标签", "Delete Tag"),
-    TagConfirmDelete:   ("确定要删除此标签吗？", "Delete this tag?"),
-    TagManage:          ("管理标签", "Manage Tags"),
-    TagNoTags:          ("暂无标签", "No tags"),
 
     // ─── Titlebar ───
-    TitlebarPin:        ("固定窗口", "Pin Window"),
-    TitlebarUnpin:      ("取消固定", "Unpin"),
-
-    // ─── Hover toolbar ───
-    HoverCopy:          ("复制", "Copy"),
-    HoverFavorite:      ("收藏", "Favorite"),
-    HoverDelete:        ("删除", "Delete"),
-    HoverNote:          ("备注", "Note"),
+    TitlebarAppName:        ("Clippi", "Clippi"),
 
     // ─── Toast ───
-    ToastCopied:        ("已复制", "Copied"),
-    ToastDeleted:       ("已删除", "Deleted"),
-    ToastSaved:         ("已保存", "Saved"),
-    ToastErrorMsg:      ("操作失败", "Operation failed"),
-    ToastTagAdded:      ("标签已添加", "Tag added"),
-    ToastTagRemoved:    ("标签已移除", "Tag removed"),
     ToastUpdateAvailable: ("发现新版本 {0}", "New version {0} available"),
     ToastUpdateError:   ("更新失败: {0}", "Update failed: {0}"),
+    ToastNoQr:          ("未检测到二维码", "No QR code detected"),
+    ToastNoOcr:         ("未检测到 OCR 文本", "No OCR text detected"),
+    ToastQrCopied:      ("二维码内容已复制", "QR code content copied to clipboard"),
 
-    // ─── Batch operations ───
-    BatchSelect:        ("批量选择", "Select"),
-    BatchDelete:        ("批量删除", "Delete"),
-    BatchTag:           ("批量标签", "Tag"),
-    BatchCopy:          ("批量复制", "Copy"),
-    BatchPaste:         ("批量粘贴", "Paste"),
-    ConfirmDeleteTitle: ("确认删除", "Confirm Delete"),
-    ConfirmDeleteMsg:   ("确定要删除所选项吗？此操作不可撤销。", "Delete selected items? This cannot be undone."),
+    // ─── Confirm dialog ───
+    DialogConfirm:          ("确认", "Confirm"),
+    ConfirmDeleteLabel:     ("删除", "Delete"),
+    ConfirmDeleteSingleTitle:("确认删除", "Confirm Delete"),
+    ConfirmDeleteSingleMsg: ("确定要删除此项吗？", "Are you sure you want to delete this item?"),
+    ConfirmBatchTitle:      ("确认批量删除", "Confirm Batch Delete"),
+    ConfirmBatchMsg:        ("确定要删除 {0} 个条目吗？\n此操作不可撤销。", "Delete {0} selected items?\nThis action cannot be undone."),
+    ConfirmRemoveTitle:     ("从黑名单移除", "Remove from Blacklist"),
+    ConfirmRemoveMsg:       ("停止忽略来自 \"{0}\" 的剪贴板内容？", "Stop ignoring clipboard from \"{0}\"?"),
+    ConfirmRemoveLabel:     ("移除", "Remove"),
+    ConfirmAddBlacklistTitle:("添加到黑名单", "Add to Blacklist"),
+    ConfirmAddBlacklistMsg: ("在 \"{0}\" 中禁用 Clippi 快捷键？\n当此应用激活时将忽略快捷键。", "Disable Clippi hotkey in \"{0}\"?\nHotkey will be ignored while this app is active."),
+    ConfirmAddLabel:        ("添加", "Add"),
 
     // ─── Types / Data ───
     FormatJustNow:      ("刚刚", "Just now"),
@@ -301,7 +266,6 @@ define_i18n! {
     FormatHoursAgo:     ("{0}小时前", "{0} h ago"),
     FormatDaysAgo:      ("{0}天前", "{0} d ago"),
     FormatWeeksAgo:     ("{0}周前", "{0} w ago"),
-    ContentTypeFile:    ("文件", "File"),
     UnknownApp:         ("未知应用", "Unknown app"),
 
     // ─── Registry / Plist errors ───
@@ -341,9 +305,6 @@ define_i18n! {
     // ─── Data operation ───
     ErrDataOp:              ("数据操作失败", "Data operation failed"),
 
-    // ─── Image save ───
-    ImageSaved:             ("图片已保存", "Image saved"),
-
     // ─── Search bar / Filters ───
     FilterTextLabel:        ("文本", "Text"),
     FilterRtfLabel:         ("富文本", "RTF"),
@@ -364,7 +325,6 @@ define_i18n! {
     HotkeyNoForeground:     ("无前台应用", "No foreground app"),
     HotkeyPressToRecord:    ("按下新快捷键进行录制", "Press new hotkey to record"),
     HotkeyRecordingIdle:    ("点击开始录制", "Click to start recording"),
-    HotkeyBlacklistEmpty:   ("未添加黑名单应用", "No blacklisted apps"),
     HotkeyBlacklistEmptyHint:("在当前应用中不再唤起 Clippi", "Stop Clippi hotkey in current app"),
     HotkeyConfirmAddTitle:  ("确认添加黑名单", "Confirm Add to Blacklist"),
     HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
@@ -398,26 +358,6 @@ define_i18n! {
     // ─── Tag picker ───
     TagPickerNoTags:        ("暂无标签，请在标签筛选面板中创建", "No tags. Create tags in the tag filter panel."),
 
-    // ─── Edit panel ───
-    EditPanelTitle:         ("编辑", "Edit"),
-    EditContentPlaceholder: ("内容...", "Content..."),
-    EditTypeText:           ("纯文本", "Text"),
-    EditTypeColor:          ("颜色", "Color"),
-    EditTypeMarkdown:       ("Markdown", "Markdown"),
-    EditTypeHtml:           ("HTML", "HTML"),
-    EditTypeUrl:            ("链接", "URL"),
-    EditTypePath:           ("路径", "Path"),
-    EditTypeEmail:          ("邮件", "Email"),
-    EditTypePhone:          ("电话", "Phone"),
-    EditTooltipBack:        ("返回", "Back"),
-    EditTooltipUrlDecode:   ("URL解码", "URL Decode"),
-    EditTooltipBase64Decode:("Base64解码", "Base64 Decode"),
-    EditTooltipJsonFormat:  ("JSON格式化", "Format JSON"),
-    EditTooltipTrim:        ("文本修剪", "Trim Text"),
-
-    // ─── Add backend (additional from settings/sync) ───
-    BackendAddLabel:        ("添加后端", "Add backend"),
-
     // ─── Clipboard card ───
     CardTypeText:           ("文本", "Text"),
     CardTypeImage:          ("图片", "Image"),
@@ -432,36 +372,14 @@ define_i18n! {
     CardTypeRtf:            ("富文本", "RTF"),
     CardTypeUrl:            ("链接", "URL"),
     CardTypePath:           ("路径", "Path"),
-    CardTypeFiles:          ("{0} 个文件", "{0} Files"),
-    CardImageSize:          ("{0} × {1}", "{0} × {1}"),
     CardChars:              ("{0} 字符", "{0} chars"),
     CardFilesCount:         ("{0} 个文件", "{0} files"),
+    CardStaleFile:          ("已失效", "Stale"),
+    CardCrossPlatform:      ("跨平台", "Cross-platform"),
     QuickFileCount:         ("等{0}个文件", "and {0} more"),
 
     // ─── Clipboard list ───
     ListNoItems:            ("暂无条目", "No items yet"),
     ListEmptyHint:          ("复制的内容将显示在这里", "Copied items will appear here"),
     ListNotePlaceholder:    ("添加备注...", "Add a note..."),
-    ListSelectionOrder:     ("{0}", "{0}"),
-
-    // ─── Context menu ───
-    CtxFav:                 ("收藏", "Fav"),
-    CtxUnfav:               ("取消收藏", "Unfav"),
-
-    // ─── Confirm dialog ───
-    DialogConfirm:          ("确认", "Confirm"),
-    ConfirmDeleteLabel:     ("删除", "Delete"),
-    ConfirmDeleteSingleTitle:("确认删除", "Confirm Delete"),
-    ConfirmDeleteSingleMsg: ("确定要删除此项吗？", "Are you sure you want to delete this item?"),
-    ConfirmBatchTitle:      ("确认批量删除", "Confirm Batch Delete"),
-    ConfirmBatchMsg:        ("确定要删除 {0} 个条目吗？\n此操作不可撤销。", "Delete {0} selected items?\nThis action cannot be undone."),
-    ConfirmRemoveTitle:     ("从黑名单移除", "Remove from Blacklist"),
-    ConfirmRemoveMsg:       ("停止忽略来自 \"{0}\" 的剪贴板内容？", "Stop ignoring clipboard from \"{0}\"?"),
-    ConfirmRemoveLabel:     ("移除", "Remove"),
-    ConfirmAddBlacklistTitle:("添加到黑名单", "Add to Blacklist"),
-    ConfirmAddBlacklistMsg: ("在 \"{0}\" 中禁用 Clippi 快捷键？\n当此应用激活时将忽略快捷键。", "Disable Clippi hotkey in \"{0}\"?\nHotkey will be ignored while this app is active."),
-    ConfirmAddLabel:        ("添加", "Add"),
-
-    // ─── Titlebar ───
-    TitlebarAppName:        ("Clippi", "Clippi"),
 }

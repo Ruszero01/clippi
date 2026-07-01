@@ -199,7 +199,7 @@ fn foreign_path_label() -> String {
 }
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn foreign_path_label() -> String {
-    "跨平台".to_string()
+    I18nKey::CardCrossPlatform.text().to_string()
 }
 
 fn has_qr_code(item: &ClipboardItem) -> bool {
@@ -1570,7 +1570,7 @@ impl RenderOnce for ClipboardCard {
                         Some(foreign_path_label())
                     } else if !crate::core::types::path_exists(&item.full_text) {
                         size_label_danger = true;
-                        Some("已失效".to_string())
+                        Some(I18nKey::CardStaleFile.text().to_string())
                     } else {
                         let rd = RichData::from_json(&item.rich_data);
                         rd.drive_label
@@ -1598,7 +1598,7 @@ impl RenderOnce for ClipboardCard {
                     !item.image_path.is_empty() && !std::path::Path::new(&item.image_path).exists();
                 if img_missing {
                     size_label_danger = true;
-                    Some("已失效".to_string())
+                    Some(I18nKey::CardStaleFile.text().to_string())
                 } else if img_w > 0 && img_h > 0 {
                     Some(format!("{}×{}", img_w, img_h))
                 } else {
@@ -1616,7 +1616,7 @@ impl RenderOnce for ClipboardCard {
                         .is_some_and(|f| !std::path::Path::new(&f.path).exists());
                 if file_missing {
                     size_label_danger = true;
-                    Some("已失效".to_string())
+                    Some(I18nKey::CardStaleFile.text().to_string())
                 } else if count > 1 {
                     Some(I18nKey::CardFilesCount.fmt(&[&count.to_string()]))
                 } else if item.size > 0 {

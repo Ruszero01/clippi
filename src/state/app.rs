@@ -822,7 +822,7 @@ impl AppState {
         if let Some(text) = qr_text {
             self.handle_qr_text(text);
         } else {
-            self.show_toast("No QR code detected");
+            self.show_toast(I18nKey::ToastNoQr.text());
         }
     }
 
@@ -866,7 +866,7 @@ impl AppState {
         if let Some(text) = qr_text {
             self.handle_qr_text(text);
         } else {
-            self.show_toast("No QR code detected");
+            self.show_toast(I18nKey::ToastNoQr.text());
         }
     }
 
@@ -930,7 +930,7 @@ impl AppState {
             let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
             crate::platform::paste::paste_after_delay(shortcuts);
         } else {
-            self.show_toast("No OCR text detected");
+            self.show_toast(I18nKey::ToastNoOcr.text());
         }
     }
 
@@ -946,7 +946,7 @@ impl AppState {
             return;
         }
         if self.write_text_to_clipboard_internal(&text) {
-            self.show_toast("QR code content copied to clipboard");
+            self.show_toast(I18nKey::ToastQrCopied.text());
         }
     }
 
