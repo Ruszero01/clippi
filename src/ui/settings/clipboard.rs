@@ -1,11 +1,10 @@
 //! Clipboard settings tab — sort, card height, source app, scroll, copy, hover, OCR, QR.
-//!
-//! --- Matches the original Slint `SettingsTabClipboard.slint` layout. ---
 
 use gpui::*;
 
 use super::SettingsPanel;
 use crate::core::i18n_keys::I18nKey;
+use crate::services::copy_sound::{preview_sound, SOUND_LIST};
 
 impl SettingsPanel {
     pub fn render_clipboard_tab(
@@ -29,7 +28,17 @@ impl SettingsPanel {
         let auto_focus_search = app.settings.auto_focus_search;
         let auto_fetch_url_title = app.settings.auto_fetch_url_title;
         let filter_foreign_paths = app.settings.filter_foreign_paths;
+        let copy_sound_enabled = app.settings.copy_sound_enabled;
+        let copy_sound_file = app.settings.copy_sound_file.clone();
         // --- borrow released here — `app` is a &AppState reference ---
+
+        let theme = self.theme.clone();
+        let surface = theme.surface;
+        let divider = theme.divider;
+        let accent = theme.accent;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
 
         div()
             .flex()
@@ -258,5 +267,160 @@ impl SettingsPanel {
                     });
                 },
             ))
+            // --- Copy Sound card (animated expand/collapse, mirrors backend card) ---
+            .child({
+                let state = state.clone();
+                let this = this.clone();
+                let enabled = copy_sound_enabled;
+                let current = copy_sound_file.clone();
+                let nums = ["①", "②", "③", "④", "⑤", "⑥"];
+                let gen = self.copy_sound_anim_gen;
+                let key = gen.wrapping_add(if enabled { 1 } else { 0 } << 32);
+                let card_h = Self::transition_f32(
+                    window,
+                    cx,
+                    ("copy-sound-h", key),
+                    if enabled { 52.0 } else { 83.0 },
+                    if enabled { 83.0 } else { 52.0 },
+                );
+                let footer_opacity = Self::transition_f32(
+                    window,
+                    cx,
+                    ("copy-sound-fo", key),
+                    if enabled { 0.0 } else { 1.0 },
+                    if enabled { 1.0 } else { 0.0 },
+                );
+
+                div()
+                    .h(px(card_h))
+                    .rounded(px(8.))
+                    .border(px(1.))
+                    .border_color(divider)
+                    .bg(surface)
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    // Header: label + toggle
+                    .child(
+                        div()
+                            .h(px(52.))
+                            .flex_shrink_0()
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(3.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::SettingCopySound.text()),
+                                    )
+                                    .child(div().text_size(px(10.)).text_color(text_3).child(
+                                        if enabled {
+                                            I18nKey::DescCopySoundOn.text()
+                                        } else {
+                                            I18nKey::DescCopySoundOff.text()
+                                        },
+                                    )),
+                            )
+                            .child(crate::ui::components::toggle::render_toggle(
+                                enabled,
+                                "copy-sound",
+                                crate::ui::components::toggle::ToggleColors {
+                                    accent,
+                                    track_off: divider,
+                                },
+                                &mut self.toggle_states,
+                                window,
+                                cx,
+                                {
+                                    let state = state.clone();
+                                    let this = this.clone();
+                                    move |_window, cx| {
+                                        state.update(cx, |s, _cx| {
+                                            s.settings.copy_sound_enabled =
+                                                !s.settings.copy_sound_enabled;
+                                            s.settings.save();
+                                        });
+                                        this.update(cx, |panel, cx| {
+                                            panel.copy_sound_anim_gen =
+                                                panel.copy_sound_anim_gen.wrapping_add(1);
+                                            cx.emit(
+                                                super::SettingsEvent::ClipboardSettingsChanged {
+                                                    reload_items: false,
+                                                    scroll_to_top: false,
+                                                },
+                                            );
+                                        });
+                                    }
+                                },
+                            )),
+                    )
+                    // Footer: sound selector buttons (animated opacity)
+                    .child(
+                        div()
+                            .h(px(31.))
+                            .flex_shrink_0()
+                            .opacity(footer_opacity)
+                            .border_t(px(1.))
+                            .border_color(divider)
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .children(SOUND_LIST.iter().enumerate().map(
+                                |(i, &(filename, _display))| {
+                                    let is_selected = filename == current;
+                                    let num = nums.get(i).copied().unwrap_or("●");
+                                    let state = state.clone();
+                                    div()
+                                        .flex_1()
+                                        .h(px(20.))
+                                        .rounded(px(6.))
+                                        .bg(if is_selected {
+                                            accent
+                                        } else {
+                                            rgba(0x00000000)
+                                        })
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(if is_selected {
+                                            rgb(0xffffff)
+                                        } else {
+                                            text_2
+                                        })
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(move |style| {
+                                            if is_selected {
+                                                style.opacity(0.88)
+                                            } else {
+                                                style.bg(rgba(0x66666610))
+                                            }
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, _window, cx| {
+                                                preview_sound(filename);
+                                                state.update(cx, |s, _cx| {
+                                                    s.settings.copy_sound_file =
+                                                        filename.to_string();
+                                                    s.settings.save();
+                                                });
+                                            },
+                                        )
+                                        .child(num.to_string())
+                                },
+                            )),
+                    )
+            })
     }
 }

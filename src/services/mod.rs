@@ -2,6 +2,7 @@
 
 pub mod backends;
 pub mod clipboard_ops;
+pub mod copy_sound;
 pub mod downloader;
 pub mod favicon;
 pub mod gpui_clipboard;

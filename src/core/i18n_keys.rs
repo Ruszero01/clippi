@@ -120,6 +120,16 @@ define_i18n! {
     DescFilterForeignPathsOff:   ("显示所有平台的路径", "Show all platform paths"),
     DescFetchUrlTitleOn:      ("复制链接时自动获取页面标题", "Fetch page title for URLs"),
     DescFetchUrlTitleOff:     ("仅显示链接地址", "Show URL only"),
+    SettingCopySound:      ("复制音效", "Copy sound"),
+    DescCopySoundOn:       ("复制时播放音效提示", "Audible feedback on copy"),
+    DescCopySoundOff:      ("静默复制，不播放音效", "Silent copy, no sound"),
+    BtnPreviewSound:       ("试听", "Preview"),
+    SoundKacha:            ("咔嚓", "Crisp"),
+    SoundPenclick:         ("按动笔", "Pen click"),
+    SoundClack:            ("清脆键盘", "Keyboard"),
+    SoundMechkb:           ("机械键盘", "Mechanical"),
+    SoundBlip:             ("小啾啾", "Chirp"),
+    SoundBubble:           ("泡泡", "Bubble"),
 
     // ─── Data settings ───
     SettingDbPath:      ("数据库路径", "Database path"),

@@ -153,6 +153,13 @@ impl GpuiClipboardService {
                 log::error!("Failed to upsert clipboard item: {err}");
                 continue;
             }
+
+            // Play copy sound on every successful clipboard detection.
+            // This confirms the copy *action* (not new data) to the user.
+            if state.settings.copy_sound_enabled {
+                crate::services::copy_sound::play_copy_sound(&state.settings.copy_sound_file);
+            }
+
             if state.should_mark_sync_dirty(&item) {
                 state.sync_dirty.store(true, Ordering::SeqCst);
             }

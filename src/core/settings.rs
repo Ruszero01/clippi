@@ -142,6 +142,10 @@ pub struct AppSettings {
     pub auto_check_updates: bool,
     #[serde(default = "default_auto_fetch_url_title")]
     pub auto_fetch_url_title: bool, // auto-fetch page title for link items
+    #[serde(default = "default_copy_sound_enabled")]
+    pub copy_sound_enabled: bool, // play a subtle sound on copy detection
+    #[serde(default = "default_copy_sound_file")]
+    pub copy_sound_file: String, // which sound file to play
     #[serde(default)]
     pub filter_foreign_paths: bool, // hide non-native platform paths
     #[serde(default = "default_cleanup_interval")]
@@ -174,6 +178,14 @@ fn default_auto_check_updates() -> bool {
 
 fn default_auto_fetch_url_title() -> bool {
     true
+}
+
+fn default_copy_sound_enabled() -> bool {
+    true
+}
+
+fn default_copy_sound_file() -> String {
+    "copy_penclick.wav".to_string()
 }
 
 fn default_quick_hotkey() -> String {
@@ -224,6 +236,8 @@ impl Default for AppSettings {
             paste_shortcuts: Vec::new(),
             auto_check_updates: true,
             auto_fetch_url_title: true,
+            copy_sound_enabled: true,
+            copy_sound_file: default_copy_sound_file(),
             filter_foreign_paths: false,
             cleanup_interval: default_cleanup_interval(),
             cleanup_last_date: String::new(),

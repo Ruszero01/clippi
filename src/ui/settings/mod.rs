@@ -90,6 +90,8 @@ pub struct SettingsPanel {
     _db_path_dialog_task: Option<Task<()>>,
     /// Focus-out subscription for the max-items input (auto-save on blur).
     _max_items_focus_sub: gpui::Subscription,
+    /// Animation generation counter for copy-sound card expand/collapse.
+    pub copy_sound_anim_gen: u64,
 }
 
 fn tab_names() -> [&'static str; 6] {
@@ -162,6 +164,7 @@ impl SettingsPanel {
             max_items_input,
             _db_path_dialog_task: None,
             _max_items_focus_sub,
+            copy_sound_anim_gen: 0,
         }
     }
 
