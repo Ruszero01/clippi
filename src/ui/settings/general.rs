@@ -26,6 +26,7 @@ impl SettingsPanel {
         let auto_start = app.settings.auto_start;
         let auto_hide = app.settings.auto_hide;
         let silent_start = app.settings.silent_start;
+        let always_reset = app.settings.always_reset_to_clipboard;
         #[cfg(target_os = "windows")]
         let block_system_behaviors = app.settings.block_system_window_behaviors;
         #[cfg(target_os = "windows")]
@@ -102,6 +103,22 @@ impl SettingsPanel {
                 |state, _this, _window, _cx| {
                     state.update(_cx, |s, _cx| {
                         s.settings.silent_start = !s.settings.silent_start;
+                        s.settings.save();
+                    });
+                },
+            ))
+            // --- Always reset to clipboard on show ---
+            .child(self.render_toggle_row(
+                I18nKey::SettingAlwaysResetToClipboard,
+                I18nKey::DescAlwaysResetToClipboard,
+                I18nKey::DescAlwaysResetToClipboard,
+                always_reset,
+                window,
+                cx,
+                |state, _this, _window, _cx| {
+                    state.update(_cx, |s, _cx| {
+                        s.settings.always_reset_to_clipboard =
+                            !s.settings.always_reset_to_clipboard;
                         s.settings.save();
                     });
                 },

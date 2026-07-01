@@ -192,6 +192,10 @@ impl RootView {
                     });
                     cx.notify();
                 }
+                WindowManagerEvent::ResetToClipboard => {
+                    this.switch_view("clipboard");
+                    cx.notify();
+                }
                 WindowManagerEvent::WindowHidden => {
                     this.needs_auto_focus = true;
                     this.list_view.update(cx, |list, cx| {

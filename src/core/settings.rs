@@ -148,6 +148,8 @@ pub struct AppSettings {
     pub cleanup_interval: String, // cache cleanup frequency: "daily" | "weekly" | "never"
     #[serde(default)]
     pub cleanup_last_date: String, // last cleanup date "YYYY-MM-DD" for periodic scheduling
+    #[serde(default)]
+    pub always_reset_to_clipboard: bool, // always switch to clipboard history when window is shown
 }
 
 fn default_qr_enabled() -> bool {
@@ -225,6 +227,7 @@ impl Default for AppSettings {
             filter_foreign_paths: false,
             cleanup_interval: default_cleanup_interval(),
             cleanup_last_date: String::new(),
+            always_reset_to_clipboard: false,
         }
     }
 }

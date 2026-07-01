@@ -246,6 +246,8 @@ pub enum WindowManagerEvent {
     UpdateAvailable,
     /// Update progress changed — RootView should refresh toast / settings page.
     UpdateProgress(update::UpdatePhase),
+    /// Reset RootView to clipboard history page (when always_reset_to_clipboard is on).
+    ResetToClipboard,
 }
 
 /// Unified window manager entity.
@@ -1161,6 +1163,13 @@ impl WindowManager {
         // --- Reload items from DB (they were cleared on hide) ---
         self.state.update(cx, |state, _cx| state.reload_items());
         cx.emit(WindowManagerEvent::ClipboardChanged);
+
+        // When enabled, reset to clipboard history on every "show" action.
+        // Skip when tray_triggered is true — those are directed navigations
+        // (OpenSettings / OpenVersionSettings) that emit their own events after.
+        if !self.tray_triggered && self.state.read(cx).settings.always_reset_to_clipboard {
+            cx.emit(WindowManagerEvent::ResetToClipboard);
+        }
 
         #[cfg(target_os = "windows")]
         {
