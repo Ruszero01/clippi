@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.3.2"
+version = "0.3.3"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
@@ -12,7 +12,7 @@ build = "build.rs"
 name = "Clippi"
 identifier = "com.clippi.app"
 icon = ["assets/LOGO.icns"]
-version = "0.3.2"
+version = "0.3.3"
 copyright= "Copyright © 2026 Rains. MIT license."
 category = "Utility"
 short_description = "A lightweight clipboard manager"
