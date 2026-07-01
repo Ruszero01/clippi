@@ -4,15 +4,10 @@
 //! Each cleanup task is a standalone function. `run_cleanup` orchestrates
 //! all of them synchronously; callers (startup, poll loop, UI button) go
 //! through that single entry point.
-//!
-//! Also provides point-to-point deletion: when a single clipboard item is
-//! removed, `delete_item_images` cleans its image + thumbnail immediately,
-//! avoiding the need for a full sweep during the session.
 
 use crate::core::db::Database;
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// 30-day expiry for icon cache files and sync tombstones.
@@ -176,69 +171,4 @@ pub fn run_cleanup(db: &Database) -> CleanupStats {
 /// Backward-compatible alias. Prefer `run_cleanup`.
 pub fn cleanup_unused_cache(db: &Database) {
     run_cleanup(db);
-}
-
-// ── Point-to-point helpers ────────────────────────────────────────────
-
-/// Delete the original image and its thumbnail for a clipboard item.
-///
-/// `image_path` is the stored full path from the DB.
-/// The thumbnail is always looked up in `images_dir()` (where
-/// `generate_thumbnail` writes it), regardless of where the original lives.
-///
-/// Returns the number of files actually deleted (0–2). Errors are logged and
-/// swallowed — the next full sweep will catch any leftovers.
-#[allow(dead_code)] // kept for future use
-pub fn delete_item_images(image_path: &str) -> u32 {
-    if image_path.is_empty() {
-        return 0;
-    }
-
-    let original = Path::new(image_path);
-    let mut deleted: u32 = 0;
-
-    // Only delete original image files owned by Clippi's cache directory.
-    let img_dir = crate::core::paths::images_dir();
-    let can_delete_original = original
-        .parent()
-        .is_some_and(|parent| parent == img_dir.as_path());
-    if can_delete_original && original.exists() {
-        if let Err(e) = fs::remove_file(original) {
-            log::warn!("delete_item_images: failed to remove {image_path}: {e}");
-        } else {
-            deleted += 1;
-        }
-    }
-
-    // --- Delete thumbnail (always in images_dir, not next to original) ---
-    if let Some(thumb) = thumbnail_path(original) {
-        if thumb.exists() {
-            if let Err(e) = fs::remove_file(&thumb) {
-                log::warn!(
-                    "delete_item_images: failed to remove thumbnail {}: {e}",
-                    thumb.display()
-                );
-            } else {
-                deleted += 1;
-            }
-        }
-    }
-
-    if deleted > 0 {
-        log::info!("delete_item_images: cleaned {deleted} file(s) for {image_path}");
-    }
-    deleted
-}
-
-/// Derive the thumbnail path from an original image path.
-///
-/// Thumbnails are always written to `images_dir()` by `generate_thumbnail`,
-/// regardless of where the original image lives. This function extracts the
-/// file stem (hash) from the original path and builds the thumbnail path
-/// inside `images_dir()`.
-#[allow(dead_code)] // kept for future use
-fn thumbnail_path(original: &Path) -> Option<PathBuf> {
-    let stem = original.file_stem()?.to_str()?;
-    let img_dir = crate::core::paths::images_dir();
-    Some(img_dir.join(format!("thumb_{stem}.png")))
 }
