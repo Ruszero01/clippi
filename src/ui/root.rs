@@ -259,6 +259,13 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::UpdateProgress(phase) => {
+                    // Don't show the toast when the user is already looking at
+                    // the version tab — the update progress is right there on screen.
+                    let on_version_tab = this.current_view == "settings"
+                        && this.settings_panel.read(cx).active_tab() == 5;
+                    if on_version_tab {
+                        return;
+                    }
                     use crate::services::update::UpdatePhase;
                     match phase {
                         UpdatePhase::Downloading { progress } => {
