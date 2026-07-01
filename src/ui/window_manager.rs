@@ -1899,9 +1899,9 @@ impl WindowManager {
         self.auto_hide = auto_hide;
     }
 
-    /// Apply taskbar icon visibility based on settings.
+    /// Apply taskbar / Dock icon visibility based on settings.
     /// On Windows: toggles WS_EX_TOOLWINDOW extended style.
-    /// On macOS: no-op (tray apps with LSUIElement already hide from Dock).
+    /// On macOS: toggles NSApplication activation policy.
     pub fn apply_taskbar_visibility(&self, hide: bool, _cx: &mut Context<Self>) {
         #[cfg(target_os = "windows")]
         {
@@ -1943,14 +1943,29 @@ impl WindowManager {
                 );
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            let Some(mtm) = objc2::MainThreadMarker::new() else {
+                return;
+            };
+            let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            let policy = if hide {
+                objc2_app_kit::NSApplicationActivationPolicy::Accessory
+            } else {
+                objc2_app_kit::NSApplicationActivationPolicy::Regular
+            };
+            if !app.setActivationPolicy(policy) {
+                log::warn!("Failed to set macOS activation policy for Dock icon visibility");
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             let _ = hide;
             let _ = _cx;
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn set_hide_taskbar_icon(&mut self, hide: bool, cx: &mut Context<Self>) {
         self.apply_taskbar_visibility(hide, cx);
     }

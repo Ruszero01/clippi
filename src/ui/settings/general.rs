@@ -29,7 +29,7 @@ impl SettingsPanel {
         let always_reset = app.settings.always_reset_to_clipboard;
         #[cfg(target_os = "windows")]
         let block_system_behaviors = app.settings.block_system_window_behaviors;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         let hide_taskbar_icon = app.settings.hide_taskbar_icon;
         let theme_str = app.settings.theme.clone();
         let position_mode = app.settings.window_position_mode.clone();
@@ -154,7 +154,7 @@ impl SettingsPanel {
                 )
             });
 
-        // --- Hide taskbar icon (Windows only — macOS tray apps already hide from Dock) ---
+        // --- Hide taskbar / Dock icon ---
         #[cfg(target_os = "windows")]
         let container = container.child({
             let wm = wm.clone();
@@ -172,6 +172,26 @@ impl SettingsPanel {
                         s.settings.hide_taskbar_icon
                     });
                     wm.update(_cx, |wm, cx| wm.set_hide_taskbar_icon(new_val, cx));
+                },
+            )
+        });
+        #[cfg(target_os = "macos")]
+        let container = container.child({
+            let wm = wm.clone();
+            self.render_toggle_row(
+                I18nKey::SettingHideDockIcon,
+                I18nKey::DescHideDockIcon,
+                I18nKey::DescHideDockIcon,
+                hide_taskbar_icon,
+                window,
+                cx,
+                move |state, _this, _window, _cx| {
+                    let hide_dock_icon = state.update(_cx, |s, _cx| {
+                        s.settings.hide_taskbar_icon = !s.settings.hide_taskbar_icon;
+                        s.settings.save();
+                        s.settings.hide_taskbar_icon
+                    });
+                    wm.update(_cx, |wm, cx| wm.set_hide_taskbar_icon(hide_dock_icon, cx));
                 },
             )
         });

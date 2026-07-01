@@ -129,7 +129,7 @@ pub struct AppSettings {
     #[serde(default = "default_qr_enabled")]
     pub qr_enabled: bool, // image QR auto-detection toggle
     #[serde(default)]
-    pub hide_taskbar_icon: bool, // hide taskbar icon when window is shown (Windows only)
+    pub hide_taskbar_icon: bool, // hide taskbar icon on Windows, Dock icon on macOS
     #[serde(default)]
     pub block_system_window_behaviors: bool, // block system window behaviors (double-click maximize, Aero Snap)
     #[serde(default)]
