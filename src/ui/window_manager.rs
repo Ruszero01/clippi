@@ -2025,10 +2025,6 @@ impl WindowManager {
     pub fn toggle_sync_auto_enabled(&mut self, cx: &mut Context<Self>) {
         let settings = self.state.update(cx, |state, _cx| {
             let next = !state.settings.sync_auto_enabled;
-            if next && state.settings.sync_backends.is_empty() {
-                state.toast_message = Some("Please add a sync service first".into());
-                return None;
-            }
             state.settings.sync_auto_enabled = next;
             if next {
                 // 重新打开：按记忆恢复后端启用状态
