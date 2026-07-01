@@ -25,6 +25,10 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!insertmacro GetParameters
+!insertmacro GetOptions
 !define MUI_ABORTWARNING
 !define MUI_ICON "${STAGING}\app.ico"
 !define MUI_UNICON "${STAGING}\app.ico"
@@ -49,6 +53,35 @@ SetCompressor /SOLID lzma
 ; So WM_CLOSE is not effective; we go straight to taskkill /F.
 !macro CheckAndCloseApp un
 Function ${un}CheckAndCloseApp
+  StrCpy $1 ""
+  ${GetParameters} $2
+  ClearErrors
+  ${GetOptions} $2 "/CLIPPI_PID=" $1
+
+  ${If} ${Silent}
+  ${AndIf} $1 != ""
+    ; Prefer the exact updater process over the window title. Release builds can
+    ; reach the installer before GPUI has finished destroying its hidden window.
+    StrCpy $2 0
+  wait_pid_exit:
+    nsExec::ExecToStack 'cmd /C tasklist /FI "PID eq $1" /FI "IMAGENAME eq ${APP_EXE}" /NH | find /I "${APP_EXE}" >NUL'
+    Pop $3
+    Pop $4
+    StrCmp $3 0 0 done
+    Sleep 250
+    IntOp $2 $2 + 1
+    IntCmp $2 60 kill_pid wait_pid_exit kill_pid
+  kill_pid:
+    DetailPrint "Closing ${APP_NAME} process $1 after waiting for graceful shutdown..."
+    nsExec::ExecToStack 'cmd /C tasklist /FI "PID eq $1" /FI "IMAGENAME eq ${APP_EXE}" /NH | find /I "${APP_EXE}" >NUL'
+    Pop $3
+    Pop $4
+    StrCmp $3 0 0 done
+    nsExec::ExecToLog 'taskkill /F /PID $1 /T'
+    Sleep 500
+    Goto done
+  ${EndIf}
+
   FindWindow $0 "" "${APP_NAME}"
   IntCmp $0 0 done
 

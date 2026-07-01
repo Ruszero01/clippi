@@ -22,7 +22,9 @@ pub fn update_temp_dir() -> PathBuf {
 pub fn launch_nsis_installer(installer_path: &Path, parent_hwnd: isize) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, IsWindow, SW_SHOWNORMAL,
+    };
 
     if !installer_path.is_file() {
         return Err(format!(
@@ -32,7 +34,10 @@ pub fn launch_nsis_installer(installer_path: &Path, parent_hwnd: isize) -> Resul
     }
 
     let operation: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
-    let parameters: Vec<u16> = "/S".encode_utf16().chain(std::iter::once(0)).collect();
+    let parameters: Vec<u16> = format!("/S /CLIPPI_PID={}", std::process::id())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let exe_wide: Vec<u16> = installer_path
         .as_os_str()
         .encode_wide()
@@ -51,14 +56,20 @@ pub fn launch_nsis_installer(installer_path: &Path, parent_hwnd: isize) -> Resul
     // SAFETY: All string arguments are NUL-terminated UTF-16. ShellExecuteW
     // spawns a child process and returns immediately; the installer runs
     // independently after our process exits.
+    let hwnd = if parent_hwnd != 0 && unsafe { IsWindow(parent_hwnd as _) } != 0 {
+        parent_hwnd as _
+    } else {
+        unsafe { GetForegroundWindow() }
+    };
+
     let ret = unsafe {
         ShellExecuteW(
-            parent_hwnd as *mut std::ffi::c_void, // hwnd: parent window for UAC prompt
-            operation.as_ptr(),                   // lpOperation: runas (request elevation)
-            exe_wide.as_ptr(),                    // lpFile: installer path
-            parameters.as_ptr(),                  // lpParameters: silent NSIS install
-            directory_ptr,                        // lpDirectory: installer folder
-            SW_SHOW,                              // nShowCmd
+            hwnd,                // hwnd: parent window for UAC prompt when available
+            operation.as_ptr(),  // lpOperation: runas (request elevation)
+            exe_wide.as_ptr(),   // lpFile: installer path
+            parameters.as_ptr(), // lpParameters: silent NSIS install + current PID
+            directory_ptr,       // lpDirectory: installer folder
+            SW_SHOWNORMAL,       // nShowCmd
         )
     } as isize;
 
