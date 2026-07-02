@@ -702,7 +702,7 @@ impl ClipboardListener for PollingClipboardListener {
                     //    destroyed (HWND → NULL). `WM_RENDERALLFORMATS` fires
                     //    before the window goes away.
                     // 3. `rapid_same`     – same hash, same owner, within a
-                    //    short window (5 s). Catches bursts of format writes
+                    //    short window (2 s). Catches bursts of format writes
                     //    that happen right after the initial copy.
                     // ────────────────────────────────────────────────────
                     let now = Instant::now();
@@ -716,7 +716,7 @@ impl ClipboardListener for PollingClipboardListener {
                     let rapid_same = same_hash
                         && owner == guard.owner
                         && seq.wrapping_sub(guard.seq) > 2 // small deltas already caught by delayed_fill
-                        && now.duration_since(guard.time).as_millis() < 5_000;
+                        && now.duration_since(guard.time).as_millis() < 2_000;
 
                     if delayed_fill || owner_destroyed || rapid_same {
                         drop(guard);
