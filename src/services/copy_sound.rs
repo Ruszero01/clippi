@@ -78,7 +78,6 @@ pub fn play_copy_sound(sound_file: &str) {
         if let Some(t) = *last {
             let elapsed = t.elapsed().as_millis();
             if elapsed < PLAY_DEBOUNCE_MS as u128 {
-                log::info!("[sound] debounce skip — elapsed={elapsed}ms");
                 return;
             }
         }
@@ -87,8 +86,6 @@ pub fn play_copy_sound(sound_file: &str) {
 
     let data = get_sound_data(sound_file)
         .unwrap_or_else(|| get_sound_data(DEFAULT_SOUND).expect("default sound must exist"));
-
-    log::info!("[sound] playing — file={sound_file}");
 
     std::thread::spawn(move || {
         // Create a fresh stream each time so the current default

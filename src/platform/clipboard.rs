@@ -544,11 +544,64 @@ impl PollingClipboardListener {
     }
 }
 
+/// Clipboard owner handle. On Windows this is the HWND of the window
+/// that most recently called `EmptyClipboard()`; it becomes NULL when that
+/// window is destroyed (e.g. after delayed rendering on window close).
+/// On macOS the concept doesn't apply — always returns 0.
+#[cfg(target_os = "windows")]
+fn current_clipboard_owner() -> isize {
+    unsafe { windows_sys::Win32::System::DataExchange::GetClipboardOwner() as isize }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_clipboard_owner() -> isize {
+    0
+}
+
+/// Snapshot of the most recent clipboard detection, used to distinguish
+/// user-initiated copies from system-triggered delayed rendering.
+#[derive(Clone, Copy)]
+struct LastClipState {
+    hash: u64,
+    /// Windows HWND, or 0 on other platforms / no owner.
+    owner: isize,
+    time: Instant,
+    /// Clipboard sequence number at time of last push. A delta of 1
+    /// on the next detection means a single `SetClipboardData` call
+    /// without a preceding `EmptyClipboard` — definitive delayed rendering.
+    seq: u32,
+}
+
+/// Read the current clipboard sequence number.
+/// Windows: `GetClipboardSequenceNumber`; macOS: `NSPasteboard.changeCount`.
+#[cfg(target_os = "windows")]
+fn current_clipboard_seq() -> u32 {
+    unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
+}
+
+#[cfg(target_os = "macos")]
+fn current_clipboard_seq() -> u32 {
+    // `changeCount` doesn't require opening the pasteboard — no
+    // `with_clipboard_access` lock needed, avoiding a deadlock when
+    // called from inside `with_clipboard_context`.
+    unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u32 }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn current_clipboard_seq() -> u32 {
+    0
+}
+
 impl ClipboardListener for PollingClipboardListener {
     fn start(&mut self, shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.running.store(true, Ordering::SeqCst);
 
-        let last_hash = Arc::new(Mutex::new(self.capture_baseline()));
+        let last_state = Arc::new(Mutex::new(LastClipState {
+            hash: self.capture_baseline(),
+            owner: current_clipboard_owner(),
+            time: Instant::now(),
+            seq: current_clipboard_seq(),
+        }));
         let running = self.running.clone();
         let startup_end = self.startup_end.clone();
         let pending = shared.pending.clone();
@@ -638,16 +691,46 @@ impl ClipboardListener for PollingClipboardListener {
                     .is_none_or(|end| end.elapsed().as_millis() > 500);
 
                 if let Some(item) = with_clipboard_context(detect_clipboard_content).flatten() {
-                    // --- Update the hash tracker so external consumers can see ---
-                    // --- the latest hash. We intentionally push even when the ---
-                    // --- hash matches last round — a re-copy of the same content ---
-                    // --- should refresh updated_at and bump the item to the top. ---
-                    // --- The sequence-number fast-path above already skips ---
-                    // --- no-change cycles efficiently. ---
-                    {
-                        let mut last = last_hash.lock().unwrap_or_else(|e| e.into_inner());
-                        *last = item.content_hash;
+                    // ── Duplicate suppression ──────────────────────────
+                    // Three independent signals that together distinguish
+                    // system-triggered delayed rendering from user re-copies:
+                    //
+                    // 1. `delayed_fill`  – seq delta ≤ 2 means only a few
+                    //    `SetClipboardData` calls happened without a preceding
+                    //    `EmptyClipboard` (which would add ≥ 1 extra increment).
+                    // 2. `owner_destroyed` – the clipboard owner window was
+                    //    destroyed (HWND → NULL). `WM_RENDERALLFORMATS` fires
+                    //    before the window goes away.
+                    // 3. `rapid_same`     – same hash, same owner, within a
+                    //    short window (5 s). Catches bursts of format writes
+                    //    that happen right after the initial copy.
+                    // ────────────────────────────────────────────────────
+                    let now = Instant::now();
+                    let owner = current_clipboard_owner();
+                    let seq = current_clipboard_seq();
+                    let mut guard = last_state.lock().unwrap_or_else(|e| e.into_inner());
+
+                    let same_hash = guard.hash == item.content_hash;
+                    let delayed_fill = same_hash && seq.wrapping_sub(guard.seq) <= 2;
+                    let owner_destroyed = same_hash && owner == 0 && guard.owner != 0;
+                    let rapid_same = same_hash
+                        && owner == guard.owner
+                        && seq.wrapping_sub(guard.seq) > 2 // small deltas already caught by delayed_fill
+                        && now.duration_since(guard.time).as_millis() < 5_000;
+
+                    if delayed_fill || owner_destroyed || rapid_same {
+                        drop(guard);
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
                     }
+
+                    *guard = LastClipState {
+                        hash: item.content_hash,
+                        owner,
+                        time: now,
+                        seq,
+                    };
+                    drop(guard);
                     if startup_done {
                         pending.lock().unwrap_or_else(|e| e.into_inner()).push(item);
                     }
