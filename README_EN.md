@@ -22,6 +22,7 @@
     <img src="https://img.shields.io/badge/Rust-2021-%23000000?logo=rust" alt="Rust">
     <img src="https://img.shields.io/badge/GPUI-0.2-%23555555?logo=rust" alt="GPUI">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue" alt="Platform">
+    <a href="https://deepwiki.com/Ruszero01/clippi"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
   </p>
 </div>
 
