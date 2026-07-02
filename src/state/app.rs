@@ -383,6 +383,15 @@ impl AppState {
             Ok(_) => {
                 self.cancel_edit_tag();
                 self.reload_tags();
+                // Incremental update: update tag name/color on all items
+                // in-place so clipboard cards show the new values immediately
+                // without reloading from DB (which would reorder by updated_at).
+                for item in &mut self.items {
+                    if let Some(tag) = item.tags.iter_mut().find(|t| t.id == tag_id) {
+                        tag.name = name.to_string();
+                        tag.color = color.to_string();
+                    }
+                }
             }
             Err(e) => log::error!("Failed to update tag: {e}"),
         }
