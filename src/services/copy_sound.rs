@@ -1,15 +1,20 @@
 //! Copy sound feedback — plays a subtle audible confirmation when
 //! new clipboard content is detected.
 //!
-//! Uses rodio for cross-platform WAV playback. The audio device is
-//! opened lazily on first use and does not block the UI thread.
+//! Uses rodio for cross-platform WAV playback. A fresh audio stream is
+//! created for each playback so the current default output device is
+//! always used (e.g. when the user switches between speakers and
+//! headphones). A short debounce window prevents overlapping sounds
+//! from rapid-fire clipboard changes (e.g. delayed rendering when a
+//! clipboard owner exits).
 //!
 //! Multiple sound variants are embedded at compile time. The active
 //! sound is selected via [`play_copy_sound`] by passing the filename
 //! stored in settings (`copy_sound_file`).
 
 use std::io::Cursor;
-use std::sync::OnceLock;
+use std::sync::Mutex;
+use std::time::Instant;
 
 /// Embedded WAV sound effects (short, subtle click/pop sounds).
 const SOUND_PENCLICK: &[u8] = include_bytes!("../../assets/copy_penclick.wav");
@@ -45,48 +50,55 @@ fn get_sound_data(filename: &str) -> Option<&'static [u8]> {
     }
 }
 
-/// Lazily-initialized audio output handle.
-/// On first call, rodio opens the platform audio device. This is a non-trivial
-/// operation (~50-200ms on some platforms), so we defer it until actually needed.
-static AUDIO_HANDLE: OnceLock<Option<rodio::OutputStreamHandle>> = OnceLock::new();
+/// Timestamp of the last sound playback. Used for debouncing —
+/// rapid-fire clipboard changes within the debounce window
+/// (e.g. delayed rendering when Explorer exits) are suppressed.
+static LAST_PLAY: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Initialize the audio output stream and cache the handle.
-/// Returns None if the platform audio device could not be opened
-/// (e.g., no speakers, driver issues).
-fn ensure_audio() -> Option<&'static rodio::OutputStreamHandle> {
-    AUDIO_HANDLE
-        .get_or_init(|| match rodio::OutputStream::try_default() {
-            Ok((stream, handle)) => {
-                // The stream must live as long as we want to play sounds.
-                // We leak it into a static to keep it alive for the
-                // process lifetime.
-                std::mem::forget(stream);
-                Some(handle)
-            }
-            Err(e) => {
-                log::warn!("copy_sound: failed to open audio device: {e}");
-                None
-            }
-        })
-        .as_ref()
-}
+/// Minimum interval between consecutive sound plays, in milliseconds.
+const PLAY_DEBOUNCE_MS: u64 = 200;
 
 /// Play the copy confirmation sound asynchronously.
 ///
-/// `sound_file` is the filename (e.g. `"copy_kacha_low.wav"`) from settings.
+/// `sound_file` is the filename (e.g. `"copy_kacha.wav"`) from settings.
 /// Falls back to [`DEFAULT_SOUND`] if the given file is not found.
 ///
-/// Spawns a short-lived thread so audio initialization and playback
-/// never block the UI thread. Failures are logged and swallowed --
+/// Creates a fresh audio stream for every playback so the current
+/// system default output device is always used. A 200 ms debounce
+/// prevents overlapping sounds from rapid-fire clipboard changes.
+///
+/// Spawns a short-lived thread so audio initialisation and playback
+/// never block the UI thread. Failures are logged and swallowed —
 /// sound is a non-critical feature.
 pub fn play_copy_sound(sound_file: &str) {
+    // Debounce: suppress calls within the window to avoid overlapping
+    // sounds (e.g. delayed rendering when a clipboard owner exits).
+    {
+        let mut last = LAST_PLAY.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = *last {
+            let elapsed = t.elapsed().as_millis();
+            if elapsed < PLAY_DEBOUNCE_MS as u128 {
+                log::info!("[sound] debounce skip — elapsed={elapsed}ms");
+                return;
+            }
+        }
+        *last = Some(Instant::now());
+    }
+
     let data = get_sound_data(sound_file)
         .unwrap_or_else(|| get_sound_data(DEFAULT_SOUND).expect("default sound must exist"));
 
+    log::info!("[sound] playing — file={sound_file}");
+
     std::thread::spawn(move || {
-        let handle = match ensure_audio() {
-            Some(h) => h,
-            None => return,
+        // Create a fresh stream each time so the current default
+        // audio device is always used (handles device switching).
+        let (_stream, handle) = match rodio::OutputStream::try_default() {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("copy_sound: failed to open audio device: {e}");
+                return;
+            }
         };
 
         let cursor = Cursor::new(data);
@@ -98,7 +110,7 @@ pub fn play_copy_sound(sound_file: &str) {
             }
         };
 
-        let sink = match rodio::Sink::try_new(handle) {
+        let sink = match rodio::Sink::try_new(&handle) {
             Ok(s) => s,
             Err(e) => {
                 log::warn!("copy_sound: failed to create sink: {e}");
@@ -121,9 +133,12 @@ pub fn preview_sound(sound_file: &str) {
     };
 
     std::thread::spawn(move || {
-        let handle = match ensure_audio() {
-            Some(h) => h,
-            None => return,
+        let (_stream, handle) = match rodio::OutputStream::try_default() {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("copy_sound: failed to open audio device: {e}");
+                return;
+            }
         };
 
         let cursor = Cursor::new(data);
@@ -132,7 +147,7 @@ pub fn preview_sound(sound_file: &str) {
             Err(_) => return,
         };
 
-        let sink = match rodio::Sink::try_new(handle) {
+        let sink = match rodio::Sink::try_new(&handle) {
             Ok(s) => s,
             Err(_) => return,
         };
