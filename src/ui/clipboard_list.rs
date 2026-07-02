@@ -623,7 +623,7 @@ impl ClipboardListView {
     }
 
     /// Commit the current note edit to DB and exit edit mode.
-    fn commit_note_edit(&mut self, cx: &mut Context<Self>) {
+    fn commit_note_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_note_id > 0 {
             let id = self.editing_note_id;
             let text = self.note_input.read(cx).value().to_string();
@@ -637,6 +637,8 @@ impl ClipboardListView {
             self.sync_items_from_state(cx);
         }
         self.editing_note_id = -1;
+        // --- Return focus to the list so keyboard navigation continues to work ---
+        self.focus_handle.focus(window);
         cx.notify();
     }
 
@@ -1206,7 +1208,7 @@ impl Render for ClipboardListView {
                                             list_view.update(cx, move |this, cx| {
                                                 // --- Clicking another card while editing → commit first ---
                                                 if this.editing_note_id > 0 {
-                                                    this.commit_note_edit(cx);
+                                                    this.commit_note_edit(window, cx);
                                                 }
                                                 if modifiers.control {
                                                     this.toggle_index(idx, cx);
@@ -1309,11 +1311,13 @@ impl Render for ClipboardListView {
                                                     .on_commit_note({
                                                         let list_for_commit =
                                                             list_for_note_commit.clone();
-                                                        move |_window, cx| {
+                                                        move |window, cx| {
                                                             list_for_commit.update(
                                                                 cx,
                                                                 |this, cx| {
-                                                                    this.commit_note_edit(cx);
+                                                                    this.commit_note_edit(
+                                                                        window, cx,
+                                                                    );
                                                                 },
                                                             );
                                                         }
