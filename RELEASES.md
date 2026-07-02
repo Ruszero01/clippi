@@ -2,7 +2,7 @@
 
 ### 优化
 
-- **macOS 静默功耗与内存优化** — 修复 macOS 前台应用检测在 200ms 轮询中反复将 App 图标 `NSImage` 编码为 PNG/base64 的问题；前台应用图标现在按进程缓存，且 macOS 图标会先缩放到 32×32 后再编码并包裹 `@autoreleasepool`，避免 `ImageIO/libPng/deflate` 持续占用 CPU。Release 实测静默状态约 `58MB` physical footprint、CPU `0%`
+- **macOS 静默功耗与内存优化** — 修复 macOS 前台应用检测在 200ms 轮询中反复将 App 图标 `NSImage` 编码为 PNG/base64 的问题
 - **Windows 前台应用检测优化** — Windows 端同样缓存当前前台进程的应用名和图标，避免轮询中重复 `OpenProcess`、查询进程路径和 HICON 转 PNG；窗口标题仍保持实时更新
 - **旧版超大来源图标清理** — 启动时自动清理历史数据库中超过 256KB 的 `source_app_icon`，查询列表时也会跳过过大的旧图标字段，避免旧版本保存的原始大图标继续拖高启动内存
 - **图片后处理并发限制** — OCR/二维码识别改为单后台 worker 队列处理；缩略图生成最多 2 个并发任务，降低连续复制图片时的内存峰值
@@ -10,10 +10,6 @@
 ### Bug 修复
 
 - **多设备同时同步旧快照回写** — 推送前会先将本地快照与刚拉取的云端快照归并，避免某台设备用较旧的本地 `updated_at` 覆盖云端较新的条目，导致两台设备轮流更新同步文件
-
-### 备注
-
-- **macOS 与 Windows 静默内存差异** — Windows 隐藏后可通过系统工作集 trimming 降到极低 RSS；macOS 端 GPUI/AppKit/Metal/CoreAnimation 初始化后会保留一部分常驻 footprint，且没有等价的主动 trim API。因此 macOS 静默约几十 MB 属于当前单进程架构下的正常基线，不代表条目泄漏或后台持续耗电
 
 ---
 
