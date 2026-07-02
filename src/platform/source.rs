@@ -136,6 +136,34 @@ mod windows_impl {
             super::super::util::hicon_to_base64_png(shfi.hIcon, 32)
         }
     }
+
+    /// Extract the actual embedded icon from a specific file by accessing the
+    /// file system. Unlike `get_file_icon_base64`, this does NOT use
+    /// `SHGFI_USEFILEATTRIBUTES` — it reads the file's own icon resources.
+    /// Returns `None` if the file does not exist or has no icon.
+    pub fn get_actual_file_icon_base64(file_path: &str) -> Option<String> {
+        // SAFETY: `SHGetFileInfoW` reads file metadata; the input path buffer
+        // is null-terminated and stack-allocated. `SHFILEINFOW` is zeroed.
+        // The returned `hIcon` is passed to `hicon_to_base64_png` which takes
+        // ownership and calls `DestroyIcon`.
+        unsafe {
+            let wide_path: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+            let mut shfi: SHFILEINFOW = std::mem::zeroed();
+            let result = SHGetFileInfoW(
+                wide_path.as_ptr(),
+                0,
+                &mut shfi,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON,
+            );
+            if result == 0 || shfi.hIcon.is_null() {
+                return None;
+            }
+
+            super::super::util::hicon_to_base64_png(shfi.hIcon, 32)
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -177,6 +205,11 @@ mod macos_impl {
         let icon = workspace.iconForFile(&path);
         super::super::util::nsimage_to_base64_png(&icon, 32)
     }
+
+    /// macOS `iconForFile:` already reads the actual file icon — delegate.
+    pub fn get_actual_file_icon_base64(file_path: &str) -> Option<String> {
+        get_file_icon_base64(file_path, false)
+    }
 }
 
 pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
@@ -209,6 +242,51 @@ pub fn get_file_icon_base64(file_path: &str, is_dir: bool) -> Option<String> {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = (file_path, is_dir);
+        None
+    }
+}
+
+/// Return `true` for file extensions whose files can carry unique embedded
+/// icon resources. Per-file icon caching should be used for these extensions
+/// so that each file shows its own icon instead of a shared generic one.
+pub fn extension_has_embedded_icon(ext: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        matches!(
+            ext,
+            "exe" | "dll" | "msi" | "scr" | "ocx" | "cpl" | "ico" | "lnk"
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        matches!(
+            ext,
+            "prefPane" | "bundle" | "framework" | "kext" | "saver" | "icns" | "dylib"
+        )
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = ext;
+        false
+    }
+}
+
+/// Extract the actual embedded icon from a specific file by accessing the
+/// file system. Unlike `get_file_icon_base64`, this reads the file's own
+/// icon resources rather than looking up the extension association.
+/// Returns `None` if the file does not exist or has no icon.
+pub fn get_actual_file_icon_base64(file_path: &str) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::get_actual_file_icon_base64(file_path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_impl::get_actual_file_icon_base64(file_path)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = file_path;
         None
     }
 }

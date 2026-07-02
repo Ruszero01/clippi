@@ -722,6 +722,108 @@ impl Database {
             .collect())
     }
 
+    /// Collect icon cache filenames referenced by any clipboard item.
+    ///
+    /// Returns filenames (not full paths) for:
+    /// - Source app icons: `{safe_name}.png` in the `icons/` directory.
+    /// - File icons: per-file keys (`exe_<hash>.png`) and extension keys
+    ///   (`pdf.png`) in the `file_icons/` directory; `folder.png` for dirs.
+    /// - Favicons: `favicon_{domain}.png` in the `icons/` directory.
+    pub fn get_all_referenced_icon_keys(&self) -> SqlResult<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_app_name, file_data, full_text, meta_type
+             FROM clipboard_items
+             WHERE source_app_name != ''
+                OR file_data != ''
+                OR (content_type = 'plain_text' AND meta_type = 'link')",
+        )?;
+
+        #[allow(clippy::type_complexity)]
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?, // source_app_name
+                row.get::<_, String>(1)?, // file_data
+                row.get::<_, String>(2)?, // full_text
+                row.get::<_, String>(3)?, // meta_type
+            ))
+        })?;
+
+        let mut keys = Vec::new();
+
+        for row in rows.flatten() {
+            let (app_name, file_data, full_text, meta_type) = row;
+
+            // --- source app icon ---
+            if !app_name.is_empty() {
+                let safe: String = app_name
+                    .chars()
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                keys.push(format!("icons/{}", safe.trim()));
+            }
+
+            // --- file icon(s) ---
+            if !file_data.is_empty() {
+                if let Ok(fd) = serde_json::from_str::<crate::core::types::FileData>(&file_data) {
+                    for fi in &fd.files {
+                        if fi.is_dir {
+                            keys.push("file_icons/folder".to_string());
+                        } else {
+                            let ext_lower = std::path::Path::new(&fi.path)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.to_lowercase())
+                                .unwrap_or_else(|| "file".to_string());
+
+                            if crate::platform::source::extension_has_embedded_icon(&ext_lower)
+                                && std::path::Path::new(&fi.path).exists()
+                            {
+                                use std::hash::{Hash, Hasher};
+                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                fi.path.hash(&mut hasher);
+                                let h = format!("{:016x}", hasher.finish());
+                                keys.push(format!("file_icons/{ext_lower}_{h}"));
+                            } else {
+                                keys.push(format!("file_icons/{ext_lower}"));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- favicon for link items ---
+            if meta_type == "link" && !full_text.is_empty() {
+                let domain = crate::core::types::url_to_domain(&full_text);
+                if !domain.is_empty() {
+                    // Match sanitize_domain in favicon.rs: strip port, allow
+                    // only [a-zA-Z0-9._-].
+                    let safe: String = domain
+                        .split(':')
+                        .next()
+                        .unwrap_or(&domain)
+                        .chars()
+                        .map(|c| {
+                            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect();
+                    keys.push(format!("icons/favicon_{safe}"));
+                }
+            }
+        }
+
+        Ok(keys)
+    }
+
     /// Prune oldest non-favorite items when total exceeds max_items.
     /// Returns the ids of deleted items. max_items == 0 means unlimited.
     pub fn prune_excess_non_favorites(&self, max_items: u32) -> SqlResult<Vec<i64>> {

@@ -528,18 +528,18 @@ impl SettingsPanel {
                                         // Show toast
                                         if stats.is_empty() {
                                             this.update(cx, |_panel, cx| {
-                                                cx.emit(SettingsEvent::DataError(
+                                                cx.emit(SettingsEvent::DataToast(
                                                     I18nKey::ToastCleanupNone.text().to_string(),
                                                 ));
                                             });
                                         } else {
                                             let msg = I18nKey::ToastCleanupDone.fmt(&[
                                                 &stats.orphan_images.to_string(),
-                                                &stats.expired_icons.to_string(),
+                                                &stats.unreferenced_icons.to_string(),
                                                 &stats.expired_tombstones.to_string(),
                                             ]);
                                             this.update(cx, |_panel, cx| {
-                                                cx.emit(SettingsEvent::DataError(msg));
+                                                cx.emit(SettingsEvent::DataToast(msg));
                                             });
                                         }
                                     })

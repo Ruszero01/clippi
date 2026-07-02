@@ -53,6 +53,8 @@ pub enum SettingsEvent {
     HotkeyPasteShortcut { action: HotkeyConfirmAction },
     /// Data settings error — RootView should show a toast.
     DataError(String),
+    /// Data settings info toast — no error prefix.
+    DataToast(String),
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}

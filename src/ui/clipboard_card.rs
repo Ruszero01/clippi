@@ -315,28 +315,64 @@ fn format_file_size(bytes: i64) -> String {
     }
 }
 
+/// Produce a stable hex hash of a file path for per-file icon cache keys.
+/// Uses `DefaultHasher` with fixed keys — deterministic within the same
+/// binary, sufficient for a persistent on-disk cache.
+fn hash_file_path(path: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 pub(crate) fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std::path::PathBuf> {
     use std::path::Path;
-    let cache_key = if is_dir {
-        "folder".to_string()
+
+    // Determine the cache key.
+    let (cache_key, use_actual_icon) = if is_dir {
+        ("folder".to_string(), false)
     } else {
-        Path::new(file_path)
+        let ext_lower = Path::new(file_path)
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("file")
-            .to_string()
+            .map(|e| e.to_lowercase())
+            .unwrap_or_else(|| "file".to_string());
+
+        // Per-file cache for extensions that carry unique embedded icons.
+        // Only use per-file key if the source file still exists on disk;
+        // missing files fall back to the generic extension icon.
+        if crate::platform::source::extension_has_embedded_icon(&ext_lower)
+            && Path::new(file_path).exists()
+        {
+            let path_hash = hash_file_path(file_path);
+            (format!("{ext_lower}_{path_hash}"), true)
+        } else {
+            (ext_lower, false)
+        }
     };
+
     // File icon directory is pre-created at startup — no fs ops in render.
     let icon_path = crate::core::paths::images_dir()
         .join("file_icons")
         .join(format!("{cache_key}.png"));
+
     if !icon_path.exists() {
         // Cache miss: heavy Win32 SHGetFileInfoW → spawn to background,
         // skip icon this frame. Next render hits the cache.
         let fp = file_path.to_string();
         let p = icon_path.clone();
         std::thread::spawn(move || {
-            if let Some(icon_base64) = crate::platform::source::get_file_icon_base64(&fp, is_dir) {
+            // Prefer the actual embedded icon when the file type warrants
+            // per-file caching; fall back to the extension-based icon if
+            // the file was deleted between the exists() check and now.
+            let icon_base64 = if use_actual_icon {
+                crate::platform::source::get_actual_file_icon_base64(&fp)
+                    .or_else(|| crate::platform::source::get_file_icon_base64(&fp, is_dir))
+            } else {
+                crate::platform::source::get_file_icon_base64(&fp, is_dir)
+            };
+
+            if let Some(icon_base64) = icon_base64 {
                 if let Ok(png) = base64::engine::general_purpose::STANDARD.decode(&icon_base64) {
                     let _ = std::fs::write(&p, png);
                 }

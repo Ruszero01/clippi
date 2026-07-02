@@ -8,10 +8,8 @@
 use crate::core::db::Database;
 use std::collections::HashSet;
 use std::fs;
-use std::time::{Duration, SystemTime};
 
-/// 30-day expiry for icon cache files and sync tombstones.
-const ICON_EXPIRY_DAYS: u64 = 30;
+/// 30-day expiry for sync tombstones.
 const TOMBSTONE_EXPIRY_DAYS: i64 = 30;
 
 /// Aggregated stats from a full cleanup pass.
@@ -19,15 +17,15 @@ const TOMBSTONE_EXPIRY_DAYS: i64 = 30;
 pub struct CleanupStats {
     /// Number of orphaned image / thumbnail files removed.
     pub orphan_images: u32,
-    /// Number of expired icon cache files removed.
-    pub expired_icons: u32,
+    /// Number of unreferenced icon cache files removed.
+    pub unreferenced_icons: u32,
     /// Number of expired tombstone rows removed.
     pub expired_tombstones: u32,
 }
 
 impl CleanupStats {
     pub fn is_empty(&self) -> bool {
-        self.orphan_images == 0 && self.expired_icons == 0 && self.expired_tombstones == 0
+        self.orphan_images == 0 && self.unreferenced_icons == 0 && self.expired_tombstones == 0
     }
 }
 
@@ -83,15 +81,36 @@ fn clean_orphan_images(db: &Database) -> u32 {
     removed
 }
 
-/// Remove icon cache files (favicon, source-app icons, file icons) that haven't been
-/// accessed in `ICON_EXPIRY_DAYS` days.
-fn clean_expired_icons() -> u32 {
+/// Remove icon cache files (favicon, source-app icons, file icons) that are no
+/// longer referenced by any clipboard item in the database.  Mirrors
+/// `clean_orphan_images` in strategy — reference-based instead of time-based.
+fn clean_unreferenced_icons(db: &Database) -> u32 {
     let images_dir = crate::core::paths::images_dir();
     let icon_dirs = [images_dir.join("icons"), images_dir.join("file_icons")];
 
-    let cutoff = SystemTime::now()
-        .checked_sub(Duration::from_secs(ICON_EXPIRY_DAYS * 86400))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
+    // Collect every icon filename that is still referenced from the DB.
+    // Keys are relative to icon root directories (e.g. "icons/Chrome" or
+    // "file_icons/exe_3f8a2b1c9d4e5f06") — strip the directory prefix
+    // for the actual filename comparison.
+    let referenced: HashSet<String> = match db.get_all_referenced_icon_keys() {
+        Ok(keys) => keys
+            .into_iter()
+            .map(|k| {
+                // Strip "icons/" or "file_icons/" prefix → bare filename.
+                if let Some(rest) = k.strip_prefix("icons/") {
+                    rest.to_string()
+                } else if let Some(rest) = k.strip_prefix("file_icons/") {
+                    rest.to_string()
+                } else {
+                    k
+                }
+            })
+            .collect(),
+        Err(e) => {
+            log::error!("clean_unreferenced_icons: failed to query icon keys: {e}");
+            return 0;
+        }
+    };
 
     let mut removed: u32 = 0;
 
@@ -106,20 +125,19 @@ fn clean_expired_icons() -> u32 {
                 continue;
             }
 
-            let expired = match path.metadata() {
-                Ok(m) => m.modified().map(|t| t < cutoff).unwrap_or(false),
-                Err(_) => false,
-            };
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-            if expired {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+            // File icon keys don't include the ".png" extension in the
+            // DB-derived key but the on-disk file does — strip extension
+            // for matching.
+            let stem = name.strip_suffix(".png").unwrap_or(name);
+
+            if !referenced.contains(stem) {
+                let display = name.to_string();
                 if let Err(e) = fs::remove_file(&path) {
-                    log::warn!("clean_expired_icons: failed to remove {name}: {e}");
+                    log::warn!("clean_unreferenced_icons: failed to remove {display}: {e}");
                 } else {
-                    log::info!("clean_expired_icons: removed {name}");
+                    log::info!("clean_unreferenced_icons: removed {display}");
                     removed += 1;
                 }
             }
@@ -147,20 +165,20 @@ fn clean_expired_tombstones(db: &Database) -> u32 {
 /// Called at startup and periodically via the poll loop / UI button.
 pub fn run_cleanup(db: &Database) -> CleanupStats {
     let orphan_images = clean_orphan_images(db);
-    let expired_icons = clean_expired_icons();
+    let unreferenced_icons = clean_unreferenced_icons(db);
     let expired_tombstones = clean_expired_tombstones(db);
 
     let stats = CleanupStats {
         orphan_images,
-        expired_icons,
+        unreferenced_icons,
         expired_tombstones,
     };
 
     if !stats.is_empty() {
         log::info!(
-            "run_cleanup: {} orphan images, {} expired icons, {} expired tombstones",
+            "run_cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones",
             stats.orphan_images,
-            stats.expired_icons,
+            stats.unreferenced_icons,
             stats.expired_tombstones,
         );
     }

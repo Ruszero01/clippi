@@ -186,7 +186,7 @@ define_i18n! {
     CleanupIntervalWeekly:  ("每周", "Weekly"),
     BtnCleanupNow:          ("立即清理", "Clean now"),
     ToastCleanupNone:       ("没有需要清理的文件", "No files to clean up"),
-    ToastCleanupDone:       ("清理完成：{0}张图片、{1}个图标、{2}条过期记录", "Cleaned: {0} images, {1} icons, {2} expired records"),
+    ToastCleanupDone:       ("已清理 {0} 图片 {1} 图标 {2} 记录", "Cleaned {0} images, {1} icons, {2} records"),
 
     // ─── Context menu ───
     CtxCopy:            ("复制", "Copy"),

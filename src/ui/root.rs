@@ -541,6 +541,12 @@ impl RootView {
                         });
                         cx.notify();
                     }
+                    SettingsEvent::DataToast(msg) => {
+                        this.state.update(cx, |s, _cx| {
+                            s.toast_message = Some(msg.clone());
+                        });
+                        cx.notify();
+                    }
                 },
             ),
         ];

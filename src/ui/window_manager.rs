@@ -2605,9 +2605,9 @@ impl WindowManager {
                     let stats = crate::core::cache_cleanup::run_cleanup(&db);
                     if !stats.is_empty() {
                         log::info!(
-                            "periodic cleanup: {} orphan images, {} expired icons, {} expired tombstones",
+                            "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones",
                             stats.orphan_images,
-                            stats.expired_icons,
+                            stats.unreferenced_icons,
                             stats.expired_tombstones,
                         );
                     }
