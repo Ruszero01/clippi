@@ -135,6 +135,10 @@ fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str)
         }
     }
 
+    if !item.note.is_empty() && pinyin_match(&item.note, keyword) {
+        return true;
+    }
+
     item.tags.iter().any(|tag| pinyin_match(&tag.name, keyword))
 }
 
@@ -1796,6 +1800,52 @@ mod tests {
 
         assert_eq!(state.items.len(), 1);
         assert_eq!(state.items[0].full_text, "plain preview");
+    }
+
+    #[test]
+    fn keyword_search_matches_note_with_pinyin_and_initials() {
+        let (mut state, _dirty) = test_state();
+        let item = make_item(1, ContentType::PlainText, false, "与备注无关的正文");
+        state.db.upsert(&item).unwrap();
+        let item_id = state
+            .db
+            .get_by_hash(item.content_hash)
+            .unwrap()
+            .unwrap()
+            .id;
+        // 模拟真实流程：通过 update_note 写入备注
+        state.db.update_note(item_id, "工作计划").unwrap();
+        state.reload_items();
+
+        // 直接文本匹配
+        state.filters.set_keyword("工作");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1, "直接文本匹配失败");
+
+        // 全拼匹配: gongzuo
+        state.filters.set_keyword("gongzuo");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1, "全拼匹配失败");
+
+        // 首字母匹配: gzjh
+        state.filters.set_keyword("gzjh");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1, "首字母全匹配失败");
+
+        // 部分首字母匹配: gz
+        state.filters.set_keyword("gz");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1, "部分首字母匹配失败");
+
+        // 确保不在正文中搜索
+        state.filters.set_keyword("备注");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1, "备注中文匹配失败");
+
+        // 确保未写入备注的不匹配
+        state.filters.set_keyword("xyznotexist");
+        state.reload_items();
+        assert_eq!(state.items.len(), 0, "不应匹配的关键词却匹配了");
     }
 
     #[test]
