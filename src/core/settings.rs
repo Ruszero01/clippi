@@ -601,7 +601,16 @@ pub fn migrate_database(old_path: &Path, new_path: &Path) -> Result<(), String> 
 
 pub fn spawn_new_process() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = Command::new(exe).spawn();
+        match Command::new(&exe).arg("--restart").spawn() {
+            Ok(child) => {
+                log::info!("Spawned new process (pid: {}) for restart", child.id());
+            }
+            Err(e) => {
+                log::error!("Failed to spawn new process for restart: {e}");
+            }
+        }
+    } else {
+        log::error!("Failed to get current executable path for restart");
     }
 }
 

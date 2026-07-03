@@ -25,6 +25,10 @@ use ui::quick_paste::{calc_quick_window_height, QuickPasteView, QUICK_WINDOW_WID
 use ui::root::RootView;
 use ui::window_manager::WindowManager;
 
+fn is_restart() -> bool {
+    std::env::args().any(|arg| arg == "--restart")
+}
+
 fn ensure_single_instance() -> bool {
     // Bind a TCP port and leak the listener so the port stays held for the
     // entire process lifetime.  Without the leak the listener is dropped
@@ -168,7 +172,8 @@ fn load_icon_from_embedded_bytes(ico_data: &[u8]) -> Option<isize> {
 }
 
 fn main() {
-    if !ensure_single_instance() {
+    // --restart: 跳过单实例检测（旧进程 TCP 端口尚未被 OS 回收）
+    if !is_restart() && !ensure_single_instance() {
         return;
     }
 

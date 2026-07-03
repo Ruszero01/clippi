@@ -1807,12 +1807,7 @@ mod tests {
         let (mut state, _dirty) = test_state();
         let item = make_item(1, ContentType::PlainText, false, "与备注无关的正文");
         state.db.upsert(&item).unwrap();
-        let item_id = state
-            .db
-            .get_by_hash(item.content_hash)
-            .unwrap()
-            .unwrap()
-            .id;
+        let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
         // 模拟真实流程：通过 update_note 写入备注
         state.db.update_note(item_id, "工作计划").unwrap();
         state.reload_items();
