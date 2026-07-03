@@ -79,6 +79,8 @@ pub struct ClipboardListView {
     note_input: Entity<InputState>,
     /// Shared InputState for the tag picker's create-tag input.
     tag_create_input: Entity<InputState>,
+    /// Per-list image cache so card thumbnails/icons can be released on hide.
+    image_cache: Entity<RetainAllImageCache>,
     /// Active confirmation dialog (None = hidden).
     confirm_dialog: Option<ConfirmDialogState>,
     /// Persisted last-selected item ID — survives across set_items calls
@@ -129,6 +131,7 @@ impl ClipboardListView {
             tag_create_input: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())
             }),
+            image_cache: RetainAllImageCache::new(cx),
             confirm_dialog: None,
             last_selected_id: -1,
             theme,
@@ -179,6 +182,37 @@ impl ClipboardListView {
         if self.selected_index.is_none() && !self.items.is_empty() {
             self.select_index_without_scroll(0, cx);
         }
+        cx.notify();
+    }
+
+    /// Drop the list's own item copies while the main window is hidden.
+    ///
+    /// AppState also clears its item list, but ClipboardListView keeps a
+    /// separate Vec for virtual scrolling. Without clearing both, hidden
+    /// windows can retain large clipboard payloads until the next reload.
+    pub fn release_items_for_hide(&mut self, cx: &mut Context<Self>) {
+        if let Some(idx) = self.selected_index {
+            if let Some(item) = self.items.get(idx) {
+                self.last_selected_id = item.id;
+            }
+        }
+
+        self.items.clear();
+        self.items.shrink_to_fit();
+        self.item_sizes = Rc::new(Vec::new());
+        self.selected_ids.clear();
+        self.selected_ids.shrink_to_fit();
+        self.selected_index = None;
+        self.anchor_index = None;
+        self.selected_count = 0;
+        self.hovered_index = None;
+        self.context_menu_visible = false;
+        self.context_menu_item = None;
+        self.tag_picker_visible = false;
+        self.tag_picker_item_id = -1;
+        self.confirm_dialog = None;
+        self.editing_note_id = -1;
+        self.image_cache = RetainAllImageCache::new(cx);
         cx.notify();
     }
 
@@ -1051,6 +1085,7 @@ impl Render for ClipboardListView {
 
         // --- Normal state — virtual scrolling list ---
         let list_entity = view.clone();
+        let image_cache = self.image_cache.clone();
 
         div()
             .flex_1()
@@ -1323,6 +1358,7 @@ impl Render for ClipboardListView {
                                                     .show_source_app(show_source_app)
                                                     .show_original_on_hover(show_original_on_hover)
                                                     .show_page_title(show_page_title)
+                                                    .image_cache(image_cache.clone())
                                                     .selected_count(selected_count)
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)

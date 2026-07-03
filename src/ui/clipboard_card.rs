@@ -609,6 +609,7 @@ pub struct ClipboardCard {
     /// When true and a link item has a cached page title, show the title
     /// instead of the URL path in the card content area.
     show_page_title: bool,
+    image_cache: Option<Entity<RetainAllImageCache>>,
 }
 
 impl ClipboardCard {
@@ -630,6 +631,7 @@ impl ClipboardCard {
             show_source_app: false,
             show_original_on_hover: false,
             show_page_title: false,
+            image_cache: None,
         }
     }
 
@@ -705,6 +707,11 @@ impl ClipboardCard {
         self.show_page_title = value;
         self
     }
+
+    pub fn image_cache(mut self, cache: Entity<RetainAllImageCache>) -> Self {
+        self.image_cache = Some(cache);
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -726,6 +733,7 @@ impl RenderOnce for ClipboardCard {
             show_source_app,
             show_original_on_hover,
             show_page_title,
+            image_cache,
         } = self;
 
         let surface = theme.surface;
@@ -851,6 +859,9 @@ impl RenderOnce for ClipboardCard {
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
                             gpui::img(path)
+                                .when_some(image_cache.clone(), |img, cache| {
+                                    img.image_cache(&cache)
+                                })
                                 .w(px(20.))
                                 .h(px(20.))
                                 .rounded(px(4.))
@@ -917,6 +928,9 @@ impl RenderOnce for ClipboardCard {
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
                             gpui::img(path)
+                                .when_some(image_cache.clone(), |img, cache| {
+                                    img.image_cache(&cache)
+                                })
                                 .w(px(20.))
                                 .h(px(20.))
                                 .rounded(px(4.))
@@ -980,6 +994,9 @@ impl RenderOnce for ClipboardCard {
                             .justify_center()
                             .child(if let Some(path) = effective_icon {
                                 gpui::img(path)
+                                    .when_some(image_cache.clone(), |img, cache| {
+                                        img.image_cache(&cache)
+                                    })
                                     .w(px(20.))
                                     .h(px(20.))
                                     .rounded(px(4.))
@@ -1044,6 +1061,9 @@ impl RenderOnce for ClipboardCard {
                             .justify_center()
                             .child(if let Some(path) = effective_icon {
                                 gpui::img(path)
+                                    .when_some(image_cache.clone(), |img, cache| {
+                                        img.image_cache(&cache)
+                                    })
                                     .w(px(20.))
                                     .h(px(20.))
                                     .rounded(px(4.))
@@ -1094,6 +1114,9 @@ impl RenderOnce for ClipboardCard {
                         .justify_center()
                         .child(if let Some(path) = source_icon_path.clone() {
                             gpui::img(path)
+                                .when_some(image_cache.clone(), |img, cache| {
+                                    img.image_cache(&cache)
+                                })
                                 .w(px(20.))
                                 .h(px(20.))
                                 .rounded(px(4.))
@@ -1350,6 +1373,9 @@ impl RenderOnce for ClipboardCard {
                                 .justify_center()
                                 .child(
                                     gpui::img(preview_img_path)
+                                        .when_some(image_cache.clone(), |img, cache| {
+                                            img.image_cache(&cache)
+                                        })
                                         .w_full()
                                         .h_full()
                                         .rounded(px(8.))
@@ -1574,6 +1600,10 @@ impl RenderOnce for ClipboardCard {
                                                 .justify_center()
                                                 .child(if let Some(path) = cached_icon {
                                                     gpui::img(path)
+                                                        .when_some(
+                                                            image_cache.clone(),
+                                                            |img, cache| img.image_cache(&cache),
+                                                        )
                                                         .w(px(14.))
                                                         .h(px(14.))
                                                         .rounded(px(2.))

@@ -27,9 +27,24 @@ pub fn trim_process_working_set() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub fn trim_process_working_set() {
-    // --- no-op on non-Windows ---
+    use std::ffi::c_void;
+
+    extern "C" {
+        fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
+    }
+
+    // SAFETY: These macOS malloc APIs only provide a best-effort pressure
+    // relief hint. A null zone asks malloc to examine all zones.
+    unsafe {
+        let _ = malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn trim_process_working_set() {
+    // --- no-op on unsupported platforms ---
 }
 
 /// Render an HICON to a 32x32 BGRA DIB, convert to RGBA PNG, and base64-encode.

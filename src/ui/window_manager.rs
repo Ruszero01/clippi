@@ -1323,8 +1323,11 @@ impl WindowManager {
         {
             self._main_show_task = None;
         }
-        self.hide_quick_window(cx);
+        if self.quick_visible {
+            self.hide_quick_window(cx);
+        }
         self.dismiss_ui(cx);
+        self.release_memory(cx);
         cx.emit(WindowManagerEvent::WindowHidden);
 
         #[cfg(target_os = "windows")]

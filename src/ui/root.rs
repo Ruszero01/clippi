@@ -209,7 +209,7 @@ impl RootView {
                 WindowManagerEvent::WindowHidden => {
                     this.needs_auto_focus = true;
                     this.list_view.update(cx, |list, cx| {
-                        list.dismiss_all_panels(cx);
+                        list.release_items_for_hide(cx);
                     });
                     this.search_bar.update(cx, |bar, cx| {
                         bar.close_tag_panel(cx);
