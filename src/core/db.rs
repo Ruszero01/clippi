@@ -33,6 +33,39 @@ fn new_tag_uid() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn source_app_icon_cache_key(app_name: &str) -> Option<String> {
+    let safe: String = app_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    (!safe.is_empty()).then_some(format!("icons/{safe}"))
+}
+
+fn file_icon_cache_key(file_path: &str, is_dir: bool) -> String {
+    let ext_lower = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_else(|| "file".to_string());
+
+    if crate::platform::source::extension_has_embedded_icon(&ext_lower) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        file_path.hash(&mut hasher);
+        format!("file_icons/{ext_lower}_{:016x}", hasher.finish())
+    } else if is_dir {
+        "file_icons/folder".to_string()
+    } else {
+        format!("file_icons/{ext_lower}")
+    }
+}
+
 fn item_select_columns() -> String {
     format!(
         "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type"
@@ -817,45 +850,15 @@ impl Database {
             let (app_name, file_data, full_text, meta_type) = row;
 
             // --- source app icon ---
-            if !app_name.is_empty() {
-                let safe: String = app_name
-                    .chars()
-                    .map(|c| {
-                        if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                keys.push(format!("icons/{}", safe.trim()));
+            if let Some(key) = source_app_icon_cache_key(&app_name) {
+                keys.push(key);
             }
 
             // --- file icon(s) ---
             if !file_data.is_empty() {
                 if let Ok(fd) = serde_json::from_str::<crate::core::types::FileData>(&file_data) {
                     for fi in &fd.files {
-                        if fi.is_dir {
-                            keys.push("file_icons/folder".to_string());
-                        } else {
-                            let ext_lower = std::path::Path::new(&fi.path)
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .map(|e| e.to_lowercase())
-                                .unwrap_or_else(|| "file".to_string());
-
-                            if crate::platform::source::extension_has_embedded_icon(&ext_lower)
-                                && std::path::Path::new(&fi.path).exists()
-                            {
-                                use std::hash::{Hash, Hasher};
-                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                fi.path.hash(&mut hasher);
-                                let h = format!("{:016x}", hasher.finish());
-                                keys.push(format!("file_icons/{ext_lower}_{h}"));
-                            } else {
-                                keys.push(format!("file_icons/{ext_lower}"));
-                            }
-                        }
+                        keys.push(file_icon_cache_key(&fi.path, fi.is_dir));
                     }
                 }
             }

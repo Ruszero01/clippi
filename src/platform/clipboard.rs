@@ -584,7 +584,7 @@ fn current_clipboard_seq() -> u32 {
     // `changeCount` doesn't require opening the pasteboard — no
     // `with_clipboard_access` lock needed, avoiding a deadlock when
     // called from inside `with_clipboard_context`.
-    unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u32 }
+    objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u32
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -710,15 +710,27 @@ impl ClipboardListener for PollingClipboardListener {
                     let seq = current_clipboard_seq();
                     let mut guard = last_state.lock().unwrap_or_else(|e| e.into_inner());
 
-                    let same_hash = guard.hash == item.content_hash;
-                    let delayed_fill = same_hash && seq.wrapping_sub(guard.seq) <= 2;
-                    let owner_destroyed = same_hash && owner == 0 && guard.owner != 0;
-                    let rapid_same = same_hash
-                        && owner == guard.owner
-                        && seq.wrapping_sub(guard.seq) > 2 // small deltas already caught by delayed_fill
-                        && now.duration_since(guard.time).as_millis() < 2_000;
+                    #[cfg(target_os = "windows")]
+                    let suppress_duplicate = {
+                        let same_hash = guard.hash == item.content_hash;
+                        let delayed_fill = same_hash && seq.wrapping_sub(guard.seq) <= 2;
+                        let owner_destroyed = same_hash && owner == 0 && guard.owner != 0;
+                        let rapid_same = same_hash
+                            && owner == guard.owner
+                            && seq.wrapping_sub(guard.seq) > 2 // small deltas already caught by delayed_fill
+                            && now.duration_since(guard.time).as_millis() < 2_000;
+                        delayed_fill || owner_destroyed || rapid_same
+                    };
+                    #[cfg(not(target_os = "windows"))]
+                    let suppress_duplicate = {
+                        // Non-Windows platforms do not have Windows delayed
+                        // rendering, but still keep the state updated below so
+                        // the shared listener bookkeeping stays uniform.
+                        let _ = (&guard.hash, &guard.owner, &guard.time, &guard.seq);
+                        false
+                    };
 
-                    if delayed_fill || owner_destroyed || rapid_same {
+                    if suppress_duplicate {
                         drop(guard);
                         thread::sleep(Duration::from_millis(50));
                         continue;

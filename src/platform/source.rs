@@ -261,7 +261,15 @@ pub fn extension_has_embedded_icon(ext: &str) -> bool {
     {
         matches!(
             ext,
-            "prefPane" | "bundle" | "framework" | "kext" | "saver" | "icns" | "dylib"
+            "app"
+                | "appex"
+                | "prefpane"
+                | "bundle"
+                | "framework"
+                | "kext"
+                | "saver"
+                | "icns"
+                | "dylib"
         )
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

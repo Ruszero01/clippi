@@ -9,6 +9,7 @@
 //! - Dynamic height: 68/96/128px based on content type and card-height-mode
 
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;
@@ -43,6 +44,25 @@ const LIST_PADDING_X: f32 = 8.0;
 const CARD_PADDING_X: f32 = 10.0;
 const CARD_ICON_WIDTH: f32 = 36.0;
 const CARD_CONTENT_GAP: f32 = 10.0;
+const MAX_ICON_CACHE_JOBS: usize = 4;
+
+static ICON_CACHE_JOBS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn try_start_icon_cache_job(key: &str) -> bool {
+    let mut jobs = ICON_CACHE_JOBS.lock().unwrap_or_else(|e| e.into_inner());
+    if jobs.iter().any(|job| job == key) || jobs.len() >= MAX_ICON_CACHE_JOBS {
+        return false;
+    }
+    jobs.push(key.to_string());
+    true
+}
+
+fn finish_icon_cache_job(key: &str) {
+    ICON_CACHE_JOBS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|job| job != key);
+}
 
 fn info_pill_width(text: &str, padding_x: f32, window: &Window) -> f32 {
     let text: SharedString = text.to_owned().into();
@@ -260,13 +280,19 @@ fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
         .join("icons")
         .join(format!("{safe_name}.png"));
     if !path.exists() {
-        // Cache miss: write in background, skip icon this frame.
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&item.source_app_icon)
-            .ok()?;
+        let job_key = format!("source:{safe_name}");
+        if !try_start_icon_cache_job(&job_key) {
+            return None;
+        }
+        // Cache miss: decode/write in background, skip icon this frame.
+        let encoded = item.source_app_icon.clone();
         let p = path.clone();
+        let finish_key = job_key.clone();
         std::thread::spawn(move || {
-            let _ = std::fs::write(&p, decoded);
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                let _ = std::fs::write(&p, decoded);
+            }
+            finish_icon_cache_job(&finish_key);
         });
         return None;
     }
@@ -329,27 +355,26 @@ pub(crate) fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std
     use std::path::Path;
 
     // Determine the cache key.
-    let (cache_key, use_actual_icon) = if is_dir {
-        ("folder".to_string(), false)
-    } else {
-        let ext_lower = Path::new(file_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .unwrap_or_else(|| "file".to_string());
+    let ext_lower = Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_else(|| "file".to_string());
 
-        // Per-file cache for extensions that carry unique embedded icons.
-        // Only use per-file key if the source file still exists on disk;
-        // missing files fall back to the generic extension icon.
-        if crate::platform::source::extension_has_embedded_icon(&ext_lower)
-            && Path::new(file_path).exists()
-        {
+    // Per-file cache for extensions that carry unique embedded icons.
+    // Do not probe source path existence here: copied paths can point to
+    // network/removable volumes, and synchronous metadata checks in render
+    // can stall the UI. The background job falls back to a generic icon if
+    // the actual file icon cannot be read.
+    let (cache_key, use_actual_icon) =
+        if crate::platform::source::extension_has_embedded_icon(&ext_lower) {
             let path_hash = hash_file_path(file_path);
             (format!("{ext_lower}_{path_hash}"), true)
+        } else if is_dir {
+            ("folder".to_string(), false)
         } else {
             (ext_lower, false)
-        }
-    };
+        };
 
     // File icon directory is pre-created at startup — no fs ops in render.
     let icon_path = crate::core::paths::images_dir()
@@ -357,10 +382,15 @@ pub(crate) fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std
         .join(format!("{cache_key}.png"));
 
     if !icon_path.exists() {
+        let job_key = format!("file:{cache_key}");
+        if !try_start_icon_cache_job(&job_key) {
+            return None;
+        }
         // Cache miss: heavy Win32 SHGetFileInfoW → spawn to background,
         // skip icon this frame. Next render hits the cache.
         let fp = file_path.to_string();
         let p = icon_path.clone();
+        let finish_key = job_key.clone();
         std::thread::spawn(move || {
             // Prefer the actual embedded icon when the file type warrants
             // per-file caching; fall back to the extension-based icon if
@@ -377,6 +407,7 @@ pub(crate) fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std
                     let _ = std::fs::write(&p, png);
                 }
             }
+            finish_icon_cache_job(&finish_key);
         });
         return None;
     }
