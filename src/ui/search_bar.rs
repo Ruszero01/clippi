@@ -16,7 +16,7 @@ use crate::core::frontend::PANEL_OFFSET_X;
 use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
-use super::clipboard_list::ClipboardListView;
+use super::clipboard_list::{ClipboardListEvent, ClipboardListView};
 use super::theme::ClippiTheme;
 
 pub(crate) struct FilterDef {
@@ -275,9 +275,10 @@ impl Render for SearchBar {
                                         return;
                                     }
                                     "escape" => {
-                                        // Clear list selection, keep search focus
                                         list.update(cx, |list, cx| {
-                                            list.clear_selection(cx);
+                                            if !list.handle_escape(cx) {
+                                                cx.emit(ClipboardListEvent::RequestHide);
+                                            }
                                         });
                                         cx.stop_propagation();
                                         return;

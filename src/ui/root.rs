@@ -81,6 +81,8 @@ pub struct RootView {
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
+    /// Focus handle for global keyboard events (ESC navigation).
+    focus_handle: FocusHandle,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -381,6 +383,11 @@ impl RootView {
                             cx.notify();
                         }
                     }
+                    ClipboardListEvent::RequestHide => {
+                        this.window_manager.update(cx, |wm, cx| {
+                            wm.hide(cx);
+                        });
+                    }
                 },
             ),
             cx.subscribe(
@@ -627,6 +634,7 @@ impl RootView {
             _wm_subscription,
             _subscriptions,
             _appearance_subscription: Some(appearance_sub),
+            focus_handle: cx.focus_handle(),
         }
     }
 }
@@ -646,6 +654,10 @@ impl Render for RootView {
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
+        // When in settings or edit view, ensure the root has focus so ESC works.
+        if !is_clipboard && !self.focus_handle.is_focused(window) {
+            self.focus_handle.focus(window);
+        }
         let theme = self.theme.clone();
         let panel_border = if theme.bg == rgb(0x191a1b) {
             rgb(0x3a3b3c)
@@ -874,9 +886,51 @@ impl Render for RootView {
             }
         }
 
+        let root_focus = self.focus_handle.clone();
+        let root_this = cx.entity().clone();
+        let root_list = list_view.clone();
+        let root_state = self.state.clone();
+        let root_backend = backend_panel.clone();
+
         div()
             .relative()
             .size_full()
+            .track_focus(&root_focus)
+            .on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+                if ev.keystroke.key.as_str() != "escape" {
+                    return;
+                }
+                let is_settings = root_this.read(cx).current_view == "settings";
+                let is_edit = root_this.read(cx).current_view == "edit";
+                if is_settings {
+                    // Close backend panel popup first, then go back to clipboard
+                    if root_backend.read(cx).is_visible() {
+                        root_backend.update(cx, |panel, cx| panel.close(cx));
+                    } else {
+                        root_this.update(cx, |this, cx| {
+                            this.switch_view("clipboard");
+                            cx.notify();
+                        });
+                    }
+                    cx.stop_propagation();
+                } else if is_edit {
+                    root_state.update(cx, |state, _cx| state.cancel_edit_item());
+                    root_this.update(cx, |this, cx| {
+                        this.switch_view("clipboard");
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                } else {
+                    // Clipboard view: delegate to list for panel/multi-select logic
+                    let should_hide = root_list.update(cx, |list, cx| !list.handle_escape(cx));
+                    if should_hide {
+                        root_this.update(cx, |this, cx| {
+                            this.window_manager.update(cx, |wm, cx| wm.hide(cx));
+                        });
+                    }
+                    cx.stop_propagation();
+                }
+            })
             .child(div().absolute().left(px(0.)).top(px(84.)).child(sidebar))
             .child(
                 div()

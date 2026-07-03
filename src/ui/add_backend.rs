@@ -148,7 +148,7 @@ impl AddBackendPanel {
         cx.notify();
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
+    pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.animation_started = None;
         self.test_pending = false;

@@ -94,6 +94,8 @@ pub struct SettingsPanel {
     _max_items_focus_sub: gpui::Subscription,
     /// Animation generation counter for copy-sound card expand/collapse.
     pub copy_sound_anim_gen: u64,
+    /// Focus handle for keyboard events (ESC to go back).
+    focus_handle: FocusHandle,
 }
 
 fn tab_names() -> [&'static str; 6] {
@@ -154,6 +156,7 @@ impl SettingsPanel {
             backend_collapse_states: HashMap::new(),
             tab_transition_generation: 0,
             tab_transition_started: None,
+            focus_handle: cx.focus_handle(),
             backend_panel,
             hotkey_confirm: None,
             recording_paste_shortcut: None,
@@ -214,6 +217,8 @@ impl Render for SettingsPanel {
             0.0
         };
 
+        let focus_handle = self.focus_handle.clone();
+
         div()
             .flex()
             .flex_col()
@@ -222,6 +227,7 @@ impl Render for SettingsPanel {
             .overflow_hidden()
             .rounded_b(px(12.))
             .bg(theme.bg)
+            .track_focus(&focus_handle)
             //  Navigation bar (height 36px, mt 8px matching Slint y=8px)
             .child(
                 div()

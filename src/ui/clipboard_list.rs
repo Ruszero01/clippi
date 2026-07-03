@@ -36,6 +36,7 @@ pub(crate) enum ConfirmDialogState {
 
 pub enum ClipboardListEvent {
     OpenEdit(i64),
+    RequestHide,
 }
 
 impl EventEmitter<ClipboardListEvent> for ClipboardListView {}
@@ -427,13 +428,40 @@ impl ClipboardListView {
         cx.notify();
     }
 
-    /// Clear the current selection. Called from search bar Escape handler.
-    pub(crate) fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        self.selected_ids.clear();
-        self.selected_count = 0;
-        self.selected_index = None;
-        self.anchor_index = None;
-        cx.notify();
+    /// Reduce multi-selection to single selection, keeping only the first selected item.
+    /// Returns true if the selection was reduced, false if it was already single/none.
+    pub fn reduce_to_single_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.selected_count <= 1 {
+            return false;
+        }
+        let first_id = self.selected_ids[0];
+        if let Some(idx) = self.items.iter().position(|item| item.id == first_id) {
+            self.selected_ids.clear();
+            self.selected_ids.push(first_id);
+            self.selected_index = Some(idx);
+            self.anchor_index = Some(idx);
+            self.selected_count = 1;
+            self.state.update(cx, |state, _cx| {
+                state.select_single(first_id);
+            });
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    /// Handle ESC key: dismiss panels/editing → reduce multi-select → signal close.
+    /// Returns `true` if the event was consumed (panels dismissed or selection reduced),
+    /// `false` if the window should close.
+    pub fn handle_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.has_any_panel_or_editing() {
+            self.dismiss_all_panels(cx);
+            self.editing_note_id = -1;
+            self.confirm_dialog = None;
+            cx.notify();
+            return true;
+        }
+        self.reduce_to_single_selection(cx)
     }
 
     // --- Context menu state accessors ---
@@ -1107,19 +1135,9 @@ impl Render for ClipboardListView {
                             cx.stop_propagation();
                         }
                         "escape" => {
-                            // Escape — dismiss panels or clear selection
-                            if this.has_any_panel_or_editing() {
-                                this.dismiss_all_panels(cx);
-                                this.editing_note_id = -1;
-                                this.confirm_dialog = None;
-                                cx.notify();
-                            } else if !this.selected_ids.is_empty() {
-                                this.clear_selection(cx);
-                                // Sync to AppState
-                                let empty: Vec<i64> = Vec::new();
-                                this.state.update(cx, |s, _cx| {
-                                    s.range_select(&empty);
-                                });
+                            // Escape — dismiss panels → reduce multi-select → hide window
+                            if !this.handle_escape(cx) {
+                                cx.emit(ClipboardListEvent::RequestHide);
                             }
                             cx.stop_propagation();
                         }
