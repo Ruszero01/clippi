@@ -162,6 +162,14 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::OpenVersionSettings => {
+                    // Clear any existing update toast — the version info is now
+                    // visible on screen and a redundant toast is distracting.
+                    if this.toast_actions.is_some() {
+                        this._toast_timer = None;
+                        this.toast_timer_expiry = None;
+                        this.toast_actions = None;
+                        this.state.update(cx, |s, _cx| s.clear_toast());
+                    }
                     this.switch_view("settings");
                     this.settings_panel
                         .update(cx, |panel, _cx| panel.set_active_tab(5));
@@ -217,6 +225,9 @@ impl RootView {
                     let on_version_tab = this.current_view == "settings"
                         && this.settings_panel.read(cx).active_tab() == 5;
                     if on_version_tab {
+                        // AppState.update_available was already set by poll_update;
+                        // notify so the version tab re-renders with the latest info.
+                        cx.notify();
                         return;
                     }
                     // A newly discovered update must not inherit the timer from
@@ -266,6 +277,10 @@ impl RootView {
                     let on_version_tab = this.current_view == "settings"
                         && this.settings_panel.read(cx).active_tab() == 5;
                     if on_version_tab {
+                        // AppState.update_phase was already set by poll_update
+                        // or start_update_check; notify so the version tab
+                        // re-renders with the latest progress.
+                        cx.notify();
                         return;
                     }
                     use crate::services::update::UpdatePhase;
@@ -434,6 +449,17 @@ impl RootView {
                     SettingsEvent::Back => {
                         this.switch_view("clipboard");
                         cx.notify();
+                    }
+                    SettingsEvent::TabChanged(idx) => {
+                        // When the user clicks the version tab manually, clear
+                        // any existing update toast — the info is now on screen.
+                        if *idx == 5 && this.toast_actions.is_some() {
+                            this._toast_timer = None;
+                            this.toast_timer_expiry = None;
+                            this.toast_actions = None;
+                            this.state.update(cx, |s, _cx| s.clear_toast());
+                            cx.notify();
+                        }
                     }
                     SettingsEvent::ThemeChanged(theme_str) => {
                         // --- Use cached window_appearance from creation time so ---

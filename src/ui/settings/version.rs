@@ -3,6 +3,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::i18n_keys::I18nKey;
 use crate::services::update::UpdatePhase;
@@ -12,7 +13,7 @@ use super::SettingsPanel;
 impl SettingsPanel {
     pub fn render_version_tab(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = &self.theme;
@@ -229,14 +230,31 @@ impl SettingsPanel {
                                         .child(I18nKey::VersionReleaseNotes.text()),
                                 ),
                         )
-                        .child(
+                        .child({
+                            let style = TextViewStyle::default()
+                                .paragraph_gap(rems(0.2))
+                                .heading_font_size(|level, base| {
+                                    // Scale headings down to fit the compact settings UI.
+                                    let sizes =
+                                        [px(12.), px(11.5), px(11.), px(10.5), px(10.), px(10.)];
+                                    sizes
+                                        .get(level.saturating_sub(1) as usize)
+                                        .copied()
+                                        .unwrap_or(base)
+                                });
                             div()
                                 .px(px(10.))
                                 .py(px(6.))
                                 .max_h(px(200.))
                                 .overflow_y_scrollbar()
-                                .child(div().text_size(px(11.)).text_color(text_2).child(notes)),
-                        ),
+                                .text_size(px(11.))
+                                .text_color(text_2)
+                                .child(
+                                    TextView::markdown("version-release-notes", notes, window, cx)
+                                        .style(style)
+                                        .selectable(false),
+                                )
+                        }),
                 )
             })
     }

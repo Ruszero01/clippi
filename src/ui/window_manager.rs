@@ -829,13 +829,17 @@ impl WindowManager {
                 self.do_quit(cx);
             }
             Some(TrayAction::CheckUpdate) => {
+                // Emit OpenVersionSettings BEFORE start_update_check so the
+                // RootView switches to the version tab first. Otherwise the
+                // UpdateProgress(Checking) event arrives while current_view is
+                // still "clipboard" and the on-version-tab suppression fails.
+                cx.emit(WindowManagerEvent::OpenVersionSettings);
                 self.start_update_check(cx);
                 if !self.visible {
                     self.tray_triggered = true;
                     self.show_and_focus(cx);
                     self.tray_triggered = false;
                 }
-                cx.emit(WindowManagerEvent::OpenVersionSettings);
             }
             None => {}
         }

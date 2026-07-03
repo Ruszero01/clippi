@@ -41,6 +41,9 @@ use crate::ui::window_manager::WindowManager;
 pub enum SettingsEvent {
     /// User clicked the back button — return to clipboard view.
     Back,
+    /// Active tab changed — RootView should clear update toast when
+    /// switching to the version tab (index 5).
+    TabChanged(usize),
     /// Theme setting changed — RootView should rebuild its ClippiTheme.
     ThemeChanged(String),
     ClipboardSettingsChanged {
@@ -307,6 +310,7 @@ impl Render for SettingsPanel {
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 this.update(cx, |panel, cx| {
                                     panel.set_active_tab(i);
+                                    cx.emit(SettingsEvent::TabChanged(i));
                                     cx.notify();
                                 });
                             })
