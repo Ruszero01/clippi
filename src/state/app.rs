@@ -360,15 +360,36 @@ impl AppState {
         let count = self.tags.len();
         let color = next_tag_color(count);
         match self.db.create_tag(name, color) {
-            Ok(_) => self.reload_tags(),
+            Ok(_) => {
+                self.sync_dirty.store(true, Ordering::SeqCst);
+                self.reload_tags();
+            }
             Err(e) => log::error!("Failed to create tag: {e}"),
         }
     }
 
     /// Delete a tag by id.
     pub fn delete_tag(&mut self, tag_id: i64) {
+        let tag = match self.db.get_tag_by_id(tag_id) {
+            Ok(tag) => tag,
+            Err(e) => {
+                log::error!("Failed to load tag before deletion: {e}");
+                None
+            }
+        };
         match self.db.delete_tag(tag_id) {
             Ok(_) => {
+                if let Some(tag) = tag {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let device = crate::services::backends::local_folder::hostname();
+                    if let Err(e) = self
+                        .db
+                        .record_tag_deletion(&tag.uid, &tag.name, &now, &device)
+                    {
+                        log::error!("Failed to record tag deletion: {e}");
+                    }
+                }
+                self.sync_dirty.store(true, Ordering::SeqCst);
                 self.filters.tag_ids.retain(|&id| id != tag_id);
                 self.reload_tags();
                 self.reload_items();
@@ -381,6 +402,7 @@ impl AppState {
     pub fn update_tag(&mut self, tag_id: i64, name: &str, color: &str) {
         match self.db.update_tag(tag_id, name, color) {
             Ok(_) => {
+                self.sync_dirty.store(true, Ordering::SeqCst);
                 self.cancel_edit_tag();
                 self.reload_tags();
                 // Incremental update: update tag name/color on all items

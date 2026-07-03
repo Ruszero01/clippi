@@ -5,6 +5,7 @@
 //! can later be used with a WebDAV backend by swapping the transport layer.
 
 use crate::core::db::Database;
+use crate::core::types::TagInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -83,6 +84,8 @@ pub struct SyncItem {
 /// Tag reference embedded in a SyncItem.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncTagRef {
+    #[serde(default)]
+    pub uid: String,
     pub name: String,
     pub color: String,
 }
@@ -90,6 +93,8 @@ pub struct SyncTagRef {
 /// Global tag definition in the top-level tags array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncTag {
+    #[serde(default)]
+    pub uid: String,
     pub name: String,
     pub color: String,
     /// Last-modified timestamp for tag color conflict resolution.
@@ -108,6 +113,8 @@ pub struct SyncDeletedItem {
 /// A deleted tag tombstone — notifies other devices to delete this tag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDeletedTag {
+    #[serde(default)]
+    pub uid: String,
     pub name: String,
     pub deleted_at: String, // RFC3339
     pub device_name: String,
@@ -173,6 +180,7 @@ pub fn build_snapshot(
         .collect();
 
     let mut sync_items: Vec<SyncItem> = Vec::with_capacity(items.len());
+    let mut used_tag_uids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut used_tag_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for item in items {
@@ -191,7 +199,11 @@ pub fn build_snapshot(
             .iter()
             .map(|t| {
                 used_tag_names.insert(t.name.clone());
+                if !t.uid.is_empty() {
+                    used_tag_uids.insert(t.uid.clone());
+                }
                 SyncTagRef {
+                    uid: t.uid.clone(),
                     name: t.name.clone(),
                     color: t.color.clone(),
                 }
@@ -220,8 +232,9 @@ pub fn build_snapshot(
         db.get_all_tags()
             .map_err(|e| format!("query all tags: {e}"))?
             .into_iter()
-            .filter(|t| used_tag_names.contains(&t.name))
+            .filter(|t| used_tag_uids.contains(&t.uid) || used_tag_names.contains(&t.name))
             .map(|t| SyncTag {
+                uid: t.uid,
                 name: t.name,
                 color: t.color,
                 updated_at: t.updated_at,
@@ -245,7 +258,8 @@ pub fn build_snapshot(
         .get_deleted_tags_recent(30)
         .map_err(|e| format!("query tag tombstones: {e}"))?
         .into_iter()
-        .map(|(name, at, dev)| SyncDeletedTag {
+        .map(|(uid, name, at, dev)| SyncDeletedTag {
+            uid,
             name,
             deleted_at: at,
             device_name: dev,
@@ -279,6 +293,66 @@ pub fn build_snapshot(
     };
     sanitize_payload(&mut payload);
     Ok(payload)
+}
+
+fn tag_key(uid: &str, name: &str) -> String {
+    if uid.is_empty() {
+        format!("name:{name}")
+    } else {
+        format!("uid:{uid}")
+    }
+}
+
+fn resolve_tag_for_ref(db: &Database, tag_ref: &SyncTagRef) -> rusqlite::Result<Option<TagInfo>> {
+    if !tag_ref.uid.is_empty() {
+        if let Some(tag) = db.get_tag_by_uid(&tag_ref.uid)? {
+            return Ok(Some(tag));
+        }
+    }
+    db.get_tag_by_name(&tag_ref.name)
+}
+
+fn resolve_tag_for_remote_tag(
+    db: &Database,
+    remote_tag: &SyncTag,
+) -> rusqlite::Result<Option<TagInfo>> {
+    if !remote_tag.uid.is_empty() {
+        if let Some(tag) = db.get_tag_by_uid(&remote_tag.uid)? {
+            return Ok(Some(tag));
+        }
+    }
+    db.get_tag_by_name(&remote_tag.name)
+}
+
+fn resolve_tag_for_tombstone(
+    db: &Database,
+    tombstone: &SyncDeletedTag,
+) -> rusqlite::Result<Option<TagInfo>> {
+    if tombstone.uid.is_empty() {
+        db.get_tag_by_name(&tombstone.name)
+    } else {
+        db.get_tag_by_uid(&tombstone.uid)
+    }
+}
+
+fn tag_has_more_stable_refs(a: &SyncItem, b: &SyncItem) -> bool {
+    let a_count = a.tags.iter().filter(|tag| !tag.uid.is_empty()).count();
+    let b_count = b.tags.iter().filter(|tag| !tag.uid.is_empty()).count();
+    a_count > b_count
+}
+
+fn sync_tag_preferred(candidate: &SyncTag, existing: &SyncTag) -> bool {
+    rfc3339_newer(&candidate.updated_at, &existing.updated_at)
+        || (candidate.updated_at == existing.updated_at
+            && existing.uid.is_empty()
+            && !candidate.uid.is_empty())
+}
+
+fn deleted_tag_preferred(candidate: &SyncDeletedTag, existing: &SyncDeletedTag) -> bool {
+    rfc3339_newer(&candidate.deleted_at, &existing.deleted_at)
+        || (candidate.deleted_at == existing.deleted_at
+            && existing.uid.is_empty()
+            && !candidate.uid.is_empty())
 }
 
 // --- ── Merge logic ── ---
@@ -416,30 +490,37 @@ pub fn merge_remote_into_local(
         }
     }
 
-    // Collect remote tag names — if a tombstone and a tag share the same name,
-    // the remote device recreated the tag and the tag should take precedence.
-    let remote_tag_names: std::collections::HashSet<&str> =
-        remote.tags.iter().map(|t| t.name.as_str()).collect();
+    // If a tombstone and a tag share the same stable identity, the remote
+    // device recreated the tag and the live tag should take precedence.
+    let remote_tag_keys: std::collections::HashSet<String> = remote
+        .tags
+        .iter()
+        .map(|t| tag_key(&t.uid, &t.name))
+        .collect();
 
     // --- Phase 2: Process remote tag tombstones ---
     for tombstone in &remote.deleted_tags {
         if tombstone.device_name == local_device_name {
             continue; // own deletion
         }
-        // Skip tombstone if the remote payload also includes a tag with the same
-        // --- name — the sender recreated this tag after deleting it. ---
-        if remote_tag_names.contains(tombstone.name.as_str()) {
+        if remote_tag_keys.contains(&tag_key(&tombstone.uid, &tombstone.name)) {
             continue;
         }
-        if db.is_tag_tombstoned(&tombstone.name).unwrap_or(false) {
+        if db
+            .is_tag_tombstoned(&tombstone.uid, &tombstone.name)
+            .unwrap_or(false)
+        {
             // Already tombstoned — replace if remote tombstone is newer.
-            if let Ok(Some(local_at)) = db.get_tag_tombstone_deleted_at(&tombstone.name) {
+            if let Ok(Some(local_at)) =
+                db.get_tag_tombstone_deleted_at(&tombstone.uid, &tombstone.name)
+            {
                 if rfc3339_newer(&tombstone.deleted_at, &local_at) {
-                    if let Err(e) = db.remove_tag_tombstone(&tombstone.name) {
+                    if let Err(e) = db.remove_tag_tombstone(&tombstone.uid, &tombstone.name) {
                         log::warn!("sync: remove_tag_tombstone (update) failed: {e}");
                     }
                     let _ = db
                         .record_tag_deletion(
+                            &tombstone.uid,
                             &tombstone.name,
                             &tombstone.deleted_at,
                             &tombstone.device_name,
@@ -453,17 +534,23 @@ pub fn merge_remote_into_local(
         }
         // --- Check local tag age before recording the tombstone. ---
         // --- If the local tag is newer, the user recreated it — skip. ---
-        if let Ok(Some(local_tag)) = db.get_tag_by_name(&tombstone.name) {
+        if let Ok(Some(local_tag)) = resolve_tag_for_tombstone(&db, tombstone) {
             let remote_ts = parse_rfc3339(&tombstone.deleted_at);
             let local_ts = parse_rfc3339(&local_tag.updated_at);
             if remote_ts.is_some_and(|r| local_ts.is_none_or(|l| r > l)) {
                 // Tombstone is newer — delete and record for propagation.
-                drop(local_tag);
-                if db.delete_tag_by_name(&tombstone.name).unwrap_or(false) {
+                let deleted = if tombstone.uid.is_empty() {
+                    db.delete_tag_by_name(&tombstone.name)
+                } else {
+                    db.delete_tag_by_uid(&tombstone.uid)
+                }
+                .unwrap_or(false);
+                if deleted {
                     stats.tags_deleted += 1;
                 }
                 let _ = db
                     .record_tag_deletion(
+                        &tombstone.uid,
                         &tombstone.name,
                         &tombstone.deleted_at,
                         &tombstone.device_name,
@@ -475,6 +562,7 @@ pub fn merge_remote_into_local(
             // No local tag — record tombstone for propagation.
             let _ = db
                 .record_tag_deletion(
+                    &tombstone.uid,
                     &tombstone.name,
                     &tombstone.deleted_at,
                     &tombstone.device_name,
@@ -487,16 +575,25 @@ pub fn merge_remote_into_local(
     for remote_tag in &remote.tags {
         // --- If this tag is locally tombstoned, compare timestamps. The remote ---
         // --- tag may be newer (recreated after deletion) — in that case accept it. ---
-        if db.is_tag_tombstoned(&remote_tag.name).unwrap_or(false) {
+        if db
+            .is_tag_tombstoned(&remote_tag.uid, &remote_tag.name)
+            .unwrap_or(false)
+        {
             if remote_tag.updated_at.is_empty() {
                 // --- v1 tag without timestamp — fall back to device-based check. ---
                 if db
-                    .is_tag_tombstoned_by_other_device(&remote_tag.name, &remote.device_name)
+                    .is_tag_tombstoned_by_other_device(
+                        &remote_tag.uid,
+                        &remote_tag.name,
+                        &remote.device_name,
+                    )
                     .unwrap_or(false)
                 {
                     continue;
                 }
-            } else if let Ok(Some(deleted_at)) = db.get_tag_tombstone_deleted_at(&remote_tag.name) {
+            } else if let Ok(Some(deleted_at)) =
+                db.get_tag_tombstone_deleted_at(&remote_tag.uid, &remote_tag.name)
+            {
                 let remote_ts = parse_rfc3339(&remote_tag.updated_at);
                 let del_ts = parse_rfc3339(&deleted_at);
                 if remote_ts.is_some_and(|r| del_ts.is_some_and(|d| d >= r)) {
@@ -506,19 +603,30 @@ pub fn merge_remote_into_local(
             }
         }
         // --- Clear any tombstone so the tag can be recreated. ---
-        if let Err(e) = db.remove_tag_tombstone(&remote_tag.name) {
+        if let Err(e) = db.remove_tag_tombstone(&remote_tag.uid, &remote_tag.name) {
             log::warn!("sync: remove_tag_tombstone (merge) failed: {e}");
         }
-        match db
-            .get_tag_by_name(&remote_tag.name)
-            .map_err(|e| format!("tag lookup: {e}"))?
-        {
+        match resolve_tag_for_remote_tag(&db, remote_tag).map_err(|e| format!("tag lookup: {e}"))? {
             None => {
                 // --- New tag from remote ---
-                if remote_tag.updated_at.is_empty() {
+                if remote_tag.updated_at.is_empty() && remote_tag.uid.is_empty() {
                     db.create_tag(&remote_tag.name, &remote_tag.color)
-                } else {
+                } else if remote_tag.updated_at.is_empty() {
+                    db.create_tag_with_uid_and_timestamp(
+                        &remote_tag.uid,
+                        &remote_tag.name,
+                        &remote_tag.color,
+                        &chrono::Utc::now().to_rfc3339(),
+                    )
+                } else if remote_tag.uid.is_empty() {
                     db.create_tag_with_timestamp(
+                        &remote_tag.name,
+                        &remote_tag.color,
+                        &remote_tag.updated_at,
+                    )
+                } else {
+                    db.create_tag_with_uid_and_timestamp(
+                        &remote_tag.uid,
                         &remote_tag.name,
                         &remote_tag.color,
                         &remote_tag.updated_at,
@@ -533,12 +641,25 @@ pub fn merge_remote_into_local(
                     let remote_ts = parse_rfc3339(&remote_tag.updated_at);
                     let local_ts = parse_rfc3339(&local_tag.updated_at);
                     if remote_ts.is_some_and(|r| local_ts.is_none_or(|l| r > l)) {
-                        db.update_tag_with_timestamp(
-                            local_tag.id,
-                            &remote_tag.name,
-                            &remote_tag.color,
-                            &remote_tag.updated_at,
-                        )
+                        if !remote_tag.uid.is_empty()
+                            && local_tag.uid != remote_tag.uid
+                            && local_tag.uid == crate::core::db::legacy_tag_uid(&local_tag.name)
+                        {
+                            db.update_tag_uid_with_timestamp(
+                                local_tag.id,
+                                &remote_tag.uid,
+                                &remote_tag.name,
+                                &remote_tag.color,
+                                &remote_tag.updated_at,
+                            )
+                        } else {
+                            db.update_tag_with_timestamp(
+                                local_tag.id,
+                                &remote_tag.name,
+                                &remote_tag.color,
+                                &remote_tag.updated_at,
+                            )
+                        }
                         .map_err(|e| format!("update tag: {e}"))?;
                     }
                 }
@@ -588,7 +709,7 @@ pub fn merge_remote_into_local(
                 stats.items_added += 1;
 
                 for tag_ref in &remote_item.tags {
-                    if let Ok(Some(tag)) = db.get_tag_by_name(&tag_ref.name) {
+                    if let Ok(Some(tag)) = resolve_tag_for_ref(&db, tag_ref) {
                         if let Err(e) = db.add_item_tag(item_id, tag.id) {
                             log::warn!("sync: add_item_tag (new) failed: {e}");
                         }
@@ -674,12 +795,14 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
         item.note.hash(&mut h);
         item.tags.len().hash(&mut h);
         for tag in &item.tags {
+            tag.uid.hash(&mut h);
             tag.name.hash(&mut h);
             tag.color.hash(&mut h);
         }
     }
     payload.items.len().hash(&mut h);
     for tag in &payload.tags {
+        tag.uid.hash(&mut h);
         tag.name.hash(&mut h);
         tag.color.hash(&mut h);
         tag.updated_at.hash(&mut h);
@@ -691,6 +814,7 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
     }
     payload.deleted_items.len().hash(&mut h);
     for d in &payload.deleted_tags {
+        d.uid.hash(&mut h);
         d.name.hash(&mut h);
         d.deleted_at.hash(&mut h);
     }
@@ -709,7 +833,10 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
         std::collections::HashMap::with_capacity(payload.items.len());
     for item in std::mem::take(&mut payload.items) {
         match item_map.get(&item.content_hash) {
-            Some(existing) if !rfc3339_newer(&item.updated_at, &existing.updated_at) => {}
+            Some(existing)
+                if !(rfc3339_newer(&item.updated_at, &existing.updated_at)
+                    || item.updated_at == existing.updated_at
+                        && tag_has_more_stable_refs(&item, existing)) => {}
             _ => {
                 item_map.insert(item.content_hash, item);
             }
@@ -719,13 +846,28 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
     let mut tag_map: std::collections::HashMap<String, SyncTag> =
         std::collections::HashMap::with_capacity(payload.tags.len());
     for tag in std::mem::take(&mut payload.tags) {
-        match tag_map.get(&tag.name) {
-            Some(existing) if !rfc3339_newer(&tag.updated_at, &existing.updated_at) => {}
+        let key = tag_key(&tag.uid, &tag.name);
+        match tag_map.get(&key) {
+            Some(existing) if !sync_tag_preferred(&tag, existing) => {}
             _ => {
-                tag_map.insert(tag.name.clone(), tag);
+                tag_map.insert(key, tag);
             }
         }
     }
+    let mut tag_name_map: std::collections::HashMap<String, SyncTag> =
+        std::collections::HashMap::with_capacity(tag_map.len());
+    for tag in tag_map.into_values() {
+        match tag_name_map.get(&tag.name) {
+            Some(existing) if !sync_tag_preferred(&tag, existing) => {}
+            _ => {
+                tag_name_map.insert(tag.name.clone(), tag);
+            }
+        }
+    }
+    let mut tag_map: std::collections::HashMap<String, SyncTag> = tag_name_map
+        .into_values()
+        .map(|tag| (tag_key(&tag.uid, &tag.name), tag))
+        .collect();
 
     let mut deleted_item_map: std::collections::HashMap<u64, SyncDeletedItem> =
         std::collections::HashMap::with_capacity(payload.deleted_items.len());
@@ -741,13 +883,29 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
     let mut deleted_tag_map: std::collections::HashMap<String, SyncDeletedTag> =
         std::collections::HashMap::with_capacity(payload.deleted_tags.len());
     for tombstone in std::mem::take(&mut payload.deleted_tags) {
-        match deleted_tag_map.get(&tombstone.name) {
-            Some(existing) if !rfc3339_newer(&tombstone.deleted_at, &existing.deleted_at) => {}
+        let key = tag_key(&tombstone.uid, &tombstone.name);
+        match deleted_tag_map.get(&key) {
+            Some(existing) if !deleted_tag_preferred(&tombstone, existing) => {}
             _ => {
-                deleted_tag_map.insert(tombstone.name.clone(), tombstone);
+                deleted_tag_map.insert(key, tombstone);
             }
         }
     }
+    let mut deleted_tag_name_map: std::collections::HashMap<String, SyncDeletedTag> =
+        std::collections::HashMap::with_capacity(deleted_tag_map.len());
+    for tombstone in deleted_tag_map.into_values() {
+        match deleted_tag_name_map.get(&tombstone.name) {
+            Some(existing) if !deleted_tag_preferred(&tombstone, existing) => {}
+            _ => {
+                deleted_tag_name_map.insert(tombstone.name.clone(), tombstone);
+            }
+        }
+    }
+    let mut deleted_tag_map: std::collections::HashMap<String, SyncDeletedTag> =
+        deleted_tag_name_map
+            .into_values()
+            .map(|tombstone| (tag_key(&tombstone.uid, &tombstone.name), tombstone))
+            .collect();
 
     let mut unfavorite_map: std::collections::HashMap<u64, SyncUnfavoritedItem> =
         std::collections::HashMap::with_capacity(payload.unfavorited_items.len());
@@ -782,10 +940,10 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
         true
     });
 
-    tag_map.retain(|name, tag| {
-        if let Some(tombstone) = deleted_tag_map.get(name) {
+    tag_map.retain(|key, tag| {
+        if let Some(tombstone) = deleted_tag_map.get(key) {
             if rfc3339_newer(&tag.updated_at, &tombstone.deleted_at) {
-                deleted_tag_map.remove(name);
+                deleted_tag_map.remove(key);
                 true
             } else {
                 false
@@ -809,17 +967,53 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
     payload.deleted_tags = deleted_tag_map.into_values().collect();
     payload.unfavorited_items = unfavorite_map.into_values().collect();
 
+    canonicalize_item_tag_refs(payload);
     sort_payload(payload);
+}
+
+fn canonicalize_item_tag_refs(payload: &mut SyncPayload) {
+    let mut by_uid: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    let mut by_name: std::collections::HashMap<String, (String, String, String)> =
+        std::collections::HashMap::new();
+    for tag in &payload.tags {
+        if !tag.uid.is_empty() {
+            by_uid.insert(tag.uid.clone(), (tag.name.clone(), tag.color.clone()));
+        }
+        by_name.insert(
+            tag.name.clone(),
+            (tag.uid.clone(), tag.name.clone(), tag.color.clone()),
+        );
+    }
+
+    for item in &mut payload.items {
+        for tag_ref in &mut item.tags {
+            if !tag_ref.uid.is_empty() {
+                if let Some((name, color)) = by_uid.get(&tag_ref.uid) {
+                    tag_ref.name = name.clone();
+                    tag_ref.color = color.clone();
+                    continue;
+                }
+            }
+            if let Some((uid, name, color)) = by_name.get(&tag_ref.name) {
+                tag_ref.uid = uid.clone();
+                tag_ref.name = name.clone();
+                tag_ref.color = color.clone();
+            }
+        }
+    }
 }
 
 fn sort_payload(payload: &mut SyncPayload) {
     for item in &mut payload.items {
-        item.tags.sort_by(|a, b| a.name.cmp(&b.name));
+        item.tags.sort_by_key(|tag| tag_key(&tag.uid, &tag.name));
     }
     payload.items.sort_by_key(|i| i.content_hash);
-    payload.tags.sort_by(|a, b| a.name.cmp(&b.name));
+    payload.tags.sort_by_key(|tag| tag_key(&tag.uid, &tag.name));
     payload.deleted_items.sort_by_key(|d| d.content_hash);
-    payload.deleted_tags.sort_by(|a, b| a.name.cmp(&b.name));
+    payload
+        .deleted_tags
+        .sort_by_key(|tag| tag_key(&tag.uid, &tag.name));
     payload.unfavorited_items.sort_by_key(|u| u.content_hash);
 }
 
@@ -838,7 +1032,7 @@ fn replace_item_tags(db: &Database, item_id: i64, item: &SyncItem) -> Result<(),
     db.clear_item_tags(item_id)
         .map_err(|e| format!("clear tags: {e}"))?;
     for tag_ref in &item.tags {
-        if let Ok(Some(tag)) = db.get_tag_by_name(&tag_ref.name) {
+        if let Ok(Some(tag)) = resolve_tag_for_ref(db, tag_ref) {
             if let Err(e) = db.add_item_tag(item_id, tag.id) {
                 log::warn!("sync: add_item_tag (update) failed: {e}");
             }
@@ -847,9 +1041,8 @@ fn replace_item_tags(db: &Database, item_id: i64, item: &SyncItem) -> Result<(),
     Ok(())
 }
 
-/// Merge `other` into `base`. For items (by content_hash) and tags (by name),
-/// the version with the newer updated_at wins. Tombstones and unfavorite markers
-/// are deduplicated by their natural keys.
+/// Merge `other` into `base`. Items use content_hash, tags use stable uid when
+/// available and fall back to name for legacy payloads.
 pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload {
     // Merge items: keep the newer version for each content_hash
     let mut item_map: std::collections::HashMap<u64, SyncItem> =
@@ -860,7 +1053,10 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
     for item in other.items {
         match item_map.get(&item.content_hash) {
             Some(existing) => {
-                if rfc3339_newer(&item.updated_at, &existing.updated_at) {
+                if rfc3339_newer(&item.updated_at, &existing.updated_at)
+                    || (item.updated_at == existing.updated_at
+                        && tag_has_more_stable_refs(&item, existing))
+                {
                     item_map.insert(item.content_hash, item);
                 }
             }
@@ -871,21 +1067,22 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
     }
     base.items = item_map.into_values().collect();
 
-    // Merge tags: keep the newer color for each name
+    // Merge tags: keep the newer version for each stable identity.
     let mut tag_map: std::collections::HashMap<String, SyncTag> =
         std::collections::HashMap::with_capacity(base.tags.len() + other.tags.len());
     for tag in base.tags {
-        tag_map.insert(tag.name.clone(), tag);
+        tag_map.insert(tag_key(&tag.uid, &tag.name), tag);
     }
     for tag in other.tags {
-        match tag_map.get(&tag.name) {
+        let key = tag_key(&tag.uid, &tag.name);
+        match tag_map.get(&key) {
             Some(existing) => {
-                if rfc3339_newer(&tag.updated_at, &existing.updated_at) {
-                    tag_map.insert(tag.name.clone(), tag);
+                if sync_tag_preferred(&tag, existing) {
+                    tag_map.insert(key, tag);
                 }
             }
             None => {
-                tag_map.insert(tag.name.clone(), tag);
+                tag_map.insert(key, tag);
             }
         }
     }
@@ -915,15 +1112,16 @@ pub fn merge_payloads(mut base: SyncPayload, other: SyncPayload) -> SyncPayload 
         let mut seen: std::collections::HashMap<String, SyncDeletedTag> = base
             .deleted_tags
             .into_iter()
-            .map(|d| (d.name.clone(), d))
+            .map(|d| (tag_key(&d.uid, &d.name), d))
             .collect();
         for d in other.deleted_tags {
-            match seen.get(&d.name) {
-                Some(existing) if rfc3339_newer(&d.deleted_at, &existing.deleted_at) => {
-                    seen.insert(d.name.clone(), d);
+            let key = tag_key(&d.uid, &d.name);
+            match seen.get(&key) {
+                Some(existing) if deleted_tag_preferred(&d, existing) => {
+                    seen.insert(key, d);
                 }
                 None => {
-                    seen.insert(d.name.clone(), d);
+                    seen.insert(key, d);
                 }
                 _ => {}
             }
@@ -1016,12 +1214,14 @@ mod tests {
                 note: String::new(),
                 size: 0,
                 tags: vec![SyncTagRef {
+                    uid: "tag-work".into(),
                     name: "work".into(),
                     color: "#EF4444".into(),
                 }],
                 meta_type: String::new(),
             }],
             tags: vec![SyncTag {
+                uid: "tag-work".into(),
                 name: "work".into(),
                 color: "#EF4444".into(),
                 updated_at: String::new(),
@@ -1098,6 +1298,16 @@ mod tests {
 
     fn make_tag(name: &str, color: &str, updated_at: &str) -> SyncTag {
         SyncTag {
+            uid: String::new(),
+            name: name.into(),
+            color: color.into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    fn make_tag_with_uid(uid: &str, name: &str, color: &str, updated_at: &str) -> SyncTag {
+        SyncTag {
+            uid: uid.into(),
             name: name.into(),
             color: color.into(),
             updated_at: updated_at.into(),
@@ -1152,6 +1362,77 @@ mod tests {
         assert_eq!(merged.tags.len(), 1);
         assert_eq!(merged.tags[0].color, "#00FF00");
         assert_eq!(merged.tags[0].updated_at, "2026-05-14T10:00:00Z");
+    }
+
+    #[test]
+    fn test_merge_payloads_canonicalizes_tag_rename_without_item_timestamp_bump() {
+        let mut old_item = make_item(1, "2026-05-14T09:00:00Z", "hello");
+        old_item.tags = vec![SyncTagRef {
+            uid: "tag-1".into(),
+            name: "old".into(),
+            color: "#FF0000".into(),
+        }];
+        let base = make_payload(
+            vec![old_item],
+            vec![make_tag_with_uid(
+                "tag-1",
+                "old",
+                "#FF0000",
+                "2026-05-14T09:00:00Z",
+            )],
+        );
+
+        let mut renamed_item = make_item(1, "2026-05-14T09:00:00Z", "hello");
+        renamed_item.tags = vec![SyncTagRef {
+            uid: "tag-1".into(),
+            name: "new".into(),
+            color: "#00FF00".into(),
+        }];
+        let other = make_payload(
+            vec![renamed_item],
+            vec![make_tag_with_uid(
+                "tag-1",
+                "new",
+                "#00FF00",
+                "2026-05-14T10:00:00Z",
+            )],
+        );
+
+        let merged = merge_payloads(base, other);
+        assert_eq!(merged.tags.len(), 1);
+        assert_eq!(merged.tags[0].name, "new");
+        assert_eq!(merged.items.len(), 1);
+        assert_eq!(merged.items[0].updated_at, "2026-05-14T09:00:00Z");
+        assert_eq!(merged.items[0].tags[0].uid, "tag-1");
+        assert_eq!(merged.items[0].tags[0].name, "new");
+        assert_eq!(merged.items[0].tags[0].color, "#00FF00");
+    }
+
+    #[test]
+    fn test_merge_remote_renames_tag_by_uid() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        db.create_tag_with_uid_and_timestamp("tag-1", "old", "#FF0000", "2026-05-14T09:00:00Z")
+            .expect("create tag");
+        let db = std::sync::Mutex::new(db);
+        let mut remote = make_payload(
+            vec![],
+            vec![make_tag_with_uid(
+                "tag-1",
+                "new",
+                "#00FF00",
+                "2026-05-14T10:00:00Z",
+            )],
+        );
+
+        let stats = merge_remote_into_local(&db, &mut remote, "local").expect("merge");
+        assert_eq!(stats.tags_added, 0);
+        let db = db.lock().unwrap();
+        let tag = db
+            .get_tag_by_uid("tag-1")
+            .expect("lookup")
+            .expect("tag exists");
+        assert_eq!(tag.name, "new");
+        assert_eq!(tag.color, "#00FF00");
     }
 
     #[test]

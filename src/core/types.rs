@@ -77,6 +77,8 @@ pub struct SourceAppInfo {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TagInfo {
     pub id: i64,
+    #[serde(default)]
+    pub uid: String,
     pub name: String,
     pub color: String, // 6-digit uppercase hex, e.g. "FF5733"
     #[serde(default)]

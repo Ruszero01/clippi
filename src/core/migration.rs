@@ -18,14 +18,15 @@
 //! --- 2. Add a `SyncPayload` migration step in `migrate_sync_payload` that ---
 //! --- transforms from the old format to the current one ---
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
+use uuid::Uuid;
 
 /// Current database schema version — derived from migration count (versions are 1..=N).
 #[allow(dead_code)]
 pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 
 /// Current sync protocol version — written into every `SyncPayload` snapshot.
-pub const SYNC_VERSION: u32 = 3;
+pub const SYNC_VERSION: u32 = 4;
 
 /// A registered database migration.
 struct DbMigration {
@@ -82,6 +83,11 @@ const DB_MIGRATIONS: &[DbMigration] = &[
         description: "Add index on created_at for sort-by-created query performance",
         sql: "CREATE INDEX IF NOT EXISTS idx_created ON clipboard_items(created_at DESC)",
     },
+    DbMigration {
+        version: 6,
+        description: "Add stable sync uid columns for tags and tag tombstones",
+        sql: "",
+    },
 ];
 
 /// Run all pending database migrations, updating `PRAGMA user_version`.
@@ -109,11 +115,86 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
             if !migration.sql.is_empty() {
                 conn.execute_batch(migration.sql)?;
             }
+            if migration.version == 6 {
+                migrate_tag_sync_uids(conn)?;
+            }
             conn.pragma_update(None, "user_version", migration.version)?;
         }
     }
 
     Ok(())
+}
+
+fn migrate_tag_sync_uids(conn: &Connection) -> rusqlite::Result<()> {
+    if !column_exists(conn, "tags", "uid")? {
+        conn.execute(
+            "ALTER TABLE tags ADD COLUMN uid TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "deleted_tags", "uid")? {
+        conn.execute(
+            "ALTER TABLE deleted_tags ADD COLUMN uid TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+
+    let tags: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare("SELECT id, name FROM tags WHERE uid = ''")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for (id, name) in tags {
+        conn.execute(
+            "UPDATE tags SET uid = ?1 WHERE id = ?2",
+            params![legacy_tag_uid(&name), id],
+        )?;
+    }
+
+    let deleted_tags: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare("SELECT rowid, name FROM deleted_tags WHERE uid = ''")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for (rowid, name) in deleted_tags {
+        conn.execute(
+            "UPDATE deleted_tags SET uid = ?1 WHERE rowid = ?2",
+            params![legacy_tag_uid(&name), rowid],
+        )?;
+    }
+
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_uid_uq ON tags(uid) WHERE uid != '';
+         DROP INDEX IF EXISTS idx_del_tags_name_uq;
+         CREATE INDEX IF NOT EXISTS idx_del_tags_uid ON deleted_tags(uid);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_del_tags_uid_uq ON deleted_tags(uid) WHERE uid != '';
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_del_tags_legacy_name_uq ON deleted_tags(name) WHERE uid = '';",
+    )?;
+
+    Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in rows {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn legacy_tag_uid(name: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("clippi-tag:{name}").as_bytes(),
+    )
+    .to_string()
 }
 
 /// Migrate an older sync payload to the current protocol version.
@@ -142,5 +223,9 @@ pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
             }
         }
         payload.version = 3;
+    }
+    if payload.version < 4 {
+        // v3 → v4: tag uid fields were added with #[serde(default)].
+        payload.version = 4;
     }
 }
