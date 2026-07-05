@@ -47,8 +47,6 @@ pub struct EditPanel {
     /// 以便切回富文本时能将纯文本编辑同步回 HTML 标签中。
     rich_cache: Option<RichTextCache>,
     _subscriptions: Vec<Subscription>,
-    /// Focus handle for keyboard events (ESC to go back).
-    focus_handle: FocusHandle,
 }
 
 pub enum EditPanelEvent {
@@ -96,7 +94,6 @@ impl EditPanel {
             split_drag_start_ratio: 0.5,
             rich_cache: None,
             _subscriptions,
-            focus_handle: cx.focus_handle(),
         }
     }
 
@@ -199,8 +196,6 @@ impl Render for EditPanel {
         let selected_type = self.selected_type.clone();
         let preview_generation = self.preview_generation;
 
-        let focus_handle = self.focus_handle.clone();
-
         div()
             .relative()
             .flex()
@@ -211,7 +206,6 @@ impl Render for EditPanel {
             .overflow_hidden()
             .p(px(8.))
             .gap(px(8.))
-            .track_focus(&focus_handle)
             .child(
                 div()
                     .flex()

@@ -680,10 +680,6 @@ impl Render for RootView {
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
-        // When in settings or edit view, ensure the root has focus so ESC works.
-        if !is_clipboard && !self.focus_handle.is_focused(window) {
-            self.focus_handle.focus(window);
-        }
         let theme = self.theme.clone();
         let panel_border = if theme.bg == rgb(0x191a1b) {
             rgb(0x3a3b3c)
