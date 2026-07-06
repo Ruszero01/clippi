@@ -657,12 +657,11 @@ impl Render for QuickPasteView {
                                             let ve2 = ve.clone();
                                             let ve3 = ve.clone();
                                             move |ev, _window, cx| {
-                                                // Single-click: select
-                                                ve2.update(cx, |view, cx| {
-                                                    view.select_index(index, cx);
-                                                });
-                                                // Double-click: paste
-                                                if ev.click_count == 2 {
+                                                // Single-click: select + paste
+                                                if ev.click_count == 1 {
+                                                    ve2.update(cx, |view, cx| {
+                                                        view.select_index(index, cx);
+                                                    });
                                                     ve3.update(cx, |_, cx| {
                                                         cx.emit(QuickPasteEvent::Paste(item_id));
                                                     });
