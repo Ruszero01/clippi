@@ -996,9 +996,9 @@ impl Render for RootView {
                     div()
                         .absolute()
                         .size_full()
+                        .occlude()
                         .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                            cx.stop_propagation();
                             search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
                         })
                         .child(
@@ -1019,9 +1019,9 @@ impl Render for RootView {
                     div()
                         .absolute()
                         .size_full()
+                        .occlude()
                         .opacity(filter_config_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                            cx.stop_propagation();
                             search_for_backdrop.update(cx, |bar, cx| bar.close_filter_config(cx));
                         })
                         .child(
@@ -1102,10 +1102,10 @@ impl Render for RootView {
                     div()
                         .absolute()
                         .size_full()
+                        .occlude()
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
                             move |_ev, _window, cx| {
-                                cx.stop_propagation();
                                 l.update(cx, |lst, cx| lst.dismiss_context_menu(cx));
                             }
                         })
@@ -1188,11 +1188,11 @@ impl Render for RootView {
                     div()
                         .absolute()
                         .size_full()
+                        .occlude()
                         .opacity(tag_picker_opacity)
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
                             move |_ev, _window, cx| {
-                                cx.stop_propagation();
                                 l.update(cx, |lst, cx| lst.hide_tag_picker(cx));
                             }
                         }),
