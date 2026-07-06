@@ -630,7 +630,10 @@ impl ClipboardListView {
         self.sync_items_from_state(cx);
         // --- Keep the affected item selected and visible. ---
         // --- (updated_at is bumped but position is preserved — see AppState) ---
-        self.scroll_to_item_if_visible(target_id, cx);
+        // --- Skip in batch mode to preserve multi-selection state. ---
+        if !self.tag_picker_is_batch {
+            self.scroll_to_item_if_visible(target_id, cx);
+        }
     }
 
     pub fn create_tag_from_picker(&mut self, name: &str, cx: &mut Context<Self>) {
@@ -648,7 +651,9 @@ impl ClipboardListView {
             self.state.update(cx, |s, _cx| s.clear_item_tags(target_id));
         }
         self.sync_items_from_state(cx);
-        self.scroll_to_item_if_visible(target_id, cx);
+        if !self.tag_picker_is_batch {
+            self.scroll_to_item_if_visible(target_id, cx);
+        }
     }
 
     /// After a tag/favorite/note operation bumps `updated_at`, keep the affected
