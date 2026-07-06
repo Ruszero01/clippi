@@ -750,6 +750,42 @@ impl AppState {
         paste_after_delay(shortcuts);
     }
 
+    /// Paste the file paths as plain text.
+    pub fn paste_file_path(&mut self, id: i64) {
+        use crate::platform::paste::{paste_after_delay, restore_paste_target};
+
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("paste_file_path: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("paste_file_path: db error for {id}: {e}");
+                return;
+            }
+        };
+        if item.file_data.is_empty() {
+            return;
+        }
+        let file_data = FileData::from_json(&item.file_data);
+        if file_data.files.is_empty() {
+            return;
+        }
+        let paths_text: String = file_data
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        self.touch_item_usage(id);
+        self.write_text_to_clipboard_internal(&paths_text);
+        restore_paste_target();
+        let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
+        paste_after_delay(shortcuts);
+    }
+
     pub fn open_item_location(&self, id: i64) {
         let item = match self.db.get_by_id(id) {
             Ok(Some(item)) => item,
@@ -1137,11 +1173,28 @@ impl AppState {
         };
 
         self.touch_item_usage(id);
-        let expected = item.full_text.clone();
+        let is_file_or_image = item.content_type == ContentType::File
+            || (item.content_type == ContentType::Image && !item.image_path.is_empty());
+        let expected = if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+            item.image_path.clone()
+        } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
+            let file_data = FileData::from_json(&item.file_data);
+            file_data
+                .files
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            item.full_text.clone()
+        };
         self.write_item_to_clipboard_internal(&item, true);
 
         if !expected.is_empty() {
             crate::services::clipboard_ops::verify_clipboard_content(&expected, 200);
+        }
+        if is_file_or_image {
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         restore_paste_target();

@@ -325,6 +325,7 @@ impl QuickPasteView {
         };
 
         let is_image = item.content_type == ContentType::Image;
+        let is_file = item.content_type == ContentType::File && !item.file_data.is_empty();
         let is_color = item.meta_type == "color";
 
         if is_image {
@@ -340,6 +341,9 @@ impl QuickPasteView {
                 self.current_alt_index = pos;
                 self.current_alt_mode = default_mode.clone();
             }
+        } else if is_file {
+            self.available_alt_modes.push("file_path".to_string());
+            self.current_alt_mode = "file_path".to_string();
         } else if is_color {
             let full_text = &item.full_text;
             let current_is_hex = detect_color(full_text)
@@ -399,6 +403,7 @@ impl QuickPasteView {
                         "ocr" => "粘贴OCR文本",
                         "rgb" => "粘贴为RGB",
                         "hex" => "粘贴为HEX",
+                        "file_path" => "粘贴文件路径",
                         _ => "高级粘贴",
                     };
                     (label, mode.clone(), i == self.current_alt_index)

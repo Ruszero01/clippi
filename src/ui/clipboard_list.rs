@@ -817,6 +817,13 @@ impl ClipboardListView {
                     self.sync_items_from_state_for_usage(cx);
                 }
             }
+            "paste_file_path" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_file_path(item_id));
+                    self.sync_items_from_state_for_usage(cx);
+                }
+            }
             "paste_image_bitmap" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;

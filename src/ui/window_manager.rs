@@ -1708,6 +1708,9 @@ impl WindowManager {
             "hex" => {
                 self.state.update(cx, |s, _cx| s.paste_as_hex(id));
             }
+            "file_path" => {
+                self.state.update(cx, |s, _cx| s.paste_file_path(id));
+            }
             _ => {
                 let plain = self.state.read(cx).settings.copy_as_plain_text;
                 self.state.update(cx, |s, _cx| s.paste_item(id, plain));

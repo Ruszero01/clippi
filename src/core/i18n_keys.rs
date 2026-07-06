@@ -197,6 +197,7 @@ define_i18n! {
     CtxTag:             ("标签", "Tag"),
     CtxOpenImage:       ("打开图片", "Open image"),
     CtxPasteImagePath:  ("粘贴图片路径", "Paste image path"),
+    CtxPasteFilePath:  ("粘贴文件路径", "Paste file path"),
     CtxPasteImageBitmap: ("粘贴为位图", "Paste as bitmap"),
     CtxPasteOcr:        ("粘贴 OCR 文本", "Paste OCR text"),
     CtxDetectQr:        ("识别二维码", "Detect QR Code"),

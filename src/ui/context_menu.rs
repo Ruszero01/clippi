@@ -256,6 +256,16 @@ impl ContextMenu {
                 fav: false,
             });
         }
+        // --- Paste file path (file only) ---
+        if ctx.is_file {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxPasteFilePath.text().into(),
+                action: "paste_file_path".into(),
+                icon: "\u{e60e}".into(),
+                danger: false,
+                fav: false,
+            });
+        }
 
         // --- Separator ---
         items.push(RawMenuItem {
