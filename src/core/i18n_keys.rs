@@ -114,7 +114,7 @@ define_i18n! {
     SettingAutoFocusSearch: ("自动聚焦搜索框", "Auto-focus search"),
     DescAutoFocusSearchOn:  ("打开窗口时自动聚焦搜索框", "Auto-focus search bar on open"),
     DescAutoFocusSearchOff: ("手动点击聚焦搜索框", "Click to focus search bar"),
-    SettingAutoFetchUrlTitle: ("自动解析URL", "Auto-fetch URL"),
+    SettingAutoFetchUrlTitle: ("自动解析 URL", "Auto-fetch URL"),
     SettingFilterForeignPaths:   ("跨平台路径过滤", "Filter foreign paths"),
     DescFilterForeignPathsOn:    ("隐藏非当前平台格式的路径", "Hide paths from other platforms"),
     DescFilterForeignPathsOff:   ("显示所有平台的路径", "Show all platform paths"),
