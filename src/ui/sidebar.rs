@@ -20,6 +20,13 @@ use crate::state::app::AppState;
 use super::clipboard_list::ClipboardListView;
 use super::theme::ClippiTheme;
 
+/// Sidebar top offset (must match `top(px(84.))` in root.rs).
+const SIDEBAR_TOP_OFFSET: f32 = 84.0;
+/// Height of a single sidebar row (22px row + 2px gap).
+const ROW_HEIGHT: f32 = 24.0;
+/// Bottom padding to keep the last row from touching the window edge.
+const SIDEBAR_BOTTOM_PADDING: f32 = 8.0;
+
 /// Sidebar entity for displaying and managing tags.
 pub struct Sidebar {
     state: Entity<AppState>,
@@ -85,7 +92,7 @@ impl Render for Sidebar {
                 && now.duration_since(*started_at) < Duration::from_millis(300)
         });
 
-        let display_tags = ordered_sidebar_tags(
+        let mut display_tags = ordered_sidebar_tags(
             &tags,
             &active_tag_ids,
             &pinned_tag_ids,
@@ -101,6 +108,25 @@ impl Render for Sidebar {
         }
         let transition_generations = self.transition_generations.clone();
         self.rendered_tag_ids = display_tags.iter().map(|tag| tag.id).collect();
+
+        // ── Collapse tags that don't fit in the available vertical space ──
+        let available_height =
+            f32::from(window.viewport_size().height) - SIDEBAR_TOP_OFFSET - SIDEBAR_BOTTOM_PADDING;
+        let max_visible = (available_height / ROW_HEIGHT).floor() as usize;
+
+        let hidden_count = display_tags.len().saturating_sub(max_visible);
+        if hidden_count > 0 && max_visible > 1 {
+            // Keep last slot for the "+N" overflow indicator row.
+            let overflow_start = max_visible.saturating_sub(1);
+            let overflow_tags: Vec<_> = display_tags.drain(overflow_start..).collect();
+            // Clean up animation state for tags that are now invisible.
+            for tag in &overflow_tags {
+                self.rendered_tag_ids.retain(|id| *id != tag.id);
+                self.unchecked_unpinned_since.remove(&tag.id);
+                self.transition_generations.remove(&tag.id);
+            }
+        }
+        // ── end collapse ──
 
         let dark = self.dark_mode;
         let text_1 = if dark { rgb(0xeaebec) } else { rgb(0x1a1c2e) };
@@ -249,6 +275,37 @@ impl Render for Sidebar {
                     row
                 }
             }))
+            .when(hidden_count > 0, move |parent| {
+                let pill_bg = if dark {
+                    rgba(0x232425e8)
+                } else {
+                    rgba(0xffffffe8)
+                };
+                let pill_border = if dark {
+                    rgba(0xffffff20)
+                } else {
+                    rgba(0x00000014)
+                };
+                let text_2 = if dark { rgb(0x919496) } else { rgb(0x7c809a) };
+                // 38px = 36px visible + 2px overlap to prevent gap with main panel edge
+                parent.child(
+                    div().w(px(38.)).flex().justify_end().child(
+                        div()
+                            .h(px(18.))
+                            .rounded_l(px(9.))
+                            .bg(pill_bg)
+                            .border(px(1.))
+                            .border_color(pill_border)
+                            .px(px(5.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(9.))
+                            .text_color(text_2)
+                            .cursor(CursorStyle::PointingHand)
+                            .child(format!("+{hidden_count}")),
+                    ),
+                )
+            })
     }
 }
 

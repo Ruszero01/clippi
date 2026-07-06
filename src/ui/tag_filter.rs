@@ -163,11 +163,18 @@ impl Render for TagFilterPanel {
         let app_state = self.state.read(cx);
         // --- Filter tags by input text for live search (pinyin-aware) ---
         let filter_text = self.create_input.read(cx).value();
-        let tags: Vec<(TagInfo, bool)> = app_state
+        let pinned_tag_ids = app_state.settings.pinned_tag_ids.clone();
+        let tags: Vec<(TagInfo, bool, bool)> = app_state
             .tags
             .iter()
             .filter(|t| filter_text.is_empty() || pinyin_match(&t.name, &filter_text))
-            .map(|t| (t.clone(), app_state.filters.tag_ids.contains(&t.id)))
+            .map(|t| {
+                (
+                    t.clone(),
+                    app_state.filters.tag_ids.contains(&t.id),
+                    pinned_tag_ids.contains(&t.id),
+                )
+            })
             .collect();
         let tag_match_all = app_state.filters.is_tag_match_all();
         let has_tag_filter = !app_state.filters.tag_ids.is_empty();
@@ -200,7 +207,7 @@ impl Render for TagFilterPanel {
             rgba(0xff5f5718)
         };
 
-        let rows: Vec<Vec<(TagInfo, bool)>> = tags.chunks(2).map(|r| r.to_vec()).collect();
+        let rows: Vec<Vec<(TagInfo, bool, bool)>> = tags.chunks(2).map(|r| r.to_vec()).collect();
         let rows_is_empty = rows.is_empty();
         let this_entity = cx.entity().clone();
 
@@ -353,7 +360,7 @@ impl Render for TagFilterPanel {
                                 .flex()
                                 .flex_row()
                                 .gap(px(4.))
-                                .children(row.into_iter().map(|(tag, checked)| {
+                                .children(row.into_iter().map(|(tag, checked, pinned)| {
                                     let tag_id = tag.id;
                                     let tag_color = parse_hex_to_rgba(&tag.color);
                                     let tag_name = tag.name.clone();
@@ -386,9 +393,33 @@ impl Render for TagFilterPanel {
                                                 });
                                             }
                                         })
-                                        .child(
-                                            div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(tag_color),
-                                        )
+                                        .child(if pinned {
+                                            // Pin icon replacing color dot for pinned tags
+                                            div()
+                                                .w(px(10.))
+                                                .h(px(10.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(12.))
+                                                .font_family("iconfont")
+                                                .text_color(tag_color)
+                                                .child("\u{e633}")
+                                        } else {
+                                            div()
+                                                .w(px(10.))
+                                                .h(px(10.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(
+                                                    div()
+                                                        .w(px(8.))
+                                                        .h(px(8.))
+                                                        .rounded_full()
+                                                        .bg(tag_color),
+                                                )
+                                        })
                                         .child(
                                             div()
                                                 .flex_1()
