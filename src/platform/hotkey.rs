@@ -19,8 +19,12 @@ pub enum QuickAction {
     PreviousPage,
     NextPage,
     Paste,
+    PasteShift, // Shift+Enter → plain text paste
+    PasteCtrl,  // Ctrl+Enter → advanced paste
     Close,
     Pick(usize),
+    PreviousAltMode, // Ctrl+↑ → cycle advanced paste mode
+    NextAltMode,     // Ctrl+↓ → cycle advanced paste mode
 }
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
@@ -449,6 +453,14 @@ fn quick_action_hotkeys() -> Vec<(QuickAction, HotKey)> {
         ),
         (QuickAction::NextPage, HotKey::new(None, Code::ArrowRight)),
         (QuickAction::Paste, HotKey::new(None, Code::Enter)),
+        (
+            QuickAction::PasteShift,
+            HotKey::new(Some(Modifiers::SHIFT), Code::Enter),
+        ),
+        (
+            QuickAction::PasteCtrl,
+            HotKey::new(Some(Modifiers::CONTROL), Code::Enter),
+        ),
         (QuickAction::Close, HotKey::new(None, Code::Escape)),
     ];
     for (index, code) in [
@@ -467,6 +479,15 @@ fn quick_action_hotkeys() -> Vec<(QuickAction, HotKey)> {
     {
         hotkeys.push((QuickAction::Pick(index), HotKey::new(None, code)));
     }
+    // Ctrl+Arrow → cycle advanced paste mode
+    hotkeys.push((
+        QuickAction::PreviousAltMode,
+        HotKey::new(Some(Modifiers::CONTROL), Code::ArrowUp),
+    ));
+    hotkeys.push((
+        QuickAction::NextAltMode,
+        HotKey::new(Some(Modifiers::CONTROL), Code::ArrowDown),
+    ));
     hotkeys
 }
 

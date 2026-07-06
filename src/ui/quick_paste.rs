@@ -27,6 +27,9 @@ const TAG_ROW_HEIGHT: f32 = 26.0;
 pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 8.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
 const LIST_INSET: f32 = 4.0;
+const HINT_BAR_HEIGHT: f32 = 24.0;
+const TOOLTIP_ITEM_HEIGHT: f32 = 28.0;
+const TOOLTIP_PADDING: f32 = 6.0;
 
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
@@ -38,7 +41,7 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     if has_tag_row {
         h += TAG_ROW_HEIGHT + 1.0; // bar + divider
     }
-    h
+    h + HINT_BAR_HEIGHT // always: bottom hint bar
 }
 
 /// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, image_path, favicon_path, file_icon_path, path_color, styled_first_line)
@@ -60,6 +63,8 @@ type RowData = (
 
 pub enum QuickPasteEvent {
     Paste(i64),
+    PastePlain(i64),       // Shift+click → force plain text
+    PasteAlt(i64, String), // Ctrl+click / tooltip click → advanced mode
 }
 
 pub struct QuickPasteView {
@@ -67,6 +72,13 @@ pub struct QuickPasteView {
     selected_index: usize,
     first_visible: usize,
     _appearance_subscription: Subscription,
+    // Modifier key state (updated by WindowManager poll)
+    pub(crate) shift_held: bool,
+    pub(crate) ctrl_held: bool,
+    /// Which advanced paste mode is currently selected for the current item type.
+    current_alt_index: usize,
+    pub(crate) current_alt_mode: String,
+    pub(crate) available_alt_modes: Vec<String>,
 }
 
 impl EventEmitter<QuickPasteEvent> for QuickPasteView {}
@@ -75,11 +87,17 @@ impl QuickPasteView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let appearance_subscription =
             cx.observe_window_appearance(window, |_this, _window, cx| cx.notify());
+        let image_alt_mode = state.read(cx).settings.image_alt_mode.clone();
         Self {
             state,
             selected_index: 0,
             first_visible: 0,
             _appearance_subscription: appearance_subscription,
+            shift_held: false,
+            ctrl_held: false,
+            current_alt_index: 0,
+            current_alt_mode: image_alt_mode,
+            available_alt_modes: Vec::new(),
         }
     }
 
@@ -90,6 +108,9 @@ impl QuickPasteView {
         }
         self.selected_index = (self.selected_index + 1).min(len - 1);
         self.ensure_selected_visible();
+        if self.ctrl_held {
+            self.update_alt_modes_for_selection(cx);
+        }
         cx.notify();
     }
 
@@ -152,6 +173,9 @@ impl QuickPasteView {
         }
         self.selected_index = index;
         self.ensure_selected_visible();
+        if self.ctrl_held {
+            self.update_alt_modes_for_selection(cx);
+        }
         cx.notify();
     }
 
@@ -273,6 +297,163 @@ impl QuickPasteView {
             .collect()
     }
 
+    // ── Modifier key & advanced paste ──
+
+    /// Update modifier key state from external poll.
+    pub fn set_modifiers(&mut self, shift: bool, ctrl: bool, cx: &mut Context<Self>) {
+        let changed = self.shift_held != shift || self.ctrl_held != ctrl;
+        self.shift_held = shift;
+        self.ctrl_held = ctrl;
+        if changed {
+            // Only Ctrl triggers the floating tooltip — refresh alt modes.
+            if ctrl {
+                self.update_alt_modes_for_selection(cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Refresh available_alt_modes and current_alt_index based on the currently
+    /// selected item's type. Only images and colors have advanced modes.
+    fn update_alt_modes_for_selection(&mut self, cx: &Context<Self>) {
+        self.available_alt_modes.clear();
+        self.current_alt_index = 0;
+
+        let state = self.state.read(cx);
+        let Some(item) = state.items.get(self.selected_index) else {
+            return;
+        };
+
+        let is_image = item.content_type == ContentType::Image;
+        let is_color = item.meta_type == "color";
+
+        if is_image {
+            self.available_alt_modes.push("bitmap".to_string());
+            self.available_alt_modes.push("path".to_string());
+            self.available_alt_modes.push("ocr".to_string());
+            let default_mode = &state.settings.image_alt_mode;
+            if let Some(pos) = self
+                .available_alt_modes
+                .iter()
+                .position(|m| m == default_mode)
+            {
+                self.current_alt_index = pos;
+                self.current_alt_mode = default_mode.clone();
+            }
+        } else if is_color {
+            let full_text = &item.full_text;
+            let current_is_hex = detect_color(full_text)
+                .map(|_c| {
+                    full_text.starts_with('#')
+                        || (full_text.len() == 6
+                            && full_text.chars().all(|ch| ch.is_ascii_hexdigit()))
+                })
+                .unwrap_or(false);
+            if current_is_hex {
+                self.available_alt_modes.push("rgb".to_string());
+                self.current_alt_mode = "rgb".to_string();
+            } else {
+                self.available_alt_modes.push("hex".to_string());
+                self.current_alt_mode = "hex".to_string();
+            }
+        }
+    }
+
+    /// Whether the currently selected item has any advanced paste modes.
+    pub(crate) fn has_alt_modes(&self) -> bool {
+        !self.available_alt_modes.is_empty()
+    }
+
+    /// Cycle the current alt mode and persist the new default.
+    pub fn cycle_alt_mode(&mut self, delta: i32, cx: &mut Context<Self>) {
+        if self.available_alt_modes.is_empty() {
+            return;
+        }
+        let len = self.available_alt_modes.len() as i32;
+        let new_index = (self.current_alt_index as i32 + delta).rem_euclid(len) as usize;
+        self.current_alt_index = new_index;
+        self.current_alt_mode = self.available_alt_modes[new_index].clone();
+
+        // Persist image-specific alt mode to settings (skip "plain").
+        let mode = self.current_alt_mode.clone();
+        if matches!(mode.as_str(), "bitmap" | "path" | "ocr") {
+            self.state.update(cx, |state, _cx| {
+                state.settings.image_alt_mode = mode;
+                state.settings.save();
+            });
+        }
+        cx.notify();
+    }
+
+    /// Items for the floating tooltip menu (Ctrl only): (label, mode, is_selected).
+    fn tooltip_items(&self) -> Vec<(&'static str, String, bool)> {
+        if self.ctrl_held && !self.available_alt_modes.is_empty() {
+            return self
+                .available_alt_modes
+                .iter()
+                .enumerate()
+                .map(|(i, mode)| {
+                    let label = match mode.as_str() {
+                        "bitmap" => "粘贴为位图",
+                        "path" => "粘贴图片路径",
+                        "ocr" => "粘贴OCR文本",
+                        "rgb" => "粘贴为RGB",
+                        "hex" => "粘贴为HEX",
+                        _ => "高级粘贴",
+                    };
+                    (label, mode.clone(), i == self.current_alt_index)
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
+    /// Computes the tooltip Y position (right edge is fixed at 8px inset).
+    fn tooltip_position(
+        &self,
+        has_tag_row: bool,
+        has_type_bar: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Pixels> {
+        let item_count = self.state.read(cx).items.len();
+        if item_count == 0 {
+            return None;
+        }
+
+        let visible_idx = self.selected_index.saturating_sub(self.first_visible);
+        let bars_offset = if has_type_bar {
+            TYPE_BAR_HEIGHT + 1.0
+        } else {
+            0.0
+        } + if has_tag_row {
+            TAG_ROW_HEIGHT + 1.0
+        } else {
+            0.0
+        };
+
+        let row_top = visible_idx as f32 * ROW_HEIGHT + LIST_INSET + bars_offset;
+        let items = self.tooltip_items();
+        if items.is_empty() {
+            return None;
+        }
+        let tooltip_h = items.len() as f32 * TOOLTIP_ITEM_HEIGHT + TOOLTIP_PADDING * 2.0;
+        // Hint bar is always present now
+        let content_h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET * 2.0 + bars_offset;
+
+        let space_below = content_h - row_top - ROW_HEIGHT;
+        let space_above = row_top;
+
+        let tooltip_y = if space_below >= tooltip_h {
+            row_top + ROW_HEIGHT
+        } else if space_above >= tooltip_h {
+            row_top - tooltip_h
+        } else {
+            (content_h - tooltip_h).max(0.0)
+        };
+
+        Some(px(tooltip_y))
+    }
+
     fn theme(&self, appearance: WindowAppearance, cx: &Context<Self>) -> ClippiTheme {
         ClippiTheme::from_setting(&self.state.read(cx).settings.theme, Some(appearance))
     }
@@ -350,11 +531,23 @@ impl Render for QuickPasteView {
             .flex()
             .flex_col()
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _window, cx| {
-                let delta = ev.delta.pixel_delta(px(16.0)).y;
-                if delta < px(0.0) {
-                    this.select_next(cx);
-                } else if delta > px(0.0) {
-                    this.select_previous(cx);
+                let pixel = ev.delta.pixel_delta(px(16.0));
+                if ev.modifiers.control {
+                    // Ctrl+scroll → cycle advanced mode
+                    let delta = if pixel.y < px(0.0) || pixel.x < px(0.0) {
+                        1
+                    } else {
+                        -1
+                    };
+                    this.cycle_alt_mode(delta, cx);
+                } else {
+                    // Support Shift+scroll (Windows remaps to horizontal scroll).
+                    let delta = if pixel.y != px(0.0) { pixel.y } else { pixel.x };
+                    if delta < px(0.0) {
+                        this.select_next(cx);
+                    } else if delta > px(0.0) {
+                        this.select_previous(cx);
+                    }
                 }
             }))
             // ── Type filter bar ──
@@ -662,9 +855,37 @@ impl Render for QuickPasteView {
                                                     ve2.update(cx, |view, cx| {
                                                         view.select_index(index, cx);
                                                     });
-                                                    ve3.update(cx, |_, cx| {
-                                                        cx.emit(QuickPasteEvent::Paste(item_id));
-                                                    });
+                                                    if ev.modifiers.shift {
+                                                        ve3.update(cx, |_, cx| {
+                                                            cx.emit(QuickPasteEvent::PastePlain(
+                                                                item_id,
+                                                            ));
+                                                        });
+                                                    } else if ev.modifiers.control {
+                                                        if ve2.read(cx).has_alt_modes() {
+                                                            let mode = ve2
+                                                                .read(cx)
+                                                                .current_alt_mode
+                                                                .clone();
+                                                            ve3.update(cx, |_, cx| {
+                                                                cx.emit(QuickPasteEvent::PasteAlt(
+                                                                    item_id, mode,
+                                                                ));
+                                                            });
+                                                        } else {
+                                                            ve3.update(cx, |_, cx| {
+                                                                cx.emit(QuickPasteEvent::Paste(
+                                                                    item_id,
+                                                                ));
+                                                            });
+                                                        }
+                                                    } else {
+                                                        ve3.update(cx, |_, cx| {
+                                                            cx.emit(QuickPasteEvent::Paste(
+                                                                item_id,
+                                                            ));
+                                                        });
+                                                    }
                                                 }
                                             }
                                         })
@@ -746,6 +967,127 @@ impl Render for QuickPasteView {
                             )
                             .collect::<Vec<_>>()
                     }),
+            )
+            // ── Floating tooltip (Ctrl held only) ──
+            .when(self.ctrl_held, |parent| {
+                let items = self.tooltip_items();
+                if items.is_empty() {
+                    return parent;
+                }
+                let tooltip_y = self.tooltip_position(has_tag_row, has_type_bar, cx);
+                let Some(tip_y) = tooltip_y else {
+                    return parent;
+                };
+                let t = theme.clone();
+                let selected_item_id = {
+                    self.state
+                        .read(cx)
+                        .items
+                        .get(self.selected_index)
+                        .map(|item| item.id)
+                };
+                let view_entity = cx.entity();
+                parent.child(
+                    div()
+                        .absolute()
+                        .top(tip_y)
+                        .right(px(8.0))
+                        .bg(t.surface)
+                        .border(px(1.0))
+                        .border_color(t.divider)
+                        .rounded(px(6.0))
+                        .px(px(TOOLTIP_PADDING))
+                        .py(px(TOOLTIP_PADDING))
+                        .flex()
+                        .flex_col()
+                        .children(items.iter().map(move |(label, mode, selected)| {
+                            let mode = mode.clone();
+                            let selected = *selected;
+                            let item_id = selected_item_id;
+                            let ve = view_entity.clone();
+                            div()
+                                .h(px(TOOLTIP_ITEM_HEIGHT))
+                                .px(px(8.0))
+                                .rounded(px(4.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .bg(if selected {
+                                    t.accent_overlay()
+                                } else {
+                                    rgba(0x00000000)
+                                })
+                                .text_color(if selected { t.accent } else { t.text_1 })
+                                .text_size(px(12.0))
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, {
+                                    let m = mode.clone();
+                                    let id = item_id;
+                                    move |_ev, _window, cx| {
+                                        let id = id.unwrap_or(0);
+                                        ve.update(cx, |_, cx| {
+                                            cx.emit(QuickPasteEvent::PasteAlt(id, m.clone()));
+                                        });
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .w(px(14.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(if selected { "●" } else { "" }),
+                                )
+                                .child(*label)
+                        })),
+                )
+            })
+            // ── Bottom hint bar ──
+            .child(
+                div()
+                    .h(px(HINT_BAR_HEIGHT))
+                    .w_full()
+                    .px(px(HORIZONTAL_PADDING))
+                    .flex()
+                    .items_center()
+                    .gap(px(16.0))
+                    .text_size(px(10.0))
+                    .text_color(theme.text_3)
+                    .border_t(px(1.0))
+                    .border_color(theme.divider)
+                    .child(
+                        div()
+                            .font_family("iconfont")
+                            .text_size(px(12.0))
+                            .child("\u{e66b}"),
+                    )
+                    .child(div().child("Enter 粘贴"))
+                    .child(
+                        div()
+                            .when(self.shift_held, |s| {
+                                s.text_size(px(10.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.accent)
+                            })
+                            .child(if self.shift_held {
+                                "Shift 纯文本粘贴"
+                            } else {
+                                "Shift 纯文本"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .when(self.ctrl_held, |s| {
+                                s.text_size(px(10.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.accent)
+                            })
+                            .child(if self.ctrl_held {
+                                "Ctrl 高级粘贴"
+                            } else {
+                                "Ctrl 高级"
+                            }),
+                    ),
             )
     }
 }

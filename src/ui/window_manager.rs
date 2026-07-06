@@ -736,6 +736,8 @@ impl WindowManager {
             const VK_LBUTTON: i32 = 0x01;
             const VK_RBUTTON: i32 = 0x02;
             const VK_MBUTTON: i32 = 0x04;
+            const VK_SHIFT: i32 = 0x10;
+            const VK_CONTROL: i32 = 0x11;
 
             // Check both the current down bit and the latched "pressed since last
             // poll" bit. The latter catches short clicks that begin and end
@@ -747,6 +749,15 @@ impl WindowManager {
                 let pressed = states.iter().any(|state| (state & 0x0001) != 0)
                     || (mouse_down && !self.quick_mouse_down);
                 self.quick_mouse_down = mouse_down;
+
+                // ── Modifier key state ──
+                let shift_held = (GetAsyncKeyState(VK_SHIFT) & i16::MIN) != 0;
+                let ctrl_held = (GetAsyncKeyState(VK_CONTROL) & i16::MIN) != 0;
+                if let Some(ref view) = self.quick_view {
+                    view.update(cx, |view, cx| {
+                        view.set_modifiers(shift_held, ctrl_held, cx);
+                    });
+                }
 
                 if pressed {
                     // Button activity since last poll — check cursor position.
@@ -780,6 +791,19 @@ impl WindowManager {
             let mouse_down = NSEvent::pressedMouseButtons() != 0;
             let pressed = mouse_down && !self.quick_mouse_down;
             self.quick_mouse_down = mouse_down;
+
+            // ── Modifier key state ──
+            {
+                let flags = NSEvent::modifierFlags();
+                let shift_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Shift);
+                let ctrl_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Control);
+                if let Some(ref view) = self.quick_view {
+                    view.update(cx, |view, cx| {
+                        view.set_modifiers(shift_held, ctrl_held, cx);
+                    });
+                }
+            }
+
             if !pressed || self.quick_ns_window == 0 {
                 return;
             }
@@ -1582,19 +1606,72 @@ impl WindowManager {
                 view.update(cx, |view, cx| view.select_next_page(cx));
             }
             QuickAction::Paste => {
+                let (id, shift, ctrl, has_alt) = view.update(cx, |view, vcx| {
+                    let id = view.selected_item_id(vcx);
+                    let shift = view.shift_held;
+                    let ctrl = view.ctrl_held;
+                    let has_alt = view.has_alt_modes();
+                    (id, shift, ctrl, has_alt)
+                });
+                if let Some(id) = id {
+                    if shift {
+                        self.quick_paste_plain(id, cx);
+                    } else if ctrl && has_alt {
+                        let alt_mode = view.read(cx).current_alt_mode.clone();
+                        self.quick_paste_alt(id, &alt_mode, cx);
+                    } else {
+                        self.quick_paste_item(id, cx);
+                    }
+                }
+            }
+            QuickAction::PasteShift => {
                 let id = view.update(cx, |view, vcx| view.selected_item_id(vcx));
                 if let Some(id) = id {
-                    self.quick_paste_item(id, cx);
+                    self.quick_paste_plain(id, cx);
+                }
+            }
+            QuickAction::PasteCtrl => {
+                let (id, has_alt, alt_mode) = view.update(cx, |view, vcx| {
+                    let id = view.selected_item_id(vcx);
+                    let has_alt = view.has_alt_modes();
+                    let alt_mode = view.current_alt_mode.clone();
+                    (id, has_alt, alt_mode)
+                });
+                if let Some(id) = id {
+                    if has_alt {
+                        self.quick_paste_alt(id, &alt_mode, cx);
+                    } else {
+                        self.quick_paste_item(id, cx);
+                    }
                 }
             }
             QuickAction::Close => {
                 self.dismiss_quick_window(cx);
             }
             QuickAction::Pick(slot) => {
-                let id = view.update(cx, |view, cx| view.select_visible_slot(slot, cx));
+                let (id, shift, ctrl, has_alt) = view.update(cx, |view, cx| {
+                    let id = view.select_visible_slot(slot, cx);
+                    let shift = view.shift_held;
+                    let ctrl = view.ctrl_held;
+                    let has_alt = view.has_alt_modes();
+                    (id, shift, ctrl, has_alt)
+                });
                 if let Some(id) = id {
-                    self.quick_paste_item(id, cx);
+                    if shift {
+                        self.quick_paste_plain(id, cx);
+                    } else if ctrl && has_alt {
+                        let alt_mode = view.read(cx).current_alt_mode.clone();
+                        self.quick_paste_alt(id, &alt_mode, cx);
+                    } else {
+                        self.quick_paste_item(id, cx);
+                    }
                 }
+            }
+            QuickAction::PreviousAltMode => {
+                view.update(cx, |view, cx| view.cycle_alt_mode(-1, cx));
+            }
+            QuickAction::NextAltMode => {
+                view.update(cx, |view, cx| view.cycle_alt_mode(1, cx));
             }
         }
     }
@@ -1603,7 +1680,49 @@ impl WindowManager {
         let plain = self.state.read(cx).settings.copy_as_plain_text;
         self.state
             .update(cx, |state, _cx| state.paste_item(id, plain));
+        self.clear_quick_modifiers(cx);
         self.dismiss_quick_window(cx);
+    }
+
+    pub fn quick_paste_plain(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, _cx| state.paste_item_plain(id));
+        self.clear_quick_modifiers(cx);
+        self.dismiss_quick_window(cx);
+    }
+
+    pub fn quick_paste_alt(&mut self, id: i64, mode: &str, cx: &mut Context<Self>) {
+        match mode {
+            "bitmap" => {
+                self.state.update(cx, |s, _cx| s.paste_image_as_bitmap(id));
+            }
+            "path" => {
+                self.state.update(cx, |s, _cx| s.paste_image_path(id));
+            }
+            "ocr" => {
+                self.state.update(cx, |s, _cx| s.paste_ocr(id));
+            }
+            "rgb" => {
+                self.state.update(cx, |s, _cx| s.paste_as_rgb(id));
+            }
+            "hex" => {
+                self.state.update(cx, |s, _cx| s.paste_as_hex(id));
+            }
+            _ => {
+                let plain = self.state.read(cx).settings.copy_as_plain_text;
+                self.state.update(cx, |s, _cx| s.paste_item(id, plain));
+            }
+        }
+        self.clear_quick_modifiers(cx);
+        self.dismiss_quick_window(cx);
+    }
+
+    fn clear_quick_modifiers(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref view) = self.quick_view {
+            view.update(cx, |view, cx| {
+                view.set_modifiers(false, false, cx);
+            });
+        }
     }
 
     fn calculate_quick_position(&self, quick_h: f32) -> Option<(i32, i32)> {
@@ -1677,6 +1796,10 @@ impl WindowManager {
             &view,
             |this, _view, event: &QuickPasteEvent, cx| match event {
                 QuickPasteEvent::Paste(id) => this.quick_paste_item(*id, cx),
+                QuickPasteEvent::PastePlain(id) => this.quick_paste_plain(*id, cx),
+                QuickPasteEvent::PasteAlt(id, mode) => {
+                    this.quick_paste_alt(*id, mode, cx);
+                }
             },
         ));
     }

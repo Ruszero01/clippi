@@ -154,6 +154,12 @@ pub struct AppSettings {
     pub cleanup_last_date: String, // last cleanup date "YYYY-MM-DD" for periodic scheduling
     #[serde(default)]
     pub always_reset_to_clipboard: bool, // always switch to clipboard history when window is shown
+    #[serde(default = "default_image_alt_mode")]
+    pub image_alt_mode: String, // advanced paste mode for images: "bitmap" | "path" | "ocr"
+}
+
+fn default_image_alt_mode() -> String {
+    "bitmap".to_string()
 }
 
 fn default_qr_enabled() -> bool {
@@ -242,6 +248,7 @@ impl Default for AppSettings {
             cleanup_interval: default_cleanup_interval(),
             cleanup_last_date: String::new(),
             always_reset_to_clipboard: false,
+            image_alt_mode: default_image_alt_mode(),
         }
     }
 }
