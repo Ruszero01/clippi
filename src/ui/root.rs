@@ -918,7 +918,7 @@ impl Render for RootView {
             .relative()
             .size_full()
             .track_focus(&root_focus)
-            .on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+            .on_key_down(move |ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
                 }
@@ -933,6 +933,7 @@ impl Render for RootView {
                             this.switch_view("clipboard");
                             cx.notify();
                         });
+                        root_focus.focus(window);
                     }
                     cx.stop_propagation();
                 } else if is_edit {
@@ -941,6 +942,7 @@ impl Render for RootView {
                         this.switch_view("clipboard");
                         cx.notify();
                     });
+                    root_focus.focus(window);
                     cx.stop_propagation();
                 } else {
                     // Clipboard view: delegate to list for panel/multi-select logic
