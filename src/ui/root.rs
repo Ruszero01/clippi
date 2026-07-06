@@ -995,7 +995,10 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .size_full()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
                         .occlude()
                         .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -1018,7 +1021,10 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .size_full()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
                         .occlude()
                         .opacity(filter_config_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -1101,7 +1107,10 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .size_full()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
                         .occlude()
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
@@ -1187,7 +1196,10 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .size_full()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
                         .occlude()
                         .opacity(tag_picker_opacity)
                         .on_mouse_down(MouseButton::Left, {
