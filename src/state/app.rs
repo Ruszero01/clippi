@@ -1805,7 +1805,7 @@ mod tests {
     #[test]
     fn keyword_search_matches_note_with_pinyin_and_initials() {
         let (mut state, _dirty) = test_state();
-        let item = make_item(1, ContentType::PlainText, false, "与备注无关的正文");
+        let item = make_item(1, ContentType::PlainText, false, "普通正文内容");
         state.db.upsert(&item).unwrap();
         let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
         // 模拟真实流程：通过 update_note 写入备注
@@ -1832,8 +1832,8 @@ mod tests {
         state.reload_items();
         assert_eq!(state.items.len(), 1, "部分首字母匹配失败");
 
-        // 确保不在正文中搜索
-        state.filters.set_keyword("备注");
+        // 确认备注字段中的中文匹配不依赖正文
+        state.filters.set_keyword("计划");
         state.reload_items();
         assert_eq!(state.items.len(), 1, "备注中文匹配失败");
 

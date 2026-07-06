@@ -289,7 +289,7 @@ fi
 if /usr/bin/ditto "$staged" "$target"; then
   /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
   rm -rf "$backup" "$staged"
-  /usr/bin/open "$target"
+  /usr/bin/open "$target" --args --restart
   exit 0
 fi
 rm -rf "$target"
