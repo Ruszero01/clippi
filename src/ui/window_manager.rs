@@ -556,7 +556,7 @@ impl WindowManager {
                         {
                             continue;
                         }
-                        self.hide_quick_window(cx);
+                        self.dismiss_quick_window(cx);
                     } else {
                         self.show_quick_window(cx);
                     }
@@ -766,7 +766,7 @@ impl WindowManager {
                                 || cursor.y < rect.top
                                 || cursor.y >= rect.bottom)
                         {
-                            self.hide_quick_window(cx);
+                            self.dismiss_quick_window(cx);
                         }
                     }
                 }
@@ -795,7 +795,7 @@ impl WindowManager {
                 || cursor.y < frame.origin.y
                 || cursor.y >= frame.origin.y + frame.size.height;
             if outside {
-                self.hide_quick_window(cx);
+                self.dismiss_quick_window(cx);
             }
         }
     }
@@ -1488,7 +1488,7 @@ impl WindowManager {
         }
     }
 
-    fn hide_quick_window(&mut self, cx: &mut Context<Self>) {
+    fn hide_quick_window(&mut self, _cx: &mut Context<Self>) {
         self._quick_poll_task = None; // cancel fast poll
         #[cfg(target_os = "windows")]
         {
@@ -1528,9 +1528,15 @@ impl WindowManager {
         {
             self.hide_quick_macos_window();
         }
+    }
 
-        // Release memory — main window and quick window are never shown
-        // simultaneously, so closing either one should drop the item list.
+    /// Hide quick window and release memory (app goes idle).
+    ///
+    /// Use when the quick window closes *without* an immediate main-window
+    /// transition.  `hide()` and `show_and_focus()` call `hide_quick_window`
+    /// directly and manage memory themselves.
+    fn dismiss_quick_window(&mut self, cx: &mut Context<Self>) {
+        self.hide_quick_window(cx);
         self.release_memory(cx);
     }
 
@@ -1582,7 +1588,7 @@ impl WindowManager {
                 }
             }
             QuickAction::Close => {
-                self.hide_quick_window(cx);
+                self.dismiss_quick_window(cx);
             }
             QuickAction::Pick(slot) => {
                 let id = view.update(cx, |view, cx| view.select_visible_slot(slot, cx));
@@ -1597,7 +1603,7 @@ impl WindowManager {
         let plain = self.state.read(cx).settings.copy_as_plain_text;
         self.state
             .update(cx, |state, _cx| state.paste_item(id, plain));
-        self.hide_quick_window(cx);
+        self.dismiss_quick_window(cx);
     }
 
     fn calculate_quick_position(&self, quick_h: f32) -> Option<(i32, i32)> {
