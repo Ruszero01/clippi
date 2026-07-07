@@ -1424,16 +1424,20 @@ impl AppState {
                 return;
             }
 
-            // Record deletion tombstone for sync propagation
-            if let Err(e) = self.db.record_item_deletion(hash, &now, &device) {
-                log::error!("record_item_deletion({hash}): {e}");
+            // Record deletion tombstone only for items in sync scope.
+            // Image/file items are never synced; unfavorited items in
+            // favorites-only mode have already left the sync scope via
+            // the unfavorite tombstone.
+            if self.should_mark_sync_dirty(&item) {
+                if let Err(e) = self.db.record_item_deletion(hash, &now, &device) {
+                    log::error!("record_item_deletion({hash}): {e}");
+                }
+                self.sync_dirty.store(true, Ordering::SeqCst);
             }
         } else {
             log::warn!("delete_item({id}): item not found");
             return;
         }
-
-        self.sync_dirty.store(true, Ordering::SeqCst);
 
         // --- Remove from in-memory items and selection ---
         self.items.retain(|it| it.id != id);
@@ -1495,17 +1499,26 @@ impl AppState {
     }
 
     /// Batch delete all selected items.
-    /// Records deletion tombstones for each deleted item.
+    /// Records deletion tombstones only for items in sync scope.
     pub fn batch_delete(&mut self) {
         let now = chrono::Utc::now().to_rfc3339();
         let device = crate::services::backends::local_folder::hostname();
 
-        // --- Collect hashes only after the corresponding DB deletion succeeds. ---
+        // --- Collect hashes only for items in sync scope. ---
         let mut hashes: Vec<u64> = Vec::with_capacity(self.selected_ids.len());
+        let mut has_sync_item = false;
         for &id in &self.selected_ids {
             if let Ok(Some(item)) = self.db.get_by_id(id) {
+                let in_sync = self.should_mark_sync_dirty(&item);
+                if in_sync {
+                    has_sync_item = true;
+                }
                 match self.db.delete_item(id) {
-                    Ok(_) => hashes.push(item.content_hash),
+                    Ok(_) => {
+                        if in_sync {
+                            hashes.push(item.content_hash);
+                        }
+                    }
                     Err(e) => log::error!("batch delete_item({id}): {e}"),
                 }
             }
@@ -1518,7 +1531,9 @@ impl AppState {
             }
         }
 
-        self.sync_dirty.store(true, Ordering::SeqCst);
+        if has_sync_item {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
 
         // --- Remove from in-memory items ---
         let ids: Vec<i64> = self.selected_ids.drain(..).collect();
@@ -1998,7 +2013,8 @@ mod tests {
     }
 
     #[test]
-    fn delete_item_always_sets_dirty() {
+    fn delete_item_skips_tombstone_outside_sync_scope() {
+        // favorites_only=true, item not favorited → outside sync scope
         let (mut state, dirty) = test_state();
         state.settings.sync_favorites_only = true;
         let item = make_item(1, ContentType::PlainText, false, "hello");
@@ -2007,8 +2023,39 @@ mod tests {
 
         state.delete_item(1);
         assert!(
+            !dirty.load(Ordering::SeqCst),
+            "delete outside sync scope should NOT set dirty (no tombstone needed)"
+        );
+    }
+
+    #[test]
+    fn delete_item_records_tombstone_in_sync_scope() {
+        // Normal mode: PlainText item → in sync scope
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.delete_item(1);
+        assert!(
             dirty.load(Ordering::SeqCst),
-            "delete should always set dirty (tombstones)"
+            "delete in sync scope should set dirty (tombstone)"
+        );
+    }
+
+    #[test]
+    fn delete_item_skips_tombstone_for_image() {
+        // Image items are never synced
+        let (mut state, dirty) = test_state();
+        let item = make_item(1, ContentType::Image, false, "image_data");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.delete_item(1);
+        assert!(
+            !dirty.load(Ordering::SeqCst),
+            "delete image should NOT set dirty"
         );
     }
 
