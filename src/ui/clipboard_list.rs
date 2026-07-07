@@ -1260,10 +1260,20 @@ impl Render for ClipboardListView {
                                 let hovered_index = this.hovered_index;
                                 let editing_note_id = this.editing_note_id;
                                 let note_input = this.note_input.clone();
-                                let settings = &this.state.read(_cx).settings;
-                                let show_source_app = settings.show_source_app;
-                                let show_original_on_hover = settings.show_original_on_hover;
-                                let show_page_title = settings.auto_fetch_url_title;
+                                let (
+                                    show_source_app,
+                                    show_original_on_hover,
+                                    show_page_title,
+                                    search_terms,
+                                ) = {
+                                    let state = this.state.read(_cx);
+                                    (
+                                        state.settings.show_source_app,
+                                        state.settings.show_original_on_hover,
+                                        state.settings.auto_fetch_url_title,
+                                        state.filters.keyword_terms(),
+                                    )
+                                };
                                 range
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
@@ -1387,6 +1397,7 @@ impl Render for ClipboardListView {
                                                     .show_original_on_hover(show_original_on_hover)
                                                     .show_page_title(show_page_title)
                                                     .image_cache(image_cache.clone())
+                                                    .search_terms(search_terms.clone())
                                                     .selected_count(selected_count)
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)

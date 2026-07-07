@@ -123,4 +123,22 @@ impl ClippiTheme {
             rgba(0x6ab89022)
         }
     }
+
+    /// Accent color used behind search hits. Stronger than the generic
+    /// overlay so short highlighted terms remain visible in dense previews.
+    pub fn accent_highlight(&self) -> Rgba {
+        if self.bg == rgb(0x191a1b) {
+            rgba(0x7ecba366)
+        } else {
+            rgba(0x6ab8904d)
+        }
+    }
+
+    pub fn accent_highlight_text(&self) -> Rgba {
+        if self.bg == rgb(0x191a1b) {
+            rgb(0xffffff)
+        } else {
+            rgb(0x000000)
+        }
+    }
 }

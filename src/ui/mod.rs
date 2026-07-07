@@ -11,6 +11,7 @@ pub mod quick_paste;
 pub mod rich_preview;
 pub mod root;
 pub mod search_bar;
+pub mod search_highlight;
 pub mod settings;
 pub mod sidebar;
 pub mod tag_filter;

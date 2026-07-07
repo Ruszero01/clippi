@@ -5,6 +5,10 @@
 
 use gpui::*;
 
+use super::search_highlight;
+
+const STYLED_SEARCH_PREVIEW_CHARS: usize = 220;
+
 /// A single styled text span with optional color, font weight, font style,
 /// and background color.
 #[derive(Clone)]
@@ -406,6 +410,197 @@ pub fn render_styled_html_lines(
 
 // ── Private helpers ──────────────────────────────────────────────────────
 
+pub fn focus_styled_html_lines(
+    lines: Vec<Vec<StyledHtmlSpan>>,
+    terms: &[String],
+) -> Vec<Vec<StyledHtmlSpan>> {
+    if terms.is_empty() {
+        return lines;
+    }
+
+    let Some((hit_idx, _)) = lines.iter().enumerate().find_map(|(idx, line)| {
+        let text: String = line.iter().map(|span| span.text.as_str()).collect();
+        search_highlight::first_match_range(&text, terms).map(|range| (idx, range))
+    }) else {
+        return lines.into_iter().take(6).collect();
+    };
+
+    let hit_line = lines[hit_idx].clone();
+    vec![focus_long_styled_line(
+        hit_line,
+        terms,
+        STYLED_SEARCH_PREVIEW_CHARS,
+    )]
+}
+
+pub fn highlight_styled_html_lines(
+    lines: Vec<Vec<StyledHtmlSpan>>,
+    terms: &[String],
+    highlight_bg: Rgba,
+    highlight_text: Rgba,
+) -> Vec<Vec<StyledHtmlSpan>> {
+    if terms.is_empty() {
+        return lines;
+    }
+
+    lines
+        .into_iter()
+        .map(|line| {
+            let line_text: String = line.iter().map(|span| span.text.as_str()).collect();
+            let ranges = highlight_ranges(&line_text, terms);
+            split_styled_line_by_ranges(line, &ranges, highlight_bg, highlight_text)
+        })
+        .collect()
+}
+
+pub fn has_highlighted_span(lines: &[Vec<StyledHtmlSpan>], highlight_bg: Rgba) -> bool {
+    lines.iter().flatten().any(|span| {
+        span.background_color
+            .is_some_and(|background| background == highlight_bg)
+    })
+}
+
+fn highlight_ranges(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut offset = 0usize;
+    for segment in search_highlight::highlight_segments(text, terms) {
+        let end = offset + segment.text.len();
+        if segment.highlighted {
+            ranges.push((offset, end));
+        }
+        offset = end;
+    }
+    ranges
+}
+
+fn focus_long_styled_line(
+    line: Vec<StyledHtmlSpan>,
+    terms: &[String],
+    max_chars: usize,
+) -> Vec<StyledHtmlSpan> {
+    let line_text: String = line.iter().map(|span| span.text.as_str()).collect();
+    let (start_byte, end_byte) =
+        search_highlight::focused_window_byte_range(&line_text, terms, max_chars);
+    crop_styled_line(line, start_byte, end_byte)
+}
+
+fn crop_styled_line(
+    line: Vec<StyledHtmlSpan>,
+    start_byte: usize,
+    end_byte: usize,
+) -> Vec<StyledHtmlSpan> {
+    if start_byte == 0 && line.iter().map(|span| span.text.len()).sum::<usize>() <= end_byte {
+        return line;
+    }
+
+    let mut out = Vec::new();
+    if start_byte > 0 {
+        let mut ellipsis = line.first().cloned().unwrap_or_else(|| StyledHtmlSpan {
+            text: String::new(),
+            color: None,
+            font_weight: None,
+            font_style: None,
+            background_color: None,
+        });
+        ellipsis.text = "...".to_string();
+        out.push(ellipsis);
+    }
+
+    let mut global_start = 0usize;
+    let mut total_len = 0usize;
+    for span in line {
+        let global_end = global_start + span.text.len();
+        total_len = global_end;
+        let local_start = start_byte.max(global_start).min(global_end) - global_start;
+        let local_end = end_byte.max(global_start).min(global_end) - global_start;
+
+        if local_start < local_end {
+            out.push(StyledHtmlSpan {
+                text: span.text[local_start..local_end].to_string(),
+                color: span.color,
+                font_weight: span.font_weight,
+                font_style: span.font_style,
+                background_color: span.background_color,
+            });
+        }
+
+        global_start = global_end;
+    }
+
+    if end_byte < total_len {
+        let mut ellipsis = out.last().cloned().unwrap_or_else(|| StyledHtmlSpan {
+            text: String::new(),
+            color: None,
+            font_weight: None,
+            font_style: None,
+            background_color: None,
+        });
+        ellipsis.text = "...".to_string();
+        out.push(ellipsis);
+    }
+
+    out
+}
+
+fn split_styled_line_by_ranges(
+    line: Vec<StyledHtmlSpan>,
+    ranges: &[(usize, usize)],
+    highlight_bg: Rgba,
+    highlight_text: Rgba,
+) -> Vec<StyledHtmlSpan> {
+    if ranges.is_empty() {
+        return line;
+    }
+
+    let mut out = Vec::new();
+    let mut global_start = 0usize;
+    for span in line {
+        let global_end = global_start + span.text.len();
+        let mut boundaries = vec![0usize, span.text.len()];
+
+        for &(range_start, range_end) in ranges {
+            let start = range_start.max(global_start).min(global_end) - global_start;
+            let end = range_end.max(global_start).min(global_end) - global_start;
+            if start < end {
+                boundaries.push(start);
+                boundaries.push(end);
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+
+        for window in boundaries.windows(2) {
+            let start = window[0];
+            let end = window[1];
+            if start == end {
+                continue;
+            }
+            let highlighted = ranges.iter().any(|&(range_start, range_end)| {
+                global_start + start >= range_start && global_start + end <= range_end
+            });
+            out.push(StyledHtmlSpan {
+                text: span.text[start..end].to_string(),
+                color: if highlighted {
+                    Some(highlight_text)
+                } else {
+                    span.color
+                },
+                font_weight: span.font_weight,
+                font_style: span.font_style,
+                background_color: if highlighted {
+                    Some(highlight_bg)
+                } else {
+                    span.background_color
+                },
+            });
+        }
+
+        global_start = global_end;
+    }
+
+    out
+}
+
 fn push_html_text(lines: &mut Vec<Vec<StyledHtmlSpan>>, text: &str, style: &ParsedInlineStyle) {
     let decoded = decode_html_text(text);
     if decoded.is_empty() {
@@ -667,7 +862,10 @@ fn looks_like_url(after_paren: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_styled_html_lines, strip_html_links};
+    use super::{
+        focus_styled_html_lines, highlight_styled_html_lines, parse_styled_html_lines,
+        strip_html_links,
+    };
     use gpui::{rgb, FontStyle, FontWeight};
 
     #[test]
@@ -714,5 +912,133 @@ mod tests {
         assert_eq!(stripped, r#"<span style="color: red">Link</span>"#);
         assert_eq!(lines[0][0].text, "Link");
         assert_eq!(lines[0][0].color, Some(rgb(0xFF0000)));
+    }
+
+    #[test]
+    fn styled_html_highlights_substring_inside_span() {
+        let terms = vec!["api".to_string()];
+        let lines = parse_styled_html_lines(
+            r#"<div><span style="color:#bbbebf"> rapid=</span><span style="color:#569cd6">false</span></div>"#,
+        )
+        .unwrap();
+        let lines = focus_styled_html_lines(lines, &terms);
+        let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
+        let highlighted: Vec<String> = lines[0]
+            .iter()
+            .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
+            .map(|span| span.text.clone())
+            .collect();
+
+        assert_eq!(highlighted, vec!["api"]);
+    }
+
+    #[test]
+    fn styled_html_only_changes_matched_fragment() {
+        let terms = vec!["api".to_string()];
+        let lines =
+            parse_styled_html_lines(r#"<span style="color:#bbbebf"> rapid=false</span>"#).unwrap();
+        let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
+        let spans = &lines[0];
+
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<Vec<_>>(),
+            vec![" r", "api", "d=false"]
+        );
+        assert_eq!(spans[0].color, Some(rgb(0xBBBEBF)));
+        assert_eq!(spans[0].background_color, None);
+        assert_eq!(spans[1].color, Some(rgb(0xFFFFFF)));
+        assert_eq!(spans[1].background_color, Some(rgb(0x7ECBA3)));
+        assert_eq!(spans[2].color, Some(rgb(0xBBBEBF)));
+        assert_eq!(spans[2].background_color, None);
+    }
+
+    #[test]
+    fn styled_html_focuses_matching_line_before_highlighting() {
+        let terms = vec!["api".to_string()];
+        let lines = parse_styled_html_lines(
+            r#"<div><span style="color:#bbbebf">first line</span></div><div><span style="color:#bbbebf"> rapid=</span><span style="color:#569cd6">false</span></div><div><span style="color:#bbbebf">last line</span></div>"#,
+        )
+        .unwrap();
+        let lines = focus_styled_html_lines(lines, &terms);
+        let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
+        let visible: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|span| span.text.as_str()).collect())
+            .collect();
+        let highlighted: Vec<String> = lines
+            .iter()
+            .flatten()
+            .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
+            .map(|span| span.text.clone())
+            .collect();
+
+        assert!(visible.iter().any(|line| line.contains("rapid=false")));
+        assert_eq!(highlighted, vec!["api"]);
+    }
+
+    #[test]
+    fn styled_html_focuses_inside_long_matching_line() {
+        let terms = vec!["api".to_string()];
+        let lines = parse_styled_html_lines(
+            r#"<div><span style="color:#bbbebf">03:12:05 [INFO] [clipboard] SKIP hash=631733700374619062 owner=43257930 last_owner=43257930 last_hash=6787954947296119038 elapsed=8364ms seq_delta=2 destroyed=false delayed=true same_hash=false owner_window=Visual Studio Code foreground_window=Clippi rapid=</span><span style="color:#569cd6">false</span></div>"#,
+        )
+        .unwrap();
+        let lines = focus_styled_html_lines(lines, &terms);
+        let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
+        let visible: String = lines[0].iter().map(|span| span.text.as_str()).collect();
+        let highlighted: Vec<String> = lines[0]
+            .iter()
+            .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
+            .map(|span| span.text.clone())
+            .collect();
+
+        assert!(visible.starts_with("..."));
+        assert!(visible.contains("rapid=false"));
+        assert_eq!(highlighted, vec!["api"]);
+    }
+
+    #[test]
+    fn styled_html_focuses_match_near_end_even_when_line_fits_window() {
+        let terms = vec!["key".to_string()];
+        let lines = parse_styled_html_lines(
+            r#"<div><span style="color:#bbbebf">02:29:03 [INFO] [clipboard] PUSH hash=</span><span style="color:#569cd6">14609533420180055385</span><span style="color:#bbbebf"> owner=</span><span style="color:#569cd6">49222182</span><span style="color:#bbbebf"> elapsed=3073ms same_hash=</span><span style="color:#569cd6">false</span><span style="color:#bbbebf"> type=Image text=</span><span style="color:#a5d6ff">"G:\Develop\github\clippi\docs\images\hotkey.png"</span></div>"#,
+        )
+        .unwrap();
+        let lines = focus_styled_html_lines(lines, &terms);
+        let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
+        let visible: String = lines[0].iter().map(|span| span.text.as_str()).collect();
+        let highlighted: Vec<String> = lines[0]
+            .iter()
+            .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
+            .map(|span| span.text.clone())
+            .collect();
+
+        assert!(visible.starts_with("..."));
+        assert!(visible.contains("hotkey.png"));
+        assert_eq!(highlighted, vec!["key"]);
+    }
+
+    #[test]
+    fn styled_html_highlights_match_across_spans() {
+        let terms = vec!["api".to_string()];
+        let lines = parse_styled_html_lines(
+            r#"<div><span style="color:#bbbebf">a</span><span style="color:#569cd6">pi</span></div>"#,
+        )
+        .unwrap();
+        let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
+        let highlighted: Vec<String> = lines[0]
+            .iter()
+            .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
+            .map(|span| span.text.clone())
+            .collect();
+
+        assert_eq!(highlighted, vec!["a", "pi"]);
+        assert!(lines[0]
+            .iter()
+            .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
+            .all(|span| span.color == Some(rgb(0xFFFFFF))));
     }
 }

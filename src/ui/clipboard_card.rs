@@ -19,6 +19,7 @@ use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::core::color::detect_color;
 use crate::core::frontend::PANEL_OFFSET_X;
+use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
     format_relative_time, is_email, is_phone, mask_sensitive_preview, parse_hex_color, url_domain,
@@ -27,6 +28,7 @@ use crate::core::types::{
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
 use super::rich_preview::{self, StyledHtmlSpan};
+use super::search_highlight;
 use super::theme::ClippiTheme;
 
 type CardClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
@@ -415,7 +417,10 @@ pub(crate) fn cached_file_icon_path(file_path: &str, is_dir: bool) -> Option<std
 }
 
 enum RichPreview {
-    StyledHtml(Vec<Vec<StyledHtmlSpan>>),
+    StyledHtml {
+        lines: Vec<Vec<StyledHtmlSpan>>,
+        visible_text: String,
+    },
     Html(String),
     Markdown(String),
     Plain(String),
@@ -430,7 +435,10 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
             let html = rich.html.unwrap_or_else(|| item.full_text.clone());
             let html = rich_preview::normalize_clipboard_html_for_render(&html);
             if let Some(lines) = rich_preview::parse_styled_html_lines(&html) {
-                return RichPreview::StyledHtml(lines);
+                return RichPreview::StyledHtml {
+                    lines,
+                    visible_text: html_text::visible_text(&html),
+                };
             }
             RichPreview::Html(rich_preview::strip_html_links(&html))
         }
@@ -442,10 +450,10 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
             if let Some(rtf) = rich.rtf.filter(|r| !r.trim().is_empty()) {
                 RichPreview::Markdown(rtf_to_plain_text(&rtf))
             } else {
-                RichPreview::Plain(item.full_text.chars().take(300).collect())
+                RichPreview::Plain(item.full_text.clone())
             }
         }
-        _ => RichPreview::Plain(item.full_text.chars().take(300).collect()),
+        _ => RichPreview::Plain(item.full_text.clone()),
     }
 }
 
@@ -530,6 +538,40 @@ fn rtf_to_plain_text(rtf: &str) -> String {
         .to_string()
 }
 
+fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
+    if terms.is_empty() {
+        return false;
+    }
+
+    let full_text_matches = if matches!(item.display_kind(), DisplayKind::Html) {
+        search_highlight::contains_match(&html_text::visible_text(&item.full_text), terms)
+    } else {
+        search_highlight::contains_match(&item.full_text, terms)
+    };
+    if full_text_matches {
+        return true;
+    }
+
+    let rich = RichData::from_json(&item.rich_data);
+    if let Some(html) = rich.html.as_deref() {
+        let html = rich_preview::normalize_clipboard_html_for_render(html);
+        if search_highlight::contains_match(&html_text::visible_text(&html), terms) {
+            return true;
+        }
+    }
+
+    let rich_text_matches = [
+        rich.rtf.as_deref(),
+        rich.ocr_text.as_deref(),
+        rich.qr_text.as_deref(),
+        rich.page_title.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|text| search_highlight::contains_match(text, terms));
+    rich_text_matches
+}
+
 /// Compute estimated card height for the virtual list.
 pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32 {
     if !item.note.is_empty() {
@@ -610,6 +652,7 @@ pub struct ClipboardCard {
     /// instead of the URL path in the card content area.
     show_page_title: bool,
     image_cache: Option<Entity<RetainAllImageCache>>,
+    search_terms: Vec<String>,
 }
 
 impl ClipboardCard {
@@ -632,6 +675,7 @@ impl ClipboardCard {
             show_original_on_hover: false,
             show_page_title: false,
             image_cache: None,
+            search_terms: Vec::new(),
         }
     }
 
@@ -712,6 +756,11 @@ impl ClipboardCard {
         self.image_cache = Some(cache);
         self
     }
+
+    pub fn search_terms(mut self, terms: Vec<String>) -> Self {
+        self.search_terms = terms;
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -734,6 +783,7 @@ impl RenderOnce for ClipboardCard {
             show_original_on_hover,
             show_page_title,
             image_cache,
+            search_terms,
         } = self;
 
         let surface = theme.surface;
@@ -773,6 +823,8 @@ impl RenderOnce for ClipboardCard {
         } else {
             rgba(0x0000000a)
         };
+        let highlight_bg = theme.accent_highlight();
+        let highlight_text = theme.accent_highlight_text();
         let time_str = format_relative_time(&item.updated_at);
         let is_fav = item.is_favorite;
         let content_type = item.content_type;
@@ -1150,6 +1202,13 @@ impl RenderOnce for ClipboardCard {
                 ),
         };
 
+        let note_matches =
+            !search_terms.is_empty() && search_highlight::contains_match(&note, &search_terms);
+        let content_matches = card_content_matches_search(&item, &search_terms);
+        let show_note_preview = !(note.is_empty()
+            || show_original_on_hover && is_hovered
+            || (!search_terms.is_empty() && content_matches && !note_matches));
+
         // --- Right: content area ---
         let content = if editing {
             // --- Inline note editor ---
@@ -1216,7 +1275,7 @@ impl RenderOnce for ClipboardCard {
                         }
                     }
                 })
-        } else if !(note.is_empty() || show_original_on_hover && is_hovered) {
+        } else if show_note_preview {
             // Note present, not hovering → display note text (single line, card at min height)
             div().flex_1().flex().items_center().child(
                 div()
@@ -1225,7 +1284,15 @@ impl RenderOnce for ClipboardCard {
                     .text_color(text_2)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .child(note),
+                    .child(search_highlight::render_highlighted_inline(
+                        note,
+                        &search_terms,
+                        text_2,
+                        highlight_bg,
+                        highlight_text,
+                        12.0,
+                        None,
+                    )),
             )
         } else {
             // No note, or note present + hovering with show_original → render full content.
@@ -1269,7 +1336,15 @@ impl RenderOnce for ClipboardCard {
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(text_1)
-                                .child(label),
+                                .child(search_highlight::render_highlighted_inline(
+                                    label,
+                                    &search_terms,
+                                    text_1,
+                                    highlight_bg,
+                                    highlight_text,
+                                    13.0,
+                                    Some(FontWeight::BOLD),
+                                )),
                         )
                         .when(show_sep, |this| {
                             this.child(
@@ -1280,7 +1355,16 @@ impl RenderOnce for ClipboardCard {
                                     .child(" - "),
                             )
                         })
-                        .child(div().text_size(px(13.)).text_color(text_3).child(subtitle))
+                        .child(div().text_size(px(13.)).text_color(text_3).child(
+                            search_highlight::render_highlighted_auxiliary_inline(
+                                subtitle,
+                                &search_terms,
+                                text_3,
+                                highlight_bg,
+                                highlight_text,
+                                13.0,
+                            ),
+                        ))
                 } else {
                     // File system path: bold last component + dimmed full path.
                     // Non-existent paths get a red tint + reduced opacity
@@ -1315,7 +1399,15 @@ impl RenderOnce for ClipboardCard {
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(label_color)
-                                    .child(leaf),
+                                    .child(search_highlight::render_highlighted_inline(
+                                        leaf,
+                                        &search_terms,
+                                        label_color,
+                                        highlight_bg,
+                                        highlight_text,
+                                        13.0,
+                                        Some(FontWeight::BOLD),
+                                    )),
                             )
                             .child(
                                 div()
@@ -1324,7 +1416,16 @@ impl RenderOnce for ClipboardCard {
                                     .mx(px(2.))
                                     .child(" - "),
                             )
-                            .child(div().text_size(px(13.)).text_color(text_3).child(full))
+                            .child(div().text_size(px(13.)).text_color(text_3).child(
+                                search_highlight::render_highlighted_auxiliary_inline(
+                                    full,
+                                    &search_terms,
+                                    text_3,
+                                    highlight_bg,
+                                    highlight_text,
+                                    13.0,
+                                ),
+                            ))
                     } else {
                         div().flex_1().flex().items_center().child(
                             div()
@@ -1332,7 +1433,15 @@ impl RenderOnce for ClipboardCard {
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(label_color)
                                 .overflow_hidden()
-                                .child(item.full_text.clone()),
+                                .child(search_highlight::render_highlighted_inline(
+                                    item.full_text.clone(),
+                                    &search_terms,
+                                    label_color,
+                                    highlight_bg,
+                                    highlight_text,
+                                    13.0,
+                                    Some(FontWeight::BOLD),
+                                )),
                         )
                     }
                 }
@@ -1343,7 +1452,15 @@ impl RenderOnce for ClipboardCard {
                         .font_weight(FontWeight::BOLD)
                         .text_color(text_1)
                         .overflow_hidden()
-                        .child(item.full_text.clone()),
+                        .child(search_highlight::render_highlighted_inline(
+                            item.full_text.clone(),
+                            &search_terms,
+                            text_1,
+                            highlight_bg,
+                            highlight_text,
+                            12.0,
+                            Some(FontWeight::BOLD),
+                        )),
                 )
             } else {
                 match content_type {
@@ -1474,29 +1591,118 @@ impl RenderOnce for ClipboardCard {
                                 .paragraph_gap(rems(0.25))
                                 .heading_font_size(|_level, base| base);
                             match rich_preview(&item) {
-                                RichPreview::Html(html) => content_box.child(
-                                    TextView::html(
-                                        ("clipboard-card-html", item.content_hash),
-                                        html,
-                                        window,
-                                        cx,
-                                    )
-                                    .style(style)
-                                    .selectable(false),
-                                ),
-                                RichPreview::Markdown(markdown) => content_box.child(
-                                    TextView::markdown(
-                                        ("clipboard-card-markdown", item.content_hash),
-                                        markdown,
-                                        window,
-                                        cx,
-                                    )
-                                    .style(style)
-                                    .selectable(false),
-                                ),
-                                RichPreview::StyledHtml(lines) => content_box
-                                    .child(rich_preview::render_styled_html_lines(lines, text_1)),
-                                RichPreview::Plain(preview) => content_box.child(preview),
+                                RichPreview::Html(html) => {
+                                    if search_terms.is_empty() {
+                                        content_box.child(
+                                            TextView::html(
+                                                ("clipboard-card-html", item.content_hash),
+                                                html,
+                                                window,
+                                                cx,
+                                            )
+                                            .style(style)
+                                            .selectable(false),
+                                        )
+                                    } else {
+                                        let visible_text = html_text::visible_text(&html);
+                                        content_box.child(
+                                            search_highlight::render_highlighted_block(
+                                                visible_text,
+                                                &search_terms,
+                                                text_1,
+                                                highlight_bg,
+                                                highlight_text,
+                                                12.0,
+                                                18.0,
+                                            ),
+                                        )
+                                    }
+                                }
+                                RichPreview::Markdown(markdown) => {
+                                    if search_terms.is_empty() {
+                                        content_box.child(
+                                            TextView::markdown(
+                                                ("clipboard-card-markdown", item.content_hash),
+                                                markdown,
+                                                window,
+                                                cx,
+                                            )
+                                            .style(style)
+                                            .selectable(false),
+                                        )
+                                    } else {
+                                        content_box.child(
+                                            search_highlight::render_highlighted_block(
+                                                markdown,
+                                                &search_terms,
+                                                text_1,
+                                                highlight_bg,
+                                                highlight_text,
+                                                12.0,
+                                                18.0,
+                                            ),
+                                        )
+                                    }
+                                }
+                                RichPreview::StyledHtml {
+                                    lines,
+                                    visible_text,
+                                } => {
+                                    if search_terms.is_empty() {
+                                        content_box.child(rich_preview::render_styled_html_lines(
+                                            lines, text_1,
+                                        ))
+                                    } else {
+                                        let lines = rich_preview::focus_styled_html_lines(
+                                            lines,
+                                            &search_terms,
+                                        );
+                                        let lines = rich_preview::highlight_styled_html_lines(
+                                            lines,
+                                            &search_terms,
+                                            highlight_bg,
+                                            highlight_text,
+                                        );
+                                        if rich_preview::has_highlighted_span(&lines, highlight_bg)
+                                        {
+                                            content_box.child(
+                                                rich_preview::render_styled_html_lines(
+                                                    lines, text_1,
+                                                ),
+                                            )
+                                        } else {
+                                            content_box.child(
+                                                search_highlight::render_highlighted_block(
+                                                    visible_text,
+                                                    &search_terms,
+                                                    text_1,
+                                                    highlight_bg,
+                                                    highlight_text,
+                                                    12.0,
+                                                    18.0,
+                                                ),
+                                            )
+                                        }
+                                    }
+                                }
+                                RichPreview::Plain(preview) => {
+                                    if search_terms.is_empty() {
+                                        content_box
+                                            .child(preview.chars().take(300).collect::<String>())
+                                    } else {
+                                        content_box.child(
+                                            search_highlight::render_highlighted_block(
+                                                preview,
+                                                &search_terms,
+                                                text_1,
+                                                highlight_bg,
+                                                highlight_text,
+                                                12.0,
+                                                18.0,
+                                            ),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

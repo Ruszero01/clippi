@@ -6,11 +6,13 @@
 
 use crate::core::db::Database;
 use crate::core::filters::ClipboardFilters;
+use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::AppSettings;
 use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
 use crate::core::types::ContentType;
+use crate::core::types::DisplayKind;
 use crate::core::types::FileData;
 use crate::core::types::RichData;
 use crate::core::types::TagInfo;
@@ -114,17 +116,29 @@ pub fn pinyin_match(text: &str, keyword: &str) -> bool {
 }
 
 fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str) -> bool {
-    if pinyin_match(&item.full_text, keyword) {
+    let full_text_matches = if matches!(item.display_kind(), DisplayKind::Html) {
+        html_text::has_visible_match(&item.full_text, |text| pinyin_match(text, keyword))
+    } else {
+        pinyin_match(&item.full_text, keyword)
+    };
+    if full_text_matches {
         return true;
     }
 
     if !item.rich_data.is_empty() {
         let rich = RichData::from_json(&item.rich_data);
+
+        if let Some(html) = rich.html.as_deref() {
+            if html_text::has_visible_match(html, |text| pinyin_match(text, keyword)) {
+                return true;
+            }
+        }
+
         let rich_texts = [
-            rich.html.as_deref(),
             rich.rtf.as_deref(),
             rich.ocr_text.as_deref(),
             rich.qr_text.as_deref(),
+            rich.page_title.as_deref(),
         ];
         if rich_texts
             .into_iter()
@@ -140,6 +154,12 @@ fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str)
     }
 
     item.tags.iter().any(|tag| pinyin_match(&tag.name, keyword))
+}
+
+fn item_matches_keywords(item: &crate::core::types::ClipboardItem, keywords: &[String]) -> bool {
+    keywords
+        .iter()
+        .all(|keyword| item_matches_keyword(item, keyword))
 }
 
 impl AppState {
@@ -232,8 +252,9 @@ impl AppState {
 
         match result {
             Ok(mut items) => {
-                if let Some(kw) = self.filters.keyword() {
-                    items.retain(|item| item_matches_keyword(item, kw));
+                let keywords = self.filters.keyword_terms();
+                if !keywords.is_empty() {
+                    items.retain(|item| item_matches_keywords(item, &keywords));
                 }
                 // Hide non-native platform paths when the setting is enabled.
                 if self.settings.filter_foreign_paths {
@@ -1850,6 +1871,129 @@ mod tests {
         assert!(texts.contains(&"buried plain match"));
         assert!(texts.contains(&"screenshot"));
         assert!(texts.contains(&"tagged item"));
+    }
+
+    #[test]
+    fn keyword_search_requires_all_space_separated_terms() {
+        let (mut state, _dirty) = test_state();
+        state
+            .db
+            .upsert(&make_item(
+                1,
+                ContentType::PlainText,
+                false,
+                "railway ticket order",
+            ))
+            .unwrap();
+        state
+            .db
+            .upsert(&make_item(
+                2,
+                ContentType::PlainText,
+                false,
+                "railway notice",
+            ))
+            .unwrap();
+
+        state.filters.set_keyword("railway order");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].full_text, "railway ticket order");
+    }
+
+    #[test]
+    fn keyword_search_matches_cached_page_title() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(1, ContentType::PlainText, false, "https://example.com/a");
+        item.meta_type = "link".to_string();
+        item.rich_data = RichData {
+            page_title: Some("Railway Order Details".to_string()),
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("order details");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].full_text, "https://example.com/a");
+    }
+
+    #[test]
+    fn keyword_search_html_uses_visible_text_not_markup_attributes() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(1, ContentType::RichText, false, "plain fallback");
+        item.meta_type = "html".to_string();
+        item.rich_data = RichData {
+            html: Some(r#"<div data-key="hidden">plain visible text</div>"#.to_string()),
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("key");
+        state.reload_items();
+        assert_eq!(state.items.len(), 0);
+
+        state.filters.set_keyword("visible");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1);
+    }
+
+    #[test]
+    fn keyword_search_html_full_text_ignores_markup_attributes() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(
+            1,
+            ContentType::RichText,
+            false,
+            r#"<div data-key="api">plain visible text</div>"#,
+        );
+        item.meta_type = "html".to_string();
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("api");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 0);
+    }
+
+    #[test]
+    fn keyword_search_html_full_text_matches_visible_substring() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(
+            1,
+            ContentType::RichText,
+            false,
+            r#"<div><span style="color:#bbbebf"> rapid=</span><span style="color:#569cd6">false</span></div>"#,
+        );
+        item.meta_type = "html".to_string();
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("api");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+    }
+
+    #[test]
+    fn keyword_search_html_matches_visible_text_inside_rich_data() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(1, ContentType::RichText, false, "plain fallback");
+        item.meta_type = "html".to_string();
+        item.rich_data = RichData {
+            html: Some(r#"<div><span style="color:#ff00aa">API Key</span></div>"#.to_string()),
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("key");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
     }
 
     #[test]

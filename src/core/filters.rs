@@ -17,6 +17,20 @@ pub const BUILTIN_TYPE_KEYS: &[&str] = &[
     "contact",
 ];
 
+/// Split user-entered search text into normalized keyword terms.
+///
+/// Whitespace separates terms. All returned terms are non-empty and unique,
+/// preserving the user's first-seen order.
+pub fn split_keyword_terms(keyword: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for term in keyword.split_whitespace() {
+        if !terms.iter().any(|existing| existing == term) {
+            terms.push(term.to_string());
+        }
+    }
+    terms
+}
+
 /// Unified filter state for clipboard queries.
 ///
 /// All active dimensions combine with AND logic.
@@ -46,6 +60,7 @@ impl ClipboardFilters {
 
     /// Set keyword search filter
     pub fn set_keyword(&mut self, keyword: &str) {
+        let keyword = keyword.trim();
         self.keyword = if keyword.is_empty() {
             None
         } else {
@@ -68,9 +83,12 @@ impl ClipboardFilters {
         self.favorites_only
     }
 
-    /// Get the current keyword string, if any.
-    pub fn keyword(&self) -> Option<&str> {
-        self.keyword.as_deref()
+    /// Get parsed keyword terms.
+    pub fn keyword_terms(&self) -> Vec<String> {
+        self.keyword
+            .as_deref()
+            .map(split_keyword_terms)
+            .unwrap_or_default()
     }
 
     /// Whether a keyword filter is active.
@@ -183,5 +201,27 @@ impl ClipboardFilters {
         } else {
             (format!("WHERE {}", conditions.join(" AND ")), params)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{split_keyword_terms, ClipboardFilters};
+
+    #[test]
+    fn keyword_terms_split_on_whitespace_and_deduplicate() {
+        assert_eq!(
+            split_keyword_terms("  railway   order railway\tseat  "),
+            vec!["railway", "order", "seat"]
+        );
+    }
+
+    #[test]
+    fn blank_keyword_clears_filter() {
+        let mut filters = ClipboardFilters::default();
+        filters.set_keyword("   ");
+
+        assert!(!filters.has_keyword());
+        assert!(filters.keyword_terms().is_empty());
     }
 }
