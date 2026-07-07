@@ -31,6 +31,28 @@ const HINT_BAR_HEIGHT: f32 = 24.0;
 const TOOLTIP_ITEM_HEIGHT: f32 = 28.0;
 const TOOLTIP_PADDING: f32 = 6.0;
 
+fn advanced_modifier_pressed(modifiers: Modifiers) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        modifiers.control || modifiers.secondary()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        modifiers.control
+    }
+}
+
+fn advanced_modifier_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Cmd/Ctrl"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl"
+    }
+}
+
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
 pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
@@ -64,7 +86,7 @@ type RowData = (
 pub enum QuickPasteEvent {
     Paste(i64),
     PastePlain(i64),       // Shift+click → force plain text
-    PasteAlt(i64, String), // Ctrl+click / tooltip click → advanced mode
+    PasteAlt(i64, String), // advanced modifier click / tooltip click → advanced mode
 }
 
 pub struct QuickPasteView {
@@ -305,7 +327,6 @@ impl QuickPasteView {
         self.shift_held = shift;
         self.ctrl_held = ctrl;
         if changed {
-            // Only Ctrl triggers the floating tooltip — refresh alt modes.
             if ctrl {
                 self.update_alt_modes_for_selection(cx);
             }
@@ -363,6 +384,11 @@ impl QuickPasteView {
         }
     }
 
+    pub(crate) fn ensure_alt_modes_for_selection(&mut self, cx: &Context<Self>) -> bool {
+        self.update_alt_modes_for_selection(cx);
+        !self.available_alt_modes.is_empty()
+    }
+
     /// Whether the currently selected item has any advanced paste modes.
     pub(crate) fn has_alt_modes(&self) -> bool {
         !self.available_alt_modes.is_empty()
@@ -370,6 +396,9 @@ impl QuickPasteView {
 
     /// Cycle the current alt mode and persist the new default.
     pub fn cycle_alt_mode(&mut self, delta: i32, cx: &mut Context<Self>) {
+        if self.available_alt_modes.is_empty() {
+            self.update_alt_modes_for_selection(cx);
+        }
         if self.available_alt_modes.is_empty() {
             return;
         }
@@ -389,7 +418,7 @@ impl QuickPasteView {
         cx.notify();
     }
 
-    /// Items for the floating tooltip menu (Ctrl only): (label, mode, is_selected).
+    /// Items for the floating tooltip menu: (label, mode, is_selected).
     fn tooltip_items(&self) -> Vec<(&'static str, String, bool)> {
         if self.ctrl_held && !self.available_alt_modes.is_empty() {
             return self
@@ -537,8 +566,8 @@ impl Render for QuickPasteView {
             .flex_col()
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _window, cx| {
                 let pixel = ev.delta.pixel_delta(px(16.0));
-                if ev.modifiers.control {
-                    // Ctrl+scroll → cycle advanced mode
+                if advanced_modifier_pressed(ev.modifiers) {
+                    // Advanced modifier + scroll → cycle advanced mode
                     let delta = if pixel.y < px(0.0) || pixel.x < px(0.0) {
                         1
                     } else {
@@ -866,12 +895,16 @@ impl Render for QuickPasteView {
                                                                 item_id,
                                                             ));
                                                         });
-                                                    } else if ev.modifiers.control {
-                                                        if ve2.read(cx).has_alt_modes() {
-                                                            let mode = ve2
-                                                                .read(cx)
-                                                                .current_alt_mode
-                                                                .clone();
+                                                    } else if advanced_modifier_pressed(
+                                                        ev.modifiers,
+                                                    ) {
+                                                        let mode = ve2.update(cx, |view, cx| {
+                                                            view.ensure_alt_modes_for_selection(cx)
+                                                                .then(|| {
+                                                                    view.current_alt_mode.clone()
+                                                                })
+                                                        });
+                                                        if let Some(mode) = mode {
                                                             ve3.update(cx, |_, cx| {
                                                                 cx.emit(QuickPasteEvent::PasteAlt(
                                                                     item_id, mode,
@@ -973,7 +1006,7 @@ impl Render for QuickPasteView {
                             .collect::<Vec<_>>()
                     }),
             )
-            // ── Floating tooltip (Ctrl held only) ──
+            // ── Floating tooltip (advanced modifier held only) ──
             .when(self.ctrl_held, |parent| {
                 let items = self.tooltip_items();
                 if items.is_empty() {
@@ -1088,9 +1121,9 @@ impl Render for QuickPasteView {
                                     .text_color(theme.accent)
                             })
                             .child(if self.ctrl_held {
-                                "Ctrl 高级粘贴"
+                                format!("{} 高级粘贴", advanced_modifier_label())
                             } else {
-                                "Ctrl 高级"
+                                format!("{} 高级", advanced_modifier_label())
                             }),
                     ),
             )

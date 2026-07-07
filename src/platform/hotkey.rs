@@ -20,11 +20,11 @@ pub enum QuickAction {
     NextPage,
     Paste,
     PasteShift, // Shift+Enter → plain text paste
-    PasteCtrl,  // Ctrl+Enter → advanced paste
+    PasteCtrl,  // Ctrl/Cmd+Enter → advanced paste
     Close,
     Pick(usize),
-    PreviousAltMode, // Ctrl+↑ → cycle advanced paste mode
-    NextAltMode,     // Ctrl+↓ → cycle advanced paste mode
+    PreviousAltMode, // Ctrl/Cmd+↑ → cycle advanced paste mode
+    NextAltMode,     // Ctrl/Cmd+↓ → cycle advanced paste mode
 }
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
@@ -479,7 +479,7 @@ fn quick_action_hotkeys() -> Vec<(QuickAction, HotKey)> {
     {
         hotkeys.push((QuickAction::Pick(index), HotKey::new(None, code)));
     }
-    // Ctrl+Arrow → cycle advanced paste mode
+    // Advanced modifier + Arrow → cycle advanced paste mode.
     hotkeys.push((
         QuickAction::PreviousAltMode,
         HotKey::new(Some(Modifiers::CONTROL), Code::ArrowUp),
@@ -488,6 +488,21 @@ fn quick_action_hotkeys() -> Vec<(QuickAction, HotKey)> {
         QuickAction::NextAltMode,
         HotKey::new(Some(Modifiers::CONTROL), Code::ArrowDown),
     ));
+    #[cfg(target_os = "macos")]
+    {
+        hotkeys.push((
+            QuickAction::PasteCtrl,
+            HotKey::new(Some(Modifiers::SUPER), Code::Enter),
+        ));
+        hotkeys.push((
+            QuickAction::PreviousAltMode,
+            HotKey::new(Some(Modifiers::SUPER), Code::ArrowUp),
+        ));
+        hotkeys.push((
+            QuickAction::NextAltMode,
+            HotKey::new(Some(Modifiers::SUPER), Code::ArrowDown),
+        ));
+    }
     hotkeys
 }
 

@@ -309,10 +309,12 @@ impl AppState {
                 .load_filtered_list_with_tags(&self.filters, self.query_limit(), self.order_by())
         };
 
+        let keyword_filtered = self.filters.has_keyword();
+
         match result {
             Ok(mut items) => {
                 let keywords = self.filters.keyword_terms();
-                if !keywords.is_empty() {
+                if !keyword_filtered && !keywords.is_empty() {
                     items.retain(|item| item_matches_keywords(item, &keywords));
                 }
                 // Hide non-native platform paths when the setting is enabled.
@@ -2033,6 +2035,20 @@ mod tests {
 
         assert_eq!(state.items.len(), 1);
         assert_eq!(state.items[0].full_text, "https://example.com/a");
+    }
+
+    #[test]
+    fn keyword_search_keeps_match_after_preview_truncation() {
+        let (mut state, _dirty) = test_state();
+        let content = format!("{} tailmatch", "x".repeat(LIST_FULL_TEXT_LIMIT + 512));
+        let item = make_item(1, ContentType::PlainText, false, &content);
+        state.db.upsert(&item).unwrap();
+
+        state.filters.set_keyword("tailmatch");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        assert!(state.items[0].full_text.len() <= LIST_FULL_TEXT_LIMIT);
     }
 
     #[test]

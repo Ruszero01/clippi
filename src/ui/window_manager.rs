@@ -796,7 +796,8 @@ impl WindowManager {
             {
                 let flags = NSEvent::modifierFlags_class();
                 let shift_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Shift);
-                let ctrl_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Control);
+                let ctrl_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Control)
+                    || flags.contains(objc2_app_kit::NSEventModifierFlags::Command);
                 if let Some(ref view) = self.quick_view {
                     view.update(cx, |view, cx| {
                         view.set_modifiers(shift_held, ctrl_held, cx);
@@ -1610,7 +1611,11 @@ impl WindowManager {
                     let id = view.selected_item_id(vcx);
                     let shift = view.shift_held;
                     let ctrl = view.ctrl_held;
-                    let has_alt = view.has_alt_modes();
+                    let has_alt = if ctrl {
+                        view.ensure_alt_modes_for_selection(vcx)
+                    } else {
+                        view.has_alt_modes()
+                    };
                     (id, shift, ctrl, has_alt)
                 });
                 if let Some(id) = id {
@@ -1633,7 +1638,7 @@ impl WindowManager {
             QuickAction::PasteCtrl => {
                 let (id, has_alt, alt_mode) = view.update(cx, |view, vcx| {
                     let id = view.selected_item_id(vcx);
-                    let has_alt = view.has_alt_modes();
+                    let has_alt = view.ensure_alt_modes_for_selection(vcx);
                     let alt_mode = view.current_alt_mode.clone();
                     (id, has_alt, alt_mode)
                 });
@@ -1653,7 +1658,11 @@ impl WindowManager {
                     let id = view.select_visible_slot(slot, cx);
                     let shift = view.shift_held;
                     let ctrl = view.ctrl_held;
-                    let has_alt = view.has_alt_modes();
+                    let has_alt = if ctrl {
+                        view.ensure_alt_modes_for_selection(cx)
+                    } else {
+                        view.has_alt_modes()
+                    };
                     (id, shift, ctrl, has_alt)
                 });
                 if let Some(id) = id {
