@@ -392,17 +392,57 @@ jobs:
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
       - name: Create GitHub Release
+        shell: bash
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          TAG: "${{ needs.plan.outputs.tag }}"
         run: |
-          # Write and read notes from a file to avoid quoting breaking things
-          echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
+          VERSION="${TAG#v}"
+          RELEASE_NOTES="$RUNNER_TEMP/release-notes.md"
 
-          gh release delete "${{ needs.plan.outputs.tag }}" --cleanup-tag -y || true
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          LC_ALL=C sed $'1s/^\xEF\xBB\xBF//' RELEASES.md | awk -v version="$VERSION" '
+            BEGIN {
+              in_section = 0
+              found = 0
+            }
+            /^# +Version[[:space:]]+/ {
+              if (in_section) exit
+              pattern = "^# +Version[[:space:]]+v?" version "([[:space:]]|$)"
+              if ($0 ~ pattern) {
+                in_section = 1
+                found = 1
+                next
+              }
+            }
+            /^---[[:space:]]*$/ {
+              if (in_section) exit
+            }
+            in_section {
+              print
+            }
+            END {
+              if (!found) exit 1
+            }
+          ' | sed '/./,$!d' > "$RELEASE_NOTES"
+
+          if [ ! -s "$RELEASE_NOTES" ]; then
+            echo "No release notes found for Version $VERSION in RELEASES.md" >&2
+            exit 1
+          fi
+
+          # Write and read notes from a file to avoid quoting breaking things.
+          {
+            printf '## Release Notes\n\n'
+            cat "$RELEASE_NOTES"
+            printf '\n'
+            printf '%s\n' "$ANNOUNCEMENT_BODY"
+          } > "$RUNNER_TEMP/notes.txt"
+
+          gh release delete "$TAG" --cleanup-tag -y || true
+          gh release create "$TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
       - name: Add DMG and NSIS to release notes
         env:
           TAG: "${{ needs.plan.outputs.tag }}"
