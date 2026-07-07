@@ -22,6 +22,15 @@ use pinyin::ToPinyin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+const KEYWORD_SEARCH_PAGE_SIZE: usize = 128;
+const KEYWORD_SEARCH_MIN_SCAN_LIMIT: usize = 1_000;
+const KEYWORD_SEARCH_MAX_SCAN_LIMIT: usize = 10_000;
+const KEYWORD_SEARCH_SCAN_MULTIPLIER: usize = 8;
+const LIST_FULL_TEXT_LIMIT: usize = 8192;
+const LIST_RICH_HTML_LIMIT: usize = 4096;
+const LIST_RICH_AUX_LIMIT: usize = 2048;
+const LIST_NOTE_LIMIT: usize = 2048;
+
 /// Root application state entity.
 ///
 /// Held in an `Entity<AppState>` by the root view. Child views access it
@@ -162,6 +171,57 @@ fn item_matches_keywords(item: &crate::core::types::ClipboardItem, keywords: &[S
         .all(|keyword| item_matches_keyword(item, keyword))
 }
 
+fn truncate_chars(text: &mut String, limit: usize) {
+    if let Some((idx, _)) = text.char_indices().nth(limit) {
+        text.truncate(idx);
+    }
+}
+
+fn truncated_owned(text: String, limit: usize) -> String {
+    let mut text = text;
+    truncate_chars(&mut text, limit);
+    text
+}
+
+fn shrink_item_for_list(item: &mut ClipboardItem) {
+    truncate_chars(&mut item.full_text, LIST_FULL_TEXT_LIMIT);
+    truncate_chars(&mut item.note, LIST_NOTE_LIMIT);
+    item.source_app_icon.clear();
+
+    if item.rich_data.is_empty() {
+        return;
+    }
+
+    let rich = RichData::from_json(&item.rich_data);
+    let preview = RichData {
+        html: rich
+            .html
+            .filter(|text| !text.is_empty())
+            .map(|text| truncated_owned(text, LIST_RICH_HTML_LIMIT)),
+        rtf: rich
+            .rtf
+            .filter(|text| !text.is_empty())
+            .map(|text| truncated_owned(text, LIST_RICH_HTML_LIMIT)),
+        ocr_text: rich
+            .ocr_text
+            .filter(|text| !text.is_empty())
+            .map(|text| truncated_owned(text, LIST_RICH_AUX_LIMIT)),
+        qr_text: rich
+            .qr_text
+            .filter(|text| !text.is_empty())
+            .map(|text| truncated_owned(text, LIST_RICH_AUX_LIMIT)),
+        page_title: rich
+            .page_title
+            .filter(|text| !text.is_empty())
+            .map(|text| truncated_owned(text, LIST_RICH_AUX_LIMIT)),
+        drive_label: rich
+            .drive_label
+            .filter(|text| !text.is_empty())
+            .map(|text| truncated_owned(text, LIST_RICH_AUX_LIMIT)),
+    };
+    item.rich_data = preview.to_json();
+}
+
 impl AppState {
     /// Open the database and load initial data.
     pub fn new(settings: AppSettings) -> Self {
@@ -184,7 +244,7 @@ impl AppState {
         }
 
         let items = db
-            .load_filtered_with_tags(&ClipboardFilters::default(), query_limit, order_by)
+            .load_filtered_list_with_tags(&ClipboardFilters::default(), query_limit, order_by)
             .unwrap_or_else(|e| {
                 log::error!("Failed to load initial items: {e}");
                 Vec::new()
@@ -243,11 +303,10 @@ impl AppState {
     /// Reload items from database with current filters.
     pub fn reload_items(&mut self) {
         let result = if self.filters.has_keyword() {
-            self.db
-                .load_filtered_unlimited_with_tags(&self.filters, self.order_by())
+            self.load_keyword_filtered_items()
         } else {
             self.db
-                .load_filtered_with_tags(&self.filters, self.query_limit(), self.order_by())
+                .load_filtered_list_with_tags(&self.filters, self.query_limit(), self.order_by())
         };
 
         match result {
@@ -270,6 +329,61 @@ impl AppState {
             }
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
+    }
+
+    fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
+        let keywords = self.filters.keyword_terms();
+        if keywords.is_empty() {
+            return self.db.load_filtered_with_tags(
+                &self.filters,
+                self.query_limit(),
+                self.order_by(),
+            );
+        }
+
+        let result_limit = self.query_limit();
+        let scan_limit = result_limit
+            .saturating_mul(KEYWORD_SEARCH_SCAN_MULTIPLIER)
+            .clamp(KEYWORD_SEARCH_MIN_SCAN_LIMIT, KEYWORD_SEARCH_MAX_SCAN_LIMIT);
+        let mut matches = Vec::new();
+        let mut offset = 0;
+
+        while offset < scan_limit && matches.len() < result_limit {
+            let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
+            let mut page = self.db.load_filtered_page_with_tags(
+                &self.filters,
+                page_limit,
+                offset,
+                self.order_by(),
+            )?;
+            if page.is_empty() {
+                break;
+            }
+
+            for item in page.drain(..) {
+                if self.settings.filter_foreign_paths
+                    && item.meta_type == "path"
+                    && !crate::core::types::path_is_native(&item.full_text)
+                {
+                    continue;
+                }
+                if item_matches_keywords(&item, &keywords) {
+                    let mut item = item;
+                    shrink_item_for_list(&mut item);
+                    matches.push(item);
+                    if matches.len() >= result_limit {
+                        break;
+                    }
+                }
+            }
+
+            if page_limit < KEYWORD_SEARCH_PAGE_SIZE {
+                break;
+            }
+            offset += page_limit;
+        }
+
+        Ok(matches)
     }
 
     /// Clear all items from memory to free resources while window is hidden.
@@ -1919,6 +2033,42 @@ mod tests {
 
         assert_eq!(state.items.len(), 1);
         assert_eq!(state.items[0].full_text, "https://example.com/a");
+    }
+
+    #[test]
+    fn list_reload_keeps_preview_light_and_db_full_item_intact() {
+        let (mut state, _dirty) = test_state();
+        let full_text = "x".repeat(12_000);
+        let html = format!("<p>{}</p>", "h".repeat(8_000));
+        let mut item = make_item(1, ContentType::RichText, false, &full_text);
+        item.meta_type = "html".to_string();
+        item.rich_data = RichData {
+            html: Some(html.clone()),
+            page_title: Some("t".repeat(3_000)),
+            ..Default::default()
+        }
+        .to_json();
+        item.note = "n".repeat(3_000);
+        item.source_app_name = "Example".to_string();
+        item.source_app_icon = "a".repeat(10_000);
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        let preview = &state.items[0];
+        assert!(preview.full_text.len() <= LIST_FULL_TEXT_LIMIT);
+        assert!(preview.note.len() <= LIST_NOTE_LIMIT);
+        assert!(preview.source_app_icon.is_empty());
+        let rich_preview = RichData::from_json(&preview.rich_data);
+        assert!(rich_preview.html.unwrap().len() <= LIST_RICH_HTML_LIMIT);
+        assert!(rich_preview.page_title.unwrap().len() <= LIST_RICH_AUX_LIMIT);
+
+        let full = state.db.get_by_hash(hash).unwrap().unwrap();
+        assert_eq!(full.full_text.len(), full_text.len());
+        assert_eq!(RichData::from_json(&full.rich_data).html.unwrap(), html);
+        assert_eq!(full.source_app_icon.len(), 10_000);
     }
 
     #[test]

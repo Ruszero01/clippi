@@ -20,6 +20,10 @@ pub struct Database {
 }
 
 const SOURCE_APP_ICON_INLINE_LIMIT: usize = 256 * 1024;
+const LIST_FULL_TEXT_LIMIT: usize = 8192;
+const LIST_RICH_HTML_LIMIT: usize = 4096;
+const LIST_RICH_AUX_LIMIT: usize = 2048;
+const LIST_NOTE_LIMIT: usize = 2048;
 
 pub fn legacy_tag_uid(name: &str) -> String {
     Uuid::new_v5(
@@ -69,6 +73,24 @@ fn file_icon_cache_key(file_path: &str, is_dir: bool) -> String {
 fn item_select_columns() -> String {
     format!(
         "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type"
+    )
+}
+
+fn list_item_select_columns() -> String {
+    format!(
+        "id, content_type, substr(full_text, 1, {LIST_FULL_TEXT_LIMIT}), content_hash, created_at, updated_at, image_path,
+         CASE
+             WHEN rich_data = '' OR NOT json_valid(rich_data) THEN ''
+             ELSE json_object(
+                 'html', NULLIF(substr(coalesce(json_extract(rich_data, '$.html'), ''), 1, {LIST_RICH_HTML_LIMIT}), ''),
+                 'rtf', NULLIF(substr(coalesce(json_extract(rich_data, '$.rtf'), ''), 1, {LIST_RICH_HTML_LIMIT}), ''),
+                 'ocr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.ocr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
+                 'qr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.qr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
+                 'page_title', NULLIF(substr(coalesce(json_extract(rich_data, '$.page_title'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
+                 'drive_label', NULLIF(substr(coalesce(json_extract(rich_data, '$.drive_label'), ''), 1, {LIST_RICH_AUX_LIMIT}), '')
+             )
+         END,
+         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, '', image_width, image_height, size, meta_type"
     )
 }
 
@@ -247,16 +269,18 @@ impl Database {
         self.load_filtered_inner(filters, Some(limit), order_by)
     }
 
-    /// Load every item matching the current filters, without a display limit.
-    ///
-    /// Used by keyword search so Rust-side pinyin/rich-data/tag matching can
-    /// inspect the full candidate set before narrowing results.
-    pub fn load_filtered_unlimited(
+    pub fn load_filtered_list(
         &self,
         filters: &ClipboardFilters,
+        limit: usize,
         order_by: &str,
     ) -> SqlResult<Vec<ClipboardItem>> {
-        self.load_filtered_inner(filters, None, order_by)
+        self.load_filtered_inner_with_columns(
+            filters,
+            Some(limit),
+            order_by,
+            &list_item_select_columns(),
+        )
     }
 
     fn load_filtered_inner(
@@ -265,10 +289,19 @@ impl Database {
         limit: Option<usize>,
         order_by: &str,
     ) -> SqlResult<Vec<ClipboardItem>> {
+        self.load_filtered_inner_with_columns(filters, limit, order_by, &item_select_columns())
+    }
+
+    fn load_filtered_inner_with_columns(
+        &self,
+        filters: &ClipboardFilters,
+        limit: Option<usize>,
+        order_by: &str,
+        columns: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
         let order_col = Self::validate_order_by(order_by);
         let (where_clause, mut filter_params) = filters.db_where();
         let limit_clause = if limit.is_some() { " LIMIT ?" } else { "" };
-        let columns = item_select_columns();
         let query = format!(
             "SELECT {columns}
              FROM clipboard_items {} ORDER BY {} DESC{}",
@@ -277,6 +310,28 @@ impl Database {
         if let Some(limit) = limit {
             filter_params.push((limit as i64).into());
         }
+        let mut stmt = self.conn.prepare(&query)?;
+        let items = stmt.query_map(rusqlite::params_from_iter(filter_params), row_to_item)?;
+        items.collect()
+    }
+
+    pub fn load_filtered_page(
+        &self,
+        filters: &ClipboardFilters,
+        limit: usize,
+        offset: usize,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        let order_col = Self::validate_order_by(order_by);
+        let (where_clause, mut filter_params) = filters.db_where();
+        let columns = item_select_columns();
+        let query = format!(
+            "SELECT {columns}
+             FROM clipboard_items {} ORDER BY {} DESC LIMIT ? OFFSET ?",
+            where_clause, order_col
+        );
+        filter_params.push((limit as i64).into());
+        filter_params.push((offset as i64).into());
         let mut stmt = self.conn.prepare(&query)?;
         let items = stmt.query_map(rusqlite::params_from_iter(filter_params), row_to_item)?;
         items.collect()
@@ -582,13 +637,25 @@ impl Database {
         Ok(items)
     }
 
-    /// Load all matching items with tags pre-filled.
-    pub fn load_filtered_unlimited_with_tags(
+    pub fn load_filtered_page_with_tags(
         &self,
         filters: &ClipboardFilters,
+        limit: usize,
+        offset: usize,
         order_by: &str,
     ) -> SqlResult<Vec<ClipboardItem>> {
-        let mut items = self.load_filtered_unlimited(filters, order_by)?;
+        let mut items = self.load_filtered_page(filters, limit, offset, order_by)?;
+        self.fill_tags(&mut items)?;
+        Ok(items)
+    }
+
+    pub fn load_filtered_list_with_tags(
+        &self,
+        filters: &ClipboardFilters,
+        limit: usize,
+        order_by: &str,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        let mut items = self.load_filtered_list(filters, limit, order_by)?;
         self.fill_tags(&mut items)?;
         Ok(items)
     }

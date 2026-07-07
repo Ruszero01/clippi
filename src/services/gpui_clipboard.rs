@@ -282,18 +282,14 @@ impl GpuiClipboardService {
                 let needs_refresh = self.needs_refresh.clone();
                 let sync_dirty = state.sync_dirty.clone();
                 let mark_sync_dirty = state.should_mark_sync_dirty(&item);
-                std::thread::spawn(move || {
-                    if crate::services::url_title::fetch_and_store_title(
-                        &url,
-                        content_hash,
-                        &db_path,
-                    ) {
-                        needs_refresh.store(true, Ordering::SeqCst);
-                        if mark_sync_dirty {
-                            sync_dirty.store(true, Ordering::SeqCst);
-                        }
-                    }
-                });
+                crate::services::url_assets::spawn_fetch_url_title(
+                    url,
+                    content_hash,
+                    db_path,
+                    needs_refresh,
+                    sync_dirty,
+                    mark_sync_dirty,
+                );
             }
         }
 

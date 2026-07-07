@@ -393,10 +393,10 @@ fn run_sync_cycle_for_backend(
             crate::core::migration::migrate_sync_payload(&mut remote);
             sync::sanitize_payload(&mut remote);
             remote_hash = Some(sync::payload_semantic_hash(&remote));
-            remote_for_push = Some(remote.clone());
             match sync::merge_remote_into_local(db, &mut remote, &local_device) {
                 Ok(merge_stats) => {
                     stats = merge_stats;
+                    remote_for_push = Some(remote);
                     let fetched = crate::services::url_assets::backfill_link_favicons_from_db(db);
                     if fetched > 0 {
                         log::debug!("sync: backfilled {fetched} URL favicon(s)");

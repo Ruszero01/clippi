@@ -260,7 +260,7 @@ fn swatch_color(text: &str, fallback: Rgba) -> Rgba {
 }
 
 fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
-    if item.source_app_name.is_empty() || item.source_app_icon.is_empty() {
+    if item.source_app_name.is_empty() {
         return None;
     }
     let safe_name: String = item
@@ -281,24 +281,27 @@ fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     let path = crate::core::paths::images_dir()
         .join("icons")
         .join(format!("{safe_name}.png"));
-    if !path.exists() {
-        let job_key = format!("source:{safe_name}");
-        if !try_start_icon_cache_job(&job_key) {
-            return None;
-        }
-        // Cache miss: decode/write in background, skip icon this frame.
-        let encoded = item.source_app_icon.clone();
-        let p = path.clone();
-        let finish_key = job_key.clone();
-        std::thread::spawn(move || {
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                let _ = std::fs::write(&p, decoded);
-            }
-            finish_icon_cache_job(&finish_key);
-        });
+    if path.exists() {
+        return Some(path);
+    }
+    if item.source_app_icon.is_empty() {
         return None;
     }
-    Some(path)
+    let job_key = format!("source:{safe_name}");
+    if !try_start_icon_cache_job(&job_key) {
+        return None;
+    }
+    // Cache miss: decode/write in background, skip icon this frame.
+    let encoded = item.source_app_icon.clone();
+    let p = path.clone();
+    let finish_key = job_key.clone();
+    std::thread::spawn(move || {
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+            let _ = std::fs::write(&p, decoded);
+        }
+        finish_icon_cache_job(&finish_key);
+    });
+    None
 }
 
 fn image_preview_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
