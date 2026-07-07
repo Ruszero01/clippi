@@ -1510,6 +1510,14 @@ mod tests {
         db.insert_sync_item_raw(&item).expect("insert")
     }
 
+    fn days_ago(days: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339()
+    }
+
+    fn seconds_ago(seconds: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339()
+    }
+
     #[test]
     fn test_snapshot_unfav_with_tombstone_excluded_from_items() {
         let (db_mutex, _id, hash) = setup_db();
@@ -1517,7 +1525,7 @@ mod tests {
             let db = db_mutex.lock().unwrap();
             // --- Simulate: item was favorited, then unfavorited ---
             db.set_favorite(_id, true).unwrap(); // was favorited
-            db.record_unfavorite(hash, "2026-06-06T10:00:00Z", "test-device")
+            db.record_unfavorite(hash, &seconds_ago(1), "test-device")
                 .unwrap();
             // --- Now unfavorite it (simulating toggle_favorite was_fav=true branch) ---
             db.set_favorite(_id, false).unwrap();
@@ -1622,34 +1630,16 @@ mod tests {
         let db = std::sync::Mutex::new(db);
 
         // --- Item A: favorited (hash=1) ---
-        insert_item(
-            &db.lock().unwrap(),
-            "item a",
-            1,
-            true,
-            "2026-06-06T10:00:00Z",
-        );
+        let recent = days_ago(1);
+        insert_item(&db.lock().unwrap(), "item a", 1, true, &recent);
         // --- Item B: unfavorited with tombstone (hash=2) ---
-        insert_item(
-            &db.lock().unwrap(),
-            "item b",
-            2,
-            false,
-            "2026-06-06T10:00:00Z",
-        );
+        insert_item(&db.lock().unwrap(), "item b", 2, false, &recent);
         // --- Item C: unfavorited without tombstone (hash=3) ---
-        insert_item(
-            &db.lock().unwrap(),
-            "item c",
-            3,
-            false,
-            "2026-06-06T10:00:00Z",
-        );
+        insert_item(&db.lock().unwrap(), "item c", 3, false, &recent);
 
         {
             let db = db.lock().unwrap();
-            db.record_unfavorite(2, "2026-06-06T10:00:00Z", "test-device")
-                .unwrap();
+            db.record_unfavorite(2, &recent, "test-device").unwrap();
         }
 
         let payload = build_snapshot(&db, "test-device", false).unwrap();
@@ -1674,7 +1664,7 @@ mod tests {
         let db = Database::open(":memory:").expect("open :memory:");
         {
             let db = &db;
-            db.record_unfavorite(0xDEAD, "2026-06-06T10:00:00Z", "test-device")
+            db.record_unfavorite(0xDEAD, &seconds_ago(1), "test-device")
                 .unwrap();
         }
         let db = std::sync::Mutex::new(db);
@@ -1867,8 +1857,11 @@ mod tests {
     #[test]
     fn test_merge_remote_favorite_respects_newer_local_unfavorite() {
         let db = Database::open(":memory:").expect("open :memory:");
-        insert_item(&db, "same content", 100, false, "2026-06-06T10:00:00Z");
-        db.record_unfavorite(100, "2026-06-06T09:00:00Z", "local-device")
+        let local_updated_at = seconds_ago(1);
+        let local_unfavorited_at = seconds_ago(2);
+        let remote_updated_at = days_ago(1);
+        insert_item(&db, "same content", 100, false, &local_updated_at);
+        db.record_unfavorite(100, &local_unfavorited_at, "local-device")
             .unwrap();
         let db = std::sync::Mutex::new(db);
 
@@ -1878,7 +1871,7 @@ mod tests {
                 full_text: "same content".into(),
                 content_hash: 100,
                 created_at: "2026-05-01T08:00:00Z".into(),
-                updated_at: "2026-05-01T10:00:00Z".into(),
+                updated_at: remote_updated_at,
                 rich_data: String::new(),
                 is_favorite: true,
                 note: "saved on device A".into(),

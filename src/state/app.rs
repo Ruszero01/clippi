@@ -2018,10 +2018,15 @@ mod tests {
         let (mut state, dirty) = test_state();
         state.settings.sync_favorites_only = true;
         let item = make_item(1, ContentType::PlainText, false, "hello");
+        let hash = item.content_hash;
         state.db.upsert(&item).unwrap();
         state.items.push(item);
 
         state.delete_item(1);
+        assert!(
+            !state.db.is_item_tombstoned(hash).unwrap(),
+            "delete outside sync scope should NOT record tombstone"
+        );
         assert!(
             !dirty.load(Ordering::SeqCst),
             "delete outside sync scope should NOT set dirty (no tombstone needed)"
@@ -2034,10 +2039,15 @@ mod tests {
         let (mut state, dirty) = test_state();
         state.settings.sync_favorites_only = false;
         let item = make_item(1, ContentType::PlainText, false, "hello");
+        let hash = item.content_hash;
         state.db.upsert(&item).unwrap();
         state.items.push(item);
 
         state.delete_item(1);
+        assert!(
+            state.db.is_item_tombstoned(hash).unwrap(),
+            "delete in sync scope should record tombstone"
+        );
         assert!(
             dirty.load(Ordering::SeqCst),
             "delete in sync scope should set dirty (tombstone)"
@@ -2049,13 +2059,80 @@ mod tests {
         // Image items are never synced
         let (mut state, dirty) = test_state();
         let item = make_item(1, ContentType::Image, false, "image_data");
+        let hash = item.content_hash;
         state.db.upsert(&item).unwrap();
         state.items.push(item);
 
         state.delete_item(1);
         assert!(
+            !state.db.is_item_tombstoned(hash).unwrap(),
+            "delete image should NOT record tombstone"
+        );
+        assert!(
             !dirty.load(Ordering::SeqCst),
             "delete image should NOT set dirty"
+        );
+    }
+
+    #[test]
+    fn batch_delete_records_tombstones_only_for_sync_scope() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+
+        let favorite = make_item(1, ContentType::PlainText, true, "favorite");
+        let non_favorite = make_item(2, ContentType::PlainText, false, "non-favorite");
+        let image = make_item(3, ContentType::Image, true, "image_data");
+        let favorite_hash = favorite.content_hash;
+        let non_favorite_hash = non_favorite.content_hash;
+        let image_hash = image.content_hash;
+
+        state.db.upsert(&favorite).unwrap();
+        state.db.upsert(&non_favorite).unwrap();
+        state.db.upsert(&image).unwrap();
+        let favorite_id = state.db.get_by_hash(favorite_hash).unwrap().unwrap().id;
+        let non_favorite_id = state.db.get_by_hash(non_favorite_hash).unwrap().unwrap().id;
+        let image_id = state.db.get_by_hash(image_hash).unwrap().unwrap().id;
+        state.db.set_favorite(favorite_id, true).unwrap();
+        state.db.set_favorite(image_id, true).unwrap();
+        state.items.extend([favorite, non_favorite, image]);
+        state.selected_ids = vec![favorite_id, non_favorite_id, image_id];
+
+        state.batch_delete();
+
+        assert!(state.db.is_item_tombstoned(favorite_hash).unwrap());
+        assert!(!state.db.is_item_tombstoned(non_favorite_hash).unwrap());
+        assert!(!state.db.is_item_tombstoned(image_hash).unwrap());
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "batch delete should set dirty when at least one selected item is in sync scope"
+        );
+    }
+
+    #[test]
+    fn batch_delete_skips_dirty_and_tombstones_when_all_items_outside_sync_scope() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+
+        let non_favorite = make_item(1, ContentType::PlainText, false, "non-favorite");
+        let image = make_item(2, ContentType::Image, true, "image_data");
+        let non_favorite_hash = non_favorite.content_hash;
+        let image_hash = image.content_hash;
+
+        state.db.upsert(&non_favorite).unwrap();
+        state.db.upsert(&image).unwrap();
+        let non_favorite_id = state.db.get_by_hash(non_favorite_hash).unwrap().unwrap().id;
+        let image_id = state.db.get_by_hash(image_hash).unwrap().unwrap().id;
+        state.db.set_favorite(image_id, true).unwrap();
+        state.items.extend([non_favorite, image]);
+        state.selected_ids = vec![non_favorite_id, image_id];
+
+        state.batch_delete();
+
+        assert!(!state.db.is_item_tombstoned(non_favorite_hash).unwrap());
+        assert!(!state.db.is_item_tombstoned(image_hash).unwrap());
+        assert!(
+            !dirty.load(Ordering::SeqCst),
+            "batch delete outside sync scope should NOT set dirty"
         );
     }
 
