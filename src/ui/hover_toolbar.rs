@@ -228,7 +228,7 @@ impl RenderOnce for HoverToolbar {
         } else if is_batch {
             // --- Batch paste ---
             buttons.push((
-                "\u{e600}",
+                "\u{e63f}",
                 "batch_paste",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
