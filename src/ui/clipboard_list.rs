@@ -25,6 +25,16 @@ const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 16.0;
 const CLIPBOARD_BOTTOM_SCROLL_INSET: f32 = 36.0;
 const CLIPBOARD_SCROLLBAR_WIDTH: f32 = 16.0;
 
+fn additive_selection_modifier(modifiers: Modifiers) -> bool {
+    modifiers.control || modifiers.secondary()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_control_modifier_pressed() -> bool {
+    objc2_app_kit::NSEvent::modifierFlags_class()
+        .contains(objc2_app_kit::NSEventModifierFlags::Control)
+}
+
 /// Types of confirmation dialogs that can be shown.
 /// [FUTURE] Add variants here for other confirmation scenarios
 /// (e.g. RemoveBlacklist { app_name: String } for hotkey settings).
@@ -1275,7 +1285,7 @@ impl Render for ClipboardListView {
                                                 if this.editing_note_id > 0 {
                                                     this.commit_note_edit(window, cx);
                                                 }
-                                                if modifiers.control {
+                                                if additive_selection_modifier(modifiers) {
                                                     this.toggle_index(idx, cx);
                                                 } else if modifiers.shift {
                                                     this.range_select_to_index(idx, cx);
@@ -1320,6 +1330,12 @@ impl Render for ClipboardListView {
                                                     MouseButton::Right,
                                                     move |ev: &MouseDownEvent, _window, cx| {
                                                         list_for_right.update(cx, |this, cx| {
+                                                            #[cfg(target_os = "macos")]
+                                                            if macos_control_modifier_pressed() {
+                                                                this.toggle_index(i, cx);
+                                                                return;
+                                                            }
+
                                                             if let Some(item) = this.items.get(i) {
                                                                 let already_selected = this
                                                                     .selected_ids

@@ -794,7 +794,7 @@ impl WindowManager {
 
             // ── Modifier key state ──
             {
-                let flags = NSEvent::modifierFlags();
+                let flags = NSEvent::modifierFlags_class();
                 let shift_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Shift);
                 let ctrl_held = flags.contains(objc2_app_kit::NSEventModifierFlags::Control);
                 if let Some(ref view) = self.quick_view {
