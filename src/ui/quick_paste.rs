@@ -45,7 +45,7 @@ fn advanced_modifier_pressed(modifiers: Modifiers) -> bool {
 fn advanced_modifier_label() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        "Cmd/Ctrl"
+        "\u{2318}"
     }
     #[cfg(not(target_os = "macos"))]
     {
