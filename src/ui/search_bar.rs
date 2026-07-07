@@ -164,6 +164,14 @@ impl SearchBar {
         self.input.focus_handle(cx).focus(window);
     }
 
+    /// Clear the search input text. Called when the window opens and
+    /// clear_search_on_show setting is enabled.
+    pub fn clear_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+    }
+
     fn apply_type_filter(
         state: &Entity<AppState>,
         list_view: &Entity<ClipboardListView>,

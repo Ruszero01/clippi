@@ -828,10 +828,17 @@ impl Render for RootView {
             1.0
         };
 
-        // --- Auto-focus search bar when the window opens ---
+        // --- Auto-focus and clear search bar when the window opens ---
         if self.needs_auto_focus && is_clipboard {
             self.needs_auto_focus = false;
-            if self.state.read(cx).settings.auto_focus_search {
+            let clear_search = self.state.read(cx).settings.clear_search_on_show;
+            let auto_focus = self.state.read(cx).settings.auto_focus_search;
+            if clear_search {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.clear_text(window, cx);
+                });
+            }
+            if auto_focus {
                 self.search_bar.update(cx, |bar, cx| {
                     bar.focus(window, cx);
                 });

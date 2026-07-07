@@ -135,6 +135,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub auto_focus_search: bool, // auto-focus search bar when the window opens
     #[serde(default)]
+    pub clear_search_on_show: bool, // clear search bar text when the window opens
+    #[serde(default)]
     pub type_filter_config: Vec<TypeFilterEntry>, // custom type filter visibility & order
     #[serde(default)]
     pub paste_shortcuts: Vec<PasteShortcutEntry>,
@@ -238,6 +240,7 @@ impl Default for AppSettings {
             hide_taskbar_icon: false,
             block_system_window_behaviors: false,
             auto_focus_search: false,
+            clear_search_on_show: false,
             type_filter_config: Vec::new(),
             paste_shortcuts: Vec::new(),
             auto_check_updates: true,

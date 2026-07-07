@@ -26,6 +26,7 @@ impl SettingsPanel {
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
         let auto_focus_search = app.settings.auto_focus_search;
+        let clear_search_on_show = app.settings.clear_search_on_show;
         let auto_fetch_url_title = app.settings.auto_fetch_url_title;
         let filter_foreign_paths = app.settings.filter_foreign_paths;
         let copy_sound_enabled = app.settings.copy_sound_enabled;
@@ -263,6 +264,21 @@ impl SettingsPanel {
                 |state, _this, _window, _cx| {
                     state.update(_cx, |s, _cx| {
                         s.settings.auto_focus_search = !s.settings.auto_focus_search;
+                        s.settings.save();
+                    });
+                },
+            ))
+            // --- Clear search on show ---
+            .child(self.render_toggle_row(
+                I18nKey::SettingClearSearchOnShow,
+                I18nKey::DescClearSearchOnShowOn,
+                I18nKey::DescClearSearchOnShowOff,
+                clear_search_on_show,
+                window,
+                cx,
+                |state, _this, _window, _cx| {
+                    state.update(_cx, |s, _cx| {
+                        s.settings.clear_search_on_show = !s.settings.clear_search_on_show;
                         s.settings.save();
                     });
                 },
