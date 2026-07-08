@@ -93,6 +93,8 @@ pub struct QuickPasteView {
     state: Entity<AppState>,
     selected_index: usize,
     first_visible: usize,
+    /// Hover tracking — when set, drives selection in single-item mode.
+    hovered_index: Option<usize>,
     _appearance_subscription: Subscription,
     // Modifier key state (updated by WindowManager poll)
     pub(crate) shift_held: bool,
@@ -114,6 +116,7 @@ impl QuickPasteView {
             state,
             selected_index: 0,
             first_visible: 0,
+            hovered_index: None,
             _appearance_subscription: appearance_subscription,
             shift_held: false,
             ctrl_held: false,
@@ -727,6 +730,17 @@ impl Render for QuickPasteView {
                     .flex()
                     .flex_col()
                     .pb(px(LIST_INSET))
+                    .on_mouse_move({
+                        let ve_clear = view_entity.clone();
+                        move |_ev, _window, cx| {
+                            ve_clear.update(cx, |view, cx| {
+                                if view.hovered_index.is_some() {
+                                    view.hovered_index = None;
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    })
                     .when(items_count == 0, |list| {
                         list.child(
                             div()
@@ -878,6 +892,20 @@ impl Render for QuickPasteView {
                                             t.accent_overlay()
                                         } else {
                                             rgba(0x00000000)
+                                        })
+                                        .on_mouse_move({
+                                            let ve_hover = ve.clone();
+                                            move |_ev, _window, cx| {
+                                                cx.stop_propagation();
+                                                ve_hover.update(cx, |view, cx| {
+                                                    if view.hovered_index != Some(index) {
+                                                        view.hovered_index = Some(index);
+                                                        view.selected_index = index;
+                                                        view.ensure_selected_visible();
+                                                        cx.notify();
+                                                    }
+                                                });
+                                            }
                                         })
                                         .cursor(CursorStyle::PointingHand)
                                         .on_mouse_down(MouseButton::Left, {

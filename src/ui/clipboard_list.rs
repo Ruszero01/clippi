@@ -325,11 +325,11 @@ impl ClipboardListView {
         };
         let item_id = item.id;
         if let Some(pos) = self.selected_ids.iter().position(|&x| x == item_id) {
-            self.selected_ids.remove(pos);
-            if self.selected_ids.is_empty() {
-                self.anchor_index = None;
-                self.selected_index = None;
+            // --- Don't deselect the last remaining item — always keep at least one selected ---
+            if self.selected_ids.len() <= 1 {
+                return;
             }
+            self.selected_ids.remove(pos);
         } else {
             self.selected_ids.push(item_id);
             self.anchor_index = Some(index);
@@ -1341,9 +1341,39 @@ impl Render for ClipboardListView {
                                                 .on_mouse_move({
                                                     move |ev, _window, cx| {
                                                         cx.stop_propagation();
+                                                        let modifiers = ev.modifiers;
                                                         list_for_hover.update(cx, |this, cx| {
                                                             if this.hovered_index != Some(i) {
                                                                 this.hovered_index = Some(i);
+                                                                // --- Hover-to-select: when ≤1 item ---
+                                                                // --- is selected and no multi-select ---
+                                                                // --- modifier is held, hover drives  ---
+                                                                // --- selection automatically.         ---
+                                                                if this.selected_ids.len() <= 1
+                                                                    && !additive_selection_modifier(modifiers)
+                                                                    && !modifiers.shift
+                                                                {
+                                                                    if let Some(item) =
+                                                                        this.items.get(i)
+                                                                    {
+                                                                        this.selected_ids.clear();
+                                                                        this.selected_ids
+                                                                            .push(item.id);
+                                                                        this.selected_index =
+                                                                            Some(i);
+                                                                        this.anchor_index = Some(i);
+                                                                        this.selected_count = 1;
+                                                                        let item_id = item.id;
+                                                                        this.state.update(
+                                                                            cx,
+                                                                            |state, _cx| {
+                                                                                state.select_single(
+                                                                                    item_id,
+                                                                                );
+                                                                            },
+                                                                        );
+                                                                    }
+                                                                }
                                                                 cx.notify();
                                                             }
                                                             this.last_hover_pos = Some(ev.position);
