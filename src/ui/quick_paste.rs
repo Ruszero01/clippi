@@ -23,6 +23,10 @@ pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
+/// Width of the favorites filter button (icon is ~14px, 3px padding each side).
+const FAV_BUTTON_SIZE: f32 = 20.0;
+/// Gap between the type filter area and the favorites button.
+const FAV_BUTTON_GAP: f32 = 6.0;
 
 pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 8.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
@@ -57,8 +61,10 @@ fn advanced_modifier_label() -> &'static str {
 /// Used by window_manager for positioning and main.rs for initial window size.
 pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET * 2.0;
+    // Top bar always exists (contains at minimum the favorites filter button).
+    h += TYPE_BAR_HEIGHT;
     if has_type_bar {
-        h += TYPE_BAR_HEIGHT + 1.0; // bar + divider
+        h += 1.0; // divider below type bar area
     }
     if has_tag_row {
         h += TAG_ROW_HEIGHT + 1.0; // bar + divider
@@ -458,15 +464,13 @@ impl QuickPasteView {
         }
 
         let visible_idx = self.selected_index.saturating_sub(self.first_visible);
-        let bars_offset = if has_type_bar {
-            TYPE_BAR_HEIGHT + 1.0
-        } else {
-            0.0
-        } + if has_tag_row {
-            TAG_ROW_HEIGHT + 1.0
-        } else {
-            0.0
-        };
+        let bars_offset = TYPE_BAR_HEIGHT // always present (fav button row)
+            + if has_type_bar { 1.0 } else { 0.0 } // divider only with type bar
+            + if has_tag_row {
+                TAG_ROW_HEIGHT + 1.0
+            } else {
+                0.0
+            };
 
         let row_top = visible_idx as f32 * ROW_HEIGHT + LIST_INSET + bars_offset;
         let items = self.tooltip_items();
@@ -527,6 +531,7 @@ impl Render for QuickPasteView {
 
         let has_type_bar = !type_config.is_empty();
         let has_tag_row = !pinned_tags.is_empty();
+        let fav_active = filters.is_favorites_active();
 
         // ── Tag compact mode detection ──
         // Estimate total tag width; if it overflows the row, switch to flex_1 equal division.
@@ -547,7 +552,12 @@ impl Render for QuickPasteView {
         let visible_count = visible_type_entries.len().max(1) as f32;
         // Use design width constant so sizing is deterministic — viewport
         // may vary on first paint before SetWindowPos enforces correct size.
-        let type_bar_avail = QUICK_WINDOW_WIDTH - HORIZONTAL_PADDING * 2.0;
+        let fav_space = if has_type_bar {
+            FAV_BUTTON_SIZE + FAV_BUTTON_GAP
+        } else {
+            0.0
+        };
+        let type_bar_avail = QUICK_WINDOW_WIDTH - HORIZONTAL_PADDING * 2.0 - fav_space;
         let text_gap_total = 4.0 * (visible_count - 1.0).max(0.0); // TYPE_FILTER_TEXT_GAP
         let type_slot_width = (type_bar_avail - text_gap_total).max(0.0) / visible_count;
         let icon_only = type_slot_width < 50.0; // TYPE_FILTER_TEXT_MIN_SLOT_WIDTH
@@ -587,69 +597,112 @@ impl Render for QuickPasteView {
                     }
                 }
             }))
-            // ── Type filter bar ──
-            .when(has_type_bar, |parent| {
-                parent.child(
-                    div()
-                        .h(px(TYPE_BAR_HEIGHT))
-                        .px(px(HORIZONTAL_PADDING))
-                        .flex()
-                        .items_center()
-                        .gap(px(filter_gap))
-                        .children(visible_type_entries.iter().map(|entry| {
-                            let active = filters.is_type_active(&entry.key);
-                            let (icon, label) =
-                                filter_type_display(&entry.key).unwrap_or(("\u{e60e}", "".into()));
-                            let key = entry.key.clone();
-                            let t = theme.clone();
-                            let app_state = self.state.clone();
-                            let filter_text = if active { rgb(0xffffff) } else { t.text_2 };
+            // ── Top bar (always visible: type filters + favorites button) ──
+            .child(
+                div()
+                    .h(px(TYPE_BAR_HEIGHT))
+                    .px(px(HORIZONTAL_PADDING))
+                    .flex()
+                    .items_center()
+                    .gap(px(filter_gap))
+                    // Type filter buttons area (only when has_type_bar, takes remaining space)
+                    .when(has_type_bar, |row| {
+                        row.child(
                             div()
-                                .h(px(22.0))
-                                .when(icon_only, |b| b.flex_1().min_w(px(0.0)).justify_center())
-                                .when(!icon_only, |b| {
-                                    b.flex_1()
-                                        .min_w(px(0.0))
-                                        .justify_center()
-                                        .px(px(5.0))
-                                        .gap(px(2.0))
-                                })
-                                .rounded(px(5.0))
+                                .flex_1()
                                 .flex()
-                                .flex_row()
                                 .items_center()
-                                .bg(if active { t.accent } else { inactive_bg })
-                                .cursor(CursorStyle::PointingHand)
-                                .on_mouse_down(MouseButton::Left, {
-                                    let s = app_state.clone();
-                                    let k = key.clone();
-                                    let v = view_entity.clone();
-                                    move |_, _window, cx| {
-                                        s.update(cx, |s, _cx| {
-                                            s.toggle_type_filter(&k);
-                                        });
-                                        v.update(cx, |view, cx| view.reset_scroll(cx));
-                                    }
-                                })
-                                .child(
+                                .gap(px(filter_gap))
+                                .children(visible_type_entries.iter().map(|entry| {
+                                    let active = filters.is_type_active(&entry.key);
+                                    let (icon, label) = filter_type_display(&entry.key)
+                                        .unwrap_or(("\u{e60e}", "".into()));
+                                    let key = entry.key.clone();
+                                    let t = theme.clone();
+                                    let app_state = self.state.clone();
+                                    let filter_text = if active { rgb(0xffffff) } else { t.text_2 };
                                     div()
-                                        .text_size(px(12.0))
-                                        .font_family("iconfont")
-                                        .text_color(filter_text)
-                                        .child(icon),
-                                )
-                                .when(!icon_only, |b| {
-                                    b.child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(filter_text)
-                                            .child(label),
-                                    )
-                                })
-                                .into_any_element()
-                        })),
-                )
-            })
+                                        .h(px(22.0))
+                                        .when(icon_only, |b| {
+                                            b.flex_1().min_w(px(0.0)).justify_center()
+                                        })
+                                        .when(!icon_only, |b| {
+                                            b.flex_1()
+                                                .min_w(px(0.0))
+                                                .justify_center()
+                                                .px(px(5.0))
+                                                .gap(px(2.0))
+                                        })
+                                        .rounded(px(5.0))
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .bg(if active { t.accent } else { inactive_bg })
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let s = app_state.clone();
+                                            let k = key.clone();
+                                            let v = view_entity.clone();
+                                            move |_, _window, cx| {
+                                                s.update(cx, |s, _cx| {
+                                                    s.toggle_type_filter(&k);
+                                                });
+                                                v.update(cx, |view, cx| view.reset_scroll(cx));
+                                            }
+                                        })
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .font_family("iconfont")
+                                                .text_color(filter_text)
+                                                .child(icon),
+                                        )
+                                        .when(!icon_only, |b| {
+                                            b.child(
+                                                div()
+                                                    .text_size(px(11.0))
+                                                    .text_color(filter_text)
+                                                    .child(label),
+                                            )
+                                        })
+                                        .into_any_element()
+                                })),
+                        )
+                    })
+                    // Spacer to push fav button to the right when no type filters are shown.
+                    .when(!has_type_bar, |row| row.child(div().flex_1()))
+                    // Favorites filter button (always visible, fixed width, right-aligned)
+                    .child(
+                        div()
+                            .w(px(FAV_BUTTON_SIZE))
+                            .h(px(FAV_BUTTON_SIZE))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .on_mouse_down(MouseButton::Left, {
+                                let s = self.state.clone();
+                                let v = view_entity.clone();
+                                move |_, _window, cx| {
+                                    s.update(cx, |s, _cx| {
+                                        s.toggle_favorites_filter();
+                                    });
+                                    v.update(cx, |view, cx| view.reset_scroll(cx));
+                                }
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .font_family("iconfont")
+                                    .text_color(if fav_active {
+                                        theme.fav_color
+                                    } else {
+                                        theme.text_2
+                                    })
+                                    .child("\u{e630}"),
+                            ),
+                    ),
+            )
             .when(has_type_bar, |parent| {
                 parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
             })
