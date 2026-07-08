@@ -232,6 +232,12 @@ impl RenderOnce for HoverToolbar {
                 "batch_paste",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
+            // --- Merge selected ---
+            buttons.push((
+                "\u{e68a}",
+                "merge_selected",
+                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+            ));
             // --- Batch tag ---
             buttons.push((
                 "\u{ec07}",

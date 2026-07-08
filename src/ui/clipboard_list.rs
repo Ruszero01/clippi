@@ -789,6 +789,13 @@ impl ClipboardListView {
                 self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
                 self.sync_items_from_state_for_usage(cx);
             }
+            "merge_selected" => {
+                let new_id = self.state.update(cx, |s, _cx| s.merge_selected_items());
+                self.sync_items_from_state(cx);
+                if let Some(id) = new_id {
+                    self.scroll_to_item_if_visible(id, cx);
+                }
+            }
             "edit_note" => {
                 if let Some(ref item) = self.context_menu_item {
                     self.start_note_edit(item.id, &item.note.clone(), _window, cx);
@@ -892,7 +899,7 @@ impl ClipboardListView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !action.starts_with("batch_") {
+        if !action.starts_with("batch_") && action != "merge_selected" {
             let Some(index) = self.hovered_index else {
                 return;
             };
@@ -927,6 +934,13 @@ impl ClipboardListView {
                 let ids = self.selected_ids.clone();
                 self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
                 self.sync_items_from_state_for_usage(cx);
+            }
+            "merge_selected" => {
+                let new_id = self.state.update(cx, |s, _cx| s.merge_selected_items());
+                self.sync_items_from_state(cx);
+                if let Some(id) = new_id {
+                    self.scroll_to_item_if_visible(id, cx);
+                }
             }
             "batch_tag" => {
                 self.tag_picker_visible = true;

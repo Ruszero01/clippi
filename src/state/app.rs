@@ -1456,6 +1456,128 @@ impl AppState {
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Merge selected text items into one new entry (seamless concatenation, no separator).
+    /// Returns the new item's ID so the UI can scroll to it.
+    ///
+    /// When all selected items are rich text with HTML content, the merged entry
+    /// preserves rich formatting by concatenating the HTML body contents.
+    /// Otherwise it falls back to plain-text concatenation of `full_text`.
+    pub fn merge_selected_items(&mut self) -> Option<i64> {
+        if self.selected_ids.len() < 2 {
+            return None;
+        }
+
+        // Collect items in current list display order.
+        let selected_set: std::collections::HashSet<i64> =
+            self.selected_ids.iter().copied().collect();
+        let items: Vec<&ClipboardItem> = self
+            .items
+            .iter()
+            .filter(|item| selected_set.contains(&item.id))
+            .collect();
+
+        if items.len() < 2 {
+            return None;
+        }
+
+        // ── Check whether all items are rich text with HTML ──
+        let all_rich = items.iter().all(|item| {
+            item.content_type == ContentType::RichText
+                && !item.rich_data.is_empty()
+                && RichData::from_json(&item.rich_data).html.is_some()
+        });
+
+        let (content_type, merged_text, rich_data, hash) = if all_rich {
+            // ── Rich text path: merge HTML body contents ──
+            let bodies: Vec<String> = items
+                .iter()
+                .map(|item| {
+                    let rich = RichData::from_json(&item.rich_data);
+                    let html = rich.html.as_deref().unwrap_or("");
+                    extract_html_body(html)
+                })
+                .collect();
+            let merged_body = bodies.concat();
+            let merged_html =
+                format!("<!DOCTYPE html>\n<html>\n<head><meta charset=\"utf-8\"></head>\n<body>\n{merged_body}\n</body>\n</html>");
+            let merged_plain = item_texts_for_merge(&items);
+
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&merged_html, &mut hasher);
+            let hash = std::hash::Hasher::finish(&hasher);
+
+            let rd = RichData {
+                html: Some(merged_html),
+                ..Default::default()
+            };
+
+            (ContentType::RichText, merged_plain, rd.to_json(), hash)
+        } else {
+            // ── Plain-text path: concatenate full_text ──
+            let merged = item_texts_for_merge(&items);
+
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&merged, &mut hasher);
+            let hash = std::hash::Hasher::finish(&hasher);
+
+            (ContentType::PlainText, merged, String::new(), hash)
+        };
+
+        let text_size = merged_text.chars().count() as i64;
+        let now = chrono::Utc::now();
+        let item = ClipboardItem {
+            id: 0,
+            content_type,
+            meta_type: String::new(),
+            full_text: merged_text,
+            content_hash: hash,
+            created_at: now,
+            updated_at: now,
+            image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rich_data,
+            file_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            source_app_name: String::new(),
+            source_app_icon: String::new(),
+            size: text_size,
+            tags: vec![],
+        };
+
+        // Write to DB.
+        if let Err(e) = self.db.upsert(&item) {
+            log::error!("merge_selected_items: upsert failed: {e}");
+            return None;
+        }
+
+        // Retrieve the auto-generated ID.
+        let new_id = match self.db.get_by_hash(hash) {
+            Ok(Some(item)) => item.id,
+            other => {
+                log::error!("merge_selected_items: get_by_hash returned {other:?}");
+                return None;
+            }
+        };
+
+        let merged_count = items.len();
+
+        // Mark sync dirty and refresh the in-memory list.
+        self.sync_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.reload_items();
+
+        // Clear multi-selection, select the new item.
+        self.select_single(new_id);
+
+        log::info!(
+            "merge_selected_items: merged {merged_count} items → id={new_id} ({text_size} chars)"
+        );
+
+        Some(new_id)
+    }
+
     /// Update the note field for a clipboard item.
     /// Writes to DB (includes updated_at) and syncs the in-memory items list.
     pub fn update_note(&mut self, id: i64, note: &str) {
@@ -1752,6 +1874,30 @@ fn reveal_file_location(path: &str) {
             let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
         }
     }
+}
+
+/// Extract body content from an HTML string for merging.
+///
+/// If the HTML has `<body>…</body>` tags, returns the inner content;
+/// otherwise returns the input as-is.
+fn extract_html_body(html: &str) -> String {
+    let lower = html.to_lowercase();
+    if let Some(body_start) = lower.find("<body") {
+        if let Some(tag_end) = html[body_start..].find('>') {
+            let content_start = body_start + tag_end + 1;
+            if let Some(body_end) = lower[content_start..].find("</body>") {
+                return html[content_start..content_start + body_end]
+                    .trim()
+                    .to_string();
+            }
+        }
+    }
+    html.trim().to_string()
+}
+
+/// Concatenate the `full_text` of all items (no separator).
+fn item_texts_for_merge(items: &[&ClipboardItem]) -> String {
+    items.iter().map(|item| item.full_text.as_str()).collect()
 }
 
 #[cfg(test)]

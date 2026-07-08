@@ -313,6 +313,13 @@ impl ContextMenu {
                 fav: false,
             },
             RawMenuItem {
+                label: I18nKey::CtxMergeSelected.text().into(),
+                action: "merge_selected".into(),
+                icon: "\u{e68a}".into(),
+                danger: false,
+                fav: false,
+            },
+            RawMenuItem {
                 label: SEPARATOR_LABEL.into(),
                 action: String::new(),
                 icon: String::new(),

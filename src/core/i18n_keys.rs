@@ -207,6 +207,7 @@ define_i18n! {
     CtxPasteAsRgb:      ("粘贴为 RGB", "Paste as RGB"),
     CtxPasteAsHex:      ("粘贴为 HEX", "Paste as HEX"),
     CtxBatchPasteN:     ("粘贴 {0} 项", "Paste {0} items"),
+    CtxMergeSelected:   ("合并条目", "Merge entries"),
     CtxBatchTag:        ("批量标签", "Batch tag"),
     CtxBatchFav:        ("批量收藏", "Batch fav"),
     CtxBatchDelete:     ("批量删除", "Batch delete"),
