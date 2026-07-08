@@ -842,6 +842,8 @@ impl Render for RootView {
                 self.search_bar.update(cx, |bar, cx| {
                     bar.focus(window, cx);
                 });
+            } else {
+                self.list_view.update(cx, |list, _cx| list.focus(window));
             }
         }
 
@@ -940,7 +942,7 @@ impl Render for RootView {
                             this.switch_view("clipboard");
                             cx.notify();
                         });
-                        root_focus.focus(window);
+                        root_list.update(cx, |list, _cx| list.focus(window));
                     }
                     cx.stop_propagation();
                 } else if is_edit {
@@ -949,7 +951,7 @@ impl Render for RootView {
                         this.switch_view("clipboard");
                         cx.notify();
                     });
-                    root_focus.focus(window);
+                    root_list.update(cx, |list, _cx| list.focus(window));
                     cx.stop_propagation();
                 } else {
                     // Clipboard view: delegate to list for panel/multi-select logic
@@ -958,6 +960,9 @@ impl Render for RootView {
                         root_this.update(cx, |this, cx| {
                             this.window_manager.update(cx, |wm, cx| wm.hide(cx));
                         });
+                    } else {
+                        // Panels were dismissed by ESC — return focus to the list
+                        root_list.update(cx, |list, _cx| list.focus(window));
                     }
                     cx.stop_propagation();
                 }
@@ -1262,12 +1267,14 @@ impl Render for RootView {
             .when(confirm_dialog_visible, |root| {
                 let list = self.list_view.clone();
                 let app_state = self.state.clone();
+                let dialog_focus = cx.focus_handle();
 
                 // --- Read dialog state and clone what we need before closures ---
                 let dialog = list.read(cx).confirm_dialog_state().cloned();
                 let dialog_element: AnyElement = match dialog {
                     Some(ConfirmDialogState::DeleteSingle { id }) => ConfirmDialog::delete_single()
                         .theme(self.theme.clone())
+                        .focus_handle(dialog_focus.clone())
                         .on_confirm({
                             let s = app_state.clone();
                             let l = list.clone();
@@ -1289,6 +1296,7 @@ impl Render for RootView {
                     Some(ConfirmDialogState::DeleteBatch { count }) => {
                         ConfirmDialog::delete_batch(count)
                             .theme(self.theme.clone())
+                            .focus_handle(dialog_focus.clone())
                             .on_confirm({
                                 let s = app_state.clone();
                                 let l = list.clone();

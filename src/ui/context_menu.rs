@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use crate::core::i18n_keys::I18nKey;
@@ -77,10 +78,33 @@ struct RawMenuItem {
     icon: String,
     danger: bool,
     fav: bool,
+    shortcut: Option<String>,
+}
+
+/// Platform-aware modifier key label for shortcut display.
+fn ctrl_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "\u{2318}"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl"
+    }
 }
 
 const SEPARATOR_LABEL: &str = "__sep__";
-const MENU_WIDTH: f32 = 164.0;
+
+fn sc(label: &str) -> Option<String> {
+    Some(label.into())
+}
+
+fn ctrl_shortcut(key: &str) -> Option<String> {
+    Some(format!("{}+{}", ctrl_label(), key))
+}
+const MENU_WIDTH: f32 = 184.0;
+/// Internal item width (menu width minus 4px padding on each side).
+const ITEM_WIDTH: f32 = MENU_WIDTH - 8.0; // 176.0
 /// Height of a single menu item row.
 const ITEM_HEIGHT: f32 = 30.0;
 /// Height of a separator (3px gap + 1px line + 3px gap).
@@ -113,6 +137,7 @@ impl ContextMenu {
             icon: "\u{e7e1}".into(),
             danger: false,
             fav: false,
+            shortcut: ctrl_shortcut("C"),
         });
         // --- Paste ---
         items.push(RawMenuItem {
@@ -121,6 +146,7 @@ impl ContextMenu {
             icon: "\u{e63f}".into(),
             danger: false,
             fav: false,
+            shortcut: sc("Enter"),
         });
         // --- Paste Plain Text (rich text only) ---
         if ctx.is_rich_text {
@@ -130,6 +156,7 @@ impl ContextMenu {
                 icon: "\u{e60e}".into(),
                 danger: false,
                 fav: false,
+                shortcut: sc("Shift+Enter"),
             });
         }
 
@@ -146,6 +173,7 @@ impl ContextMenu {
                 icon: "\u{e610}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             });
         }
 
@@ -156,6 +184,7 @@ impl ContextMenu {
             icon: String::new(),
             danger: false,
             fav: false,
+            shortcut: None,
         });
 
         // Edit (not for image/file)
@@ -166,6 +195,7 @@ impl ContextMenu {
                 icon: "\u{e648}".into(),
                 danger: false,
                 fav: false,
+                shortcut: ctrl_shortcut("E"),
             });
         }
 
@@ -176,6 +206,7 @@ impl ContextMenu {
             icon: "\u{e606}".into(),
             danger: false,
             fav: false,
+            shortcut: sc("F2"),
         });
 
         // --- Open original image (image only) ---
@@ -186,6 +217,7 @@ impl ContextMenu {
                 icon: "\u{e626}".into(),
                 danger: false,
                 fav: false,
+                shortcut: sc("Space"),
             });
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteImagePath.text().into(),
@@ -193,6 +225,7 @@ impl ContextMenu {
                 icon: "\u{e60e}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             });
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteImageBitmap.text().into(),
@@ -200,6 +233,7 @@ impl ContextMenu {
                 icon: "\u{e626}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             });
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteOcr.text().into(),
@@ -207,6 +241,7 @@ impl ContextMenu {
                 icon: "\u{e6a5}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             });
             items.push(RawMenuItem {
                 label: I18nKey::CtxDetectQr.text().into(),
@@ -214,6 +249,7 @@ impl ContextMenu {
                 icon: "\u{e605}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             });
         }
 
@@ -224,6 +260,7 @@ impl ContextMenu {
             icon: "\u{ec07}".into(),
             danger: false,
             fav: false,
+            shortcut: ctrl_shortcut("T"),
         });
 
         // --- Open in browser (link only) ---
@@ -234,6 +271,7 @@ impl ContextMenu {
                 icon: "\u{e643}".into(),
                 danger: false,
                 fav: false,
+                shortcut: sc("Space"),
             });
         }
         // --- Jump to directory (path only) ---
@@ -244,6 +282,7 @@ impl ContextMenu {
                 icon: "\u{e609}".into(),
                 danger: false,
                 fav: false,
+                shortcut: sc("Space"),
             });
         }
         // --- Open folder (file only) ---
@@ -254,6 +293,7 @@ impl ContextMenu {
                 icon: "\u{e609}".into(),
                 danger: false,
                 fav: false,
+                shortcut: sc("Space"),
             });
         }
         // --- Paste file path (file only) ---
@@ -264,6 +304,7 @@ impl ContextMenu {
                 icon: "\u{e60e}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             });
         }
 
@@ -274,6 +315,7 @@ impl ContextMenu {
             icon: String::new(),
             danger: false,
             fav: false,
+            shortcut: None,
         });
 
         // --- Favorite ---
@@ -288,6 +330,7 @@ impl ContextMenu {
             icon: fav_icon.into(),
             danger: false,
             fav: true,
+            shortcut: ctrl_shortcut("D"),
         });
 
         // --- Delete ---
@@ -297,6 +340,7 @@ impl ContextMenu {
             icon: "\u{e8b6}".into(),
             danger: true,
             fav: false,
+            shortcut: sc("Delete"),
         });
 
         Self::new().items(items)
@@ -311,6 +355,7 @@ impl ContextMenu {
                 icon: "\u{e63f}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             },
             RawMenuItem {
                 label: I18nKey::CtxMergeSelected.text().into(),
@@ -318,6 +363,7 @@ impl ContextMenu {
                 icon: "\u{e68a}".into(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             },
             RawMenuItem {
                 label: SEPARATOR_LABEL.into(),
@@ -325,6 +371,7 @@ impl ContextMenu {
                 icon: String::new(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             },
             RawMenuItem {
                 label: I18nKey::CtxBatchTag.text().into(),
@@ -332,6 +379,7 @@ impl ContextMenu {
                 icon: "\u{ec07}".into(),
                 danger: false,
                 fav: false,
+                shortcut: ctrl_shortcut("T"),
             },
             RawMenuItem {
                 label: SEPARATOR_LABEL.into(),
@@ -339,6 +387,7 @@ impl ContextMenu {
                 icon: String::new(),
                 danger: false,
                 fav: false,
+                shortcut: None,
             },
             RawMenuItem {
                 label: I18nKey::CtxBatchFav.text().into(),
@@ -346,6 +395,7 @@ impl ContextMenu {
                 icon: "\u{e630}".into(),
                 danger: false,
                 fav: true,
+                shortcut: ctrl_shortcut("D"),
             },
             RawMenuItem {
                 label: I18nKey::CtxBatchDelete.text().into(),
@@ -353,6 +403,7 @@ impl ContextMenu {
                 icon: "\u{e8b6}".into(),
                 danger: true,
                 fav: false,
+                shortcut: sc("Delete"),
             },
         ];
         Self::new().items(items)
@@ -428,6 +479,7 @@ impl RenderOnce for ContextMenu {
         let accent = theme.accent;
         let text_1 = theme.text_1;
         let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
         let danger = theme.danger;
         let fav_color = theme.fav_color;
 
@@ -475,7 +527,7 @@ impl RenderOnce for ContextMenu {
                 // --- Render separator ---
                 if item.label == SEPARATOR_LABEL {
                     return div()
-                        .w(px(156.))
+                        .w(px(ITEM_WIDTH))
                         .flex()
                         .flex_col()
                         .child(div().h(px(3.)))
@@ -488,6 +540,7 @@ impl RenderOnce for ContextMenu {
                 let action = item.action.clone();
                 let icon = item.icon.clone();
                 let label = item.label.clone();
+                let shortcut = item.shortcut.clone();
 
                 let normal_icon = if is_fav {
                     fav_color
@@ -521,32 +574,47 @@ impl RenderOnce for ContextMenu {
                 };
 
                 div()
-                    .w(px(156.))
+                    .w(px(ITEM_WIDTH))
                     .h(px(30.))
                     .rounded(px(5.))
                     .flex()
                     .flex_row()
                     .items_center()
+                    .justify_between()
                     .px(px(8.))
-                    .gap(px(8.))
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |style| style.bg(btn_hover))
-                    .child({
-                        let icon = icon.clone();
+                    .child(
                         div()
-                            .font_family("iconfont")
-                            .text_size(px(13.))
-                            .text_color(normal_icon)
-                            .hover(move |style| style.text_color(hover_icon))
-                            .child(icon)
-                    })
-                    .child({
-                        let label = label.clone();
-                        div()
-                            .text_size(px(13.))
-                            .text_color(normal_text)
-                            .hover(move |style| style.text_color(hover_text))
-                            .child(label)
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .child({
+                                let icon = icon.clone();
+                                div()
+                                    .font_family("iconfont")
+                                    .text_size(px(13.))
+                                    .text_color(normal_icon)
+                                    .hover(move |style| style.text_color(hover_icon))
+                                    .child(icon)
+                            })
+                            .child({
+                                let label = label.clone();
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(normal_text)
+                                    .hover(move |style| style.text_color(hover_text))
+                                    .child(label)
+                            }),
+                    )
+                    .when(shortcut.is_some(), move |row| {
+                        row.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(text_3)
+                                .child(shortcut.clone().unwrap()),
+                        )
                     })
                     .on_mouse_down(MouseButton::Left, {
                         let action = action.clone();

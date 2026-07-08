@@ -13,7 +13,7 @@ use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
 
 use crate::core::i18n_keys::I18nKey;
-use crate::core::types::ClipboardItem;
+use crate::core::types::{ClipboardItem, ContentType};
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
@@ -1155,6 +1155,32 @@ impl Render for ClipboardListView {
                                 this.action_edit(cx);
                                 cx.stop_propagation();
                             }
+                            "c" if !this.has_any_panel_or_editing() => {
+                                // Ctrl+C — copy selected item to clipboard
+                                if let Some(idx) = this.selected_index {
+                                    if let Some(item) = this.items.get(idx) {
+                                        let id = item.id;
+                                        let plain = this.state.read(cx).settings.copy_as_plain_text;
+                                        this.state.update(cx, |s, _cx| s.copy_item(id, plain));
+                                        this.sync_items_from_state_for_usage(cx);
+                                    }
+                                }
+                                cx.stop_propagation();
+                            }
+                            "t" if !this.has_any_panel_or_editing() => {
+                                // Ctrl+T — show tag picker
+                                this.tag_picker_visible = true;
+                                this.tag_picker_x = 0.0;
+                                this.tag_picker_y = 0.0;
+                                this.tag_picker_is_batch = this.selected_count > 1;
+                                this.tag_picker_item_id = if let Some(idx) = this.selected_index {
+                                    this.items.get(idx).map_or(-1, |item| item.id)
+                                } else {
+                                    -1
+                                };
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
                             _ => {}
                         }
                         return;
@@ -1195,12 +1221,29 @@ impl Render for ClipboardListView {
                                 cx.stop_propagation();
                             }
                         }
+                        "space" if !this.has_any_panel_or_editing() => {
+                            // Space — smart open based on item type
+                            if let Some(idx) = this.selected_index {
+                                if let Some(item) = this.items.get(idx) {
+                                    let item_id = item.id;
+                                    if item.content_type == ContentType::Image {
+                                        this.state.update(cx, |s, _cx| s.open_original_image(item_id));
+                                    } else if item.meta_type == "link"
+                                        || item.meta_type == "path"
+                                        || item.content_type == ContentType::File
+                                    {
+                                        this.state.update(cx, |s, _cx| s.open_item_location(item_id));
+                                    }
+                                }
+                            }
+                            cx.stop_propagation();
+                        }
                         "f2" if !this.has_any_panel_or_editing() => {
                             // F2 — add/edit note for selected item
                             this.action_edit_note(window, cx);
                             cx.stop_propagation();
                         }
-                        "delete" if !this.has_any_panel_or_editing() => {
+                        "delete" | "backspace" if !this.has_any_panel_or_editing() => {
                             // Delete — remove selected item(s)
                             this.action_delete(cx);
                             cx.stop_propagation();
