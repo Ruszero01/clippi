@@ -277,7 +277,7 @@ fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     if safe_name.is_empty() {
         return None;
     }
-    // Icon directory is pre-created at startup — no fs ops in render.
+    // Icon directory is pre-created at startup.
     let path = crate::core::paths::images_dir()
         .join("icons")
         .join(format!("{safe_name}.png"));
@@ -287,20 +287,24 @@ fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     if item.source_app_icon.is_empty() {
         return None;
     }
-    let job_key = format!("source:{safe_name}");
-    if !try_start_icon_cache_job(&job_key) {
-        return None;
-    }
-    // Cache miss: decode/write in background, skip icon this frame.
-    let encoded = item.source_app_icon.clone();
-    let p = path.clone();
-    let finish_key = job_key.clone();
-    std::thread::spawn(move || {
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-            let _ = std::fs::write(&p, decoded);
+    // Cache miss: decode and write synchronously.
+    // A 32×32 PNG is ~2–5 KB — the decode + write completes in microseconds.
+    match base64::engine::general_purpose::STANDARD.decode(&item.source_app_icon) {
+        Ok(decoded) => {
+            if let Err(e) = std::fs::write(&path, &decoded) {
+                log::warn!("source_icon_path: failed to write {}: {e}", path.display());
+                return None;
+            }
+            return Some(path);
         }
-        finish_icon_cache_job(&finish_key);
-    });
+        Err(e) => {
+            log::warn!(
+                "source_icon_path: base64 decode failed for '{}' (len={}): {e}",
+                item.source_app_name,
+                item.source_app_icon.len(),
+            );
+        }
+    }
     None
 }
 

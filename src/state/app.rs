@@ -186,7 +186,7 @@ fn truncated_owned(text: String, limit: usize) -> String {
 fn shrink_item_for_list(item: &mut ClipboardItem) {
     truncate_chars(&mut item.full_text, LIST_FULL_TEXT_LIMIT);
     truncate_chars(&mut item.note, LIST_NOTE_LIMIT);
-    item.source_app_icon.clear();
+    truncate_chars(&mut item.source_app_icon, 8192);
 
     if item.rich_data.is_empty() {
         return;
@@ -2222,7 +2222,7 @@ mod tests {
         let preview = &state.items[0];
         assert!(preview.full_text.len() <= LIST_FULL_TEXT_LIMIT);
         assert!(preview.note.len() <= LIST_NOTE_LIMIT);
-        assert!(preview.source_app_icon.is_empty());
+        assert_eq!(preview.source_app_icon.len(), 10_000);
         let rich_preview = RichData::from_json(&preview.rich_data);
         assert!(rich_preview.html.unwrap().len() <= LIST_RICH_HTML_LIMIT);
         assert!(rich_preview.page_title.unwrap().len() <= LIST_RICH_AUX_LIMIT);

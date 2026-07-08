@@ -90,7 +90,7 @@ fn list_item_select_columns() -> String {
                  'drive_label', NULLIF(substr(coalesce(json_extract(rich_data, '$.drive_label'), ''), 1, {LIST_RICH_AUX_LIMIT}), '')
              )
          END,
-         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, '', image_width, image_height, size, meta_type"
+         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type"
     )
 }
 

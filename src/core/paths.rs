@@ -164,7 +164,7 @@ pub fn app_icon_path(app_name: &str) -> PathBuf {
     let sanitized: String = app_name
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ' ' {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
                 c
             } else {
                 '_'

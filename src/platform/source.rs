@@ -17,6 +17,7 @@ mod windows_impl {
         SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SMALLICON,
         SHGFI_USEFILEATTRIBUTES,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     extern "system" {
         fn GetClipboardOwner() -> HWND;
@@ -25,46 +26,83 @@ mod windows_impl {
 
     const PROCESS_NAME_WIN32: u32 = 0;
 
-    pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
-        // SAFETY: `GetClipboardOwner` reads the current clipboard owner HWND
-        // (query-only, no side effects). `OpenProcess` with
-        // PROCESS_QUERY_LIMITED_INFORMATION is the least-privilege access mode.
-        // `QueryFullProcessImageNameW` writes into a stack-allocated buffer
-        // whose capacity matches the reported `len`. `CloseHandle` is always
-        // called on non-null handles.
-        unsafe {
-            let hwnd = GetClipboardOwner();
-            if hwnd.is_null() {
-                return None;
-            }
+    /// Processes whose clipboard ownership is a proxy for the real app (e.g.
+    /// WebView2 runtime hosts the clipboard on behalf of the parent app).
+    const PROXY_EXE_NAMES: &[&str] = &["msedgewebview2.exe"];
 
-            let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, &mut pid);
-            if pid == 0 {
-                return None;
-            }
+    /// Query the executable path of the process that owns `hwnd`.
+    /// Returns `None` if the process cannot be opened or queried.
+    unsafe fn exe_path_from_hwnd(hwnd: HWND) -> Option<String> {
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            // Protected / elevated processes may deny QUERY_LIMITED_INFORMATION.
+            return None;
+        }
+        let mut buf = [0u16; 260];
+        let mut len = buf.len() as u32;
+        let result =
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        if result == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
 
-            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if process.is_null() {
-                return None;
-            }
-            let mut buf = [0u16; 260];
-            let mut len = buf.len() as u32;
-            let result =
-                QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
-            CloseHandle(process);
-            if result == 0 {
-                return None;
-            }
+    /// Build `SourceAppInfo` from an executable path.
+    fn source_info_from_exe(exe_path: &str) -> Option<SourceAppInfo> {
+        let app_name = extract_app_name(exe_path);
+        let icon_base64 = extract_icon_base64(exe_path)?;
+        Some(SourceAppInfo {
+            app_name,
+            icon_base64,
+        })
+    }
 
-            let exe_path = String::from_utf16_lossy(&buf[..len as usize]);
-            let app_name = extract_app_name(&exe_path);
-            let icon_base64 = extract_icon_base64(&exe_path)?;
-
-            Some(SourceAppInfo {
-                app_name,
-                icon_base64,
+    fn is_proxy_process(exe_path: &str) -> bool {
+        std::path::Path::new(exe_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|name| {
+                let lower = name.to_lowercase();
+                PROXY_EXE_NAMES.contains(&lower.as_str())
             })
+            .unwrap_or(false)
+    }
+
+    pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
+        unsafe {
+            let owner_hwnd = GetClipboardOwner();
+
+            if !owner_hwnd.is_null() {
+                if let Some(exe_path) = exe_path_from_hwnd(owner_hwnd) {
+                    if !is_proxy_process(&exe_path) {
+                        if let Some(info) = source_info_from_exe(&exe_path) {
+                            return Some(info);
+                        }
+                        log::warn!(
+                            "get_clipboard_owner_info: icon extraction failed for {exe_path}"
+                        );
+                    }
+                }
+            }
+
+            // Fallback: use the foreground window.
+            let fg_hwnd = GetForegroundWindow();
+            if fg_hwnd.is_null() || fg_hwnd == owner_hwnd {
+                return None;
+            }
+            if let Some(fg_path) = exe_path_from_hwnd(fg_hwnd) {
+                if let Some(fg_info) = source_info_from_exe(&fg_path) {
+                    return Some(fg_info);
+                }
+            }
+            None
         }
     }
 
