@@ -936,59 +936,69 @@ impl AppState {
             }
         };
 
-        // ── Link / path: open in browser or Explorer ─────────────────
-        if item.meta_type == "link" || item.meta_type == "path" {
+        // ── Link: open in browser ─────────────────────────────────
+        if item.meta_type == "link" {
             if item.full_text.is_empty() {
-                log::warn!("open_item_location: link/path item {id} has empty full_text");
+                log::warn!("open_item_location: link item {id} has empty full_text");
                 return;
             }
             let mut text = item.full_text.clone();
             // Protocol-less URLs need a scheme for ShellExecuteW to
             // dispatch them to the browser instead of treating them as
             // file-system paths.
-            if item.meta_type == "link"
-                && !text.starts_with("http://")
-                && !text.starts_with("https://")
-            {
+            if !text.starts_with("http://") && !text.starts_with("https://") {
                 text = format!("https://{}", text);
             }
             let target = text;
 
             // ── Lazy URL metadata backfill for old/synced link items ─────
-            if item.meta_type == "link" {
-                let mark_sync_dirty = self.should_mark_sync_dirty(&item);
-                crate::services::url_assets::spawn_link_open_backfill(
-                    item.full_text.clone(),
-                    item.content_hash,
-                    self.settings.db_path.clone(),
-                    item.rich_data.clone(),
-                    self.settings.auto_fetch_url_title,
-                    self.sync_dirty.clone(),
-                    mark_sync_dirty,
-                );
-            }
-
-            // ── Lazy drive-label fill for old path items ──────────
-            if item.meta_type == "path" {
-                let rd = RichData::from_json(&item.rich_data);
-                if rd.drive_label.is_none() {
-                    if let Some(label) = crate::core::types::path_drive_label(&item.full_text) {
-                        let resolved = crate::core::paths::resolve_db_path(&self.settings.db_path);
-                        if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy())
-                        {
-                            let mut new_rd = rd;
-                            new_rd.drive_label = Some(label);
-                            let _ = db.update_rich_data(item.id, &new_rd.to_json());
-                        }
-                    }
-                }
-            }
+            let mark_sync_dirty = self.should_mark_sync_dirty(&item);
+            crate::services::url_assets::spawn_link_open_backfill(
+                item.full_text.clone(),
+                item.content_hash,
+                self.settings.db_path.clone(),
+                item.rich_data.clone(),
+                self.settings.auto_fetch_url_title,
+                self.sync_dirty.clone(),
+                mark_sync_dirty,
+            );
 
             // --- Spawn on a background thread to avoid ShellExecuteW ---
             // --- deadlock on the GPUI main thread (DDE/COM message pumping). ---
             std::thread::spawn(move || {
                 open_system_target(&target);
             });
+            return;
+        }
+
+        // ── Path: reveal in Explorer (not open/execute) ──────────
+        if item.meta_type == "path" {
+            if item.full_text.is_empty() {
+                log::warn!("open_item_location: path item {id} has empty full_text");
+                return;
+            }
+
+            // ── Lazy drive-label fill for old path items ──────────
+            let rd = RichData::from_json(&item.rich_data);
+            if rd.drive_label.is_none() {
+                if let Some(label) = crate::core::types::path_drive_label(&item.full_text) {
+                    let resolved = crate::core::paths::resolve_db_path(&self.settings.db_path);
+                    if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
+                        let mut new_rd = rd;
+                        new_rd.drive_label = Some(label);
+                        let _ = db.update_rich_data(item.id, &new_rd.to_json());
+                    }
+                }
+            }
+
+            // Reveal in Explorer if the path exists locally;
+            // silently skip non-existent paths.
+            if crate::core::types::path_exists(&item.full_text) {
+                let path = item.full_text.clone();
+                std::thread::spawn(move || {
+                    reveal_file_location(&path);
+                });
+            }
             return;
         }
 
