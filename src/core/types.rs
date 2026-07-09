@@ -403,16 +403,28 @@ pub fn format_relative_time(captured_at: &DateTime<Utc>) -> String {
     let elapsed = Utc::now().signed_duration_since(*captured_at);
     let secs = elapsed.num_seconds();
     use crate::core::i18n_keys::I18nKey;
-    if secs < 60 {
+
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    const WEEK: i64 = 7 * DAY;
+    const MONTH: i64 = 30 * DAY;
+    const YEAR: i64 = 365 * DAY;
+
+    if secs < MINUTE {
         I18nKey::FormatJustNow.text().to_string()
-    } else if secs < 3600 {
-        I18nKey::FormatMinutesAgo.fmt(&[&(secs / 60).to_string()])
-    } else if secs < 86400 {
-        I18nKey::FormatHoursAgo.fmt(&[&(secs / 3600).to_string()])
-    } else if secs < 604800 {
-        I18nKey::FormatDaysAgo.fmt(&[&(secs / 86400).to_string()])
+    } else if secs < HOUR {
+        I18nKey::FormatMinutesAgo.fmt(&[&(secs / MINUTE).to_string()])
+    } else if secs < DAY {
+        I18nKey::FormatHoursAgo.fmt(&[&(secs / HOUR).to_string()])
+    } else if secs < WEEK {
+        I18nKey::FormatDaysAgo.fmt(&[&(secs / DAY).to_string()])
+    } else if secs < MONTH {
+        I18nKey::FormatWeeksAgo.fmt(&[&(secs / WEEK).to_string()])
+    } else if secs < YEAR {
+        I18nKey::FormatMonthsAgo.fmt(&[&(secs / MONTH).to_string()])
     } else {
-        I18nKey::FormatWeeksAgo.fmt(&[&(secs / 604800).to_string()])
+        I18nKey::FormatYearsAgo.fmt(&[&(secs / YEAR).to_string()])
     }
 }
 
@@ -883,6 +895,15 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_relative_time_supports_months_and_years() {
+        let month_old = Utc::now() - chrono::Duration::days(45);
+        let year_old = Utc::now() - chrono::Duration::days(400);
+
+        assert_eq!(format_relative_time(&month_old), "1月前");
+        assert_eq!(format_relative_time(&year_old), "1年前");
+    }
 
     // ── is_url ──────────────────────────────────────────────────────────
 

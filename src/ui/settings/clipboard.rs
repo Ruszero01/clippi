@@ -119,56 +119,73 @@ impl SettingsPanel {
                             .justify_between()
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w(px(0.))
                                     .flex()
                                     .flex_col()
                                     .gap(px(3.))
                                     .child(
                                         div()
+                                            .max_w_full()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
                                             .text_size(px(12.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(text_1)
                                             .child(I18nKey::SettingCopySound.text()),
                                     )
-                                    .child(div().text_size(px(10.)).text_color(text_3).child(
-                                        if enabled {
-                                            I18nKey::DescCopySoundOn.text()
-                                        } else {
-                                            I18nKey::DescCopySoundOff.text()
-                                        },
-                                    )),
+                                    .child(
+                                        div()
+                                            .max_w_full()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .text_size(px(10.))
+                                            .text_color(text_3)
+                                            .child(if enabled {
+                                                I18nKey::DescCopySoundOn.text()
+                                            } else {
+                                                I18nKey::DescCopySoundOff.text()
+                                            }),
+                                    ),
                             )
-                            .child(crate::ui::components::toggle::render_toggle(
-                                enabled,
-                                "copy-sound",
-                                crate::ui::components::toggle::ToggleColors {
-                                    accent,
-                                    track_off: divider,
-                                },
-                                &mut self.toggle_states,
-                                window,
-                                cx,
-                                {
-                                    let state = state.clone();
-                                    let this = this.clone();
-                                    move |_window, cx| {
-                                        state.update(cx, |s, _cx| {
-                                            s.settings.copy_sound_enabled =
-                                                !s.settings.copy_sound_enabled;
-                                            s.settings.save();
-                                        });
-                                        this.update(cx, |panel, cx| {
-                                            panel.copy_sound_anim_gen =
-                                                panel.copy_sound_anim_gen.wrapping_add(1);
-                                            cx.emit(
-                                                super::SettingsEvent::ClipboardSettingsChanged {
-                                                    reload_items: false,
-                                                    scroll_to_top: false,
-                                                },
-                                            );
-                                        });
-                                    }
-                                },
-                            )),
+                            .child(
+                                div().flex_shrink_0().child(
+                                    crate::ui::components::toggle::render_toggle(
+                                        enabled,
+                                        "copy-sound",
+                                        crate::ui::components::toggle::ToggleColors {
+                                            accent,
+                                            track_off: divider,
+                                        },
+                                        &mut self.toggle_states,
+                                        window,
+                                        cx,
+                                        {
+                                            let state = state.clone();
+                                            let this = this.clone();
+                                            move |_window, cx| {
+                                                state.update(cx, |s, _cx| {
+                                                    s.settings.copy_sound_enabled =
+                                                        !s.settings.copy_sound_enabled;
+                                                    s.settings.save();
+                                                });
+                                                this.update(cx, |panel, cx| {
+                                                    panel.copy_sound_anim_gen =
+                                                        panel.copy_sound_anim_gen.wrapping_add(1);
+                                                    cx.emit(
+                                                        super::SettingsEvent::ClipboardSettingsChanged {
+                                                            reload_items: false,
+                                                            scroll_to_top: false,
+                                                        },
+                                                    );
+                                                });
+                                            }
+                                        },
+                                    ),
+                                ),
+                            ),
                     )
                     // Footer: sound selector buttons (animated opacity)
                     .child(

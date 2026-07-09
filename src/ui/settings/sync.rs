@@ -70,12 +70,17 @@ impl SettingsPanel {
                             .justify_between()
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
                                     .child(I18nKey::SyncTabTitle.text()),
                             )
-                            .child(render_toggle(
+                            .child(div().flex_shrink_0().child(render_toggle(
                                 sync.auto_enabled,
                                 "sync-auto-enabled",
                                 ToggleColors {
@@ -93,7 +98,7 @@ impl SettingsPanel {
                                         });
                                     }
                                 },
-                            )),
+                            ))),
                     )
                     .when(sync.auto_enabled, |card| {
                         card.child(div().h(px(1.)).bg(divider)).child(
@@ -105,12 +110,17 @@ impl SettingsPanel {
                                 .justify_between()
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
                                         .text_size(px(12.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_1)
                                         .child(I18nKey::SyncFavoritesOnly.text()),
                                 )
-                                .child(render_toggle(
+                                .child(div().flex_shrink_0().child(render_toggle(
                                     sync.favorites_only,
                                     "sync-favorites-only",
                                     ToggleColors {
@@ -128,7 +138,7 @@ impl SettingsPanel {
                                             });
                                         }
                                     },
-                                )),
+                                ))),
                         )
                     }),
             )

@@ -301,6 +301,7 @@ impl Render for SettingsPanel {
 
                         div()
                             .flex_1()
+                            .min_w(px(0.))
                             .h_full()
                             .flex()
                             .flex_col()
@@ -317,6 +318,11 @@ impl Render for SettingsPanel {
                             // --- Tab label ---
                             .child(
                                 div()
+                                    .max_w_full()
+                                    .min_w(px(0.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
                                     .text_size(px(12.))
                                     .font_weight(if is_active {
                                         FontWeight::BOLD
@@ -466,10 +472,16 @@ impl SettingsPanel {
             .child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w(px(0.))
                     .flex_col()
                     .gap(px(2.))
                     .child(
                         div()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
                             .text_size(px(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
@@ -477,12 +489,16 @@ impl SettingsPanel {
                     )
                     .child(
                         div()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
                             .text_size(px(10.))
                             .text_color(text_3)
                             .child(desc.to_string()),
                     ),
             )
-            .child(render_toggle(
+            .child(div().flex_shrink_0().child(render_toggle(
                 value,
                 label,
                 ToggleColors {
@@ -493,7 +509,7 @@ impl SettingsPanel {
                 window,
                 cx,
                 on_toggle,
-            ))
+            )))
     }
 
     /// Render a toggle row with common boilerplate handled automatically.
@@ -558,10 +574,16 @@ impl SettingsPanel {
             .child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w(px(0.))
                     .flex_col()
                     .gap(px(2.))
                     .child(
                         div()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
                             .text_size(px(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
@@ -569,6 +591,10 @@ impl SettingsPanel {
                     )
                     .child(
                         div()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
                             .text_size(px(10.))
                             .text_color(text_3)
                             .child(desc.to_string()),
@@ -578,6 +604,7 @@ impl SettingsPanel {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .flex_row()
                     .gap(px(4.))
                     .children(options.iter().map(|(key, display_label)| {
