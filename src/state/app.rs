@@ -1483,13 +1483,12 @@ impl AppState {
             return None;
         }
 
-        // Collect items in current list display order.
-        let selected_set: std::collections::HashSet<i64> =
-            self.selected_ids.iter().copied().collect();
+        // Preserve the explicit selection order. The list is usually sorted by
+        // newest first, which can differ from the user's merge order.
         let items: Vec<&ClipboardItem> = self
-            .items
+            .selected_ids
             .iter()
-            .filter(|item| selected_set.contains(&item.id))
+            .filter_map(|id| self.items.iter().find(|item| item.id == *id))
             .collect();
 
         if items.len() < 2 {
@@ -1610,13 +1609,11 @@ impl AppState {
             return false;
         }
 
-        let selected_set: std::collections::HashSet<i64> =
-            self.selected_ids.iter().copied().collect();
         let mut count = 0;
         for item in self
-            .items
+            .selected_ids
             .iter()
-            .filter(|item| selected_set.contains(&item.id))
+            .filter_map(|id| self.items.iter().find(|item| item.id == *id))
         {
             if !item_can_be_merged(item) {
                 return false;

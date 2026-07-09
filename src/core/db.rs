@@ -1607,14 +1607,19 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
 mod tests {
     use super::*;
 
+    static TEMP_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn temp_db(name: &str) -> (std::path::PathBuf, Database) {
+        let counter = TEMP_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "clippi-merge-test-{}-{}",
+            "clippi-merge-test-{}-{}-{}-{}",
             name,
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            counter
         ));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("clippi.db");
