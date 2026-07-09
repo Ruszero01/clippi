@@ -346,11 +346,6 @@ impl Render for SettingsPanel {
                             // --- Tab label ---
                             .child(
                                 div()
-                                    .max_w_full()
-                                    .min_w(px(0.))
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
                                     .text_size(px(12.))
                                     .font_weight(if is_active {
                                         FontWeight::BOLD
