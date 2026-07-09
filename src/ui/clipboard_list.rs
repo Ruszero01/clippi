@@ -24,6 +24,10 @@ use super::theme::ClippiTheme;
 const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 16.0;
 const CLIPBOARD_BOTTOM_SCROLL_INSET: f32 = 36.0;
 const CLIPBOARD_SCROLLBAR_WIDTH: f32 = 16.0;
+const TAG_PICKER_WIDTH: f32 = 304.0;
+const TAG_PICKER_CARD_ANCHOR_Y: f32 = 10.0;
+const TAG_PICKER_FALLBACK_X: f32 = 400.0;
+const TAG_PICKER_FALLBACK_Y: f32 = 80.0;
 
 fn additive_selection_modifier(modifiers: Modifiers) -> bool {
     modifiers.control || modifiers.secondary()
@@ -463,6 +467,77 @@ impl ClipboardListView {
         }
     }
 
+    /// Open the tag picker from keyboard actions, anchored to the selected row.
+    pub(crate) fn action_show_tag_picker(&mut self, cx: &mut Context<Self>) {
+        if self.has_any_panel_or_editing() {
+            return;
+        }
+
+        let Some(selected_index) = self.selected_index else {
+            return;
+        };
+
+        let Some(item) = self.items.get(selected_index) else {
+            return;
+        };
+
+        let y = self
+            .selected_item_tag_picker_y(selected_index)
+            .unwrap_or(TAG_PICKER_FALLBACK_Y);
+
+        let is_batch = self.selected_count > 1;
+        let item_id = if is_batch { -1 } else { item.id };
+        self.open_tag_picker(is_batch, item_id, y, cx);
+    }
+
+    fn open_tag_picker(
+        &mut self,
+        is_batch: bool,
+        item_id: i64,
+        anchor_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.tag_picker_visible = true;
+        self.tag_picker_x = self.fixed_tag_picker_x();
+        self.tag_picker_y = anchor_y;
+        self.tag_picker_is_batch = is_batch;
+        self.tag_picker_item_id = if is_batch { -1 } else { item_id };
+        cx.notify();
+    }
+
+    fn fixed_tag_picker_x(&self) -> f32 {
+        let list_bounds = self.scroll_handle.bounds();
+        if list_bounds.size.width <= px(0.) {
+            return TAG_PICKER_FALLBACK_X;
+        }
+
+        f32::from(list_bounds.left()) + (f32::from(list_bounds.size.width) - TAG_PICKER_WIDTH) / 2.0
+    }
+
+    fn selected_item_tag_picker_y(&self, selected_index: usize) -> Option<f32> {
+        let list_bounds = self.scroll_handle.bounds();
+        if list_bounds.size.width <= px(0.) || list_bounds.size.height <= px(0.) {
+            return None;
+        }
+
+        let row_top = self
+            .item_sizes
+            .iter()
+            .take(selected_index)
+            .map(|size| f32::from(size.height))
+            .sum::<f32>();
+        let scroll_y = f32::from(self.scroll_handle.offset().y);
+        let y = f32::from(list_bounds.top()) + row_top + scroll_y + TAG_PICKER_CARD_ANCHOR_Y;
+
+        Some(y)
+    }
+
+    fn pointer_tag_picker_y(&self) -> f32 {
+        self.last_hover_pos
+            .map(|p| f32::from(p.y))
+            .unwrap_or(TAG_PICKER_FALLBACK_Y)
+    }
+
     /// Show the delete confirmation dialog for selected item(s).
     pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) {
         if self.selected_count > 1 {
@@ -582,13 +657,25 @@ impl ClipboardListView {
         cx.notify();
     }
 
-    fn show_tag_picker(&mut self, is_batch: bool, x: f32, y: f32, cx: &mut Context<Self>) {
-        self.tag_picker_visible = true;
-        self.tag_picker_x = x;
-        self.tag_picker_y = y;
-        self.tag_picker_is_batch = is_batch;
-        self.tag_picker_item_id = self.context_menu_item.as_ref().map_or(-1, |item| item.id);
-        cx.notify();
+    fn show_context_menu_tag_picker(&mut self, cx: &mut Context<Self>) {
+        let item_id = self.context_menu_item.as_ref().map_or(-1, |item| item.id);
+        self.open_tag_picker(self.context_menu_is_batch, item_id, self.context_menu_y, cx);
+    }
+
+    fn show_hover_tag_picker(&mut self, is_batch: bool, cx: &mut Context<Self>) {
+        let item_id = if is_batch {
+            -1
+        } else {
+            let Some(index) = self.hovered_index else {
+                return;
+            };
+            self.items.get(index).map_or(-1, |item| item.id)
+        };
+        if !is_batch && item_id <= 0 {
+            return;
+        }
+
+        self.open_tag_picker(is_batch, item_id, self.pointer_tag_picker_y(), cx);
     }
 
     pub fn tag_picker_rows(
@@ -877,12 +964,7 @@ impl ClipboardListView {
                 }
             }
             "show_tag_picker" => {
-                self.show_tag_picker(
-                    self.context_menu_is_batch,
-                    self.context_menu_x,
-                    self.context_menu_y,
-                    cx,
-                );
+                self.show_context_menu_tag_picker(cx);
             }
             // --- Edit panel migration is tracked separately. ---
             "edit" => {
@@ -951,16 +1033,7 @@ impl ClipboardListView {
                 }
             }
             "batch_tag" => {
-                self.tag_picker_visible = true;
-                let (px, py) = self
-                    .last_hover_pos
-                    .map(|p| (f32::from(p.x), f32::from(p.y)))
-                    .unwrap_or((400.0, 80.0));
-                self.tag_picker_x = px;
-                self.tag_picker_y = py;
-                self.tag_picker_is_batch = true;
-                self.tag_picker_item_id = -1;
-                cx.notify();
+                self.show_hover_tag_picker(true, cx);
             }
             "edit_note" => {
                 if let Some(index) = self.hovered_index {
@@ -973,20 +1046,7 @@ impl ClipboardListView {
                 }
             }
             "show_tag_picker" => {
-                if let Some(index) = self.hovered_index {
-                    if let Some(item) = self.items.get(index) {
-                        self.tag_picker_visible = true;
-                        let (px, py) = self
-                            .last_hover_pos
-                            .map(|p| (f32::from(p.x), f32::from(p.y)))
-                            .unwrap_or((400.0, 80.0));
-                        self.tag_picker_x = px;
-                        self.tag_picker_y = py;
-                        self.tag_picker_is_batch = false;
-                        self.tag_picker_item_id = item.id;
-                        cx.notify();
-                    }
-                }
+                self.show_hover_tag_picker(false, cx);
             }
             "toggle_favorite" => {
                 if let Some(index) = self.hovered_index {
@@ -1177,16 +1237,7 @@ impl Render for ClipboardListView {
                             }
                             "t" if !this.has_any_panel_or_editing() => {
                                 // Ctrl+T — show tag picker
-                                this.tag_picker_visible = true;
-                                this.tag_picker_x = 0.0;
-                                this.tag_picker_y = 0.0;
-                                this.tag_picker_is_batch = this.selected_count > 1;
-                                this.tag_picker_item_id = if let Some(idx) = this.selected_index {
-                                    this.items.get(idx).map_or(-1, |item| item.id)
-                                } else {
-                                    -1
-                                };
-                                cx.notify();
+                                this.action_show_tag_picker(cx);
                                 cx.stop_propagation();
                             }
                             _ => {}

@@ -334,6 +334,14 @@ impl Render for SearchBar {
                                     });
                                     cx.stop_propagation();
                                 }
+                                // Ctrl+T — tag picker
+                                (true, false, "t") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_show_tag_picker(cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
                                 // F2 — edit note
                                 (false, false, "f2") => {
                                     list.update(cx, |list, cx| {
