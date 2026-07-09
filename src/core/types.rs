@@ -846,7 +846,7 @@ pub fn path_exists(text: &str) -> bool {
 }
 
 /// Mask sensitive content for preview display.
-/// Email: show first 2 chars of local part + "***" + domain (e.g. "ab***@gmail.com")
+/// Email: show first 3 chars of local part + "****" + domain (e.g. "abc****@gmail.com")
 /// Phone: show first 3 chars + "****" + last 4 chars (e.g. "138****5678")
 pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
     match meta_type {
@@ -854,8 +854,8 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
             if let Some(at) = text.find('@') {
                 let local = &text[..at];
                 let domain = &text[at..];
-                let visible = local.chars().take(2).collect::<String>();
-                format!("{}***{}", visible, domain)
+                let visible = local.chars().take(3).collect::<String>();
+                format!("{}****{}", visible, domain)
             } else {
                 text.to_string()
             }
