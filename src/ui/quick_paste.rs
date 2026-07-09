@@ -109,6 +109,8 @@ pub struct QuickPasteView {
     current_alt_index: usize,
     pub(crate) current_alt_mode: String,
     pub(crate) available_alt_modes: Vec<String>,
+    /// Accumulated scroll delta for page-flip threshold (prevents touchpad over-scroll).
+    scroll_accumulator: f32,
 }
 
 impl EventEmitter<QuickPasteEvent> for QuickPasteView {}
@@ -129,6 +131,7 @@ impl QuickPasteView {
             current_alt_index: 0,
             current_alt_mode: image_alt_mode,
             available_alt_modes: Vec::new(),
+            scroll_accumulator: 0.0,
         }
     }
 
@@ -160,28 +163,31 @@ impl QuickPasteView {
         if len == 0 {
             return;
         }
-        let last_page = (len - 1) / VISIBLE_ROWS;
         let current_page = self.selected_index / VISIBLE_ROWS;
+        let offset = self.selected_index % VISIBLE_ROWS;
+        let last_page = (len - 1) / VISIBLE_ROWS;
         if current_page >= last_page {
             return;
         }
         let next_page = current_page + 1;
-        self.selected_index = next_page * VISIBLE_ROWS;
-        self.first_visible = self.selected_index;
+        self.first_visible = next_page * VISIBLE_ROWS;
+        self.selected_index = (self.first_visible + offset).min(len - 1);
         cx.notify();
     }
 
     pub fn select_previous_page(&mut self, cx: &mut Context<Self>) {
-        if self.state.read(cx).items.is_empty() {
+        let len = self.state.read(cx).items.len();
+        if len == 0 {
             return;
         }
         let current_page = self.selected_index / VISIBLE_ROWS;
         if current_page == 0 {
             return;
         }
+        let offset = self.selected_index % VISIBLE_ROWS;
         let previous_page = current_page - 1;
-        self.selected_index = previous_page * VISIBLE_ROWS;
-        self.first_visible = self.selected_index;
+        self.first_visible = previous_page * VISIBLE_ROWS;
+        self.selected_index = (self.first_visible + offset).min(len - 1);
         cx.notify();
     }
 
@@ -588,12 +594,24 @@ impl Render for QuickPasteView {
                     };
                     this.cycle_alt_mode(delta, cx);
                 } else {
-                    // Support Shift+scroll (Windows remaps to horizontal scroll).
-                    let delta = if pixel.y != px(0.0) { pixel.y } else { pixel.x };
-                    if delta < px(0.0) {
-                        this.select_next(cx);
-                    } else if delta > px(0.0) {
-                        this.select_previous(cx);
+                    // Extract f32 from Pixels via Div (Pixels / Pixels = f32).
+                    let dy = pixel.y / px(1.0);
+                    // Reset accumulator on direction change to avoid momentum carry-over.
+                    if dy.signum() != this.scroll_accumulator.signum()
+                        && this.scroll_accumulator != 0.0
+                    {
+                        this.scroll_accumulator = 0.0;
+                    }
+                    this.scroll_accumulator += dy;
+                    // Page-flip threshold: ROW_HEIGHT pixels triggers one page scroll.
+                    let threshold = ROW_HEIGHT;
+                    while this.scroll_accumulator <= -threshold {
+                        this.scroll_accumulator += threshold;
+                        this.select_next_page(cx);
+                    }
+                    while this.scroll_accumulator >= threshold {
+                        this.scroll_accumulator -= threshold;
+                        this.select_previous_page(cx);
                     }
                 }
             }))
