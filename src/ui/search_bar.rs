@@ -19,6 +19,10 @@ use crate::state::app::AppState;
 use super::clipboard_list::{ClipboardListEvent, ClipboardListView};
 use super::theme::ClippiTheme;
 
+fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
+    modifiers.secondary()
+}
+
 pub(crate) struct FilterDef {
     pub key: &'static str,
     pub icon: &'static str,
@@ -262,7 +266,7 @@ impl Render for SearchBar {
                         let app_state = self.state.clone();
                         move |ev: &KeyDownEvent, window, cx| {
                             let key = ev.keystroke.key.as_str();
-                            let ctrl = ev.keystroke.modifiers.control;
+                            let ctrl = primary_modifier_pressed(ev.keystroke.modifiers);
                             let shift = ev.keystroke.modifiers.shift;
 
                             // --- Navigation: up/down — keep search focus, move list selection ---

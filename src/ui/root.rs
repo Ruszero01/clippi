@@ -1146,7 +1146,8 @@ impl Render for RootView {
                             let l = list_for_action.clone();
                             if is_batch {
                                 let count = l.read(cx).selected_count;
-                                ContextMenu::for_batch(count)
+                                let can_merge = l.read(cx).can_merge_selected_items(cx);
+                                ContextMenu::for_batch(count, can_merge)
                                     .with_position(menu_x, menu_y, win_w, win_h)
                                     .theme(self.theme.clone())
                                     .on_action({

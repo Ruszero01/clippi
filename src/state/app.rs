@@ -183,10 +183,16 @@ fn truncated_owned(text: String, limit: usize) -> String {
     text
 }
 
+fn item_can_be_merged(item: &ClipboardItem) -> bool {
+    matches!(
+        item.content_type,
+        ContentType::PlainText | ContentType::RichText
+    ) && !item.full_text.is_empty()
+}
+
 fn shrink_item_for_list(item: &mut ClipboardItem) {
     truncate_chars(&mut item.full_text, LIST_FULL_TEXT_LIMIT);
     truncate_chars(&mut item.note, LIST_NOTE_LIMIT);
-    truncate_chars(&mut item.source_app_icon, 8192);
 
     if item.rich_data.is_empty() {
         return;
@@ -1489,6 +1495,12 @@ impl AppState {
         if items.len() < 2 {
             return None;
         }
+        if !items.iter().all(|item| item_can_be_merged(item)) {
+            log::warn!("merge_selected_items: selected items include non-text or empty content");
+            return None;
+        }
+
+        let now = chrono::Utc::now();
 
         // ── Check whether all items are rich text with HTML ──
         let all_rich = items.iter().all(|item| {
@@ -1513,6 +1525,9 @@ impl AppState {
             let merged_plain = item_texts_for_merge(&items);
 
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&"merge", &mut hasher);
+            std::hash::Hash::hash(&now.timestamp_nanos_opt(), &mut hasher);
+            std::hash::Hash::hash(&self.selected_ids, &mut hasher);
             std::hash::Hash::hash(&merged_html, &mut hasher);
             let hash = std::hash::Hasher::finish(&hasher);
 
@@ -1527,6 +1542,9 @@ impl AppState {
             let merged = item_texts_for_merge(&items);
 
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&"merge", &mut hasher);
+            std::hash::Hash::hash(&now.timestamp_nanos_opt(), &mut hasher);
+            std::hash::Hash::hash(&self.selected_ids, &mut hasher);
             std::hash::Hash::hash(&merged, &mut hasher);
             let hash = std::hash::Hasher::finish(&hasher);
 
@@ -1534,7 +1552,6 @@ impl AppState {
         };
 
         let text_size = merged_text.chars().count() as i64;
-        let now = chrono::Utc::now();
         let item = ClipboardItem {
             id: 0,
             content_type,
@@ -1586,6 +1603,28 @@ impl AppState {
         );
 
         Some(new_id)
+    }
+
+    pub fn can_merge_selected_items(&self) -> bool {
+        if self.selected_ids.len() < 2 {
+            return false;
+        }
+
+        let selected_set: std::collections::HashSet<i64> =
+            self.selected_ids.iter().copied().collect();
+        let mut count = 0;
+        for item in self
+            .items
+            .iter()
+            .filter(|item| selected_set.contains(&item.id))
+        {
+            if !item_can_be_merged(item) {
+                return false;
+            }
+            count += 1;
+        }
+
+        count >= 2
     }
 
     /// Update the note field for a clipboard item.
@@ -1873,9 +1912,10 @@ fn reveal_file_location(path: &str) {
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            let _ = std::process::Command::new("open").arg(parent).spawn();
-        }
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn();
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -2599,6 +2639,62 @@ mod tests {
         assert!(
             !dirty.load(Ordering::SeqCst),
             "batch delete outside sync scope should NOT set dirty"
+        );
+    }
+
+    #[test]
+    fn merge_selected_items_rejects_non_text_items() {
+        let (mut state, _dirty) = test_state();
+        let text = make_item(1, ContentType::PlainText, false, "text");
+        let image = make_item(2, ContentType::Image, false, "image_data");
+        let text_hash = text.content_hash;
+        let image_hash = image.content_hash;
+
+        state.db.upsert(&text).unwrap();
+        state.db.upsert(&image).unwrap();
+        let text_id = state.db.get_by_hash(text_hash).unwrap().unwrap().id;
+        let image_id = state.db.get_by_hash(image_hash).unwrap().unwrap().id;
+        state.reload_items();
+        state.selected_ids = vec![text_id, image_id];
+
+        assert!(!state.can_merge_selected_items());
+        assert!(state.merge_selected_items().is_none());
+        state.reload_items();
+        assert_eq!(state.items.len(), 2);
+    }
+
+    #[test]
+    fn merge_selected_items_creates_new_entry_even_when_text_already_exists() {
+        let (mut state, _dirty) = test_state();
+        let existing = make_item(1, ContentType::PlainText, false, "ab");
+        let first = make_item(2, ContentType::PlainText, false, "a");
+        let second = make_item(3, ContentType::PlainText, false, "b");
+        let existing_hash = existing.content_hash;
+        let first_hash = first.content_hash;
+        let second_hash = second.content_hash;
+
+        state.db.upsert(&existing).unwrap();
+        state.db.upsert(&first).unwrap();
+        state.db.upsert(&second).unwrap();
+        let existing_id = state.db.get_by_hash(existing_hash).unwrap().unwrap().id;
+        let first_id = state.db.get_by_hash(first_hash).unwrap().unwrap().id;
+        let second_id = state.db.get_by_hash(second_hash).unwrap().unwrap().id;
+        state.reload_items();
+        state.selected_ids = vec![first_id, second_id];
+
+        assert!(state.can_merge_selected_items());
+        let merged_id = state.merge_selected_items().unwrap();
+
+        assert_ne!(merged_id, existing_id);
+        let merged = state.db.get_by_id(merged_id).unwrap().unwrap();
+        assert_eq!(merged.full_text, "ab");
+        assert_eq!(
+            state
+                .items
+                .iter()
+                .filter(|item| item.full_text == "ab")
+                .count(),
+            2
         );
     }
 

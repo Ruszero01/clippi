@@ -347,24 +347,28 @@ impl ContextMenu {
     }
 
     /// Build a batch context menu.
-    pub fn for_batch(selected_count: usize) -> Self {
-        let items = vec![
-            RawMenuItem {
-                label: I18nKey::CtxBatchPasteN.fmt(&[&selected_count.to_string()]),
-                action: "batch_paste".into(),
-                icon: "\u{e63f}".into(),
-                danger: false,
-                fav: false,
-                shortcut: None,
-            },
-            RawMenuItem {
+    pub fn for_batch(selected_count: usize, can_merge: bool) -> Self {
+        let mut items = vec![RawMenuItem {
+            label: I18nKey::CtxBatchPasteN.fmt(&[&selected_count.to_string()]),
+            action: "batch_paste".into(),
+            icon: "\u{e63f}".into(),
+            danger: false,
+            fav: false,
+            shortcut: None,
+        }];
+
+        if can_merge {
+            items.push(RawMenuItem {
                 label: I18nKey::CtxMergeSelected.text().into(),
                 action: "merge_selected".into(),
                 icon: "\u{e68a}".into(),
                 danger: false,
                 fav: false,
                 shortcut: None,
-            },
+            });
+        }
+
+        items.extend([
             RawMenuItem {
                 label: SEPARATOR_LABEL.into(),
                 action: String::new(),
@@ -405,7 +409,7 @@ impl ContextMenu {
                 fav: false,
                 shortcut: sc("Delete"),
             },
-        ];
+        ]);
         Self::new().items(items)
     }
 

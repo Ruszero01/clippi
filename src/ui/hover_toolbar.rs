@@ -26,6 +26,7 @@ pub struct HoverToolbarProps {
     pub is_favorite: bool,
     pub selected_count: usize,
     pub is_selected: bool,
+    pub can_merge_selection: bool,
 }
 
 impl HoverToolbarProps {
@@ -52,7 +53,13 @@ impl HoverToolbarProps {
             is_favorite: item.is_favorite,
             selected_count,
             is_selected,
+            can_merge_selection: false,
         }
+    }
+
+    pub fn can_merge_selection(mut self, value: bool) -> Self {
+        self.can_merge_selection = value;
+        self
     }
 }
 
@@ -232,12 +239,14 @@ impl RenderOnce for HoverToolbar {
                 "batch_paste",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
-            // --- Merge selected ---
-            buttons.push((
-                "\u{e68a}",
-                "merge_selected",
-                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
-            ));
+            if props.can_merge_selection {
+                // --- Merge selected ---
+                buttons.push((
+                    "\u{e68a}",
+                    "merge_selected",
+                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                ));
+            }
             // --- Batch tag ---
             buttons.push((
                 "\u{ec07}",

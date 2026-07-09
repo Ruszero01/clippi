@@ -648,6 +648,7 @@ pub struct ClipboardCard {
     on_click: Option<CardClickHandler>,
     is_hovered: bool,
     selected_count: usize,
+    can_merge_selection: bool,
     on_toolbar_action: Option<CardActionHandler>,
     on_double_click: Option<CardIndexHandler>,
     /// Whether this card is in note-editing mode (shows inline editor).
@@ -676,6 +677,7 @@ impl ClipboardCard {
             on_click: None,
             is_hovered: false,
             selected_count: 0,
+            can_merge_selection: false,
             on_toolbar_action: None,
             on_double_click: None,
             editing: false,
@@ -702,6 +704,11 @@ impl ClipboardCard {
 
     pub fn selected_count(mut self, count: usize) -> Self {
         self.selected_count = count;
+        self
+    }
+
+    pub fn can_merge_selection(mut self, value: bool) -> Self {
+        self.can_merge_selection = value;
         self
     }
 
@@ -784,6 +791,7 @@ impl RenderOnce for ClipboardCard {
             on_click,
             is_hovered,
             selected_count,
+            can_merge_selection,
             on_toolbar_action,
             on_double_click,
             editing,
@@ -2131,7 +2139,8 @@ impl RenderOnce for ClipboardCard {
 
         // --- Hover toolbar (hidden during note editing) ---
         if is_hovered && !editing {
-            let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected);
+            let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
+                .can_merge_selection(can_merge_selection);
             card.child(
                 div().absolute().top(px(3.)).right(px(4.)).child(
                     HoverToolbar::new(toolbar_props)

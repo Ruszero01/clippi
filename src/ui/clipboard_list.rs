@@ -29,6 +29,10 @@ fn additive_selection_modifier(modifiers: Modifiers) -> bool {
     modifiers.control || modifiers.secondary()
 }
 
+fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
+    modifiers.secondary()
+}
+
 #[cfg(target_os = "macos")]
 fn macos_control_modifier_pressed() -> bool {
     objc2_app_kit::NSEvent::modifierFlags_class()
@@ -516,6 +520,10 @@ impl ClipboardListView {
 
     pub fn context_menu_is_batch(&self) -> bool {
         self.context_menu_is_batch
+    }
+
+    pub fn can_merge_selected_items(&self, cx: &App) -> bool {
+        self.state.read(cx).can_merge_selected_items()
     }
 
     pub fn context_menu_position(&self) -> (f32, f32) {
@@ -1130,7 +1138,7 @@ impl Render for ClipboardListView {
             .on_key_down(
                 window.listener_for(&view, |this, event: &KeyDownEvent, window, cx| {
                     let key = event.keystroke.key.as_str();
-                    let ctrl = event.keystroke.modifiers.control;
+                    let ctrl = primary_modifier_pressed(event.keystroke.modifiers);
                     let shift = event.keystroke.modifiers.shift;
 
                     // --- Ctrl+Key shortcuts ---
@@ -1312,8 +1320,10 @@ impl Render for ClipboardListView {
                             view.clone(),
                             "clippi-clipboard-list",
                             item_sizes,
-                            move |this, range, _window, _cx| {
+                            move |this, range, _window, cx| {
                                 let selected_count = this.selected_count;
+                                let can_merge_selection =
+                                    this.state.read(cx).can_merge_selected_items();
                                 let hovered_index = this.hovered_index;
                                 let editing_note_id = this.editing_note_id;
                                 let note_input = this.note_input.clone();
@@ -1323,7 +1333,7 @@ impl Render for ClipboardListView {
                                     show_page_title,
                                     search_terms,
                                 ) = {
-                                    let state = this.state.read(_cx);
+                                    let state = this.state.read(cx);
                                     (
                                         state.settings.show_source_app,
                                         state.settings.show_original_on_hover,
@@ -1486,6 +1496,7 @@ impl Render for ClipboardListView {
                                                     .image_cache(image_cache.clone())
                                                     .search_terms(search_terms.clone())
                                                     .selected_count(selected_count)
+                                                    .can_merge_selection(can_merge_selection)
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)
                                                     .on_commit_note({
