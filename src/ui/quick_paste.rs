@@ -1,5 +1,7 @@
 //! Quick paste popup — compact, non-focus clipboard candidate list.
 
+use std::time::Duration;
+
 use gpui::prelude::*;
 use gpui::*;
 use gpui::{InteractiveElement, StatefulInteractiveElement};
@@ -15,6 +17,7 @@ use crate::state::app::AppState;
 use crate::ui::search_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
 use gpui_component::tooltip::Tooltip;
+use gpui_transitions::WindowUseTransition;
 
 const VISIBLE_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 44.0;
@@ -23,6 +26,7 @@ pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
+const TAG_INDICATOR_ANIM_DURATION: Duration = Duration::from_millis(180);
 /// Width of the favorites filter button (icon is ~14px, 3px padding each side).
 const FAV_BUTTON_SIZE: f32 = 20.0;
 /// Gap between the type filter area and the favorites button.
@@ -55,6 +59,10 @@ fn advanced_modifier_label() -> &'static str {
     {
         "Ctrl"
     }
+}
+
+fn quick_tag_indicator_ease(delta: f32) -> f32 {
+    1.0 - (1.0 - delta).powi(3)
 }
 
 /// Calculate the quick window height based on visible bars.
@@ -737,6 +745,22 @@ impl Render for QuickPasteView {
                             let active = filters.tag_ids.contains(id);
                             let tag_color = parse_hex_for_tag(color_hex);
                             let tag_id = *id;
+                            let indicator_target: f32 = if active { 1.0 } else { 0.0 };
+                            let indicator_transition = window
+                                .use_keyed_transition(
+                                    ("quick-tag-indicator", tag_id as u64),
+                                    cx,
+                                    TAG_INDICATOR_ANIM_DURATION,
+                                    move |_, _| indicator_target,
+                                )
+                                .with_easing(quick_tag_indicator_ease);
+                            indicator_transition.update(cx, |value, cx| {
+                                *value = indicator_target;
+                                cx.notify();
+                            });
+                            let indicator_progress = (*indicator_transition.evaluate(window, cx))
+                                .clamp(0.0_f32, 1.0_f32);
+                            let indicator_offset = (1.0_f32 - indicator_progress) / 2.0_f32;
                             let app_state = self.state.clone();
                             let tag_name = name.clone();
                             let tag_name_for_tip = name.clone();
@@ -745,6 +769,7 @@ impl Render for QuickPasteView {
                                 .h(px(20.0))
                                 .px(px(6.0))
                                 .rounded(px(4.0))
+                                .relative()
                                 .flex()
                                 .items_center()
                                 .when(tag_compact, |d| d.flex_1().min_w(px(0.0)))
@@ -752,7 +777,7 @@ impl Render for QuickPasteView {
                                 .overflow_hidden()
                                 .text_size(px(10.0))
                                 .font_weight(FontWeight::MEDIUM)
-                                .bg(if active { theme.accent } else { tag_color })
+                                .bg(tag_color)
                                 .text_color(rgb(0xffffff))
                                 .cursor(CursorStyle::PointingHand)
                                 .when(tag_compact, move |d| {
@@ -774,6 +799,18 @@ impl Render for QuickPasteView {
                                         });
                                         v.update(cx, |view, cx| view.reset_scroll(cx));
                                     }
+                                })
+                                .when(indicator_progress > 0.01, |d| {
+                                    d.child(
+                                        div()
+                                            .absolute()
+                                            .left(relative(indicator_offset))
+                                            .bottom(px(0.0))
+                                            .w(relative(indicator_progress))
+                                            .h(px(4.0))
+                                            .rounded_b(px(4.0))
+                                            .bg(theme.accent),
+                                    )
                                 })
                                 .child(
                                     div()
