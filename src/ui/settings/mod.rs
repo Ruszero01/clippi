@@ -95,6 +95,12 @@ pub struct SettingsPanel {
     _db_path_dialog_task: Option<Task<()>>,
     /// Focus-out subscription for the max-items input (auto-save on blur).
     _max_items_focus_sub: gpui::Subscription,
+    /// Whether the retention-days field is in editing mode.
+    editing_retention_days: bool,
+    /// Input entity for the retention-days editor (created once in constructor).
+    retention_days_input: Entity<InputState>,
+    /// Focus-out subscription for the retention-days input (auto-save on blur).
+    _retention_days_focus_sub: gpui::Subscription,
     /// Animation generation counter for copy-sound card expand/collapse.
     pub copy_sound_anim_gen: u64,
     /// Focus handle for keyboard events (ESC to go back).
@@ -127,6 +133,7 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let max_items_input = cx.new(|cx| gpui_component::input::InputState::new(window, cx));
+        let retention_days_input = cx.new(|cx| gpui_component::input::InputState::new(window, cx));
         let backend_panel =
             cx.new(|cx| AddBackendPanel::new(window_manager.clone(), theme.clone(), window, cx));
 
@@ -145,6 +152,24 @@ impl SettingsPanel {
                         s.settings.save();
                     });
                     this.editing_max_items = false;
+                    cx.notify();
+                }
+            });
+
+        // --- Subscribe to focus-out on the retention-days InputState. ---
+        let state_sub_rd = state.clone();
+        let input_sub_rd = retention_days_input.clone();
+        let handle_rd = retention_days_input.read(cx).focus_handle(cx);
+        let _retention_days_focus_sub =
+            cx.on_focus_out(&handle_rd, window, move |this, _ev, _window, cx| {
+                if this.editing_retention_days {
+                    let text = input_sub_rd.read(cx).value().to_string();
+                    let n: u32 = text.trim().parse().unwrap_or(0);
+                    state_sub_rd.update(cx, |s, _cx| {
+                        s.settings.retention_days = n;
+                        s.settings.save();
+                    });
+                    this.editing_retention_days = false;
                     cx.notify();
                 }
             });
@@ -172,6 +197,9 @@ impl SettingsPanel {
             max_items_input,
             _db_path_dialog_task: None,
             _max_items_focus_sub,
+            editing_retention_days: false,
+            retention_days_input,
+            _retention_days_focus_sub,
             copy_sound_anim_gen: 0,
         }
     }

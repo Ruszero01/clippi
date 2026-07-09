@@ -1,5 +1,5 @@
 //! --- Cache cleanup — removes orphaned image files, expired icon caches, ---
-//! --- and expired sync tombstones. ---
+//! --- expired sync tombstones, and expired clipboard items. ---
 //!
 //! Each cleanup task is a standalone function. `run_cleanup` orchestrates
 //! all of them synchronously; callers (startup, poll loop, UI button) go
@@ -21,11 +21,16 @@ pub struct CleanupStats {
     pub unreferenced_icons: u32,
     /// Number of expired tombstone rows removed.
     pub expired_tombstones: u32,
+    /// Number of clipboard items removed due to retention_days expiry.
+    pub expired_items: u32,
 }
 
 impl CleanupStats {
     pub fn is_empty(&self) -> bool {
-        self.orphan_images == 0 && self.unreferenced_icons == 0 && self.expired_tombstones == 0
+        self.orphan_images == 0
+            && self.unreferenced_icons == 0
+            && self.expired_tombstones == 0
+            && self.expired_items == 0
     }
 }
 
@@ -158,35 +163,44 @@ fn clean_expired_tombstones(db: &Database) -> u32 {
     }
 }
 
+/// Remove non-favorite clipboard items older than `retention_days`.
+fn clean_expired_clipboard_items(db: &Database, retention_days: u32) -> u32 {
+    match db.prune_expired_items(retention_days) {
+        Ok(ids) => ids.len() as u32,
+        Err(e) => {
+            log::error!("clean_expired_clipboard_items: {e}");
+            0
+        }
+    }
+}
+
 // ── Unified entry point ───────────────────────────────────────────────
 
 /// Run all cleanup tasks synchronously. Returns aggregated stats.
 ///
 /// Called at startup and periodically via the poll loop / UI button.
-pub fn run_cleanup(db: &Database) -> CleanupStats {
+pub fn run_cleanup(db: &Database, retention_days: u32) -> CleanupStats {
     let orphan_images = clean_orphan_images(db);
     let unreferenced_icons = clean_unreferenced_icons(db);
     let expired_tombstones = clean_expired_tombstones(db);
+    let expired_items = clean_expired_clipboard_items(db, retention_days);
 
     let stats = CleanupStats {
         orphan_images,
         unreferenced_icons,
         expired_tombstones,
+        expired_items,
     };
 
     if !stats.is_empty() {
         log::info!(
-            "run_cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones",
+            "run_cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items",
             stats.orphan_images,
             stats.unreferenced_icons,
             stats.expired_tombstones,
+            stats.expired_items,
         );
     }
 
     stats
-}
-
-/// Backward-compatible alias. Prefer `run_cleanup`.
-pub fn cleanup_unused_cache(db: &Database) {
-    run_cleanup(db);
 }

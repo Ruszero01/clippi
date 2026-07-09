@@ -957,6 +957,30 @@ impl Database {
         Ok(keys)
     }
 
+    /// Internal helper: delete clipboard_items and their item_tags in chunks.
+    /// Uses a transaction so the delete is atomic. Caller must ensure `ids` are valid.
+    fn delete_items_in_chunks(&self, ids: &[i64]) -> SqlResult<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        for chunk in ids.chunks(500) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let ph = placeholders.join(",");
+            let params: Vec<rusqlite::types::Value> = chunk.iter().map(|&id| (id).into()).collect();
+            tx.execute(
+                &format!("DELETE FROM item_tags WHERE item_id IN ({})", ph),
+                rusqlite::params_from_iter(params.iter()),
+            )?;
+            tx.execute(
+                &format!("DELETE FROM clipboard_items WHERE id IN ({})", ph),
+                rusqlite::params_from_iter(params.iter()),
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Prune oldest non-favorite items when total exceeds max_items.
     /// Returns the ids of deleted items. max_items == 0 means unlimited.
     pub fn prune_excess_non_favorites(&self, max_items: u32) -> SqlResult<Vec<i64>> {
@@ -983,24 +1007,28 @@ impl Database {
         if pruned_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Delete item_tags first (CASCADE may not be enforced without PRAGMA foreign_keys = ON),
-        // then delete clipboard_items. Use chunked IN clauses to stay within SQLITE_MAX_VARIABLE_NUMBER.
-        let tx = self.conn.unchecked_transaction()?;
-        for chunk in pruned_ids.chunks(500) {
-            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
-            let ph = placeholders.join(",");
-            let params: Vec<rusqlite::types::Value> = chunk.iter().map(|&id| (id).into()).collect();
-            tx.execute(
-                &format!("DELETE FROM item_tags WHERE item_id IN ({})", ph),
-                rusqlite::params_from_iter(params.iter()),
-            )?;
-            tx.execute(
-                &format!("DELETE FROM clipboard_items WHERE id IN ({})", ph),
-                rusqlite::params_from_iter(params.iter()),
-            )?;
-        }
-        tx.commit()?;
+        self.delete_items_in_chunks(&pruned_ids)?;
         Ok(pruned_ids)
+    }
+
+    /// Prune non-favorite items not updated within retention_days.
+    /// Returns the ids of deleted items. retention_days == 0 means no limit.
+    /// Uses updated_at so frequently re-captured content stays fresh.
+    pub fn prune_expired_items(&self, retention_days: u32) -> SqlResult<Vec<i64>> {
+        if retention_days == 0 {
+            return Ok(Vec::new());
+        }
+        let cutoff = format!("-{} days", retention_days);
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM clipboard_items \
+             WHERE is_favorite = 0 AND updated_at < datetime('now', ?1)",
+        )?;
+        let expired_ids: Vec<i64> = stmt
+            .query_map(params![&cutoff], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        self.delete_items_in_chunks(&expired_ids)?;
+        Ok(expired_ids)
     }
 
     /// Clean up tombstones older than N days.
@@ -1894,5 +1922,179 @@ mod tests {
 
         assert_eq!(count_items(&a), 2);
         assert_eq!(count_items(&b), 2);
+    }
+
+    // ── prune_excess_non_favorites ──────────────────────────────────────
+
+    #[test]
+    fn prune_excess_max_items_zero_does_nothing() {
+        let (_path, db) = temp_db("prune-max-zero");
+        insert_item(&db, 1, "a", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "b", "2025-01-01T00:00:00Z");
+        assert_eq!(count_items(&db), 2);
+        let removed = db.prune_excess_non_favorites(0).unwrap();
+        assert!(removed.is_empty());
+        assert_eq!(count_items(&db), 2);
+    }
+
+    #[test]
+    fn prune_excess_removes_oldest_non_favorites() {
+        let (_path, db) = temp_db("prune-max-excess");
+        insert_item(&db, 1, "oldest", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "middle", "2025-01-02T00:00:00Z");
+        insert_item(&db, 3, "newest", "2025-01-03T00:00:00Z");
+        assert_eq!(count_items(&db), 3);
+
+        let removed = db.prune_excess_non_favorites(2).unwrap();
+        assert_eq!(removed.len(), 1);
+        // Oldest should be removed.
+        let remaining: Vec<String> = db
+            .conn
+            .prepare("SELECT full_text FROM clipboard_items ORDER BY created_at ASC")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(remaining, vec!["middle".to_string(), "newest".to_string()]);
+    }
+
+    #[test]
+    fn prune_excess_keeps_favorites() {
+        let (_path, db) = temp_db("prune-max-fav");
+        // Insert 3 non-fav items.
+        insert_item(&db, 1, "a", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "b", "2025-01-01T00:00:00Z");
+        insert_item(&db, 3, "c", "2025-01-01T00:00:00Z");
+        // Make item 'a' a favorite.
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET is_favorite = 1 WHERE full_text = 'a'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(count_items(&db), 3);
+
+        // Only 2 non-fav items, limit = 1 → should remove oldest non-fav.
+        let removed = db.prune_excess_non_favorites(1).unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(count_items(&db), 2);
+
+        // Remaining: the favorite + 1 non-fav.
+        let remaining: Vec<String> = db
+            .conn
+            .prepare("SELECT full_text FROM clipboard_items ORDER BY created_at ASC")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        // 'a' is fav, 'b' was oldest non-fav, so 'c' remains as non-fav.
+        assert!(remaining.contains(&"a".to_string()));
+        assert!(remaining.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn prune_excess_does_not_over_prune() {
+        let (_path, db) = temp_db("prune-max-exact");
+        insert_item(&db, 1, "a", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "b", "2025-01-01T00:00:00Z");
+        assert_eq!(count_items(&db), 2);
+        let removed = db.prune_excess_non_favorites(2).unwrap();
+        assert!(removed.is_empty());
+        assert_eq!(count_items(&db), 2);
+    }
+
+    // ── prune_expired_items ─────────────────────────────────────────────
+
+    #[test]
+    fn prune_expired_retention_zero_does_nothing() {
+        let (_path, db) = temp_db("prune-exp-zero");
+        insert_item(&db, 1, "old", "2020-01-01T00:00:00Z");
+        assert_eq!(count_items(&db), 1);
+        let removed = db.prune_expired_items(0).unwrap();
+        assert!(removed.is_empty());
+        assert_eq!(count_items(&db), 1);
+    }
+
+    #[test]
+    fn prune_expired_removes_old_items() {
+        let (_path, db) = temp_db("prune-exp-old");
+        // Insert an item with very old updated_at.
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES ('plain_text', 'old_item', 1, '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z', '')",
+                [],
+            )
+            .unwrap();
+        // Insert a recent item.
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES ('plain_text', 'recent_item', 2, datetime('now'), datetime('now'), '')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(count_items(&db), 2);
+
+        // With 30-day retention, only the old item should be removed.
+        let removed = db.prune_expired_items(30).unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(count_items(&db), 1);
+
+        let remaining: String = db
+            .conn
+            .query_row("SELECT full_text FROM clipboard_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, "recent_item");
+    }
+
+    #[test]
+    fn prune_expired_keeps_favorites() {
+        let (_path, db) = temp_db("prune-exp-fav");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type, is_favorite)
+                 VALUES ('plain_text', 'fav_old', 1, '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z', '', 1)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES ('plain_text', 'nonfav_old', 2, '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z', '')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(count_items(&db), 2);
+
+        let removed = db.prune_expired_items(30).unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(count_items(&db), 1);
+
+        let remaining: String = db
+            .conn
+            .query_row("SELECT full_text FROM clipboard_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, "fav_old");
+    }
+
+    #[test]
+    fn prune_expired_recent_items_not_removed() {
+        let (_path, db) = temp_db("prune-exp-recent");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES ('plain_text', 'today', 1, datetime('now'), datetime('now'), '')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(count_items(&db), 1);
+
+        // With 7-day retention, a brand-new item should stay.
+        let removed = db.prune_expired_items(7).unwrap();
+        assert!(removed.is_empty());
+        assert_eq!(count_items(&db), 1);
     }
 }

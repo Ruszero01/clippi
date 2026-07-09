@@ -1,4 +1,4 @@
-//! --- Data settings tab — database path + max items. ---
+//! --- Data settings tab — database path, max items, retention days. ---
 //!
 //! --- Mirrors the original Slint `SettingsTabData.slint` layout. ---
 //! Includes the reset-data-directory dialog for portable mode.
@@ -59,6 +59,33 @@ impl SettingsPanel {
             s.settings.save();
         });
         self.editing_max_items = false;
+        cx.notify();
+    }
+
+    /// Enter editing mode for the retention-days field.
+    fn start_edit_retention_days(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.state.read(cx).settings.retention_days;
+        let text = if current == 0 {
+            String::new()
+        } else {
+            current.to_string()
+        };
+        self.retention_days_input.update(cx, |input, cx| {
+            input.set_value(&text, window, cx);
+        });
+        self.editing_retention_days = true;
+        cx.notify();
+    }
+
+    /// Save the retention-days value and exit editing mode.
+    fn save_retention_days(&mut self, cx: &mut Context<Self>) {
+        let text = self.retention_days_input.read(cx).value().to_string();
+        let n: u32 = text.trim().parse().unwrap_or(0);
+        self.state.update(cx, |s, _cx| {
+            s.settings.retention_days = n;
+            s.settings.save();
+        });
+        self.editing_retention_days = false;
         cx.notify();
     }
 
@@ -336,13 +363,8 @@ impl SettingsPanel {
                         } else {
                             // --- ── Normal: clickable value button ── ---
                             let val = self.state.read(cx).settings.max_items;
-                            let label = if val == 0 {
-                                I18nKey::Unlimited.text().to_string()
-                            } else {
-                                val.to_string()
-                            };
                             div()
-                                .w(px(80.))
+                                .w(px(90.))
                                 .h(px(28.))
                                 .rounded(px(7.))
                                 .bg(input_bg)
@@ -361,12 +383,161 @@ impl SettingsPanel {
                                         });
                                     }
                                 })
-                                .child(
+                                .child(if val == 0 {
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(if val == 0 { text_3 } else { text_1 })
-                                        .child(label),
+                                        .text_color(text_3)
+                                        .child(I18nKey::Unlimited.text())
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(text_1)
+                                                .child(val.to_string()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(text_3)
+                                                .child(I18nKey::UnitItems.text()),
+                                        )
+                                        .into_any_element()
+                                })
+                        }
+                    })
+            })
+            // --- ── Retention days row (66px, standard row) ── ---
+            .child({
+                let surface = self.theme.surface;
+                let divider = self.theme.divider;
+                let text_1 = self.theme.text_1;
+                let text_3 = self.theme.text_3;
+                let input_bg = if self.theme.bg == rgb(0x191a1b) {
+                    rgb(0x191a1b)
+                } else {
+                    rgb(0xf2f3f8)
+                };
+
+                div()
+                    .h(px(66.))
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .px(px(14.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    // --- Left: label + description ---
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::SettingRetentionDays.text()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(text_3)
+                                    .child(I18nKey::DescRetentionDays.text()),
+                            ),
+                    )
+                    // --- Right: retention-days value (button or Input) ---
+                    .child({
+                        let this = this.clone();
+
+                        if self.editing_retention_days {
+                            div()
+                                .w(px(80.))
+                                .h(px(28.))
+                                .rounded(px(7.))
+                                .bg(input_bg)
+                                .border(px(1.))
+                                .border_color(self.theme.accent)
+                                .px(px(6.))
+                                .flex()
+                                .items_center()
+                                .child(
+                                    Input::new(&self.retention_days_input)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .focus_bordered(false)
+                                        .w_full()
+                                        .h(px(20.))
+                                        .text_size(px(12.))
+                                        .text_color(text_1),
                                 )
+                                .on_key_down({
+                                    move |ev: &KeyDownEvent, _window, cx| {
+                                        if ev.keystroke.key.as_str() == "enter" {
+                                            cx.stop_propagation();
+                                            this.update(cx, |panel, cx| {
+                                                panel.save_retention_days(cx);
+                                            });
+                                        }
+                                    }
+                                })
+                        } else {
+                            let val = self.state.read(cx).settings.retention_days;
+                            div()
+                                .w(px(90.))
+                                .h(px(28.))
+                                .rounded(px(7.))
+                                .bg(input_bg)
+                                .border(px(1.))
+                                .border_color(divider)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, {
+                                    let this = this.clone();
+                                    move |_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                        this.update(cx, |panel, cx| {
+                                            panel.start_edit_retention_days(_window, cx);
+                                        });
+                                    }
+                                })
+                                .child(if val == 0 {
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(text_3)
+                                        .child(I18nKey::Unlimited.text())
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(text_1)
+                                                .child(val.to_string()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(text_3)
+                                                .child(I18nKey::UnitDays.text()),
+                                        )
+                                        .into_any_element()
+                                })
                         }
                     })
             })
@@ -498,20 +669,24 @@ impl SettingsPanel {
                                     .hover(|s| s.opacity(0.85))
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         cx.stop_propagation();
-                                        let db_path = state.read(cx).settings.resolve_db_path();
+                                        let settings = state.read(cx).settings.clone();
+                                        let db_path = settings.resolve_db_path();
+                                        let retention_days = settings.retention_days;
                                         let stats = match crate::core::db::Database::open(
                                             &db_path.to_string_lossy(),
                                         ) {
-                                            Ok(db) => crate::core::cache_cleanup::run_cleanup(&db),
+                                            Ok(db) => crate::core::cache_cleanup::run_cleanup(
+                                                &db,
+                                                retention_days,
+                                            ),
                                             Err(e) => {
                                                 log::error!("cleanup: failed to open DB: {e}");
                                                 return;
                                             }
                                         };
                                         // Update last cleanup marker using the active interval format.
-                                        let interval =
-                                            state.read(cx).settings.cleanup_interval.clone();
-                                        let last_cleanup = match interval.as_str() {
+                                        let interval = settings.cleanup_interval.as_str();
+                                        let last_cleanup = match interval {
                                             "weekly" => {
                                                 let wk = chrono::Local::now().iso_week();
                                                 format!("{}-W{:02}", wk.year(), wk.week())
@@ -519,7 +694,9 @@ impl SettingsPanel {
                                             "daily" => {
                                                 chrono::Local::now().format("%Y-%m-%d").to_string()
                                             }
-                                            _ => String::new(),
+                                            _ => {
+                                                chrono::Local::now().format("%Y-%m-%d").to_string()
+                                            }
                                         };
                                         state.update(cx, |s, _cx| {
                                             s.settings.cleanup_last_date = last_cleanup;
@@ -533,10 +710,12 @@ impl SettingsPanel {
                                                 ));
                                             });
                                         } else {
+                                            let total_records =
+                                                stats.expired_tombstones + stats.expired_items;
                                             let msg = I18nKey::ToastCleanupDone.fmt(&[
                                                 &stats.orphan_images.to_string(),
                                                 &stats.unreferenced_icons.to_string(),
-                                                &stats.expired_tombstones.to_string(),
+                                                &total_records.to_string(),
                                             ]);
                                             this.update(cx, |_panel, cx| {
                                                 cx.emit(SettingsEvent::DataToast(msg));

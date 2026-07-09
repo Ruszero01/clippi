@@ -119,6 +119,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub max_items: u32, // max saved items (0=unlimited, default 0)
     #[serde(default)]
+    pub retention_days: u32, // auto-delete items not updated within N days (0=forever)
+    #[serde(default)]
     pub hotkey_blacklist: Vec<String>, // hotkey blacklist app name list
     #[serde(default)]
     pub language: String, // "zh_CN" or "en", empty = follow system
@@ -232,6 +234,7 @@ impl Default for AppSettings {
             saved_enabled_backend_ids: Vec::new(),
             sync_favorites_only: true,
             max_items: 0,
+            retention_days: 0,
             hotkey_blacklist: Vec::new(),
             language: String::new(),
             pinned_tag_ids: Vec::new(),

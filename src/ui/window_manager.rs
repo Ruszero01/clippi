@@ -2725,24 +2725,25 @@ impl WindowManager {
     fn poll_cleanup(&mut self, cx: &mut Context<Self>) {
         let settings = self.state.read(cx).settings.clone();
         let interval = settings.cleanup_interval.as_str();
-        if interval == "never" {
-            return;
-        }
+        let retention_days = settings.retention_days;
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let should_run = match interval {
-            "daily" => settings.cleanup_last_date != today,
-            "weekly" => {
-                // ISO week-based comparison
-                let current_week = chrono::Local::now().iso_week();
-                let current_week_str =
-                    format!("{}-W{:02}", current_week.year(), current_week.week());
-                settings.cleanup_last_date != current_week_str
-            }
-            _ => false,
-        };
 
-        if !should_run {
+        let cache_needed = interval != "never"
+            && match interval {
+                "daily" => settings.cleanup_last_date != today,
+                "weekly" => {
+                    let current_week = chrono::Local::now().iso_week();
+                    let current_week_str =
+                        format!("{}-W{:02}", current_week.year(), current_week.week());
+                    settings.cleanup_last_date != current_week_str
+                }
+                _ => false,
+            };
+
+        let retention_needed = retention_days > 0 && settings.cleanup_last_date != today;
+
+        if !cache_needed && !retention_needed {
             return;
         }
 
@@ -2750,13 +2751,14 @@ impl WindowManager {
         std::thread::spawn(move || {
             match crate::core::db::Database::open(&db_path.to_string_lossy()) {
                 Ok(db) => {
-                    let stats = crate::core::cache_cleanup::run_cleanup(&db);
+                    let stats = crate::core::cache_cleanup::run_cleanup(&db, retention_days);
                     if !stats.is_empty() {
                         log::info!(
-                            "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones",
+                            "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items",
                             stats.orphan_images,
                             stats.unreferenced_icons,
                             stats.expired_tombstones,
+                            stats.expired_items,
                         );
                     }
                 }
@@ -2771,7 +2773,7 @@ impl WindowManager {
                 let wk = chrono::Local::now().iso_week();
                 format!("{}-W{:02}", wk.year(), wk.week())
             }
-            _ => return,
+            _ => today,
         };
         self.state.update(cx, |s, _cx| {
             s.settings.cleanup_last_date = new_date;
