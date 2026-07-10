@@ -8,6 +8,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
 use base64::Engine;
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -334,6 +335,114 @@ impl SyncBackend for WebDAVBackend {
             Err(e) => Err(format!("{}: {e}", I18nKey::SyncErrPush.text())),
         }
     }
+
+    fn upload_blob(&self, hash_hex: &str, ext: &str, data: &[u8]) -> Result<(), String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let images_url = format!("{base}/images");
+        let blob_url = format!("{images_url}/{hash_hex}.{ext}");
+        let auth = self.auth_header();
+
+        // Ensure images/ directory exists (try MKCOL, ignore if already exists)
+        let _ = self
+            .agent
+            .request("MKCOL", &images_url)
+            .set("Authorization", &auth)
+            .call();
+
+        let content_type = match ext {
+            "jpg" | "jpeg" => "image/jpeg",
+            _ => "image/png",
+        };
+
+        match self
+            .agent
+            .put(&blob_url)
+            .set("Authorization", &auth)
+            .set("Content-Type", content_type)
+            .send_bytes(data)
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("blob upload failed: {e}")),
+        }
+    }
+
+    fn download_blob(&self, hash_hex: &str, ext: &str) -> Result<Vec<u8>, String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let blob_url = format!("{base}/images/{hash_hex}.{ext}");
+        let auth = self.auth_header();
+
+        match self.agent.get(&blob_url).set("Authorization", &auth).call() {
+            Ok(resp) => {
+                let mut buf = Vec::new();
+                resp.into_reader()
+                    .read_to_end(&mut buf)
+                    .map_err(|e| format!("blob read failed: {e}"))?;
+                Ok(buf)
+            }
+            Err(ureq::Error::Status(404, _)) => Err("blob not found".into()),
+            Err(e) => Err(format!("blob download failed: {e}")),
+        }
+    }
+
+    fn list_remote_blobs(&self) -> Result<Vec<String>, String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let images_url = format!("{base}/images/");
+        let auth = self.auth_header();
+
+        match self
+            .agent
+            .request("PROPFIND", &images_url)
+            .set("Authorization", &auth)
+            .set("Depth", "1")
+            .call()
+        {
+            Ok(resp) => {
+                let body = resp
+                    .into_string()
+                    .map_err(|e| format!("PROPFIND read failed: {e}"))?;
+                // Extract filenames from href elements in the XML response
+                let mut files = Vec::new();
+                for line in body.lines() {
+                    if let Some(href) = extract_href_filename(line) {
+                        if !href.is_empty() && href != "images" && !href.ends_with('/') {
+                            files.push(href);
+                        }
+                    }
+                }
+                Ok(files)
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
+            Err(e) => Err(format!("PROPFIND failed: {e}")),
+        }
+    }
+}
+
+/// Extract the filename from a DAV:href XML element.
+/// Handles both `<D:href>filename.png</D:href>` and `<d:href>...</d:href>`.
+fn extract_href_filename(line: &str) -> Option<String> {
+    let line = line.trim();
+    // Match <href>...</href> or <D:href>...</D:href> or <d:href>...</d:href>
+    let start_tag_end = line.find("href>")?;
+    let content_start = start_tag_end + 5; // "href>".len()
+    let rest = &line[content_start..];
+    let content_end = rest.find("</")?;
+    let href = rest[..content_end].trim();
+
+    if href.is_empty() {
+        return None;
+    }
+
+    // Extract just the filename from the path
+    let filename = href.rsplit('/').next().unwrap_or(href);
+    if filename.is_empty() {
+        return None;
+    }
+
+    Some(
+        percent_encoding::percent_decode_str(filename)
+            .decode_utf8_lossy()
+            .to_string(),
+    )
 }
 
 #[cfg(test)]

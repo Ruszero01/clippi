@@ -16,6 +16,8 @@ pub struct SyncState {
     pub backends: Vec<BackendStatus>,
     pub auto_enabled: bool,
     pub favorites_only: bool,
+    pub include_images: bool,
+    pub compress_images: bool,
     pub last_message: String,
 }
 
@@ -36,6 +38,8 @@ impl SyncState {
                 .collect(),
             auto_enabled: settings.sync_auto_enabled,
             favorites_only: settings.sync_favorites_only,
+            include_images: settings.sync_include_images,
+            compress_images: settings.sync_compress_images,
             last_message: String::new(),
         }
     }

@@ -155,7 +155,7 @@ pub fn spawn_fetch_url_title(
 /// of sync semantics and should not mark items dirty or change `updated_at`.
 pub fn backfill_link_favicons_from_db(db: &Mutex<Database>) -> usize {
     let urls = match db.lock() {
-        Ok(db) => match db.get_all_sync_items_with_tags() {
+        Ok(db) => match db.get_all_sync_items_with_tags(false) {
             Ok(items) => items
                 .into_iter()
                 .filter(|item| item.meta_type == "link")

@@ -37,6 +37,21 @@ pub trait SyncBackend: Send + Sync {
     fn post_push_cleanup(&self) -> Result<(), String> {
         Ok(())
     }
+
+    /// Upload a binary blob to {remote}/images/{hash_hex}.{ext}
+    fn upload_blob(&self, _hash_hex: &str, _ext: &str, _data: &[u8]) -> Result<(), String> {
+        Err("not supported".into())
+    }
+
+    /// Download a binary blob from {remote}/images/{hash_hex}.{ext}
+    fn download_blob(&self, _hash_hex: &str, _ext: &str) -> Result<Vec<u8>, String> {
+        Err("not supported".into())
+    }
+
+    /// List remote blob filenames (e.g. ["a1b2c3.png", "d4e5f6.jpg"])
+    fn list_remote_blobs(&self) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
 }
 
 /// Top-level sync payload stored as JSON on the cloud folder.
@@ -79,6 +94,18 @@ pub struct SyncItem {
     /// Plain-text subtype: "" | "email" | "phone" | "link" | "path" | "color".
     #[serde(default)]
     pub meta_type: String,
+    /// Image width (only meaningful for image type items).
+    #[serde(default)]
+    pub image_width: u32,
+    /// Image height.
+    #[serde(default)]
+    pub image_height: u32,
+    /// Remote image blob filename (e.g. "a1b2c3d4e5f60789.png" or ".jpg").
+    #[serde(default)]
+    pub image_blob: String,
+    /// Thumbnail base64-encoded PNG (310px wide, typically 10-33 KB).
+    #[serde(default)]
+    pub thumb_data: String,
 }
 
 /// Tag reference embedded in a SyncItem.
@@ -151,13 +178,14 @@ impl MergeStats {
 // --- ── Snapshot building ── ---
 
 /// Build a full `SyncPayload` from the local database.
-/// Excludes image and file type items.
+/// Excludes file type items. Image items are included when `include_images` is true.
 /// When `favorites_only` is true, only favorited items are included.
 /// Only tags referenced by the synced items are included.
 pub fn build_snapshot(
     db: &Mutex<Database>,
     device_name: &str,
     favorites_only: bool,
+    _include_images: bool,
 ) -> Result<SyncPayload, String> {
     let db = db.lock().map_err(|e| format!("db lock: {e}"))?;
     let _ = db.cleanup_sync_residue().inspect_err(|e| {
@@ -166,7 +194,7 @@ pub fn build_snapshot(
 
     // --- Collect all live synced items ---
     let items = db
-        .get_all_sync_items_with_tags()
+        .get_all_sync_items_with_tags(_include_images)
         .map_err(|e| format!("query items: {e}"))?;
 
     // --- Collect unfavorited hashes up front. Items that are unfavorited ---
@@ -222,6 +250,10 @@ pub fn build_snapshot(
             size: item.size,
             tags,
             meta_type: item.meta_type.clone(),
+            image_width: item.image_width,
+            image_height: item.image_height,
+            image_blob: String::new(),
+            thumb_data: String::new(),
         });
     }
 
@@ -793,6 +825,9 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
         item.updated_at.hash(&mut h);
         item.is_favorite.hash(&mut h);
         item.note.hash(&mut h);
+        item.image_width.hash(&mut h);
+        item.image_height.hash(&mut h);
+        item.image_blob.hash(&mut h);
         item.tags.len().hash(&mut h);
         for tag in &item.tags {
             tag.uid.hash(&mut h);
@@ -831,7 +866,8 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
 pub fn sanitize_payload(payload: &mut SyncPayload) {
     let mut item_map: std::collections::HashMap<u64, SyncItem> =
         std::collections::HashMap::with_capacity(payload.items.len());
-    for item in std::mem::take(&mut payload.items) {
+    for mut item in std::mem::take(&mut payload.items) {
+        sanitize_sync_item_image_fields(&mut item);
         match item_map.get(&item.content_hash) {
             Some(existing)
                 if !(rfc3339_newer(&item.updated_at, &existing.updated_at)
@@ -969,6 +1005,41 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
 
     canonicalize_item_tag_refs(payload);
     sort_payload(payload);
+}
+
+fn sanitize_sync_item_image_fields(item: &mut SyncItem) {
+    if item.content_type != "image" {
+        item.image_blob.clear();
+        item.thumb_data.clear();
+        return;
+    }
+
+    if item.image_blob.is_empty() {
+        return;
+    }
+
+    let filename = item
+        .image_blob
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    let ext = filename
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    let valid_ext = matches!(ext.as_str(), "png" | "jpg" | "jpeg");
+    let valid_name = !filename.is_empty()
+        && filename == item.image_blob
+        && !filename.starts_with('.')
+        && filename
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.');
+
+    if valid_name && valid_ext {
+        item.image_blob = filename.to_string();
+    } else {
+        item.image_blob = format!("{:016x}.png", item.content_hash);
+    }
 }
 
 fn canonicalize_item_tag_refs(payload: &mut SyncPayload) {
@@ -1219,6 +1290,10 @@ mod tests {
                     color: "#EF4444".into(),
                 }],
                 meta_type: String::new(),
+                image_width: 0,
+                image_height: 0,
+                image_blob: String::new(),
+                thumb_data: String::new(),
             }],
             tags: vec![SyncTag {
                 uid: "tag-work".into(),
@@ -1293,7 +1368,26 @@ mod tests {
             size: 0,
             tags: vec![],
             meta_type: String::new(),
+            image_width: 0,
+            image_height: 0,
+            image_blob: String::new(),
+            thumb_data: String::new(),
         }
+    }
+
+    #[test]
+    fn sanitize_payload_rewrites_image_blob_path_segments() {
+        let mut item = make_item(0xABCD, "2026-05-14T09:00:00Z", "image");
+        item.content_type = "image".into();
+        item.image_blob = "..\\outside.png".into();
+        item.thumb_data = "thumb".into();
+
+        let mut payload = make_payload(vec![item], vec![]);
+
+        sanitize_payload(&mut payload);
+
+        assert_eq!(payload.items[0].image_blob, "000000000000abcd.png");
+        assert_eq!(payload.items[0].thumb_data, "thumb");
     }
 
     fn make_tag(name: &str, color: &str, updated_at: &str) -> SyncTag {
@@ -1481,6 +1575,10 @@ mod tests {
             size: 5,
             tags: vec![],
             meta_type: String::new(),
+            image_width: 0,
+            image_height: 0,
+            image_blob: String::new(),
+            thumb_data: String::new(),
         };
         let id = db.insert_sync_item_raw(&item).expect("insert");
         (std::sync::Mutex::new(db), id, 0xABCD)
@@ -1506,6 +1604,10 @@ mod tests {
             size: text.len() as i64,
             tags: vec![],
             meta_type: String::new(),
+            image_width: 0,
+            image_height: 0,
+            image_blob: String::new(),
+            thumb_data: String::new(),
         };
         db.insert_sync_item_raw(&item).expect("insert")
     }
@@ -1532,7 +1634,7 @@ mod tests {
         }
 
         // --- Build snapshot with favorites_only=false ---
-        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+        let payload = build_snapshot(&db_mutex, "test-device", false, false).unwrap();
 
         // --- Item should NOT be in items[] (tombstone communicates unfavorite) ---
         assert!(
@@ -1553,7 +1655,7 @@ mod tests {
         let (db_mutex, _id, hash) = setup_db();
         // --- Item has is_favorite=false, no tombstone (never favorited) ---
 
-        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+        let payload = build_snapshot(&db_mutex, "test-device", false, false).unwrap();
 
         // --- Item SHOULD be in items[] — it's just a normal unfavorited item ---
         let found = payload.items.iter().find(|i| i.content_hash == hash);
@@ -1574,7 +1676,7 @@ mod tests {
             db.set_favorite(_id, true).unwrap();
         }
 
-        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+        let payload = build_snapshot(&db_mutex, "test-device", false, false).unwrap();
 
         let found = payload.items.iter().find(|i| i.content_hash == hash);
         assert!(
@@ -1589,7 +1691,7 @@ mod tests {
         let (db_mutex, _id, hash) = setup_db();
         // --- Item is_favorite=false, no tombstone ---
 
-        let payload = build_snapshot(&db_mutex, "test-device", true).unwrap();
+        let payload = build_snapshot(&db_mutex, "test-device", true, false).unwrap();
 
         // --- With favorites_only=true, unfavorited items should be excluded ---
         assert!(payload
@@ -1614,7 +1716,7 @@ mod tests {
             db.set_favorite(_id, true).unwrap();
         }
 
-        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+        let payload = build_snapshot(&db_mutex, "test-device", false, false).unwrap();
 
         // --- Item should be back in items[] as favorited ---
         let found = payload.items.iter().find(|i| i.content_hash == hash);
@@ -1642,7 +1744,7 @@ mod tests {
             db.record_unfavorite(2, &recent, "test-device").unwrap();
         }
 
-        let payload = build_snapshot(&db, "test-device", false).unwrap();
+        let payload = build_snapshot(&db, "test-device", false, false).unwrap();
 
         // --- Item A: in items[] ---
         assert!(payload.items.iter().any(|i| i.content_hash == 1));
@@ -1669,7 +1771,7 @@ mod tests {
         }
         let db = std::sync::Mutex::new(db);
 
-        let payload = build_snapshot(&db, "test-device", false).unwrap();
+        let payload = build_snapshot(&db, "test-device", false, false).unwrap();
 
         // --- Tombstone still propagates even without the item ---
         assert_eq!(payload.unfavorited_items.len(), 1);
@@ -1689,7 +1791,7 @@ mod tests {
                 .unwrap();
         }
 
-        let payload = build_snapshot(&db_mutex, "test-device", false).unwrap();
+        let payload = build_snapshot(&db_mutex, "test-device", false, false).unwrap();
 
         // Favorited item should be in items[] even if a stale tombstone exists
         let found = payload.items.iter().find(|i| i.content_hash == hash);
@@ -1835,6 +1937,10 @@ mod tests {
                 size: 12,
                 tags: vec![],
                 meta_type: String::new(),
+                image_width: 0,
+                image_height: 0,
+                image_blob: String::new(),
+                thumb_data: String::new(),
             }],
             vec![],
         );
@@ -1878,6 +1984,10 @@ mod tests {
                 size: 12,
                 tags: vec![],
                 meta_type: String::new(),
+                image_width: 0,
+                image_height: 0,
+                image_blob: String::new(),
+                thumb_data: String::new(),
             }],
             vec![],
         );
@@ -1936,6 +2046,10 @@ mod tests {
                 size: 9,
                 tags: vec![],
                 meta_type: String::new(),
+                image_width: 0,
+                image_height: 0,
+                image_blob: String::new(),
+                thumb_data: String::new(),
             }],
             vec![SyncUnfavoritedItem {
                 content_hash: 100,

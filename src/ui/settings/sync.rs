@@ -142,6 +142,96 @@ impl SettingsPanel {
                         )
                     }),
             )
+            .when(sync.auto_enabled, |container| {
+                container.child(
+                    div()
+                        .rounded(px(10.))
+                        .bg(surface)
+                        .border(px(1.))
+                        .border_color(divider)
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .h(px(38.))
+                                .px(px(14.))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(text_1)
+                                        .child(I18nKey::SyncIncludeImages.text()),
+                                )
+                                .child(div().flex_shrink_0().child(render_toggle(
+                                    sync.include_images,
+                                    "sync-include-images",
+                                    ToggleColors {
+                                        accent,
+                                        track_off: divider,
+                                    },
+                                    &mut self.toggle_states,
+                                    window,
+                                    cx,
+                                    {
+                                        let wm = wm.clone();
+                                        move |_window, cx| {
+                                            wm.update(cx, |wm, cx| {
+                                                wm.toggle_sync_include_images(cx);
+                                            });
+                                        }
+                                    },
+                                ))),
+                        )
+                        .when(sync.include_images, |card| {
+                            card.child(div().h(px(1.)).bg(divider)).child(
+                                div()
+                                    .h(px(38.))
+                                    .px(px(14.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::SyncCompressImages.text()),
+                                    )
+                                    .child(div().flex_shrink_0().child(render_toggle(
+                                        sync.compress_images,
+                                        "sync-compress-images",
+                                        ToggleColors {
+                                            accent,
+                                            track_off: divider,
+                                        },
+                                        &mut self.toggle_states,
+                                        window,
+                                        cx,
+                                        {
+                                            let wm = wm.clone();
+                                            move |_window, cx| {
+                                                wm.update(cx, |wm, cx| {
+                                                    wm.toggle_sync_compress_images(cx);
+                                                });
+                                            }
+                                        },
+                                    ))),
+                            )
+                        }),
+                )
+            })
             .child(
                 div()
                     .rounded(px(10.))

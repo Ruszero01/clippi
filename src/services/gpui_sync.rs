@@ -3,6 +3,7 @@
 //! --- Keeps blocking backend work off the GPUI thread and publishes compact ---
 //! --- snapshots into `AppState` from the unified WindowManager poll loop. ---
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -56,6 +57,8 @@ pub struct GpuiSyncService {
     backends: Vec<BackendRuntime>,
     auto_enabled: bool,
     favorites_only: bool,
+    include_images: bool,
+    compress_images: bool,
     last_message: String,
 }
 
@@ -70,6 +73,8 @@ impl GpuiSyncService {
             backends: Vec::new(),
             auto_enabled: settings.sync_auto_enabled,
             favorites_only: settings.sync_favorites_only,
+            include_images: settings.sync_include_images,
+            compress_images: settings.sync_compress_images,
             last_message: String::new(),
         };
         service.reload_from_settings(settings);
@@ -83,6 +88,8 @@ impl GpuiSyncService {
 
         self.auto_enabled = settings.sync_auto_enabled;
         self.favorites_only = settings.sync_favorites_only;
+        self.include_images = settings.sync_include_images;
+        self.compress_images = settings.sync_compress_images;
         self.backends = settings
             .sync_backends
             .iter()
@@ -239,6 +246,8 @@ impl GpuiSyncService {
         let backend = Arc::clone(&runtime.backend);
         let backend_id = runtime.config.id.clone();
         let favorites_only = self.favorites_only;
+        let include_images = self.include_images;
+        let compress_images = self.compress_images;
 
         std::thread::spawn(move || {
             let cycle = run_sync_cycle_for_backend(
@@ -247,6 +256,8 @@ impl GpuiSyncService {
                 &cancel,
                 favorites_only,
                 force_push,
+                include_images,
+                compress_images,
             );
             *pending.lock().expect("sync result lock poisoned") =
                 Some(BackendSyncResult { backend_id, cycle });
@@ -318,6 +329,8 @@ impl GpuiSyncService {
                 .collect(),
             auto_enabled: self.auto_enabled,
             favorites_only: self.favorites_only,
+            include_images: self.include_images,
+            compress_images: self.compress_images,
             last_message: self.last_message.clone(),
         }
     }
@@ -381,12 +394,16 @@ fn run_sync_cycle_for_backend(
     cancel: &AtomicBool,
     favorites_only: bool,
     force_push: bool,
+    include_images: bool,
+    compress_images: bool,
 ) -> SyncCycleResult {
     let local_device = crate::services::backends::local_folder::hostname();
     let mut stats = MergeStats::default();
     let mut remote_hash = None;
     let mut remote_for_push = None;
     let mut remote_unchanged = false;
+    let mut images_downloaded: u32 = 0;
+    let mut images_uploaded: u32 = 0;
 
     match backend.pull(force_push) {
         Ok(mut remote) => {
@@ -401,6 +418,10 @@ fn run_sync_cycle_for_backend(
                     if fetched > 0 {
                         log::debug!("sync: backfilled {fetched} URL favicon(s)");
                     }
+
+                    if include_images {
+                        images_downloaded = download_missing_images(backend, db);
+                    }
                 }
                 Err(error) => {
                     return SyncCycleResult {
@@ -414,7 +435,10 @@ fn run_sync_cycle_for_backend(
             }
         }
         Err(error) if error == "@@unchanged" => remote_unchanged = true,
-        Err(error) if error.contains("not found") || error.contains("不存在") => {}
+        Err(error)
+            if error.contains("not found")
+                || error.contains("No such file")
+                || error.contains("404") => {}
         Err(error) => {
             return SyncCycleResult {
                 success: false,
@@ -445,7 +469,8 @@ fn run_sync_cycle_for_backend(
         };
     }
 
-    let mut payload = match sync::build_snapshot(db, &local_device, favorites_only) {
+    let mut payload = match sync::build_snapshot(db, &local_device, favorites_only, include_images)
+    {
         Ok(payload) => payload,
         Err(error) => {
             return SyncCycleResult {
@@ -462,16 +487,32 @@ fn run_sync_cycle_for_backend(
         payload.device_name = local_device.clone();
         payload.synced_at = chrono::Utc::now().to_rfc3339();
     }
+
+    let image_blobs = if include_images {
+        prepare_image_snapshot_data(&mut payload, db, compress_images)
+    } else {
+        Vec::new()
+    };
+
     let snapshot_counts = (payload.items.len() as u32, payload.tags.len() as u32);
+
+    if include_images {
+        images_uploaded = upload_prepared_images(backend, image_blobs);
+    }
 
     if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
         let _ = backend.post_push_cleanup();
+        let message = if images_uploaded > 0 {
+            format!("Up to date, images: up {images_uploaded}")
+        } else {
+            "Up to date".into()
+        };
         return SyncCycleResult {
             success: true,
-            message: "Up to date".into(),
+            message,
             stats,
             snapshot_counts: Some(snapshot_counts),
-            did_push: false,
+            did_push: images_uploaded > 0,
         };
     }
     if let Err(error) = backend.push(&payload) {
@@ -485,16 +526,215 @@ fn run_sync_cycle_for_backend(
     }
     let _ = backend.post_push_cleanup();
 
+    let mut msg = format!(
+        "Sync complete: {} items, {} tags",
+        snapshot_counts.0, snapshot_counts.1
+    );
+    if images_downloaded > 0 || images_uploaded > 0 {
+        msg.push_str(&format!(
+            ", images: down {images_downloaded} up {images_uploaded}"
+        ));
+    }
+
     SyncCycleResult {
         success: true,
-        message: format!(
-            "Sync complete: {} items, {} tags",
-            snapshot_counts.0, snapshot_counts.1
-        ),
+        message: msg,
         stats,
         snapshot_counts: Some(snapshot_counts),
         did_push: true,
     }
+}
+
+/// Download images and thumbnails that exist in the DB but not on local disk.
+fn download_missing_images(backend: &dyn SyncBackend, db: &Mutex<Database>) -> u32 {
+    let images_dir = crate::core::paths::images_dir();
+    let _ = std::fs::create_dir_all(&images_dir);
+
+    let image_items = match db.lock() {
+        Ok(db) => match db.get_all_sync_items_with_tags(true) {
+            Ok(items) => items
+                .into_iter()
+                .filter(|item| item.content_type.as_str() == "image")
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                log::warn!("sync: query images for download failed: {e}");
+                return 0;
+            }
+        },
+        Err(e) => {
+            log::warn!("sync: db lock for image download failed: {e}");
+            return 0;
+        }
+    };
+
+    let mut count: u32 = 0;
+
+    for item in &image_items {
+        // Check if full image file exists
+        let image_path = std::path::PathBuf::from(&item.image_path);
+        if image_path.exists() {
+            continue; // Already have it
+        }
+
+        // Determine filename from image_path or fall back to hash
+        let (hash_hex, ext) = if item.image_path.is_empty() {
+            (format!("{:016x}", item.content_hash), "png".to_string())
+        } else {
+            let path = std::path::Path::new(&item.image_path);
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("png")
+                .to_string();
+            (stem.to_string(), ext)
+        };
+
+        // Download blob
+        match backend.download_blob(&hash_hex, &ext) {
+            Ok(data) => {
+                let dest = images_dir.join(format!("{hash_hex}.{ext}"));
+                // Atomic write
+                let tmp = images_dir.join(format!(".{hash_hex}.{ext}.tmp"));
+                if std::fs::write(&tmp, &data).is_ok() && std::fs::rename(&tmp, &dest).is_ok() {
+                    // Update DB image_path
+                    if let Ok(db) = db.lock() {
+                        let new_path = dest.to_string_lossy().to_string();
+                        let _ = db.set_item_image_path(item.content_hash, &new_path);
+                    }
+
+                    // Generate thumbnail from downloaded image
+                    crate::platform::clipboard::ensure_thumbnail_for_image(
+                        &dest.to_string_lossy(),
+                        item.content_hash,
+                    );
+
+                    count += 1;
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                }
+            }
+            Err(e) => {
+                // Not found or network error; retry next cycle.
+                if !e.contains("not found") {
+                    log::warn!("sync: download blob {hash_hex}.{ext} failed: {e}");
+                }
+            }
+        }
+    }
+
+    if count > 0 {
+        log::info!("sync: downloaded {count} image(s)");
+    }
+    count
+}
+
+struct PreparedImageBlob {
+    hash_hex: String,
+    ext: String,
+    data: Vec<u8>,
+}
+
+fn prepare_image_snapshot_data(
+    payload: &mut crate::core::sync::SyncPayload,
+    db: &Mutex<Database>,
+    compress: bool,
+) -> Vec<PreparedImageBlob> {
+    let images_dir = crate::core::paths::images_dir();
+    let wanted_hashes: Vec<u64> = payload
+        .items
+        .iter()
+        .filter(|item| item.content_type == "image")
+        .map(|item| item.content_hash)
+        .collect();
+    let image_paths = match db.lock() {
+        Ok(db) => wanted_hashes
+            .iter()
+            .filter_map(|hash| {
+                db.get_by_hash(*hash)
+                    .ok()
+                    .flatten()
+                    .map(|item| (*hash, item.image_path))
+            })
+            .collect::<HashMap<_, _>>(),
+        Err(e) => {
+            log::warn!("sync: db lock for image snapshot data failed: {e}");
+            HashMap::new()
+        }
+    };
+
+    let mut blobs = Vec::new();
+    for item in &mut payload.items {
+        if item.content_type != "image" {
+            continue;
+        }
+
+        let hash_hex = format!("{:016x}", item.content_hash);
+        if let Some(image_path) = image_paths.get(&item.content_hash) {
+            let path = std::path::Path::new(image_path);
+            if path.exists() {
+                match crate::services::image_compressor::compress_for_sync(path, compress) {
+                    Ok(result) => {
+                        item.image_blob = format!("{hash_hex}.{}", result.ext);
+                        blobs.push(PreparedImageBlob {
+                            hash_hex: hash_hex.clone(),
+                            ext: result.ext,
+                            data: result.data,
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!("sync: prepare image blob {hash_hex} failed: {e}");
+                    }
+                }
+            }
+        }
+
+        if item.image_blob.is_empty() {
+            item.image_blob = format!("{hash_hex}.png");
+        }
+
+        let thumb_path = images_dir.join(format!("thumb_{hash_hex}.png"));
+        if let Ok(thumb_data) = std::fs::read(&thumb_path) {
+            use base64::Engine;
+            item.thumb_data = base64::engine::general_purpose::STANDARD.encode(&thumb_data);
+        }
+    }
+    blobs
+}
+
+fn upload_prepared_images(backend: &dyn SyncBackend, blobs: Vec<PreparedImageBlob>) -> u32 {
+    if blobs.is_empty() {
+        return 0;
+    }
+
+    let remote_blobs = match backend.list_remote_blobs() {
+        Ok(blobs) => blobs,
+        Err(e) => {
+            log::warn!("sync: list remote blobs failed: {e}");
+            return 0;
+        }
+    };
+
+    let mut count: u32 = 0;
+    for blob in blobs {
+        let filename = format!("{}.{}", blob.hash_hex, blob.ext);
+        if remote_blobs.iter().any(|name| name == &filename) {
+            continue;
+        }
+
+        match backend.upload_blob(&blob.hash_hex, &blob.ext, &blob.data) {
+            Ok(()) => count += 1,
+            Err(e) => log::warn!("sync: upload blob {filename} failed: {e}"),
+        }
+    }
+
+    if count > 0 {
+        log::info!("sync: uploaded {count} image(s)");
+    }
+    count
 }
 
 #[cfg(test)]
@@ -502,6 +742,9 @@ mod tests {
     use super::*;
     use crate::core::settings::BackendConfig;
     use crate::core::sync::{SyncItem, SyncPayload};
+    use crate::core::types::ClipboardItem;
+    use image::{ImageBuffer, Rgb};
+    use std::collections::HashMap as StdHashMap;
     use std::sync::atomic::AtomicUsize;
 
     struct MemoryBackend {
@@ -528,6 +771,81 @@ mod tests {
         }
     }
 
+    struct BlobMemoryBackend {
+        pushed: Mutex<Option<SyncPayload>>,
+        blobs: Mutex<StdHashMap<String, Vec<u8>>>,
+    }
+
+    impl BlobMemoryBackend {
+        fn new() -> Self {
+            Self {
+                pushed: Mutex::new(None),
+                blobs: Mutex::new(StdHashMap::new()),
+            }
+        }
+    }
+
+    impl SyncBackend for BlobMemoryBackend {
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
+            Err("not found".into())
+        }
+
+        fn push(&self, payload: &SyncPayload) -> Result<(), String> {
+            *self.pushed.lock().expect("payload lock") = Some(payload.clone());
+            Ok(())
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+
+        fn upload_blob(&self, hash_hex: &str, ext: &str, data: &[u8]) -> Result<(), String> {
+            self.blobs
+                .lock()
+                .expect("blob lock")
+                .insert(format!("{hash_hex}.{ext}"), data.to_vec());
+            Ok(())
+        }
+
+        fn list_remote_blobs(&self) -> Result<Vec<String>, String> {
+            Ok(self
+                .blobs
+                .lock()
+                .expect("blob lock")
+                .keys()
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn unique_temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "clippi-sync-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn write_test_png(path: &std::path::Path, color: [u8; 3]) {
+        let img = ImageBuffer::from_fn(32, 32, |x, y| {
+            let tweak = ((x + y) % 7) as u8;
+            Rgb([
+                color[0].saturating_add(tweak),
+                color[1].saturating_add(tweak),
+                color[2].saturating_add(tweak),
+            ])
+        });
+        img.save(path).expect("save png");
+    }
+
     #[test]
     fn unchanged_snapshot_reports_backend_counts() {
         let db = Database::open(":memory:").expect("open in-memory database");
@@ -543,21 +861,92 @@ mod tests {
             size: 20,
             tags: vec![],
             meta_type: String::new(),
+            image_width: 0,
+            image_height: 0,
+            image_blob: String::new(),
+            thumb_data: String::new(),
         })
         .expect("insert sync item");
         let db = Mutex::new(db);
-        let remote = sync::build_snapshot(&db, "remote-device", true).expect("build remote");
+        let remote = sync::build_snapshot(&db, "remote-device", true, false).expect("build remote");
         let backend = MemoryBackend {
             payload: remote,
             pushes: AtomicUsize::new(0),
         };
 
-        let result = run_sync_cycle_for_backend(&backend, &db, &AtomicBool::new(false), true, true);
+        let result = run_sync_cycle_for_backend(
+            &backend,
+            &db,
+            &AtomicBool::new(false),
+            true,
+            true,
+            false,
+            false,
+        );
 
         assert!(result.success);
         assert_eq!(result.snapshot_counts, Some((1, 0)));
         assert!(!result.did_push);
         assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn image_blob_upload_uses_snapshot_scope_and_payload_filename() {
+        let dir = unique_temp_dir();
+        let favorite_path = dir.join("favorite.png");
+        let other_path = dir.join("other.png");
+        write_test_png(&favorite_path, [24, 64, 96]);
+        write_test_png(&other_path, [96, 64, 24]);
+
+        let db = Database::open(":memory:").expect("open in-memory database");
+        let favorite =
+            ClipboardItem::new_image(0, favorite_path.to_str().unwrap(), 0x1111, 32, 32, None);
+        db.upsert(&favorite).expect("insert favorite image");
+        let favorite_id = db
+            .get_by_hash(0x1111)
+            .expect("load favorite image")
+            .expect("favorite image exists")
+            .id;
+        db.set_favorite(favorite_id, true).expect("favorite image");
+
+        let other = ClipboardItem::new_image(0, other_path.to_str().unwrap(), 0x2222, 32, 32, None);
+        db.upsert(&other).expect("insert nonfavorite image");
+
+        let db = Mutex::new(db);
+        let backend = BlobMemoryBackend::new();
+
+        let result = run_sync_cycle_for_backend(
+            &backend,
+            &db,
+            &AtomicBool::new(false),
+            true,
+            true,
+            true,
+            true,
+        );
+
+        assert!(result.success);
+        assert!(result.did_push);
+        assert_eq!(result.snapshot_counts, Some((1, 0)));
+
+        let pushed = backend
+            .pushed
+            .lock()
+            .expect("payload lock")
+            .clone()
+            .expect("payload pushed");
+        assert_eq!(pushed.items.len(), 1);
+        let image_item = &pushed.items[0];
+        assert_eq!(image_item.content_hash, 0x1111);
+        assert!(!image_item.image_blob.is_empty());
+
+        let blobs = backend.blobs.lock().expect("blob lock");
+        assert!(blobs.contains_key(&image_item.image_blob));
+        assert!(blobs
+            .keys()
+            .all(|name| !name.starts_with("0000000000002222")));
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -575,6 +964,10 @@ mod tests {
             size: 12,
             tags: vec![],
             meta_type: String::new(),
+            image_width: 0,
+            image_height: 0,
+            image_blob: String::new(),
+            thumb_data: String::new(),
         })
         .expect("insert local item");
         let db = Mutex::new(db);
@@ -594,6 +987,10 @@ mod tests {
                 size: 12,
                 tags: vec![],
                 meta_type: String::new(),
+                image_width: 0,
+                image_height: 0,
+                image_blob: String::new(),
+                thumb_data: String::new(),
             }],
             tags: vec![],
             deleted_items: vec![],
@@ -605,8 +1002,15 @@ mod tests {
             pushes: AtomicUsize::new(0),
         };
 
-        let result =
-            run_sync_cycle_for_backend(&backend, &db, &AtomicBool::new(false), true, false);
+        let result = run_sync_cycle_for_backend(
+            &backend,
+            &db,
+            &AtomicBool::new(false),
+            true,
+            false,
+            false,
+            false,
+        );
 
         assert!(result.success);
         assert!(!result.did_push);

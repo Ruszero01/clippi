@@ -683,11 +683,19 @@ impl Database {
     // --- ── Sync helpers ── ---
 
     /// Get all items (excluding image and file types) with tags for sync snapshot.
-    pub fn get_all_sync_items_with_tags(&self) -> SqlResult<Vec<ClipboardItem>> {
+    pub fn get_all_sync_items_with_tags(
+        &self,
+        include_images: bool,
+    ) -> SqlResult<Vec<ClipboardItem>> {
+        let exclude = if include_images {
+            "'file'"
+        } else {
+            "'image', 'file'"
+        };
         let query = format!(
             "SELECT {}
              FROM clipboard_items
-             WHERE content_type NOT IN ('image', 'file')
+             WHERE content_type NOT IN ({exclude})
              ORDER BY updated_at DESC",
             item_select_columns()
         );
@@ -746,10 +754,27 @@ impl Database {
             _ => (item.content_type.as_str(), item.meta_type.as_str()),
         };
 
+        let is_image = content_type == "image";
+        let image_path = if is_image && !item.image_blob.is_empty() {
+            crate::core::paths::images_dir()
+                .join(&item.image_blob)
+                .to_string_lossy()
+                .to_string()
+        } else if is_image {
+            // Fallback: use hash-based filename
+            crate::core::paths::images_dir()
+                .join(format!("{:016x}.png", item.content_hash))
+                .to_string_lossy()
+                .to_string()
+        } else {
+            String::new()
+        };
+
         self.conn.execute(
             "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at,
-             rich_data, is_favorite, note, source_app_name, size, meta_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             rich_data, is_favorite, note, source_app_name, size, meta_type,
+             image_path, image_width, image_height, file_data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
                 content_type,
                 item.full_text,
@@ -762,6 +787,10 @@ impl Database {
                 "", // source_app_name not in sync payload
                 item.size,
                 meta_type,
+                image_path,
+                item.image_width,
+                item.image_height,
+                "", // file_data — not synced yet
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -769,10 +798,26 @@ impl Database {
 
     /// Update an item's fields from a newer remote version (sync merge).
     pub fn update_sync_item(&self, id: i64, item: &crate::core::sync::SyncItem) -> SqlResult<()> {
+        let is_image = item.content_type == "image";
+        let image_path = if is_image && !item.image_blob.is_empty() {
+            crate::core::paths::images_dir()
+                .join(&item.image_blob)
+                .to_string_lossy()
+                .to_string()
+        } else if is_image {
+            crate::core::paths::images_dir()
+                .join(format!("{:016x}.png", item.content_hash))
+                .to_string_lossy()
+                .to_string()
+        } else {
+            String::new()
+        };
+
         self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
-             rich_data = ?4, is_favorite = ?5, note = ?6, size = ?7, meta_type = ?8
-             WHERE id = ?9",
+             rich_data = ?4, is_favorite = ?5, note = ?6, size = ?7, meta_type = ?8,
+             image_path = ?9, image_width = ?10, image_height = ?11
+             WHERE id = ?12",
             rusqlite::params![
                 item.full_text,
                 item.content_type,
@@ -782,6 +827,9 @@ impl Database {
                 item.note,
                 item.size,
                 item.meta_type,
+                image_path,
+                item.image_width,
+                item.image_height,
                 id,
             ],
         )?;
@@ -883,6 +931,16 @@ impl Database {
             .flatten()
             .map(|hash| format!("{:016x}", hash as u64))
             .collect())
+    }
+
+    /// Update image_path for an item identified by content_hash.
+    /// Used after downloading a synced image blob to redirect the path.
+    pub fn set_item_image_path(&self, content_hash: u64, image_path: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET image_path = ?1 WHERE content_hash = ?2",
+            rusqlite::params![image_path, content_hash as i64],
+        )?;
+        Ok(())
     }
 
     /// Collect icon cache filenames referenced by any clipboard item.

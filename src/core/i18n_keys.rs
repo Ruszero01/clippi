@@ -153,6 +153,8 @@ define_i18n! {
 
     // ─── Sync settings ───
     SyncFavoritesOnly:  ("仅同步收藏", "Favorites only"),
+    SyncIncludeImages:  ("包含图片", "Include images"),
+    SyncCompressImages: ("压缩图片", "Compress images"),
     SyncAddBackend:     ("添加后端", "Add backend"),
     SyncNow:            ("立即同步", "Sync now"),
     SyncSyncing:        ("同步中", "Syncing"),

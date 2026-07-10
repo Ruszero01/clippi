@@ -7,6 +7,7 @@ pub mod downloader;
 pub mod favicon;
 pub mod gpui_clipboard;
 pub mod gpui_sync;
+pub mod image_compressor;
 pub mod install;
 pub mod poll_loop;
 pub mod update;

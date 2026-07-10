@@ -2246,6 +2246,33 @@ impl WindowManager {
         cx.emit(WindowManagerEvent::SyncChanged);
     }
 
+    pub fn toggle_sync_include_images(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state.settings.sync_include_images = !state.settings.sync_include_images;
+            // If turning off include_images, also turn off compress_images
+            if !state.settings.sync_include_images {
+                state.settings.sync_compress_images = false;
+            }
+            state.settings.save();
+            state.sync.include_images = state.settings.sync_include_images;
+            state.sync.compress_images = state.settings.sync_compress_images;
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn toggle_sync_compress_images(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            state.settings.sync_compress_images = !state.settings.sync_compress_images;
+            state.settings.save();
+            state.sync.compress_images = state.settings.sync_compress_images;
+            state.settings.clone()
+        });
+        self.sync_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
     pub fn set_backend_sync_interval(&mut self, id: &str, secs: u64, cx: &mut Context<Self>) {
         let settings = self.state.update(cx, |state, _cx| {
             if let Some(config) = state.settings.sync_backends.iter_mut().find(|c| c.id == id) {

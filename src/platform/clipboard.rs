@@ -508,6 +508,14 @@ fn generate_thumbnail(image_path: &std::path::Path, img_dir: &std::path::Path, h
             && thumbnail_file_is_valid(&tmp_path)
             && std::fs::rename(&tmp_path, &thumb_path).is_ok()
         {
+            // Lossless PNG optimization — thumbnail is ~310px wide, takes < 1ms
+            if let Ok(data) = std::fs::read(&thumb_path) {
+                if let Ok(optimized) =
+                    oxipng::optimize_from_memory(&data, &oxipng::Options::from_preset(2))
+                {
+                    let _ = std::fs::write(&thumb_path, &optimized);
+                }
+            }
             THUMBNAIL_READY.store(true, Ordering::SeqCst);
         } else {
             let _ = std::fs::remove_file(&tmp_path);

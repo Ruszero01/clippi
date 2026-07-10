@@ -117,6 +117,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub sync_favorites_only: bool, // only sync favorited items
     #[serde(default)]
+    pub sync_include_images: bool, // include image items in sync
+    #[serde(default)]
+    pub sync_compress_images: bool, // compress images before syncing (JPEG quality 85)
+    #[serde(default)]
     pub max_items: u32, // max saved items (0=unlimited, default 0)
     #[serde(default)]
     pub retention_days: u32, // auto-delete items not updated within N days (0=forever)
@@ -233,6 +237,8 @@ impl Default for AppSettings {
             sync_auto_enabled: false,
             saved_enabled_backend_ids: Vec::new(),
             sync_favorites_only: true,
+            sync_include_images: false,
+            sync_compress_images: false,
             max_items: 0,
             retention_days: 0,
             hotkey_blacklist: Vec::new(),

@@ -197,6 +197,47 @@ impl SyncBackend for LocalFolderBackend {
         }
         Ok(())
     }
+
+    fn upload_blob(&self, hash_hex: &str, ext: &str, data: &[u8]) -> Result<(), String> {
+        let dir = PathBuf::from(&self.config.folder_path).join("images");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create images dir: {e}"))?;
+
+        let file_path = dir.join(format!("{hash_hex}.{ext}"));
+        // Atomic write: temp file + rename
+        let tmp_path = dir.join(format!(".{hash_hex}.{ext}.tmp"));
+        std::fs::write(&tmp_path, data).map_err(|e| format!("write blob temp: {e}"))?;
+        std::fs::rename(&tmp_path, &file_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("rename blob: {e}")
+        })
+    }
+
+    fn download_blob(&self, hash_hex: &str, ext: &str) -> Result<Vec<u8>, String> {
+        let file_path = PathBuf::from(&self.config.folder_path)
+            .join("images")
+            .join(format!("{hash_hex}.{ext}"));
+        std::fs::read(&file_path).map_err(|e| format!("read blob: {e}"))
+    }
+
+    fn list_remote_blobs(&self) -> Result<Vec<String>, String> {
+        let dir = PathBuf::from(&self.config.folder_path).join("images");
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                if let Some(name) = entry.file_name().to_str() {
+                    // Skip temp files
+                    if name.starts_with('.') && name.ends_with(".tmp") {
+                        continue;
+                    }
+                    files.push(name.to_string());
+                }
+            }
+        }
+        Ok(files)
+    }
 }
 
 // --- ── Platform detection helpers ── ---
