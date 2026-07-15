@@ -140,6 +140,20 @@ pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     ))
 }
 
+/// Paste format preference for custom hotkeys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum HotkeyPasteFormat {
+    #[default]
+    Default,
+    PlainText,
+    ImageBitmap,
+    ImagePath,
+    OcrText,
+    FilePath,
+    Rgb,
+    Hex,
+}
+
 /// A clipboard item
 #[derive(Debug, Clone)]
 pub struct ClipboardItem {
@@ -161,6 +175,8 @@ pub struct ClipboardItem {
     pub size: i64,               // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
     pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html" | "link" | "path" | "color"
+    pub custom_hotkey: String,
+    pub custom_hotkey_format: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -282,6 +298,8 @@ impl ClipboardItem {
             size: 0,
             tags: Vec::new(),
             meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         }
     }
 
@@ -316,6 +334,8 @@ impl ClipboardItem {
             size: 0,
             tags: Vec::new(),
             meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         }
     }
 
@@ -350,6 +370,8 @@ impl ClipboardItem {
             size,
             tags: Vec::new(),
             meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         }
     }
 

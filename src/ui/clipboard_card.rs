@@ -23,7 +23,8 @@ use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{
     format_relative_time, mask_sensitive_preview, parse_hex_color, url_domain, url_path,
-    url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, RichData,
+    url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, HotkeyPasteFormat,
+    RichData,
 };
 
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
@@ -35,6 +36,7 @@ type CardClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
 type CardIndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 type CardActionHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 type CardWindowHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+type CardFormatHandler = Rc<dyn Fn(HotkeyPasteFormat, &mut Window, &mut App)>;
 
 const INFO_PILL_FONT_SIZE: f32 = 9.0;
 const INFO_PILL_GAP: f32 = 4.0;
@@ -350,9 +352,79 @@ fn format_file_size(bytes: i64) -> String {
     }
 }
 
-/// Produce a stable hex hash of a file path for per-file icon cache keys.
+/// Display label for non-default paste formats attached to a custom hotkey.
 /// Uses `DefaultHasher` with fixed keys — deterministic within the same
 /// binary, sufficient for a persistent on-disk cache.
+fn parse_hotkey_paste_format(format: &str) -> Option<HotkeyPasteFormat> {
+    if format.is_empty() {
+        return Some(HotkeyPasteFormat::Default);
+    }
+    serde_json::from_str(format).ok().or(match format {
+        "Default" => Some(HotkeyPasteFormat::Default),
+        "PlainText" => Some(HotkeyPasteFormat::PlainText),
+        "ImageBitmap" => Some(HotkeyPasteFormat::ImageBitmap),
+        "ImagePath" => Some(HotkeyPasteFormat::ImagePath),
+        "OcrText" => Some(HotkeyPasteFormat::OcrText),
+        "FilePath" => Some(HotkeyPasteFormat::FilePath),
+        "Rgb" => Some(HotkeyPasteFormat::Rgb),
+        "Hex" => Some(HotkeyPasteFormat::Hex),
+        _ => None,
+    })
+}
+
+fn hotkey_paste_format_label(format: HotkeyPasteFormat) -> SharedString {
+    match format {
+        HotkeyPasteFormat::Default => I18nKey::HotkeyFormatDefault.text().into(),
+        HotkeyPasteFormat::PlainText => I18nKey::HotkeyFormatPlainText.text().into(),
+        HotkeyPasteFormat::ImageBitmap => I18nKey::HotkeyFormatBitmap.text().into(),
+        HotkeyPasteFormat::ImagePath => I18nKey::HotkeyFormatImagePath.text().into(),
+        HotkeyPasteFormat::OcrText => I18nKey::HotkeyFormatOcr.text().into(),
+        HotkeyPasteFormat::FilePath => I18nKey::HotkeyFormatFilePath.text().into(),
+        HotkeyPasteFormat::Rgb => I18nKey::HotkeyFormatRgb.text().into(),
+        HotkeyPasteFormat::Hex => I18nKey::HotkeyFormatHex.text().into(),
+    }
+}
+
+fn hotkey_paste_formats_for_item(item: &ClipboardItem) -> Vec<HotkeyPasteFormat> {
+    let mut formats = vec![HotkeyPasteFormat::Default];
+
+    match item.content_type {
+        ContentType::Image => {
+            formats.push(HotkeyPasteFormat::ImageBitmap);
+            formats.push(HotkeyPasteFormat::ImagePath);
+            if !item.image_path.is_empty() {
+                formats.push(HotkeyPasteFormat::OcrText);
+            }
+        }
+        ContentType::File => {
+            formats.push(HotkeyPasteFormat::FilePath);
+        }
+        ContentType::PlainText | ContentType::RichText => {
+            if item.meta_type == "color" {
+                formats.push(HotkeyPasteFormat::Rgb);
+                formats.push(HotkeyPasteFormat::Hex);
+            } else if matches!(
+                item.display_kind(),
+                DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf
+            ) {
+                formats.push(HotkeyPasteFormat::PlainText);
+            }
+        }
+    }
+
+    formats
+}
+
+fn normalized_hotkey_paste_format(format: &str, item: &ClipboardItem) -> HotkeyPasteFormat {
+    let selected = parse_hotkey_paste_format(format).unwrap_or_default();
+    if hotkey_paste_formats_for_item(item).contains(&selected) {
+        selected
+    } else {
+        HotkeyPasteFormat::Default
+    }
+}
+
+/// Produce a stable hex hash of a file path for per-file icon cache keys.
 fn hash_file_path(path: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -657,6 +729,16 @@ pub struct ClipboardCard {
     note_input: Option<Entity<InputState>>,
     /// Called when note editing is committed (Enter / confirm button).
     on_commit_note: Option<CardWindowHandler>,
+    /// Whether this card is in hotkey-recording mode.
+    recording_hotkey: bool,
+    /// Called when hotkey recording is committed.
+    on_commit_hotkey: Option<CardWindowHandler>,
+    /// Called when hotkey recording is cancelled.
+    on_cancel_hotkey: Option<CardWindowHandler>,
+    /// Paste format selected during recording.
+    hotkey_paste_format: String,
+    /// Called when the hotkey paste format is changed while recording.
+    on_hotkey_format_change: Option<CardFormatHandler>,
     show_source_app: bool,
     show_original_on_hover: bool,
     /// When true and a link item has a cached page title, show the title
@@ -683,6 +765,11 @@ impl ClipboardCard {
             editing: false,
             note_input: None,
             on_commit_note: None,
+            recording_hotkey: false,
+            on_commit_hotkey: None,
+            on_cancel_hotkey: None,
+            hotkey_paste_format: String::new(),
+            on_hotkey_format_change: None,
             show_source_app: false,
             show_original_on_hover: false,
             show_page_title: false,
@@ -754,6 +841,34 @@ impl ClipboardCard {
         self
     }
 
+    pub fn recording_hotkey(mut self, recording: bool) -> Self {
+        self.recording_hotkey = recording;
+        self
+    }
+
+    pub fn hotkey_paste_format(mut self, format: String) -> Self {
+        self.hotkey_paste_format = format;
+        self
+    }
+
+    pub fn on_hotkey_format_change(
+        mut self,
+        handler: impl Fn(HotkeyPasteFormat, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_hotkey_format_change = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_commit_hotkey(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_commit_hotkey = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_cancel_hotkey(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_cancel_hotkey = Some(Rc::new(handler));
+        self
+    }
+
     pub fn show_source_app(mut self, value: bool) -> Self {
         self.show_source_app = value;
         self
@@ -802,6 +917,11 @@ impl RenderOnce for ClipboardCard {
             show_page_title,
             image_cache,
             search_terms,
+            recording_hotkey,
+            on_commit_hotkey: _on_commit_hotkey,
+            on_cancel_hotkey: _on_cancel_hotkey,
+            hotkey_paste_format,
+            on_hotkey_format_change,
         } = self;
 
         let surface = theme.surface;
@@ -1228,7 +1348,87 @@ impl RenderOnce for ClipboardCard {
             || (!search_terms.is_empty() && content_matches && !note_matches));
 
         // --- Right: content area ---
-        let content = if editing {
+        let content = if recording_hotkey {
+            // --- Inline hotkey recording UI ---
+            let record_text = I18nKey::LatestHotkeyRecording.text();
+            let selected_format = normalized_hotkey_paste_format(&hotkey_paste_format, &item);
+            let format_options = hotkey_paste_formats_for_item(&item);
+            let format_handler = on_hotkey_format_change.clone();
+
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .font_family("iconfont")
+                                .text_size(px(14.))
+                                .text_color(accent)
+                                .child("\u{e66b}"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(accent)
+                                .child(record_text),
+                        ),
+                )
+                .when(format_options.len() > 1, |el| {
+                    el.child(
+                        div()
+                            .h(px(18.))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(4.))
+                            .children(format_options.into_iter().map(|format| {
+                                let selected = format == selected_format;
+                                let handler = format_handler.clone();
+                                div()
+                                    .h(px(18.))
+                                    .rounded(px(9.))
+                                    .bg(if selected { accent } else { pill_bg })
+                                    .border(px(1.))
+                                    .border_color(if selected { accent } else { pill_border })
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| {
+                                        if selected {
+                                            style
+                                        } else {
+                                            style.border_color(accent)
+                                        }
+                                    })
+                                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(ref handler) = handler {
+                                            handler(format, window, cx);
+                                        }
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(9.))
+                                            .text_color(if selected {
+                                                rgb(0xffffff)
+                                            } else {
+                                                text_2
+                                            })
+                                            .child(hotkey_paste_format_label(format)),
+                                    )
+                            })),
+                    )
+                })
+        } else if editing {
             // --- Inline note editor ---
             let commit = on_commit_note.clone();
             let note_input_ref = note_input.clone();
@@ -1985,7 +2185,16 @@ impl RenderOnce for ClipboardCard {
             .iter()
             .map(|tag| info_pill_width(&tag.name, INFO_PILL_PADDING_X, window))
             .collect::<Vec<_>>();
-        let mut fixed_widths = Vec::with_capacity(2);
+        let mut fixed_widths = Vec::with_capacity(3);
+        // Hotkey pill (if item has a custom hotkey)
+        let hotkey_pill = if !item.custom_hotkey.is_empty() {
+            Some(item.custom_hotkey.clone())
+        } else {
+            None
+        };
+        if let Some(ref hk) = hotkey_pill {
+            fixed_widths.push(info_pill_width(hk, INFO_PILL_PADDING_X, window));
+        }
         if let Some(label) = size_label.as_deref() {
             fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
         }
@@ -2072,6 +2281,27 @@ impl RenderOnce for ClipboardCard {
                         ),
                 )
             })
+            .when_some(hotkey_pill, |el, hk| {
+                el.child(
+                    div()
+                        .h(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(accent)
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .font_family("iconfont")
+                                .text_size(px(9.))
+                                .text_color(accent)
+                                .child("\u{e66b}"),
+                        )
+                        .child(div().text_size(px(9.)).text_color(accent).child(hk)),
+                )
+            })
             .child(
                 div()
                     .h(px(18.))
@@ -2087,8 +2317,8 @@ impl RenderOnce for ClipboardCard {
 
         // --- Assemble card ---
         let card = base.child(icon_area).child(content);
-        // --- Hide bottom tags/time row during note editing ---
-        let card = if !editing {
+        // --- Hide bottom tags/time row during inline editing/recording. ---
+        let card = if !editing && !recording_hotkey {
             card.child(bottom_info)
         } else {
             card
@@ -2137,8 +2367,8 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // --- Hover toolbar (hidden during note editing) ---
-        if is_hovered && !editing {
+        // --- Hover toolbar (hidden during inline editing/recording). ---
+        if is_hovered && !editing && !recording_hotkey {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
                 .can_merge_selection(can_merge_selection);
             card.child(

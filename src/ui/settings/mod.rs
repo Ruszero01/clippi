@@ -75,6 +75,8 @@ pub struct SettingsPanel {
     tab_transition_generation: u64,
     tab_transition_started: Option<Instant>,
     backend_panel: Entity<AddBackendPanel>,
+    /// Whether the latest hotkeys popup is open.
+    pub latest_hotkeys_popup_open: bool,
     /// Pending hotkey blacklist confirmation (consumed by RootView).
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
     /// Whether we are currently recording a paste shortcut for an app (Some(app_name)).
@@ -186,6 +188,7 @@ impl SettingsPanel {
             tab_transition_started: None,
             focus_handle: cx.focus_handle(),
             backend_panel,
+            latest_hotkeys_popup_open: false,
             hotkey_confirm: None,
             recording_paste_shortcut: None,
             pending_paste_shortcut: None,

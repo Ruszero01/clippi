@@ -72,6 +72,8 @@ pub struct AppState {
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
     pub bitmap_paste_finished: Arc<AtomicBool>,
+    /// Item IDs whose custom hotkeys need unregistering (consumed by WindowManager poll).
+    pub pending_hotkey_unregister: Vec<i64>,
     pub toast_message: Option<String>,
     /// true = warning (red), false = info (green).
     pub toast_is_warning: bool,
@@ -278,6 +280,7 @@ impl AppState {
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
+            pending_hotkey_unregister: Vec::new(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
             toast_is_warning: false,
@@ -1570,6 +1573,8 @@ impl AppState {
             source_app_icon: String::new(),
             size: text_size,
             tags: vec![],
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         };
 
         // Write to DB.
@@ -1643,6 +1648,76 @@ impl AppState {
                 }
             }
             Err(e) => log::error!("update_note({id}): {e}"),
+        }
+    }
+
+    /// Set or update the custom hotkey for a clipboard item.
+    pub fn update_item_hotkey(&mut self, id: i64, hotkey: &str, format: &str) {
+        match self.db.set_item_hotkey(id, hotkey, format) {
+            Ok(_) => {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.custom_hotkey = hotkey.to_string();
+                    item.custom_hotkey_format = format.to_string();
+                }
+            }
+            Err(e) => log::error!("update_item_hotkey({id}): {e}"),
+        }
+    }
+
+    /// Clear the custom hotkey for a clipboard item.
+    pub fn clear_item_hotkey(&mut self, id: i64) {
+        match self.db.clear_item_hotkey(id) {
+            Ok(_) => {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.custom_hotkey.clear();
+                    item.custom_hotkey_format.clear();
+                }
+            }
+            Err(e) => log::error!("clear_item_hotkey({id}): {e}"),
+        }
+    }
+
+    /// Get the paste format for a specific item's custom hotkey.
+    pub fn get_item_hotkey_format(&self, id: i64) -> crate::core::types::HotkeyPasteFormat {
+        self.items
+            .iter()
+            .find(|i| i.id == id)
+            .and_then(|item| {
+                if item.custom_hotkey_format.is_empty() {
+                    None
+                } else {
+                    serde_json::from_str(&item.custom_hotkey_format).ok().or(
+                        match item.custom_hotkey_format.as_str() {
+                            "Default" => Some(crate::core::types::HotkeyPasteFormat::Default),
+                            "PlainText" => Some(crate::core::types::HotkeyPasteFormat::PlainText),
+                            "ImageBitmap" => {
+                                Some(crate::core::types::HotkeyPasteFormat::ImageBitmap)
+                            }
+                            "ImagePath" => Some(crate::core::types::HotkeyPasteFormat::ImagePath),
+                            "OcrText" => Some(crate::core::types::HotkeyPasteFormat::OcrText),
+                            "FilePath" => Some(crate::core::types::HotkeyPasteFormat::FilePath),
+                            "Rgb" => Some(crate::core::types::HotkeyPasteFormat::Rgb),
+                            "Hex" => Some(crate::core::types::HotkeyPasteFormat::Hex),
+                            _ => None,
+                        },
+                    )
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// Return the id for a latest-item hotkey slot, independent of active UI filters.
+    pub fn latest_hotkey_item_id(&self, slot: usize) -> Option<i64> {
+        let filters = crate::core::filters::ClipboardFilters::default();
+        match self
+            .db
+            .load_filtered(&filters, slot.saturating_add(1), self.order_by())
+        {
+            Ok(items) => items.get(slot).map(|item| item.id),
+            Err(e) => {
+                log::error!("latest_hotkey_item_id({slot}): {e}");
+                None
+            }
         }
     }
 
@@ -1738,6 +1813,10 @@ impl AppState {
                     log::error!("record_item_deletion({hash}): {e}");
                 }
                 self.sync_dirty.store(true, Ordering::SeqCst);
+            }
+            // If this item had a custom hotkey, schedule it for unregistration.
+            if !item.custom_hotkey.is_empty() {
+                self.pending_hotkey_unregister.push(id);
             }
         } else {
             log::warn!("delete_item({id}): item not found");
@@ -1982,6 +2061,8 @@ mod tests {
             size: full_text.len() as i64,
             tags: Vec::new(),
             meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         }
     }
 
@@ -2008,6 +2089,7 @@ mod tests {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
+            pending_hotkey_unregister: Vec::new(),
             toast_message: None,
             toast_is_warning: false,
             foreground_app_name: String::new(),
@@ -2020,6 +2102,83 @@ mod tests {
             update_phase: UpdatePhase::Idle,
         };
         (state, dirty)
+    }
+
+    #[test]
+    fn item_hotkey_update_is_local_metadata_only() {
+        let (mut state, dirty) = test_state();
+        dirty.store(false, Ordering::SeqCst);
+
+        let mut item = make_item(1, ContentType::PlainText, true, "hello");
+        item.created_at = chrono::Utc::now() - chrono::Duration::days(1);
+        item.updated_at = item.created_at;
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+        let db_item = state.db.get_by_hash(hash).unwrap().unwrap();
+        let item_id = db_item.id;
+        state.items.push(db_item.clone());
+
+        let before_updated_at = db_item.updated_at;
+        let format =
+            serde_json::to_string(&crate::core::types::HotkeyPasteFormat::PlainText).unwrap();
+        state.update_item_hotkey(item_id, "Ctrl+Alt+1", &format);
+
+        let after_set = state.db.get_by_id(item_id).unwrap().unwrap();
+        assert_eq!(after_set.updated_at, before_updated_at);
+        assert_eq!(after_set.custom_hotkey, "Ctrl+Alt+1");
+        assert_eq!(
+            state.get_item_hotkey_format(item_id),
+            crate::core::types::HotkeyPasteFormat::PlainText
+        );
+        assert!(!dirty.load(Ordering::SeqCst));
+
+        state.clear_item_hotkey(item_id);
+        let after_clear = state.db.get_by_id(item_id).unwrap().unwrap();
+        assert_eq!(after_clear.updated_at, before_updated_at);
+        assert!(after_clear.custom_hotkey.is_empty());
+        assert!(!dirty.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn item_hotkey_format_accepts_legacy_variant_names() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(1, ContentType::PlainText, false, "hello");
+        item.custom_hotkey_format = "Hex".to_string();
+        state.items.push(item);
+
+        assert_eq!(
+            state.get_item_hotkey_format(1),
+            crate::core::types::HotkeyPasteFormat::Hex
+        );
+    }
+
+    #[test]
+    fn latest_hotkey_slot_uses_unfiltered_latest_items() {
+        let (mut state, _dirty) = test_state();
+        let base = chrono::Utc::now() - chrono::Duration::hours(1);
+
+        let mut older = make_item(1, ContentType::PlainText, false, "visible older");
+        older.created_at = base;
+        older.updated_at = base;
+        let older_hash = older.content_hash;
+        state.db.upsert(&older).unwrap();
+
+        let mut newer = make_item(2, ContentType::PlainText, false, "hidden newer");
+        newer.created_at = base + chrono::Duration::minutes(10);
+        newer.updated_at = newer.created_at;
+        let newer_hash = newer.content_hash;
+        state.db.upsert(&newer).unwrap();
+
+        let older_id = state.db.get_by_hash(older_hash).unwrap().unwrap().id;
+        let newer_id = state.db.get_by_hash(newer_hash).unwrap().unwrap().id;
+
+        state.filters.set_keyword("visible");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].id, older_id);
+
+        assert_eq!(state.latest_hotkey_item_id(0), Some(newer_id));
+        assert_eq!(state.latest_hotkey_item_id(1), Some(older_id));
     }
 
     // ── should_mark_sync_dirty ──────────────────────────────────────

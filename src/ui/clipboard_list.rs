@@ -13,7 +13,7 @@ use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
 
 use crate::core::i18n_keys::I18nKey;
-use crate::core::types::{ClipboardItem, ContentType};
+use crate::core::types::{ClipboardItem, ContentType, HotkeyPasteFormat};
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
@@ -106,6 +106,12 @@ pub struct ClipboardListView {
     last_selected_id: i64,
     theme: ClippiTheme,
     last_lang_version: u64,
+    /// WindowManager entity for hotkey recording coordination.
+    window_manager: Entity<crate::ui::window_manager::WindowManager>,
+    /// ID of item currently in hotkey-recording mode (-1 = none).
+    recording_hotkey_id: i64,
+    /// Serialized paste format selected while recording an item hotkey.
+    recording_hotkey_format: String,
 }
 
 impl ClipboardListView {
@@ -115,6 +121,7 @@ impl ClipboardListView {
         theme: ClippiTheme,
         window: &mut Window,
         cx: &mut App,
+        window_manager: Entity<crate::ui::window_manager::WindowManager>,
     ) -> Self {
         let card_height_mode = state.read(cx).settings.card_height_mode.clone();
         let item_sizes = Rc::new(Self::compute_sizes(&items, &card_height_mode));
@@ -154,6 +161,9 @@ impl ClipboardListView {
             last_selected_id: -1,
             theme,
             last_lang_version: crate::core::i18n::lang_version(),
+            window_manager,
+            recording_hotkey_id: -1,
+            recording_hotkey_format: String::new(),
         }
     }
 
@@ -577,6 +587,10 @@ impl ClipboardListView {
     /// Returns `true` if the event was consumed (panels dismissed or selection reduced),
     /// `false` if the window should close.
     pub fn handle_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.recording_hotkey_id > 0 {
+            self.cancel_hotkey_recording(cx);
+            return true;
+        }
         if self.has_any_panel_or_editing() {
             self.dismiss_all_panels(cx);
             self.editing_note_id = -1;
@@ -633,6 +647,7 @@ impl ClipboardListView {
             || self.tag_picker_visible
             || self.confirm_dialog.is_some()
             || self.editing_note_id > 0
+            || self.recording_hotkey_id > 0
     }
 
     pub fn tag_picker_visible(&self) -> bool {
@@ -775,6 +790,31 @@ impl ClipboardListView {
         }
     }
 
+    fn inline_locked_item_id(&self) -> Option<i64> {
+        if self.editing_note_id > 0 {
+            Some(self.editing_note_id)
+        } else if self.recording_hotkey_id > 0 {
+            Some(self.recording_hotkey_id)
+        } else {
+            None
+        }
+    }
+
+    fn lock_selection_to_item(&mut self, item_id: i64, cx: &mut Context<Self>) {
+        let Some(index) = self.items.iter().position(|item| item.id == item_id) else {
+            return;
+        };
+        self.selected_ids.clear();
+        self.selected_ids.push(item_id);
+        self.selected_index = Some(index);
+        self.anchor_index = Some(index);
+        self.selected_count = 1;
+        self.hovered_index = Some(index);
+        self.state.update(cx, |state, _cx| {
+            state.select_single(item_id);
+        });
+    }
+
     /// Start editing the note for an item.
     /// `initial_text` — from item.note (hover toolbar) or "" (context menu).
     fn start_note_edit(
@@ -785,12 +825,82 @@ impl ClipboardListView {
         cx: &mut Context<Self>,
     ) {
         self.editing_note_id = id;
+        self.lock_selection_to_item(id, cx);
         let text = SharedString::from(initial_text.to_string());
         self.note_input.update(cx, move |input, cx| {
             input.set_value(text, window, cx);
             // --- Auto-focus so user can type immediately ---
             input.focus_handle(cx).focus(window);
         });
+        cx.notify();
+    }
+
+    /// Start recording a custom hotkey for the given item.
+    fn start_hotkey_recording(&mut self, id: i64, _window: &mut Window, cx: &mut Context<Self>) {
+        self.context_menu_visible = false;
+        self.context_menu_item = None;
+        self.tag_picker_visible = false;
+        self.tag_picker_item_id = -1;
+        self.confirm_dialog = None;
+        self.hovered_index = None;
+        let format = self
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.custom_hotkey_format.clone())
+            .filter(|format| !format.is_empty())
+            .unwrap_or_else(|| {
+                serde_json::to_string(&HotkeyPasteFormat::Default).unwrap_or_default()
+            });
+        self.recording_hotkey_format = format.clone();
+        self.window_manager.update(cx, |wm, cx| {
+            wm.start_item_hotkey_recording(id, format, cx);
+        });
+        self.recording_hotkey_id = id;
+        self.lock_selection_to_item(id, cx);
+        cx.notify();
+    }
+
+    /// Cancel hotkey recording and restore normal card view.
+    fn cancel_hotkey_recording(&mut self, cx: &mut Context<Self>) {
+        self.window_manager
+            .update(cx, |wm, _cx| wm.cancel_custom_recording());
+        self.recording_hotkey_id = -1;
+        self.recording_hotkey_format.clear();
+        self.hovered_index = None;
+        cx.notify();
+    }
+
+    fn confirm_hotkey_recording(&mut self, cx: &mut Context<Self>) {
+        self.window_manager
+            .update(cx, |wm, _cx| wm.cancel_custom_recording());
+        self.recording_hotkey_id = -1;
+        self.recording_hotkey_format.clear();
+        self.hovered_index = None;
+        cx.notify();
+    }
+
+    fn update_recording_hotkey_format(
+        &mut self,
+        format: HotkeyPasteFormat,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recording_hotkey_id <= 0 {
+            return;
+        }
+        let serialized = serde_json::to_string(&format).unwrap_or_default();
+        self.recording_hotkey_format = serialized.clone();
+        self.window_manager.update(cx, |wm, _cx| {
+            wm.update_recording_item_hotkey_format(serialized);
+        });
+        cx.notify();
+    }
+
+    /// Called by card when user triggers commit/cancel in the recording UI.
+    pub(crate) fn finish_hotkey_recording_ui(&mut self, cx: &mut Context<Self>) {
+        self.recording_hotkey_id = -1;
+        self.recording_hotkey_format.clear();
+        self.hovered_index = None;
         cx.notify();
     }
 
@@ -809,6 +919,7 @@ impl ClipboardListView {
             self.sync_items_from_state(cx);
         }
         self.editing_note_id = -1;
+        self.hovered_index = None;
         // --- Return focus to the list so keyboard navigation continues to work ---
         self.focus_handle.focus(window);
         cx.notify();
@@ -894,6 +1005,21 @@ impl ClipboardListView {
             "edit_note" => {
                 if let Some(ref item) = self.context_menu_item {
                     self.start_note_edit(item.id, &item.note.clone(), _window, cx);
+                }
+            }
+            "set_hotkey" => {
+                if let Some(ref item) = self.context_menu_item {
+                    self.start_hotkey_recording(item.id, _window, cx);
+                }
+            }
+            "remove_hotkey" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let id = item.id;
+                    self.state.update(cx, |s, _cx| s.clear_item_hotkey(id));
+                    self.window_manager.update(cx, |wm, _cx| {
+                        wm.unregister_item_hotkey_if_set(id);
+                    });
+                    self.sync_items_from_state(cx);
                 }
             }
             "toggle_favorite" => {
@@ -1201,6 +1327,26 @@ impl Render for ClipboardListView {
                     let ctrl = primary_modifier_pressed(event.keystroke.modifiers);
                     let shift = event.keystroke.modifiers.shift;
 
+                    if this.recording_hotkey_id > 0 {
+                        match key {
+                            "escape" => {
+                                this.cancel_hotkey_recording(cx);
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "enter" => {
+                                this.confirm_hotkey_recording(cx);
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "up" | "down" | "pageup" | "pagedown" | "home" | "end" => {
+                                cx.stop_propagation();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // --- Ctrl+Key shortcuts ---
                     if ctrl {
                         match key {
@@ -1324,10 +1470,23 @@ impl Render for ClipboardListView {
             .overflow_hidden()
             .rounded_b(px(12.))
             .bg(bg)
+            .on_scroll_wheel({
+                let list_for_scroll_lock = list_entity.clone();
+                move |_ev, _window, cx| {
+                    list_for_scroll_lock.update(cx, |this, cx| {
+                        if this.inline_locked_item_id().is_some() {
+                            cx.stop_propagation();
+                        }
+                    });
+                }
+            })
             .on_mouse_move({
                 let list_for_clear = list_entity.clone();
                 move |_ev, _window, cx| {
                     list_for_clear.update(cx, |this, cx| {
+                        if this.inline_locked_item_id().is_some() {
+                            return;
+                        }
                         if this.hovered_index.is_some() {
                             this.hovered_index = None;
                             cx.notify();
@@ -1377,6 +1536,10 @@ impl Render for ClipboardListView {
                                     this.state.read(cx).can_merge_selected_items();
                                 let hovered_index = this.hovered_index;
                                 let editing_note_id = this.editing_note_id;
+                                let recording_hotkey_id = this.recording_hotkey_id;
+                                let recording_hotkey_format =
+                                    this.recording_hotkey_format.clone();
+                                let inline_locked_item_id = this.inline_locked_item_id();
                                 let note_input = this.note_input.clone();
                                 let (
                                     show_source_app,
@@ -1396,11 +1559,20 @@ impl Render for ClipboardListView {
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
                                         let item_id = item.id;
-                                        let selected = this.selected_ids.contains(&item_id);
-                                        let is_hovered = hovered_index == Some(i);
+                                        let inline_locked = inline_locked_item_id == Some(item_id);
+                                        let selected =
+                                            inline_locked || this.selected_ids.contains(&item_id);
+                                        let is_hovered = inline_locked
+                                            || (inline_locked_item_id.is_none()
+                                                && hovered_index == Some(i));
                                         let list_view = list_entity.clone();
                                         let focus_handle = this.focus_handle.clone();
                                         let item_clone = item.clone();
+                                        let hotkey_format = if recording_hotkey_id == item_id {
+                                            recording_hotkey_format.clone()
+                                        } else {
+                                            item_clone.custom_hotkey_format.clone()
+                                        };
 
                                         let click_handler = Rc::new(
                                             move |idx: usize,
@@ -1442,11 +1614,34 @@ impl Render for ClipboardListView {
                                                 .h_full()
                                                 .overflow_hidden()
                                                 .py(px(5.))
+                                                .on_scroll_wheel({
+                                                    let list_for_scroll_lock =
+                                                        list_entity.clone();
+                                                    move |_ev, _window, cx| {
+                                                        list_for_scroll_lock.update(
+                                                            cx,
+                                                            |this, cx| {
+                                                                if this
+                                                                    .inline_locked_item_id()
+                                                                    .is_some()
+                                                                {
+                                                                    cx.stop_propagation();
+                                                                }
+                                                            },
+                                                        );
+                                                    }
+                                                })
                                                 .on_mouse_move({
                                                     move |ev, _window, cx| {
                                                         cx.stop_propagation();
                                                         let modifiers = ev.modifiers;
                                                         list_for_hover.update(cx, |this, cx| {
+                                                            if this
+                                                                .inline_locked_item_id()
+                                                                .is_some()
+                                                            {
+                                                                return;
+                                                            }
                                                             if this.hovered_index != Some(i) {
                                                                 this.hovered_index = Some(i);
                                                                 // --- Hover-to-select: when ≤1 item ---
@@ -1550,6 +1745,22 @@ impl Render for ClipboardListView {
                                                     .can_merge_selection(can_merge_selection)
                                                     .selection_order(selection_order)
                                                     .editing(editing_note_id == item_id)
+                                                    .recording_hotkey(recording_hotkey_id == item_id)
+                                                    .hotkey_paste_format(hotkey_format)
+                                                    .on_hotkey_format_change({
+                                                        let list_for_format =
+                                                            list_for_note_commit.clone();
+                                                        move |format, _window, cx| {
+                                                            list_for_format.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.update_recording_hotkey_format(
+                                                                        format, cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                        }
+                                                    })
                                                     .on_commit_note({
                                                         let list_for_commit =
                                                             list_for_note_commit.clone();
@@ -1614,6 +1825,22 @@ impl Render for ClipboardListView {
                                                     } else {
                                                         card.on_click(click_handler)
                                                     }
+                                                    .on_commit_hotkey({
+                                                        let lst = list_for_note_commit.clone();
+                                                        move |_window, cx| {
+                                                            lst.update(cx, |this, cx| {
+                                                                this.cancel_hotkey_recording(cx);
+                                                            });
+                                                        }
+                                                    })
+                                                    .on_cancel_hotkey({
+                                                        let lst = list_for_note_commit.clone();
+                                                        move |_window, cx| {
+                                                            lst.update(cx, |this, cx| {
+                                                                this.cancel_hotkey_recording(cx);
+                                                            });
+                                                        }
+                                                    })
                                                 })
                                                 .into_any_element(),
                                         )
@@ -1631,10 +1858,12 @@ impl Render for ClipboardListView {
                             .right(px(0.))
                             .bottom(px(10.))
                             .w(px(CLIPBOARD_SCROLLBAR_WIDTH))
-                            .child(
-                                Scrollbar::vertical(&self.scroll_handle)
-                                    .scrollbar_show(ScrollbarShow::Scrolling),
-                            ),
+                            .when(self.inline_locked_item_id().is_none(), |el| {
+                                el.child(
+                                    Scrollbar::vertical(&self.scroll_handle)
+                                        .scrollbar_show(ScrollbarShow::Scrolling),
+                                )
+                            }),
                     )
             })
             .into_any_element()

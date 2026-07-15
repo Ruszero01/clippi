@@ -287,6 +287,12 @@ pub struct WindowManager {
 
     /// When Some(app_name), the current recording is for a paste shortcut (not global hotkey).
     pub recording_paste_shortcut_app: Option<String>,
+    /// When Some(id), recording a per-item custom hotkey for this item.
+    recording_item_hotkey_id: Option<i64>,
+    /// Paste format selected during per-item hotkey recording.
+    recording_item_hotkey_format: Option<String>,
+    /// When Some(slot), recording a latest-N hotkey for this slot (0-9).
+    recording_latest_slot: Option<usize>,
 
     // --- Dependencies ---
     state: Entity<AppState>,
@@ -392,6 +398,9 @@ impl WindowManager {
             saved_h: settings.saved_window_height,
             blacklist: settings.hotkey_blacklist.clone(),
             recording_paste_shortcut_app: None,
+            recording_item_hotkey_id: None,
+            recording_item_hotkey_format: None,
+            recording_latest_slot: None,
             state,
             clipboard_service,
             sync_service,
@@ -513,6 +522,9 @@ impl WindowManager {
         // --- 3. Hotkey blacklist — dynamic register/unregister ---
         self.poll_blacklist();
 
+        // --- 3b. Clean up hotkeys for deleted items ---
+        self.poll_hotkey_cleanup(cx);
+
         // --- 4. Clipboard changes -> update state + notify ---
         self.poll_clipboard(cx);
 
@@ -562,6 +574,45 @@ impl WindowManager {
                     }
                 }
                 HotkeyEvent::QuickAction(action) => self.handle_quick_action(action, cx),
+                HotkeyEvent::CustomItem(item_id) => {
+                    // Dismiss quick window if visible.
+                    if self.quick_visible {
+                        self.dismiss_quick_window(cx);
+                    }
+                    let state = self.state.clone();
+                    let format = state.read(cx).get_item_hotkey_format(item_id);
+                    state.update(cx, move |s, _cx| {
+                        Self::paste_item_with_format(s, item_id, format);
+                    });
+                }
+                HotkeyEvent::LatestItem(slot) => {
+                    if self.quick_visible {
+                        self.dismiss_quick_window(cx);
+                    }
+                    let state = self.state.clone();
+                    let item_id = {
+                        let s = state.read(cx);
+                        s.latest_hotkey_item_id(slot)
+                    };
+                    let format = state
+                        .read(cx)
+                        .settings
+                        .latest_hotkeys
+                        .get(slot)
+                        .and_then(|e| {
+                            if e.paste_format.is_empty() {
+                                None
+                            } else {
+                                serde_json::from_str(&e.paste_format).ok()
+                            }
+                        })
+                        .unwrap_or(crate::core::types::HotkeyPasteFormat::Default);
+                    if let Some(id) = item_id {
+                        state.update(cx, move |s, _cx| {
+                            Self::paste_item_with_format(s, id, format);
+                        });
+                    }
+                }
             }
         }
     }
@@ -624,11 +675,35 @@ impl WindowManager {
                     return;
                 }
 
+                // Check if recording for a per-item custom hotkey.
+                if let Some(item_id) = self.recording_item_hotkey_id.take() {
+                    let format = self.recording_item_hotkey_format.take().unwrap_or_default();
+                    hk.finish_recording();
+                    if !new_hotkey.is_empty() {
+                        self.commit_item_hotkey(item_id, &new_hotkey, &format, cx);
+                    } else {
+                        self.cancel_custom_recording();
+                    }
+                    return;
+                }
+
+                // Check if recording for a latest-N slot hotkey.
+                if let Some(slot) = self.recording_latest_slot.take() {
+                    hk.finish_recording();
+                    if !new_hotkey.is_empty() {
+                        self.commit_latest_hotkey(slot, &new_hotkey, cx);
+                    } else {
+                        self.cancel_custom_recording();
+                    }
+                    return;
+                }
+
                 if !new_hotkey.is_empty() {
                     match hk.update_hotkey(&new_hotkey) {
                         Ok(()) => {
                             // --- update_hotkey already registered the new hotkey. ---
                             hk.finish_recording();
+                            hk.register();
                             self.state.update(cx, |state, _cx| {
                                 state.settings.hotkey = new_hotkey.clone();
                                 state.settings.save();
@@ -669,6 +744,20 @@ impl WindowManager {
             }
         } else if let Some(ref mut hk) = self.hotkey {
             hk.register();
+        }
+    }
+
+    /// Unregister custom hotkeys for deleted items.
+    fn poll_hotkey_cleanup(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<i64> = self.state.update(cx, |state, _cx| {
+            std::mem::take(&mut state.pending_hotkey_unregister)
+        });
+        if !ids.is_empty() {
+            if let Some(ref mut hk) = self.hotkey {
+                for id in ids {
+                    hk.unregister_item_hotkey(id);
+                }
+            }
         }
     }
 
@@ -1322,6 +1411,25 @@ impl WindowManager {
                 None
             }
         };
+        // Reload custom hotkeys from persisted state.
+        if let Some(ref mut hk) = self.hotkey {
+            let state = self.state.read(cx);
+            let item_hotkeys: Vec<(i64, String)> = state
+                .items
+                .iter()
+                .filter(|it| !it.custom_hotkey.is_empty())
+                .map(|it| (it.id, it.custom_hotkey.clone()))
+                .collect();
+            let latest_hotkeys: Vec<(usize, String)> = state
+                .settings
+                .latest_hotkeys
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| !e.hotkey.is_empty())
+                .map(|(i, e)| (i, e.hotkey.clone()))
+                .collect();
+            hk.reload_custom_hotkeys(&item_hotkeys, &latest_hotkeys);
+        }
     }
 
     /// Release memory without changing window visibility.
@@ -1727,6 +1835,40 @@ impl WindowManager {
         }
         self.clear_quick_modifiers(cx);
         self.dismiss_quick_window(cx);
+    }
+
+    /// Paste an item using the given format override (static, called from state.update).
+    fn paste_item_with_format(
+        state: &mut crate::state::app::AppState,
+        id: i64,
+        format: crate::core::types::HotkeyPasteFormat,
+    ) {
+        match format {
+            crate::core::types::HotkeyPasteFormat::Default => {
+                state.paste_item(id, state.settings.copy_as_plain_text);
+            }
+            crate::core::types::HotkeyPasteFormat::PlainText => {
+                state.paste_item_plain(id);
+            }
+            crate::core::types::HotkeyPasteFormat::ImageBitmap => {
+                state.paste_image_as_bitmap(id);
+            }
+            crate::core::types::HotkeyPasteFormat::ImagePath => {
+                state.paste_image_path(id);
+            }
+            crate::core::types::HotkeyPasteFormat::OcrText => {
+                state.paste_ocr(id);
+            }
+            crate::core::types::HotkeyPasteFormat::FilePath => {
+                state.paste_file_path(id);
+            }
+            crate::core::types::HotkeyPasteFormat::Rgb => {
+                state.paste_as_rgb(id);
+            }
+            crate::core::types::HotkeyPasteFormat::Hex => {
+                state.paste_as_hex(id);
+            }
+        }
     }
 
     fn clear_quick_modifiers(&mut self, cx: &mut Context<Self>) {
@@ -2195,6 +2337,107 @@ impl WindowManager {
             hk.finish_recording();
             hk.register();
         }
+    }
+
+    /// Start recording a per-item custom hotkey.
+    pub fn start_item_hotkey_recording(&mut self, id: i64, format: String, cx: &mut Context<Self>) {
+        self.recording_item_hotkey_id = Some(id);
+        self.recording_item_hotkey_format = Some(format);
+        self.recording_latest_slot = None;
+        if let Some(ref mut hk) = self.hotkey {
+            hk.start_custom_recording();
+            self.start_recording_poll(cx);
+        }
+    }
+
+    pub fn update_recording_item_hotkey_format(&mut self, format: String) {
+        if self.recording_item_hotkey_id.is_some() {
+            self.recording_item_hotkey_format = Some(format);
+        }
+    }
+
+    /// Start recording a latest-N slot hotkey.
+    pub fn start_latest_slot_recording(&mut self, slot: usize, cx: &mut Context<Self>) {
+        self.recording_latest_slot = Some(slot);
+        self.recording_item_hotkey_id = None;
+        self.recording_item_hotkey_format = None;
+        if let Some(ref mut hk) = self.hotkey {
+            hk.start_custom_recording();
+            self.start_recording_poll(cx);
+        }
+    }
+
+    /// Unregister a latest-N slot hotkey (called from settings popup clear button).
+    pub fn unregister_latest_slot_hotkey(&mut self, slot: usize) {
+        if let Some(ref mut hk) = self.hotkey {
+            hk.unregister_latest_hotkey(slot);
+        }
+    }
+
+    /// Unregister a per-item hotkey (called when item is deleted or hotkey cleared).
+    pub fn unregister_item_hotkey_if_set(&mut self, id: i64) {
+        if let Some(ref mut hk) = self.hotkey {
+            hk.unregister_item_hotkey(id);
+        }
+    }
+
+    /// Cancel any custom recording (per-item or latest-N).
+    pub fn cancel_custom_recording(&mut self) {
+        self.recording_item_hotkey_id = None;
+        self.recording_item_hotkey_format = None;
+        self.recording_latest_slot = None;
+        if let Some(ref mut hk) = self.hotkey {
+            hk.finish_recording();
+        }
+    }
+
+    /// Register the item hotkey that was just recorded.
+    fn commit_item_hotkey(&mut self, id: i64, hotkey: &str, format: &str, cx: &mut Context<Self>) {
+        let state = self.state.clone();
+        if let Some(ref mut hk) = self.hotkey {
+            match hk.register_item_hotkey(id, hotkey) {
+                Ok(()) => {
+                    state.update(cx, move |s, _cx| {
+                        s.update_item_hotkey(id, hotkey, format);
+                    });
+                }
+                Err(e) => {
+                    state.update(cx, |s, _cx| {
+                        s.toast_message = Some(e);
+                        s.toast_is_warning = true;
+                    });
+                }
+            }
+        }
+        self.cancel_custom_recording();
+        cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+        cx.notify();
+    }
+
+    /// Register the latest-N slot hotkey that was just recorded.
+    fn commit_latest_hotkey(&mut self, slot: usize, hotkey: &str, cx: &mut Context<Self>) {
+        let state = self.state.clone();
+        if let Some(ref mut hk) = self.hotkey {
+            match hk.register_latest_hotkey(slot, hotkey) {
+                Ok(()) => {
+                    state.update(cx, |s, _cx| {
+                        if slot < s.settings.latest_hotkeys.len() {
+                            s.settings.latest_hotkeys[slot].hotkey = hotkey.to_string();
+                            s.settings.save();
+                        }
+                    });
+                }
+                Err(e) => {
+                    state.update(cx, |s, _cx| {
+                        s.toast_message = Some(e);
+                        s.toast_is_warning = true;
+                    });
+                }
+            }
+        }
+        self.cancel_custom_recording();
+        cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+        cx.notify();
     }
 
     pub fn toggle_sync_auto_enabled(&mut self, cx: &mut Context<Self>) {

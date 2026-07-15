@@ -103,8 +103,16 @@ impl RootView {
         let items = app_state.items.clone();
         let window_appearance = window.appearance();
         let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window_appearance));
-        let list_view =
-            cx.new(|cx| ClipboardListView::new(items, state.clone(), theme.clone(), window, cx));
+        let list_view = cx.new(|cx| {
+            ClipboardListView::new(
+                items,
+                state.clone(),
+                theme.clone(),
+                window,
+                cx,
+                window_manager.clone(),
+            )
+        });
         list_view.update(cx, |list, _cx| list.focus(window));
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
         let search_bar = cx
@@ -180,9 +188,15 @@ impl RootView {
                 WindowManagerEvent::HotkeyRecordingComplete => {
                     // --- Notify SettingsPanel so it re-renders with the updated ---
                     // --- hotkey display and recording state from AppState. ---
+                    let items = this.state.read(cx).items.clone();
+                    this.list_view.update(cx, |list, cx| {
+                        list.finish_hotkey_recording_ui(cx);
+                        list.set_items(items, cx);
+                    });
                     this.settings_panel.update(cx, |_panel, cx| {
                         cx.notify();
                     });
+                    cx.notify();
                 }
                 WindowManagerEvent::SyncChanged => {
                     this.settings_panel.update(cx, |_panel, cx| {
