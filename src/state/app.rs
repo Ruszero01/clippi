@@ -427,6 +427,13 @@ impl AppState {
         self.reload_items();
     }
 
+    /// Toggle hotkeys-only filter and reload visible items.
+    pub fn toggle_hotkeys_filter(&mut self) {
+        self.filters.toggle_hotkeys_only();
+        self.selected_ids.clear();
+        self.reload_items();
+    }
+
     /// Toggle a tag filter and reload visible items.
     pub fn toggle_tag_filter(&mut self, tag_id: i64) {
         self.filters.toggle_tag(tag_id);

@@ -4,7 +4,9 @@
 //! --- three icon buttons on the right (fav filter, pin, settings). ---
 //! --- The drag area covers the left portion (width - 92px). ---
 
+use gpui::prelude::*;
 use gpui::*;
+use gpui_component::tooltip::Tooltip;
 use std::sync::{Arc, OnceLock};
 
 use crate::core::i18n_keys::I18nKey;
@@ -69,13 +71,17 @@ impl EventEmitter<TitlebarEvent> for Titlebar {}
 impl Render for Titlebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &self.theme;
+        let hotkeys_active = self.state.read(cx).filters.is_hotkeys_active();
         let fav_active = self.state.read(cx).filters.is_favorites_active();
         let pinned = self.pinned;
         let accent = theme.accent;
         let text_2 = theme.text_2;
         let fav_color = theme.fav_color;
-        let state = self.state.clone();
-        let list_view = self.list_view.clone();
+        let hotkey_state = self.state.clone();
+        let hotkey_list_view = self.list_view.clone();
+        let fav_state = self.state.clone();
+        let fav_list_view = self.list_view.clone();
+        let hotkey_titlebar = cx.entity().clone();
         let fav_titlebar = cx.entity().clone();
         let pin_titlebar = cx.entity().clone();
         let settings_titlebar = cx.entity().clone();
@@ -126,21 +132,58 @@ impl Render for Titlebar {
                     .items_center()
                     .gap(px(2.))
                     .pr(px(4.))
-                    // --- Fav filter button (28x28) ---
+                    // --- Custom hotkey filter button (28x28) ---
                     .child(
                         div()
+                            .id("titlebar-hotkeys-filter")
                             .w(px(28.))
                             .h(px(28.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor(CursorStyle::PointingHand)
+                            .tooltip(|window, cx| {
+                                let label = I18nKey::TitlebarTooltipHotkeys.text();
+                                Tooltip::element(move |_window, _cx| div().child(label))
+                                    .build(window, cx)
+                            })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                let items = state.update(cx, |state, _cx| {
+                                let items = hotkey_state.update(cx, |state, _cx| {
+                                    state.toggle_hotkeys_filter();
+                                    state.items.clone()
+                                });
+                                hotkey_list_view.update(cx, |list, cx| list.set_items(items, cx));
+                                hotkey_titlebar.update(cx, |_titlebar, cx| cx.notify());
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_family("iconfont")
+                                    .text_color(if hotkeys_active { accent } else { text_2 })
+                                    .child("\u{e66b}"),
+                            ),
+                    )
+                    // --- Fav filter button (28x28) ---
+                    .child(
+                        div()
+                            .id("titlebar-favorites-filter")
+                            .w(px(28.))
+                            .h(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .tooltip(|window, cx| {
+                                let label = I18nKey::TitlebarTooltipFavorites.text();
+                                Tooltip::element(move |_window, _cx| div().child(label))
+                                    .build(window, cx)
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                let items = fav_state.update(cx, |state, _cx| {
                                     state.toggle_favorites_filter();
                                     state.items.clone()
                                 });
-                                list_view.update(cx, |list, cx| list.set_items(items, cx));
+                                fav_list_view.update(cx, |list, cx| list.set_items(items, cx));
                                 fav_titlebar.update(cx, |_titlebar, cx| cx.notify());
                             })
                             .child(
@@ -154,12 +197,22 @@ impl Render for Titlebar {
                     // --- Pin button (28x28) ---
                     .child(
                         div()
+                            .id("titlebar-pin")
                             .w(px(28.))
                             .h(px(28.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor(CursorStyle::PointingHand)
+                            .tooltip(move |window, cx| {
+                                let label = if pinned {
+                                    I18nKey::TitlebarTooltipUnpin.text()
+                                } else {
+                                    I18nKey::TitlebarTooltipPin.text()
+                                };
+                                Tooltip::element(move |_window, _cx| div().child(label))
+                                    .build(window, cx)
+                            })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 pin_titlebar.update(cx, |_titlebar, cx| {
                                     cx.emit(TitlebarEvent::TogglePin);
