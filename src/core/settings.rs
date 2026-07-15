@@ -82,7 +82,7 @@ pub struct AppSettings {
     pub window_position_mode: String, // "center" | "follow" | "remember"
     pub saved_window_x: i32,
     pub saved_window_y: i32,
-    pub card_height_mode: String, // "low" | "medium" | "high" | "auto"
+    pub card_height_mode: String, // "low" | "medium" | "high" | "single" | "auto"
     #[serde(default)]
     pub silent_start: bool,
     #[serde(default)]

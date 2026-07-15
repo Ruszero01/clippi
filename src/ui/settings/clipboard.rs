@@ -57,6 +57,7 @@ impl SettingsPanel {
                         ("high", I18nKey::CardHeightTall.text()),
                         ("medium", I18nKey::CardHeightMed.text()),
                         ("low", I18nKey::CardHeightShort.text()),
+                        ("single", I18nKey::CardHeightSingle.text()),
                         ("auto", I18nKey::CardHeightAuto.text()),
                     ],
                     &card_height_mode,

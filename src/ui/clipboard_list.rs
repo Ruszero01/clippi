@@ -1,7 +1,7 @@
 //! --- Clipboard list — variable-height virtual scrolling list. ---
 //!
 //! --- Uses `gpui_component::v_virtual_list` to efficiently render thousands ---
-//! --- of clipboard items with dynamic card heights (68— 28px). ---
+//! --- of clipboard items with dynamic card heights (32—128px). ---
 
 use std::rc::Rc;
 
@@ -1110,10 +1110,15 @@ impl ClipboardListView {
     }
 
     fn compute_sizes(items: &[ClipboardItem], mode: &str) -> Vec<Size<Pixels>> {
+        let row_gap = if mode == "single" {
+            4.0
+        } else {
+            CLIPBOARD_ROW_VERTICAL_SPACE
+        };
         let mut sizes: Vec<_> = items
             .iter()
             .map(|item| {
-                let h = estimate_card_height(item, mode) + CLIPBOARD_ROW_VERTICAL_SPACE;
+                let h = estimate_card_height(item, mode) + row_gap;
                 size(px(308.), px(h))
             })
             .collect();
@@ -1392,6 +1397,7 @@ impl Render for ClipboardListView {
                                         state.filters.keyword_terms(),
                                     )
                                 };
+                                let card_height_mode = this.card_height_mode.clone();
                                 range
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
@@ -1541,6 +1547,7 @@ impl Render for ClipboardListView {
                                                     )
                                                     .theme(theme.clone())
                                                     .hovered(is_hovered)
+                                                    .height_mode(card_height_mode.clone())
                                                     .show_source_app(show_source_app)
                                                     .show_original_on_hover(show_original_on_hover)
                                                     .show_page_title(show_page_title)

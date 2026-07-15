@@ -92,6 +92,7 @@ define_i18n! {
     CardHeightTall:         ("高", "Tall"),
     CardHeightMed:          ("中", "Med"),
     CardHeightShort:        ("低", "Short"),
+    CardHeightSingle:       ("单行", "Single"),
     CardHeightAuto:         ("自动", "Auto"),
     SettingShowSource:      ("显示来源应用", "Show source app"),
     DescShowSourceOn:       ("显示来源应用图标", "Show source app icon"),

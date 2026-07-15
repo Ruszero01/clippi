@@ -6,7 +6,8 @@
 //! - Fav indicator bar (left edge, 3px, fav-color, scales with card height)
 //! - Selection badge (top-left, 12x12, accent bg)
 //! - Bottom info row: tag pills + time label (9px font, 18px pills)
-//! - Dynamic height: 68/96/128px based on content type and card-height-mode
+//! - Dynamic height: 32/68/96/128px based on content type and card-height-mode
+//!   (`single` uses a compact one-line layout)
 
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -333,6 +334,46 @@ fn image_display_name(item: &ClipboardItem) -> String {
         .to_string()
 }
 
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One-line preview string for the dense `single` card height mode.
+fn single_line_preview_text(item: &ClipboardItem, show_page_title: bool) -> String {
+    match item.display_kind() {
+        DisplayKind::Link => {
+            if show_page_title {
+                let rd = RichData::from_json(&item.rich_data);
+                if let Some(title) = rd.page_title.filter(|t| !t.is_empty()) {
+                    return format!("{} - {}", url_site_name(&item.full_text), title);
+                }
+            }
+            item.full_text.clone()
+        }
+        DisplayKind::Path | DisplayKind::Color => item.full_text.clone(),
+        DisplayKind::Email | DisplayKind::Phone => {
+            mask_sensitive_preview(&item.full_text, &item.meta_type)
+        }
+        DisplayKind::Image => {
+            let name = image_display_name(item);
+            if item.image_width > 0 && item.image_height > 0 {
+                format!("{} ({}×{})", name, item.image_width, item.image_height)
+            } else {
+                name
+            }
+        }
+        DisplayKind::File => collapse_whitespace(&item.full_text),
+        DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf => {
+            let text = match rich_preview(item) {
+                RichPreview::StyledHtml { visible_text, .. } => visible_text,
+                RichPreview::Html(s) | RichPreview::Markdown(s) | RichPreview::Plain(s) => s,
+            };
+            collapse_whitespace(&text)
+        }
+        DisplayKind::PlainText => collapse_whitespace(&item.full_text),
+    }
+}
+
 /// Get a cached file system icon for a given file path.
 /// Icons are cached by extension (or "folder" for dirs) in `images_dir()/file_icons/`.
 /// Check if a favicon is cached for a URL's domain.
@@ -581,6 +622,9 @@ fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
 
 /// Compute estimated card height for the virtual list.
 pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32 {
+    if card_height_mode == "single" {
+        return 32.0;
+    }
     if !item.note.is_empty() {
         return 68.0;
     }
@@ -664,6 +708,8 @@ pub struct ClipboardCard {
     show_page_title: bool,
     image_cache: Option<Entity<RetainAllImageCache>>,
     search_terms: Vec<String>,
+    /// Card height mode from settings (`low`/`medium`/`high`/`single`/`auto`).
+    height_mode: String,
 }
 
 impl ClipboardCard {
@@ -688,6 +734,7 @@ impl ClipboardCard {
             show_page_title: false,
             image_cache: None,
             search_terms: Vec::new(),
+            height_mode: String::new(),
         }
     }
 
@@ -778,6 +825,11 @@ impl ClipboardCard {
         self.search_terms = terms;
         self
     }
+
+    pub fn height_mode(mut self, mode: impl Into<String>) -> Self {
+        self.height_mode = mode.into();
+        self
+    }
 }
 
 impl RenderOnce for ClipboardCard {
@@ -802,7 +854,35 @@ impl RenderOnce for ClipboardCard {
             show_page_title,
             image_cache,
             search_terms,
+            height_mode,
         } = self;
+
+        if height_mode == "single" {
+            return render_single_line_card(
+                item,
+                selected,
+                index,
+                theme,
+                selection_order,
+                on_click,
+                is_hovered,
+                selected_count,
+                can_merge_selection,
+                on_toolbar_action,
+                on_double_click,
+                editing,
+                note_input,
+                on_commit_note,
+                show_source_app,
+                show_original_on_hover,
+                show_page_title,
+                image_cache,
+                search_terms,
+                window,
+                cx,
+            )
+            .into_any_element();
+        }
 
         let surface = theme.surface;
         let divider = theme.divider;
@@ -2152,8 +2232,264 @@ impl RenderOnce for ClipboardCard {
                         }),
                 ),
             )
+            .into_any_element()
         } else {
-            card
+            card.into_any_element()
         }
     }
+}
+
+fn render_single_line_card(
+    item: Rc<ClipboardItem>,
+    selected: bool,
+    index: usize,
+    theme: ClippiTheme,
+    selection_order: usize,
+    on_click: Option<CardClickHandler>,
+    is_hovered: bool,
+    selected_count: usize,
+    can_merge_selection: bool,
+    on_toolbar_action: Option<CardActionHandler>,
+    on_double_click: Option<CardIndexHandler>,
+    editing: bool,
+    note_input: Option<Entity<InputState>>,
+    on_commit_note: Option<CardWindowHandler>,
+    show_source_app: bool,
+    show_original_on_hover: bool,
+    show_page_title: bool,
+    image_cache: Option<Entity<RetainAllImageCache>>,
+    search_terms: Vec<String>,
+    _window: &mut Window,
+    _cx: &mut App,
+) -> Div {
+    let surface = theme.surface;
+    let divider = theme.divider;
+    let accent = theme.accent;
+    let fav_color = theme.fav_color;
+    let tag_bg = theme.tag_bg;
+    let text_1 = theme.text_1;
+    let text_2 = theme.text_2;
+    let is_dark = theme.bg == rgb(0x191a1b);
+    let color_border = if is_dark {
+        rgba(0xffffff20)
+    } else {
+        rgba(0x00000018)
+    };
+    let highlight_bg = theme.accent_highlight();
+    let highlight_text = theme.accent_highlight_text();
+
+    let is_fav = item.is_favorite;
+    let note = item.note.clone();
+    let full_text = &item.full_text;
+    let icon = type_icon(&item);
+    let show_source = show_source_app && !item.source_app_name.is_empty();
+    let source_icon_path = if show_source {
+        source_icon_path(&item)
+    } else {
+        None
+    };
+    let color_swatch = swatch_color(full_text, accent);
+    let border_color = if selected { accent } else { divider };
+
+    let note_matches =
+        !search_terms.is_empty() && search_highlight::contains_match(&note, &search_terms);
+    let content_matches = card_content_matches_search(&item, &search_terms);
+    let show_note_preview = !(note.is_empty()
+        || show_original_on_hover && is_hovered
+        || (!search_terms.is_empty() && content_matches && !note_matches));
+
+    let mut base = div()
+        .relative()
+        .w_full()
+        .h_full()
+        .overflow_hidden()
+        .capture_any_mouse_up(|_ev, _window, cx| {
+            cx.stop_propagation();
+        })
+        .bg(surface)
+        .border(px(1.))
+        .border_color(border_color)
+        .rounded(px(6.))
+        .overflow_hidden()
+        .flex()
+        .flex_row()
+        .items_center()
+        .px(px(6.))
+        .gap(px(6.));
+
+    if let Some(handler) = on_click {
+        let double_click_handler = on_double_click.clone();
+        base = base.cursor(CursorStyle::PointingHand).on_mouse_down(
+            MouseButton::Left,
+            move |ev, window, cx| {
+                if ev.click_count == 2 {
+                    if let Some(ref dbl_handler) = double_click_handler {
+                        dbl_handler(index, window, cx);
+                    }
+                } else {
+                    handler(index, ev.modifiers, window, cx);
+                }
+            },
+        );
+    }
+
+    // Left: compact type icon / color swatch
+    let icon_el: AnyElement = if matches!(item.display_kind(), DisplayKind::Color) {
+        div()
+            .w(px(16.))
+            .h(px(16.))
+            .rounded(px(3.))
+            .bg(color_swatch)
+            .border(px(1.))
+            .border_color(color_border)
+            .into_any_element()
+    } else {
+        div()
+            .w(px(18.))
+            .h(px(18.))
+            .rounded(px(4.))
+            .bg(tag_bg)
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .font_family("iconfont")
+                    .text_color(accent)
+                    .child(icon.to_string()),
+            )
+            .into_any_element()
+    };
+
+    let content_el: AnyElement = if editing {
+        let commit = on_commit_note.clone();
+        let note_input_ref = note_input.clone();
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .h(px(22.))
+            .overflow_hidden()
+            .child({
+                let input_entity =
+                    note_input_ref.expect("note_input must be set when editing");
+                Input::new(&input_entity)
+                    .appearance(false)
+                    .bordered(false)
+                    .focus_bordered(false)
+                    .w_full()
+                    .h_full()
+                    .text_size(px(12.))
+            })
+            .on_key_down({
+                let commit = commit.clone();
+                move |ev: &KeyDownEvent, window, cx| {
+                    if ev.keystroke.key.as_str() == "enter" {
+                        if let Some(ref handler) = commit {
+                            handler(window, cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                }
+            })
+            .into_any_element()
+    } else {
+        let preview = if show_note_preview {
+            collapse_whitespace(&note)
+        } else {
+            single_line_preview_text(&item, show_page_title)
+        };
+        let preview_color = if show_note_preview { text_2 } else { text_1 };
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .overflow_hidden()
+            .child(
+                div()
+                    .w_full()
+                    .text_size(px(12.))
+                    .text_color(preview_color)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .truncate()
+                    .child(search_highlight::render_highlighted_inline(
+                        preview,
+                        &search_terms,
+                        preview_color,
+                        highlight_bg,
+                        highlight_text,
+                        12.0,
+                        None,
+                    )),
+            )
+            .into_any_element()
+    };
+
+    let mut card = base.child(icon_el).child(content_el);
+
+    if show_source {
+        if let Some(path) = source_icon_path {
+            card = card.child(
+                gpui::img(path)
+                    .when_some(image_cache.clone(), |img, cache| img.image_cache(&cache))
+                    .w(px(14.))
+                    .h(px(14.))
+                    .rounded(px(3.)),
+            );
+        }
+    }
+
+    if is_fav {
+        card = card.child(
+            div()
+                .absolute()
+                .left(px(0.))
+                .top(px(2.))
+                .bottom(px(2.))
+                .w(px(3.))
+                .rounded(px(2.))
+                .bg(fav_color),
+        );
+    }
+
+    if selected && selected_count > 1 {
+        card = card.child(
+            div()
+                .absolute()
+                .left(px(0.))
+                .top(px(0.))
+                .w(px(14.))
+                .h(px(14.))
+                .rounded_full()
+                .bg(accent)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(px(8.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xffffff))
+                        .child(format!("{}", selection_order)),
+                ),
+        );
+    }
+
+    if is_hovered && !editing {
+        let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
+            .can_merge_selection(can_merge_selection);
+        card = card.child(
+            div().absolute().top(px(1.)).right(px(2.)).child(
+                HoverToolbar::new(toolbar_props)
+                    .theme(theme.clone())
+                    .on_action(move |action, _window, cx| {
+                        if let Some(ref handler) = on_toolbar_action {
+                            handler(action, _window, cx);
+                        }
+                    }),
+            ),
+        );
+    }
+
+    card
 }
