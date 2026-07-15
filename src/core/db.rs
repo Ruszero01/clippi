@@ -414,6 +414,26 @@ impl Database {
         Ok(())
     }
 
+    pub fn has_favorite_items(&self) -> SqlResult<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE is_favorite = 1 LIMIT 1)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+    }
+
+    pub fn has_custom_hotkey_items(&self) -> SqlResult<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE custom_hotkey <> '' LIMIT 1)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+    }
+
     pub fn update_content_with_rich_data(
         &self,
         id: i64,

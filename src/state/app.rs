@@ -46,6 +46,10 @@ pub struct AppState {
     pub tags: Vec<TagInfo>,
     /// Active filter state
     pub filters: ClipboardFilters,
+    /// Whether any persisted item currently has a custom hotkey.
+    pub has_hotkey_items: bool,
+    /// Whether any persisted item is currently favorited.
+    pub has_favorite_items: bool,
     /// Currently selected item IDs (for batch operations)
     pub selected_ids: Vec<i64>,
     /// Tag editing state for TagFilterPanel overlay
@@ -264,6 +268,14 @@ impl AppState {
         });
 
         let sync = SyncState::from_settings(&settings);
+        let has_hotkey_items = db.has_custom_hotkey_items().unwrap_or_else(|e| {
+            log::error!("Failed to load custom hotkey item availability: {e}");
+            false
+        });
+        let has_favorite_items = db.has_favorite_items().unwrap_or_else(|e| {
+            log::error!("Failed to load favorite item availability: {e}");
+            false
+        });
 
         Self {
             settings,
@@ -271,6 +283,8 @@ impl AppState {
             items,
             tags,
             filters: ClipboardFilters::default(),
+            has_hotkey_items,
+            has_favorite_items,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -309,6 +323,17 @@ impl AppState {
         true
     }
 
+    fn refresh_titlebar_filter_availability(&mut self) {
+        match self.db.has_custom_hotkey_items() {
+            Ok(value) => self.has_hotkey_items = value,
+            Err(e) => log::error!("Failed to refresh custom hotkey item availability: {e}"),
+        }
+        match self.db.has_favorite_items() {
+            Ok(value) => self.has_favorite_items = value,
+            Err(e) => log::error!("Failed to refresh favorite item availability: {e}"),
+        }
+    }
+
     /// Reload items from database with current filters.
     pub fn reload_items(&mut self) {
         let result = if self.filters.has_keyword() {
@@ -340,6 +365,7 @@ impl AppState {
             }
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
@@ -1666,6 +1692,7 @@ impl AppState {
                     item.custom_hotkey = hotkey.to_string();
                     item.custom_hotkey_format = format.to_string();
                 }
+                self.refresh_titlebar_filter_availability();
             }
             Err(e) => log::error!("update_item_hotkey({id}): {e}"),
         }
@@ -1679,6 +1706,7 @@ impl AppState {
                     item.custom_hotkey.clear();
                     item.custom_hotkey_format.clear();
                 }
+                self.refresh_titlebar_filter_availability();
             }
             Err(e) => log::error!("clear_item_hotkey({id}): {e}"),
         }
@@ -1787,6 +1815,7 @@ impl AppState {
                 item.is_favorite = !item.is_favorite;
                 item.updated_at = chrono::Utc::now();
             }
+            self.refresh_titlebar_filter_availability();
         }
     }
 
@@ -1833,6 +1862,7 @@ impl AppState {
         // --- Remove from in-memory items and selection ---
         self.items.retain(|it| it.id != id);
         self.selected_ids.retain(|&sid| sid != id);
+        self.refresh_titlebar_filter_availability();
     }
 
     /// Batch toggle favorite on all selected items.
@@ -1884,6 +1914,7 @@ impl AppState {
                     item.updated_at = updated_at;
                 }
             }
+            self.refresh_titlebar_filter_availability();
         }
 
         self.sync_dirty.store(true, Ordering::SeqCst);
@@ -1929,6 +1960,7 @@ impl AppState {
         // --- Remove from in-memory items ---
         let ids: Vec<i64> = self.selected_ids.drain(..).collect();
         self.items.retain(|it| !ids.contains(&it.id));
+        self.refresh_titlebar_filter_availability();
     }
 }
 
@@ -2086,6 +2118,8 @@ mod tests {
             items: Vec::new(),
             tags: Vec::new(),
             filters: ClipboardFilters::default(),
+            has_hotkey_items: false,
+            has_favorite_items: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
