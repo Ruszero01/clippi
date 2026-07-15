@@ -42,6 +42,8 @@ const INFO_PILL_FONT_SIZE: f32 = 9.0;
 const INFO_PILL_GAP: f32 = 4.0;
 const INFO_PILL_BORDER_WIDTH: f32 = 1.0;
 const INFO_PILL_PADDING_X: f32 = 5.0;
+const HOTKEY_PILL_ICON_WIDTH: f32 = 9.0;
+const HOTKEY_PILL_ICON_GAP: f32 = 3.0;
 const TIME_PILL_PADDING_X: f32 = 7.0;
 const PANEL_BORDER_WIDTH: f32 = 1.0;
 const LIST_PADDING_X: f32 = 8.0;
@@ -76,6 +78,12 @@ fn info_pill_width(text: &str, padding_x: f32, window: &Window) -> f32 {
         .shape_line(text, px(INFO_PILL_FONT_SIZE), &[run], None);
 
     f32::from(line.width).ceil() + padding_x * 2.0 + INFO_PILL_BORDER_WIDTH * 2.0
+}
+
+fn hotkey_pill_width(hotkey: &str, window: &Window) -> f32 {
+    info_pill_width(hotkey, INFO_PILL_PADDING_X, window)
+        + HOTKEY_PILL_ICON_WIDTH
+        + HOTKEY_PILL_ICON_GAP
 }
 
 fn info_row_width(pill_width_sum: f32, pill_count: usize) -> f32 {
@@ -2193,7 +2201,7 @@ impl RenderOnce for ClipboardCard {
             None
         };
         if let Some(ref hk) = hotkey_pill {
-            fixed_widths.push(info_pill_width(hk, INFO_PILL_PADDING_X, window));
+            fixed_widths.push(hotkey_pill_width(hk, window));
         }
         if let Some(label) = size_label.as_deref() {
             fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
@@ -2255,6 +2263,28 @@ impl RenderOnce for ClipboardCard {
                             .child(tag.name.clone()),
                     )
             }))
+            .when_some(hotkey_pill, |el, hk| {
+                el.child(
+                    div()
+                        .h(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(accent)
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .gap(px(HOTKEY_PILL_ICON_GAP))
+                        .child(
+                            div()
+                                .font_family("iconfont")
+                                .text_size(px(9.))
+                                .text_color(accent)
+                                .child("\u{e66b}"),
+                        )
+                        .child(div().text_size(px(9.)).text_color(accent).child(hk)),
+                )
+            })
             .when_some(size_label, |el, label| {
                 let pill_text_color = if size_label_danger {
                     danger
@@ -2279,27 +2309,6 @@ impl RenderOnce for ClipboardCard {
                                 .text_color(pill_text_color)
                                 .child(label),
                         ),
-                )
-            })
-            .when_some(hotkey_pill, |el, hk| {
-                el.child(
-                    div()
-                        .h(px(18.))
-                        .rounded(px(9.))
-                        .bg(pill_bg)
-                        .border(px(1.))
-                        .border_color(accent)
-                        .px(px(5.))
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .font_family("iconfont")
-                                .text_size(px(9.))
-                                .text_color(accent)
-                                .child("\u{e66b}"),
-                        )
-                        .child(div().text_size(px(9.)).text_color(accent).child(hk)),
                 )
             })
             .child(
