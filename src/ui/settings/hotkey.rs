@@ -15,7 +15,10 @@ use gpui_component::tooltip::Tooltip;
 
 use super::SettingsPanel;
 use crate::core::i18n_keys::I18nKey;
+use crate::core::settings::LatestHotkeyEntry;
+use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
+use crate::ui::window_manager::WindowManager;
 
 /// Confirm action for hotkey settings operations.
 /// Emitted by SettingsPanel, handled by RootView to show ConfirmDialog.
@@ -581,7 +584,7 @@ impl SettingsPanel {
     /// Render a single latest-hotkey slot cell in the popup grid.
     fn render_latest_slot_cell(
         index: usize,
-        latest: &[crate::core::settings::LatestHotkeyEntry],
+        latest: &[LatestHotkeyEntry],
         theme: ClippiTheme,
         on_record: AppCallback,
         on_clear: Option<AppCallback>,
@@ -590,126 +593,341 @@ impl SettingsPanel {
         let hotkey = entry.map(|e| e.hotkey.as_str()).unwrap_or("");
         let has_hotkey = entry.is_some_and(|e| !e.hotkey.is_empty());
 
-        let label: String = if has_hotkey {
+        let label = if has_hotkey {
             hotkey.to_string()
         } else {
-            I18nKey::LatestHotkeyUnset.text().to_string()
-        };
-        let label_clone = label.clone();
-        let label2 = label.clone();
-        let border_color = if has_hotkey {
-            theme.accent
-        } else {
-            theme.divider
+            I18nKey::LatestHotkeyClickRecord.text().to_string()
         };
         let text_color = if has_hotkey {
             theme.accent
         } else {
             theme.text_3
         };
+        let border_color = if has_hotkey {
+            theme.accent
+        } else {
+            theme.divider
+        };
+        let bg_color = if has_hotkey {
+            theme.accent_soft
+        } else {
+            theme.surface
+        };
+        let badge_bg = if has_hotkey {
+            theme.accent
+        } else {
+            theme.titlebar_bg
+        };
+        let badge_text = if has_hotkey {
+            rgb(0xffffff)
+        } else {
+            theme.text_3
+        };
+        let hover_bg = if has_hotkey {
+            theme.accent_soft
+        } else {
+            theme.btn_hover
+        };
+        let danger = theme.danger;
+        let rec = on_record.clone();
 
         div()
             .flex_1()
-            .h(px(52.))
-            .rounded(px(8.))
-            .bg(theme.surface)
+            .min_w(px(0.))
+            .h(px(44.))
+            .rounded(px(7.))
+            .bg(bg_color)
             .border(px(1.))
             .border_color(border_color)
             .flex()
-            .flex_col()
+            .flex_row()
             .items_center()
-            .justify_center()
-            .gap(px(2.))
-            .when(!has_hotkey, {
-                let rec = on_record.clone();
-                move |d| {
-                    d.cursor(CursorStyle::PointingHand)
-                        .hover(|style| style.opacity(0.8))
+            .gap(px(8.))
+            .px(px(9.))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.bg(hover_bg))
+            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                rec(window, cx);
+            })
+            .child(
+                div()
+                    .w(px(20.))
+                    .h(px(20.))
+                    .rounded(px(10.))
+                    .bg(badge_bg)
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(badge_text)
+                            .child(format!("{}", index + 1)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .text_size(px(11.))
+                    .font_weight(if has_hotkey {
+                        FontWeight::MEDIUM
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .text_color(text_color)
+                    .child(label),
+            )
+            .when_some(on_clear.filter(|_| has_hotkey), move |d, clr| {
+                d.child(
+                    div()
+                        .w(px(22.))
+                        .h(px(22.))
+                        .rounded(px(5.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |style| style.bg(danger).opacity(0.15))
                         .on_mouse_down(MouseButton::Left, {
-                            let rec = rec.clone();
+                            let clr = clr.clone();
                             move |_ev, window, cx| {
-                                rec(window, cx);
+                                cx.stop_propagation();
+                                clr(window, cx);
                             }
                         })
                         .child(
                             div()
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(text_color)
-                                .child(format!("{}", index + 1)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(text_color)
-                                .child(label_clone),
-                        )
-                }
+                                .font_family("iconfont")
+                                .text_size(px(9.))
+                                .text_color(danger)
+                                .child("\u{e7b7}"),
+                        ),
+                )
             })
-            .when(has_hotkey, {
-                let rec = on_record.clone();
-                let clr = on_clear.clone();
-                move |d| {
-                    d.child(
-                        div()
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(text_color)
-                            .child(format!("{}", index + 1)),
-                    )
+    }
+
+    pub fn render_latest_hotkeys_popup_overlay(
+        panel_entity: Entity<SettingsPanel>,
+        state: Entity<AppState>,
+        wm: Entity<WindowManager>,
+        latest: Vec<LatestHotkeyEntry>,
+        theme: ClippiTheme,
+        motion: (f32, f32, f32),
+    ) -> impl IntoElement {
+        let (opacity, scale, offset) = motion;
+        let configured = latest
+            .iter()
+            .filter(|entry| !entry.hotkey.is_empty())
+            .count();
+        let close_panel = panel_entity.clone();
+
+        div()
+            .absolute()
+            .left(px(36.))
+            .right(px(0.))
+            .top(px(0.))
+            .bottom(px(0.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000033))
+            .opacity(opacity)
+            .cursor(CursorStyle::PointingHand)
+            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                close_panel.update(cx, |panel, cx| {
+                    panel.latest_hotkeys_popup_open = false;
+                    cx.notify();
+                });
+            })
+            .child(
+                div()
+                    .w(px(424. * scale))
+                    .mt(px(offset))
+                    .rounded(px(12.))
+                    .bg(theme.panel_surface)
+                    .border(px(1.))
+                    .border_color(theme.panel_sep_line)
+                    .shadow_lg()
+                    .p(px(14. * scale))
+                    .occlude()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .cursor(CursorStyle::Arrow)
+                    .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
+                        cx.stop_propagation();
+                    })
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(2.))
+                            .justify_between()
                             .child(
                                 div()
-                                    .text_size(px(11.))
-                                    .text_color(text_color)
-                                    .cursor(CursorStyle::PointingHand)
-                                    .hover(|style| style.opacity(0.8))
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .on_mouse_down(MouseButton::Left, {
-                                        let rec = rec.clone();
-                                        move |_ev, window, cx| {
-                                            rec(window, cx);
-                                        }
-                                    })
-                                    .child(label2),
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .font_family("iconfont")
+                                            .text_size(px(14.))
+                                            .text_color(theme.accent)
+                                            .child("\u{e6a8}"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme.text_1)
+                                            .child(I18nKey::LatestHotkeysTitle.text()),
+                                    ),
                             )
-                            .when_some(clr, |d, clr| {
-                                d.child(
-                                    div()
-                                        .w(px(14.))
-                                        .h(px(14.))
-                                        .rounded(px(3.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(|style| style.bg(theme.danger).opacity(0.15))
-                                        .on_mouse_down(MouseButton::Left, {
-                                            let clr = clr.clone();
-                                            move |_ev, window, cx| {
-                                                cx.stop_propagation();
-                                                clr(window, cx);
-                                            }
-                                        })
-                                        .child(
-                                            div()
-                                                .font_family("iconfont")
-                                                .text_size(px(8.))
-                                                .text_color(theme.danger)
-                                                .child("\u{e7b7}"),
-                                        ),
-                                )
-                            }),
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .h(px(22.))
+                                            .px(px(8.))
+                                            .rounded(px(11.))
+                                            .bg(theme.accent_soft)
+                                            .border(px(1.))
+                                            .border_color(theme.accent)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(10.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.accent)
+                                            .child(format!("{}/10", configured)),
+                                    )
+                                    .child({
+                                        let close = panel_entity.clone();
+                                        let close_hover = theme.danger;
+                                        let close_text = theme.text_2;
+                                        div()
+                                            .w(px(24.))
+                                            .h(px(24.))
+                                            .rounded(px(5.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor(CursorStyle::PointingHand)
+                                            .hover(move |style| style.bg(close_hover).opacity(0.12))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_ev, _window, cx| {
+                                                    cx.stop_propagation();
+                                                    close.update(cx, |panel, cx| {
+                                                        panel.latest_hotkeys_popup_open = false;
+                                                        cx.notify();
+                                                    });
+                                                },
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_family("iconfont")
+                                                    .text_size(px(13.))
+                                                    .text_color(close_text)
+                                                    .child("\u{e7b7}"),
+                                            )
+                                    }),
+                            ),
                     )
-                }
-            })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .children((0..5).map(move |row| {
+                                let left = row;
+                                let right = row + 5;
+                                let latest_l = latest.clone();
+                                let latest_r = latest.clone();
+                                let wm_l = wm.clone();
+                                let wm_r = wm.clone();
+                                let panel_l = panel_entity.clone();
+                                let panel_r = panel_entity.clone();
+                                let state_l = state.clone();
+                                let state_r = state.clone();
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(8.))
+                                    .child({
+                                        let rec: AppCallback = Rc::new(move |_window, cx| {
+                                            wm_l.update(cx, |wm, cx| {
+                                                wm.start_latest_slot_recording(left, cx);
+                                            });
+                                        });
+                                        let panel = panel_l.clone();
+                                        let state = state_l.clone();
+                                        let wm_clear = wm.clone();
+                                        let clr: AppCallback = Rc::new(move |_window, cx| {
+                                            wm_clear.update(cx, |wm, _cx| {
+                                                wm.unregister_latest_slot_hotkey(left);
+                                            });
+                                            state.update(cx, |st, _cx| {
+                                                if left < st.settings.latest_hotkeys.len() {
+                                                    st.settings.latest_hotkeys[left].hotkey.clear();
+                                                    st.settings.save();
+                                                }
+                                            });
+                                            panel.update(cx, |_panel, cx| cx.notify());
+                                        });
+                                        Self::render_latest_slot_cell(
+                                            left,
+                                            &latest_l,
+                                            theme.clone(),
+                                            rec,
+                                            Some(clr),
+                                        )
+                                    })
+                                    .child({
+                                        let rec: AppCallback = Rc::new(move |_window, cx| {
+                                            wm_r.update(cx, |wm, cx| {
+                                                wm.start_latest_slot_recording(right, cx);
+                                            });
+                                        });
+                                        let panel = panel_r.clone();
+                                        let state = state_r.clone();
+                                        let wm_clear = wm.clone();
+                                        let clr: AppCallback = Rc::new(move |_window, cx| {
+                                            wm_clear.update(cx, |wm, _cx| {
+                                                wm.unregister_latest_slot_hotkey(right);
+                                            });
+                                            state.update(cx, |st, _cx| {
+                                                if right < st.settings.latest_hotkeys.len() {
+                                                    st.settings.latest_hotkeys[right]
+                                                        .hotkey
+                                                        .clear();
+                                                    st.settings.save();
+                                                }
+                                            });
+                                            panel.update(cx, |_panel, cx| cx.notify());
+                                        });
+                                        Self::render_latest_slot_cell(
+                                            right,
+                                            &latest_r,
+                                            theme.clone(),
+                                            rec,
+                                            Some(clr),
+                                        )
+                                    })
+                            })),
+                    ),
+            )
     }
 
     pub fn render_hotkey_tab(
@@ -992,180 +1210,6 @@ impl SettingsPanel {
                     #[allow(clippy::needless_borrow)]
                     Self::render_per_app_list_section(&ps_title, &ps_hint, &entries, theme)
                 })
-            })
-            // 5. Latest hotkeys popup overlay
-            .when(self.latest_hotkeys_popup_open, {
-                let this_close = this.clone();
-                let wm_popup = wm.clone();
-                let theme_popup = theme.clone();
-                let latest = app.settings.latest_hotkeys.clone();
-                move |parent| {
-                    parent.child(
-                        div()
-                            .absolute()
-                            .inset(px(0.))
-                            .bg(rgba(0x00000044))
-                            .cursor(CursorStyle::PointingHand)
-                            .on_mouse_down(MouseButton::Left, {
-                                let tc = this_close.clone();
-                                move |_ev, _window, cx| {
-                                    tc.update(cx, |panel, cx| {
-                                        panel.latest_hotkeys_popup_open = false;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top(px(40.))
-                                    .left(px(20.))
-                                    .right(px(20.))
-                                    .rounded(px(12.))
-                                    .bg(theme_popup.surface)
-                                    .border(px(1.))
-                                    .border_color(theme_popup.divider)
-                                    .p(px(16.))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(10.))
-                                    .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    // Title
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .justify_between()
-                                            .items_center()
-                                            .child(
-                                                div()
-                                                    .text_size(px(13.))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_color(theme_popup.text_1)
-                                                    .child(I18nKey::LatestHotkeysTitle.text()),
-                                            )
-                                            .child({
-                                                let tc = this_close.clone();
-                                                div()
-                                                    .w(px(24.))
-                                                    .h(px(24.))
-                                                    .rounded(px(5.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .cursor(CursorStyle::PointingHand)
-                                                    .hover(|style| {
-                                                        style.bg(theme_popup.danger).opacity(0.12)
-                                                    })
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        move |_ev, _window, cx| {
-                                                            tc.update(cx, |panel, cx| {
-                                                                panel.latest_hotkeys_popup_open =
-                                                                    false;
-                                                                cx.notify();
-                                                            });
-                                                        },
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .font_family("iconfont")
-                                                            .text_size(px(14.))
-                                                            .text_color(theme_popup.text_2)
-                                                            .child("\u{e7b7}"),
-                                                    )
-                                            }),
-                                    )
-                                    // Grid: 5 rows × 2 columns
-                                    .children((0..5).map(move |row| {
-                                        let left = row;
-                                        let right = row + 5;
-                                        let wm_l = wm_popup.clone();
-                                        let wm_r = wm_popup.clone();
-                                        let latest_l = latest.clone();
-                                        let latest_r = latest.clone();
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap(px(10.))
-                                            .child({
-                                                let wm = wm_l.clone();
-                                                let rec: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wm.update(cx, |wm, cx| {
-                                                            wm.start_latest_slot_recording(
-                                                                left, cx,
-                                                            );
-                                                        });
-                                                    });
-                                                let wmc = wm_popup.clone();
-                                                let state_clr = state.clone();
-                                                let clr: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wmc.update(cx, |wm, _cx| {
-                                                            wm.unregister_latest_slot_hotkey(left);
-                                                        });
-                                                        state_clr.update(cx, |st, _cx| {
-                                                            if left
-                                                                < st.settings.latest_hotkeys.len()
-                                                            {
-                                                                st.settings.latest_hotkeys[left]
-                                                                    .hotkey
-                                                                    .clear();
-                                                                st.settings.save();
-                                                            }
-                                                        });
-                                                    });
-                                                Self::render_latest_slot_cell(
-                                                    left,
-                                                    &latest_l,
-                                                    theme_popup.clone(),
-                                                    rec,
-                                                    Some(clr),
-                                                )
-                                            })
-                                            .child({
-                                                let wm = wm_r.clone();
-                                                let rec: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wm.update(cx, |wm, cx| {
-                                                            wm.start_latest_slot_recording(
-                                                                right, cx,
-                                                            );
-                                                        });
-                                                    });
-                                                let wmc = wm_popup.clone();
-                                                let state_clr = state.clone();
-                                                let clr: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wmc.update(cx, |wm, _cx| {
-                                                            wm.unregister_latest_slot_hotkey(right);
-                                                        });
-                                                        state_clr.update(cx, |st, _cx| {
-                                                            if right
-                                                                < st.settings.latest_hotkeys.len()
-                                                            {
-                                                                st.settings.latest_hotkeys[right]
-                                                                    .hotkey
-                                                                    .clear();
-                                                                st.settings.save();
-                                                            }
-                                                        });
-                                                    });
-                                                Self::render_latest_slot_cell(
-                                                    right,
-                                                    &latest_r,
-                                                    theme_popup.clone(),
-                                                    rec,
-                                                    Some(clr),
-                                                )
-                                            })
-                                    })),
-                            ),
-                    )
-                }
             })
     }
 }

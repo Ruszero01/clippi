@@ -716,6 +716,7 @@ impl Render for RootView {
         let tag_picker_open = self.list_view.read(cx).tag_picker_visible();
         let confirm_dialog_open = self.list_view.read(cx).confirm_dialog_state().is_some();
         let hotkey_confirm_open = self.settings_panel.read(cx).hotkey_confirm.is_some();
+        let latest_hotkeys_popup_open = self.settings_panel.read(cx).latest_hotkeys_popup_open;
 
         let editing_tag_visible = {
             let app_state = self.state.read(cx);
@@ -738,6 +739,7 @@ impl Render for RootView {
         let confirm_dialog_visible = confirm_dialog_open && is_clipboard;
         let hotkey_confirm_visible = is_settings && hotkey_confirm_open;
         let backend_panel_visible = is_settings && backend_panel_open;
+        let latest_hotkeys_popup_visible = is_settings && latest_hotkeys_popup_open;
 
         let view_animating =
             Self::animation_running(self.view_transition_started, VIEW_ANIM_DURATION);
@@ -776,6 +778,8 @@ impl Render for RootView {
         let confirm_dialog_gen = self.overlay_generation("confirm-dialog", confirm_dialog_visible);
         let hotkey_confirm_gen = self.overlay_generation("hotkey-confirm", hotkey_confirm_visible);
         let backend_panel_gen = self.overlay_generation("backend-panel", backend_panel_visible);
+        let latest_hotkeys_popup_gen =
+            self.overlay_generation("latest-hotkeys-popup", latest_hotkeys_popup_visible);
 
         let tag_panel_animating = self.overlay_animating("tag-filter");
         let filter_config_animating = self.overlay_animating("type-filter-config");
@@ -785,6 +789,7 @@ impl Render for RootView {
         let _confirm_dialog_animating = self.overlay_animating("confirm-dialog");
         let _hotkey_confirm_animating = self.overlay_animating("hotkey-confirm");
         let backend_panel_animating = self.overlay_animating("backend-panel");
+        let latest_hotkeys_popup_animating = self.overlay_animating("latest-hotkeys-popup");
 
         let tag_panel_opacity = if tag_panel_visible && tag_panel_animating {
             Self::overlay_opacity(window, cx, tag_panel_gen, "tag-filter")
@@ -841,6 +846,24 @@ impl Render for RootView {
         } else {
             1.0
         };
+        let latest_hotkeys_popup_opacity =
+            if latest_hotkeys_popup_visible && latest_hotkeys_popup_animating {
+                Self::overlay_opacity(window, cx, latest_hotkeys_popup_gen, "latest-hotkeys-popup")
+            } else {
+                1.0
+            };
+        let latest_hotkeys_popup_offset =
+            if latest_hotkeys_popup_visible && latest_hotkeys_popup_animating {
+                Self::overlay_offset(window, cx, latest_hotkeys_popup_gen, "latest-hotkeys-popup")
+            } else {
+                0.0
+            };
+        let latest_hotkeys_popup_scale =
+            if latest_hotkeys_popup_visible && latest_hotkeys_popup_animating {
+                Self::overlay_scale(window, cx, latest_hotkeys_popup_gen, "latest-hotkeys-popup")
+            } else {
+                1.0
+            };
 
         // --- Auto-focus and clear search bar when the window opens ---
         if self.needs_auto_focus && is_clipboard {
@@ -1346,6 +1369,21 @@ impl Render for RootView {
                         .bottom(px(0.))
                         .child(dialog_element),
                 )
+            })
+            .when(latest_hotkeys_popup_visible, |root| {
+                let latest_hotkeys = self.state.read(cx).settings.latest_hotkeys.clone();
+                root.child(SettingsPanel::render_latest_hotkeys_popup_overlay(
+                    self.settings_panel.clone(),
+                    self.state.clone(),
+                    self.window_manager.clone(),
+                    latest_hotkeys,
+                    self.theme.clone(),
+                    (
+                        latest_hotkeys_popup_opacity,
+                        latest_hotkeys_popup_scale,
+                        latest_hotkeys_popup_offset,
+                    ),
+                ))
             })
             // --- Settings hotkey blacklist ConfirmDialog ---
             .when(hotkey_confirm_visible, |root| {
