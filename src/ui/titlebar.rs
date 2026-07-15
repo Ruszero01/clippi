@@ -144,8 +144,10 @@ impl Render for Titlebar {
                             .cursor(CursorStyle::PointingHand)
                             .tooltip(|window, cx| {
                                 let label = I18nKey::TitlebarTooltipHotkeys.text();
-                                Tooltip::element(move |_window, _cx| div().child(label))
-                                    .build(window, cx)
+                                Tooltip::element(move |_window, _cx| {
+                                    div().text_size(px(10.)).child(label)
+                                })
+                                .build(window, cx)
                             })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 let items = hotkey_state.update(cx, |state, _cx| {
@@ -175,8 +177,10 @@ impl Render for Titlebar {
                             .cursor(CursorStyle::PointingHand)
                             .tooltip(|window, cx| {
                                 let label = I18nKey::TitlebarTooltipFavorites.text();
-                                Tooltip::element(move |_window, _cx| div().child(label))
-                                    .build(window, cx)
+                                Tooltip::element(move |_window, _cx| {
+                                    div().text_size(px(10.)).child(label)
+                                })
+                                .build(window, cx)
                             })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 let items = fav_state.update(cx, |state, _cx| {
@@ -210,8 +214,10 @@ impl Render for Titlebar {
                                 } else {
                                     I18nKey::TitlebarTooltipPin.text()
                                 };
-                                Tooltip::element(move |_window, _cx| div().child(label))
-                                    .build(window, cx)
+                                Tooltip::element(move |_window, _cx| {
+                                    div().text_size(px(10.)).child(label)
+                                })
+                                .build(window, cx)
                             })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 pin_titlebar.update(cx, |_titlebar, cx| {
