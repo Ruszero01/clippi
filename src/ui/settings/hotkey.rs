@@ -586,6 +586,7 @@ impl SettingsPanel {
         index: usize,
         latest: &[LatestHotkeyEntry],
         theme: ClippiTheme,
+        recording: bool,
         on_record: AppCallback,
         on_clear: Option<AppCallback>,
     ) -> impl IntoElement {
@@ -593,37 +594,39 @@ impl SettingsPanel {
         let hotkey = entry.map(|e| e.hotkey.as_str()).unwrap_or("");
         let has_hotkey = entry.is_some_and(|e| !e.hotkey.is_empty());
 
-        let label = if has_hotkey {
+        let label = if recording {
+            I18nKey::LatestHotkeyRecording.text().to_string()
+        } else if has_hotkey {
             hotkey.to_string()
         } else {
             I18nKey::LatestHotkeyClickRecord.text().to_string()
         };
-        let text_color = if has_hotkey {
+        let text_color = if has_hotkey || recording {
             theme.accent
         } else {
             theme.text_3
         };
-        let border_color = if has_hotkey {
+        let border_color = if has_hotkey || recording {
             theme.accent
         } else {
             theme.divider
         };
-        let bg_color = if has_hotkey {
+        let bg_color = if has_hotkey || recording {
             theme.accent_soft
         } else {
             theme.surface
         };
-        let badge_bg = if has_hotkey {
+        let badge_bg = if has_hotkey || recording {
             theme.accent
         } else {
             theme.titlebar_bg
         };
-        let badge_text = if has_hotkey {
+        let badge_text = if has_hotkey || recording {
             rgb(0xffffff)
         } else {
             theme.text_3
         };
-        let hover_bg = if has_hotkey {
+        let hover_bg = if has_hotkey || recording {
             theme.accent_soft
         } else {
             theme.btn_hover
@@ -637,7 +640,7 @@ impl SettingsPanel {
             .h(px(44.))
             .rounded(px(7.))
             .bg(bg_color)
-            .border(px(1.))
+            .border(px(if recording { 2. } else { 1. }))
             .border_color(border_color)
             .flex()
             .flex_row()
@@ -717,6 +720,7 @@ impl SettingsPanel {
         state: Entity<AppState>,
         wm: Entity<WindowManager>,
         latest: Vec<LatestHotkeyEntry>,
+        recording_slot: Option<usize>,
         theme: ClippiTheme,
         motion: (f32, f32, f32),
     ) -> impl IntoElement {
@@ -866,10 +870,12 @@ impl SettingsPanel {
                                     .flex_row()
                                     .gap(px(8.))
                                     .child({
+                                        let panel_record = panel_l.clone();
                                         let rec: AppCallback = Rc::new(move |_window, cx| {
                                             wm_l.update(cx, |wm, cx| {
                                                 wm.start_latest_slot_recording(left, cx);
                                             });
+                                            panel_record.update(cx, |_panel, cx| cx.notify());
                                         });
                                         let panel = panel_l.clone();
                                         let state = state_l.clone();
@@ -890,15 +896,18 @@ impl SettingsPanel {
                                             left,
                                             &latest_l,
                                             theme.clone(),
+                                            recording_slot == Some(left),
                                             rec,
                                             Some(clr),
                                         )
                                     })
                                     .child({
+                                        let panel_record = panel_r.clone();
                                         let rec: AppCallback = Rc::new(move |_window, cx| {
                                             wm_r.update(cx, |wm, cx| {
                                                 wm.start_latest_slot_recording(right, cx);
                                             });
+                                            panel_record.update(cx, |_panel, cx| cx.notify());
                                         });
                                         let panel = panel_r.clone();
                                         let state = state_r.clone();
@@ -921,6 +930,7 @@ impl SettingsPanel {
                                             right,
                                             &latest_r,
                                             theme.clone(),
+                                            recording_slot == Some(right),
                                             rec,
                                             Some(clr),
                                         )

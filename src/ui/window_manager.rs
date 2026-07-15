@@ -2356,6 +2356,10 @@ impl WindowManager {
         }
     }
 
+    pub fn recording_latest_slot(&self) -> Option<usize> {
+        self.recording_latest_slot
+    }
+
     /// Start recording a latest-N slot hotkey.
     pub fn start_latest_slot_recording(&mut self, slot: usize, cx: &mut Context<Self>) {
         self.recording_latest_slot = Some(slot);

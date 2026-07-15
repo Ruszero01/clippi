@@ -1372,11 +1372,14 @@ impl Render for RootView {
             })
             .when(latest_hotkeys_popup_visible, |root| {
                 let latest_hotkeys = self.state.read(cx).settings.latest_hotkeys.clone();
+                let latest_hotkeys_recording_slot =
+                    self.window_manager.read(cx).recording_latest_slot();
                 root.child(SettingsPanel::render_latest_hotkeys_popup_overlay(
                     self.settings_panel.clone(),
                     self.state.clone(),
                     self.window_manager.clone(),
                     latest_hotkeys,
+                    latest_hotkeys_recording_slot,
                     self.theme.clone(),
                     (
                         latest_hotkeys_popup_opacity,
