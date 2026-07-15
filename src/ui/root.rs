@@ -969,7 +969,8 @@ impl Render for RootView {
                     cx.stop_propagation();
                 } else {
                     // Clipboard view: delegate to list for panel/multi-select logic
-                    let should_hide = root_list.update(cx, |list, cx| !list.handle_escape(cx));
+                    let should_hide =
+                        root_list.update(cx, |list, cx| !list.handle_escape_from_root(cx));
                     if should_hide {
                         root_this.update(cx, |this, cx| {
                             this.window_manager.update(cx, |wm, cx| wm.hide(cx));

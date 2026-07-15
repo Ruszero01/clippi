@@ -112,6 +112,8 @@ pub struct ClipboardListView {
     recording_hotkey_id: i64,
     /// Serialized paste format selected while recording an item hotkey.
     recording_hotkey_format: String,
+    /// One-shot guard for an ESC event already consumed by inline UI.
+    escape_consumed_inline: bool,
 }
 
 impl ClipboardListView {
@@ -164,6 +166,7 @@ impl ClipboardListView {
             window_manager,
             recording_hotkey_id: -1,
             recording_hotkey_format: String::new(),
+            escape_consumed_inline: false,
         }
     }
 
@@ -240,6 +243,7 @@ impl ClipboardListView {
         self.tag_picker_item_id = -1;
         self.confirm_dialog = None;
         self.editing_note_id = -1;
+        self.escape_consumed_inline = false;
         self.image_cache = RetainAllImageCache::new(cx);
         cx.notify();
     }
@@ -586,19 +590,37 @@ impl ClipboardListView {
     /// Handle ESC key: dismiss panels/editing → reduce multi-select → signal close.
     /// Returns `true` if the event was consumed (panels dismissed or selection reduced),
     /// `false` if the window should close.
-    pub fn handle_escape(&mut self, cx: &mut Context<Self>) -> bool {
+    fn handle_escape_inner(
+        &mut self,
+        mark_inline_bubble_guard: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.escape_consumed_inline {
+            self.escape_consumed_inline = false;
+            return true;
+        }
         if self.recording_hotkey_id > 0 {
             self.cancel_hotkey_recording(cx);
+            self.escape_consumed_inline = mark_inline_bubble_guard;
             return true;
         }
         if self.has_any_panel_or_editing() {
             self.dismiss_all_panels(cx);
             self.editing_note_id = -1;
             self.confirm_dialog = None;
+            self.escape_consumed_inline = mark_inline_bubble_guard;
             cx.notify();
             return true;
         }
         self.reduce_to_single_selection(cx)
+    }
+
+    pub fn handle_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        self.handle_escape_inner(true, cx)
+    }
+
+    pub fn handle_escape_from_root(&mut self, cx: &mut Context<Self>) -> bool {
+        self.handle_escape_inner(false, cx)
     }
 
     // --- Context menu state accessors ---
@@ -867,6 +889,7 @@ impl ClipboardListView {
             .update(cx, |wm, _cx| wm.cancel_custom_recording());
         self.recording_hotkey_id = -1;
         self.recording_hotkey_format.clear();
+        self.escape_consumed_inline = true;
         self.hovered_index = None;
         cx.notify();
     }
@@ -876,6 +899,7 @@ impl ClipboardListView {
             .update(cx, |wm, _cx| wm.cancel_custom_recording());
         self.recording_hotkey_id = -1;
         self.recording_hotkey_format.clear();
+        self.escape_consumed_inline = true;
         self.hovered_index = None;
         cx.notify();
     }
