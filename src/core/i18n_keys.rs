@@ -312,8 +312,6 @@ define_i18n! {
     HotkeyErrRegister:      ("注册快捷键失败", "Failed to register hotkey"),
     HotkeyErrConflictQuick: ("与快速窗口快捷键冲突", "Conflicts with quick window hotkey"),
     HotkeyErrConflictMain:  ("与主窗口快捷键冲突", "Conflicts with main window hotkey"),
-    HotkeyErrConflictItem:  ("与条目快捷键冲突", "Conflicts with item hotkey"),
-    HotkeyErrConflictLatest:("与最近十项快捷键冲突", "Conflicts with latest content hotkey"),
     HotkeyErrNoKey:         ("未指定按键", "No key specified"),
     HotkeyFallbackToast:    ("{0} 已被占用，已自动切换为 {1}", "{0} is in use, switched to {1}"),
 
