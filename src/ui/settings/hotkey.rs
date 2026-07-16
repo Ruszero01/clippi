@@ -635,7 +635,8 @@ impl SettingsPanel {
         let rec = on_record.clone();
 
         div()
-            .flex_1()
+            .w(px(144.))
+            .flex_shrink_0()
             .min_w(px(0.))
             .h(px(44.))
             .rounded(px(7.))
@@ -751,7 +752,8 @@ impl SettingsPanel {
             })
             .child(
                 div()
-                    .w(px(360. * scale))
+                    .w(px(344. * scale))
+                    .max_w(px(344. * scale))
                     .mt(px(offset))
                     .rounded(px(12.))
                     .bg(theme.panel_surface)
