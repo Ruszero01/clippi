@@ -751,7 +751,7 @@ impl SettingsPanel {
             })
             .child(
                 div()
-                    .w(px(424. * scale))
+                    .w(px(360. * scale))
                     .mt(px(offset))
                     .rounded(px(12.))
                     .bg(theme.panel_surface)
