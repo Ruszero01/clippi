@@ -2392,6 +2392,7 @@ impl WindowManager {
         self.recording_latest_slot = None;
         if let Some(ref mut hk) = self.hotkey {
             hk.finish_recording();
+            hk.register();
         }
     }
 

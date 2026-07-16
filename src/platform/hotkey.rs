@@ -373,6 +373,26 @@ mod tests {
         assert!(register_body.contains("if !binding.registered"));
         assert!(register_body.contains("manager.register(binding.hotkey)"));
     }
+
+    #[test]
+    fn custom_recording_temporarily_unregisters_hotkeys() {
+        let source = include_str!("hotkey.rs");
+        let impl_start = source
+            .rfind("impl HotkeyListener for DesktopHotkeyListener")
+            .unwrap();
+        let custom_start = source[impl_start..]
+            .find("fn start_custom_recording(&mut self)")
+            .unwrap()
+            + impl_start;
+        let unregister_start = source[custom_start..]
+            .find("fn unregister(&mut self)")
+            .unwrap()
+            + custom_start;
+        let custom_body = &source[custom_start..unregister_start];
+
+        assert!(custom_body.contains("self.unregister();"));
+        assert!(custom_body.contains("self.is_recording = true;"));
+    }
 }
 
 /// Fallback hotkey chain for the main window (V for clipboard).
@@ -405,6 +425,15 @@ struct LatestHotkeyBinding {
     slot: usize,
     hotkey: HotKey,
     registered: bool,
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HotkeyConflictKind {
+    Main,
+    Quick,
+    Item,
+    Latest,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -551,14 +580,32 @@ impl DesktopHotkeyListener {
         ignore_main: bool,
         ignore_quick: bool,
     ) -> bool {
+        self.conflict_kind_except(
+            hotkey,
+            ignore_item_id,
+            ignore_latest_slot,
+            ignore_main,
+            ignore_quick,
+        )
+        .is_some()
+    }
+
+    fn conflict_kind_except(
+        &self,
+        hotkey: HotKey,
+        ignore_item_id: Option<i64>,
+        ignore_latest_slot: Option<usize>,
+        ignore_main: bool,
+        ignore_quick: bool,
+    ) -> Option<HotkeyConflictKind> {
         let id = hotkey.id();
         // Check against main hotkey.
         if !ignore_main && self.hotkey.id() == id {
-            return true;
+            return Some(HotkeyConflictKind::Main);
         }
         // Check against quick hotkey.
         if !ignore_quick && self.quick_enabled && self.quick_hotkey.id() == id {
-            return true;
+            return Some(HotkeyConflictKind::Quick);
         }
         // Check against item hotkeys.
         if self
@@ -566,7 +613,7 @@ impl DesktopHotkeyListener {
             .iter()
             .any(|binding| Some(binding.id) != ignore_item_id && binding.hotkey.id() == id)
         {
-            return true;
+            return Some(HotkeyConflictKind::Item);
         }
         // Check against latest hotkeys.
         if self
@@ -574,9 +621,18 @@ impl DesktopHotkeyListener {
             .iter()
             .any(|binding| Some(binding.slot) != ignore_latest_slot && binding.hotkey.id() == id)
         {
-            return true;
+            return Some(HotkeyConflictKind::Latest);
         }
-        false
+        None
+    }
+
+    fn conflict_message(kind: HotkeyConflictKind) -> String {
+        match kind {
+            HotkeyConflictKind::Main => I18nKey::HotkeyErrConflictMain.text().to_string(),
+            HotkeyConflictKind::Quick => I18nKey::HotkeyErrConflictQuick.text().to_string(),
+            HotkeyConflictKind::Item => I18nKey::HotkeyErrConflictItem.text().to_string(),
+            HotkeyConflictKind::Latest => I18nKey::HotkeyErrConflictLatest.text().to_string(),
+        }
     }
 }
 
@@ -656,8 +712,8 @@ impl HotkeyListener for DesktopHotkeyListener {
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
         let new_hotkey = parse_hotkey(hotkey_str)?;
         // Refuse to shadow the quick-window hotkey.
-        if self.is_conflicting_except(new_hotkey, None, None, true, false) {
-            return Err(I18nKey::HotkeyErrConflictQuick.text().to_string());
+        if let Some(kind) = self.conflict_kind_except(new_hotkey, None, None, true, false) {
+            return Err(Self::conflict_message(kind));
         }
         // Register the new hotkey *before* dropping the old one so a
         // conflict with another application leaves the current hotkey intact.
@@ -685,8 +741,8 @@ impl HotkeyListener for DesktopHotkeyListener {
 
         let new_hotkey = parse_hotkey(hotkey_str)?;
         // Refuse to shadow the main hotkey.
-        if self.is_conflicting_except(new_hotkey, None, None, false, true) {
-            return Err(I18nKey::HotkeyErrConflictMain.text().to_string());
+        if let Some(kind) = self.conflict_kind_except(new_hotkey, None, None, false, true) {
+            return Err(Self::conflict_message(kind));
         }
         if self.quick_registered && new_hotkey.id() == self.quick_hotkey.id() {
             self.quick_enabled = true;
@@ -734,6 +790,7 @@ impl HotkeyListener for DesktopHotkeyListener {
     }
 
     fn start_custom_recording(&mut self) {
+        self.unregister();
         self.is_recording = true;
     }
 
@@ -854,8 +911,8 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn register_item_hotkey(&mut self, id: i64, hotkey_str: &str) -> Result<(), String> {
         let hk = parse_hotkey(hotkey_str)?;
-        if self.is_conflicting_except(hk, Some(id), None, false, false) {
-            return Err(I18nKey::HotkeyErrConflictQuick.text().to_string());
+        if let Some(kind) = self.conflict_kind_except(hk, Some(id), None, false, false) {
+            return Err(Self::conflict_message(kind));
         }
         let existing = self
             .item_hotkeys
@@ -903,8 +960,8 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn register_latest_hotkey(&mut self, slot: usize, hotkey_str: &str) -> Result<(), String> {
         let hk = parse_hotkey(hotkey_str)?;
-        if self.is_conflicting_except(hk, None, Some(slot), false, false) {
-            return Err(I18nKey::HotkeyErrConflictQuick.text().to_string());
+        if let Some(kind) = self.conflict_kind_except(hk, None, Some(slot), false, false) {
+            return Err(Self::conflict_message(kind));
         }
         let existing = self
             .latest_hotkeys
