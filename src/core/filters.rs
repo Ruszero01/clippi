@@ -42,6 +42,8 @@ pub struct ClipboardFilters {
     keyword: Option<String>,
     /// Favorites filter: true = show only favorites
     favorites_only: bool,
+    /// Hotkey filter: true = show only items with a custom hotkey
+    hotkeys_only: bool,
     /// Tag filter: empty = no tag filter, non-empty = item must have at least one of these tags
     pub tag_ids: Vec<i64>,
     /// Tag match mode: false = OR (any selected tag), true = AND (all selected tags)
@@ -73,6 +75,11 @@ impl ClipboardFilters {
         self.favorites_only = !self.favorites_only;
     }
 
+    /// Toggle hotkeys-only filter
+    pub fn toggle_hotkeys_only(&mut self) {
+        self.hotkeys_only = !self.hotkeys_only;
+    }
+
     /// Check if a specific type filter is active
     pub fn is_type_active(&self, type_name: &str) -> bool {
         self.type_filters.iter().any(|t| t == type_name)
@@ -81,6 +88,11 @@ impl ClipboardFilters {
     /// Check if favorites filter is active
     pub fn is_favorites_active(&self) -> bool {
         self.favorites_only
+    }
+
+    /// Check if hotkeys filter is active
+    pub fn is_hotkeys_active(&self) -> bool {
+        self.hotkeys_only
     }
 
     /// Get parsed keyword terms.
@@ -129,6 +141,11 @@ impl ClipboardFilters {
         // --- Favorites filter ---
         if self.favorites_only {
             conditions.push("is_favorite = 1".to_string());
+        }
+
+        // --- Custom hotkey filter ---
+        if self.hotkeys_only {
+            conditions.push("custom_hotkey <> ''".to_string());
         }
 
         // Tag filter — OR: item has any selected tag; AND: item has all selected tags
@@ -223,5 +240,16 @@ mod tests {
 
         assert!(!filters.has_keyword());
         assert!(filters.keyword_terms().is_empty());
+    }
+
+    #[test]
+    fn hotkeys_filter_matches_items_with_custom_hotkeys() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_hotkeys_only();
+
+        let (where_sql, params) = filters.db_where();
+        assert!(where_sql.contains("custom_hotkey <> ''"));
+        assert!(params.is_empty());
+        assert!(filters.is_hotkeys_active());
     }
 }

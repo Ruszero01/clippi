@@ -46,6 +46,10 @@ pub struct AppState {
     pub tags: Vec<TagInfo>,
     /// Active filter state
     pub filters: ClipboardFilters,
+    /// Whether any persisted item currently has a custom hotkey.
+    pub has_hotkey_items: bool,
+    /// Whether any persisted item is currently favorited.
+    pub has_favorite_items: bool,
     /// Currently selected item IDs (for batch operations)
     pub selected_ids: Vec<i64>,
     /// Tag editing state for TagFilterPanel overlay
@@ -72,6 +76,8 @@ pub struct AppState {
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
     pub bitmap_paste_finished: Arc<AtomicBool>,
+    /// Item IDs whose custom hotkeys need unregistering (consumed by WindowManager poll).
+    pub pending_hotkey_unregister: Vec<i64>,
     pub toast_message: Option<String>,
     /// true = warning (red), false = info (green).
     pub toast_is_warning: bool,
@@ -262,6 +268,14 @@ impl AppState {
         });
 
         let sync = SyncState::from_settings(&settings);
+        let has_hotkey_items = db.has_custom_hotkey_items().unwrap_or_else(|e| {
+            log::error!("Failed to load custom hotkey item availability: {e}");
+            false
+        });
+        let has_favorite_items = db.has_favorite_items().unwrap_or_else(|e| {
+            log::error!("Failed to load favorite item availability: {e}");
+            false
+        });
 
         Self {
             settings,
@@ -269,6 +283,8 @@ impl AppState {
             items,
             tags,
             filters: ClipboardFilters::default(),
+            has_hotkey_items,
+            has_favorite_items,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -278,6 +294,7 @@ impl AppState {
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(false)),
+            pending_hotkey_unregister: Vec::new(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
             toast_is_warning: false,
@@ -304,6 +321,17 @@ impl AppState {
             return false;
         }
         true
+    }
+
+    fn refresh_titlebar_filter_availability(&mut self) {
+        match self.db.has_custom_hotkey_items() {
+            Ok(value) => self.has_hotkey_items = value,
+            Err(e) => log::error!("Failed to refresh custom hotkey item availability: {e}"),
+        }
+        match self.db.has_favorite_items() {
+            Ok(value) => self.has_favorite_items = value,
+            Err(e) => log::error!("Failed to refresh favorite item availability: {e}"),
+        }
     }
 
     /// Reload items from database with current filters.
@@ -337,6 +365,7 @@ impl AppState {
             }
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
@@ -420,6 +449,13 @@ impl AppState {
     /// Toggle favorites-only filter and reload visible items.
     pub fn toggle_favorites_filter(&mut self) {
         self.filters.toggle_favorites_only();
+        self.selected_ids.clear();
+        self.reload_items();
+    }
+
+    /// Toggle hotkeys-only filter and reload visible items.
+    pub fn toggle_hotkeys_filter(&mut self) {
+        self.filters.toggle_hotkeys_only();
         self.selected_ids.clear();
         self.reload_items();
     }
@@ -1570,6 +1606,8 @@ impl AppState {
             source_app_icon: String::new(),
             size: text_size,
             tags: vec![],
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         };
 
         // Write to DB.
@@ -1646,6 +1684,78 @@ impl AppState {
         }
     }
 
+    /// Set or update the custom hotkey for a clipboard item.
+    pub fn update_item_hotkey(&mut self, id: i64, hotkey: &str, format: &str) {
+        match self.db.set_item_hotkey(id, hotkey, format) {
+            Ok(_) => {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.custom_hotkey = hotkey.to_string();
+                    item.custom_hotkey_format = format.to_string();
+                }
+                self.refresh_titlebar_filter_availability();
+            }
+            Err(e) => log::error!("update_item_hotkey({id}): {e}"),
+        }
+    }
+
+    /// Clear the custom hotkey for a clipboard item.
+    pub fn clear_item_hotkey(&mut self, id: i64) {
+        match self.db.clear_item_hotkey(id) {
+            Ok(_) => {
+                if let Some(item) = self.items.iter_mut().find(|it| it.id == id) {
+                    item.custom_hotkey.clear();
+                    item.custom_hotkey_format.clear();
+                }
+                self.refresh_titlebar_filter_availability();
+            }
+            Err(e) => log::error!("clear_item_hotkey({id}): {e}"),
+        }
+    }
+
+    /// Get the paste format for a specific item's custom hotkey.
+    pub fn get_item_hotkey_format(&self, id: i64) -> crate::core::types::HotkeyPasteFormat {
+        self.items
+            .iter()
+            .find(|i| i.id == id)
+            .and_then(|item| {
+                if item.custom_hotkey_format.is_empty() {
+                    None
+                } else {
+                    serde_json::from_str(&item.custom_hotkey_format).ok().or(
+                        match item.custom_hotkey_format.as_str() {
+                            "Default" => Some(crate::core::types::HotkeyPasteFormat::Default),
+                            "PlainText" => Some(crate::core::types::HotkeyPasteFormat::PlainText),
+                            "ImageBitmap" => {
+                                Some(crate::core::types::HotkeyPasteFormat::ImageBitmap)
+                            }
+                            "ImagePath" => Some(crate::core::types::HotkeyPasteFormat::ImagePath),
+                            "OcrText" => Some(crate::core::types::HotkeyPasteFormat::OcrText),
+                            "FilePath" => Some(crate::core::types::HotkeyPasteFormat::FilePath),
+                            "Rgb" => Some(crate::core::types::HotkeyPasteFormat::Rgb),
+                            "Hex" => Some(crate::core::types::HotkeyPasteFormat::Hex),
+                            _ => None,
+                        },
+                    )
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// Return the id for a latest-item hotkey slot, independent of active UI filters.
+    pub fn latest_hotkey_item_id(&self, slot: usize) -> Option<i64> {
+        let filters = crate::core::filters::ClipboardFilters::default();
+        match self
+            .db
+            .load_filtered(&filters, slot.saturating_add(1), self.order_by())
+        {
+            Ok(items) => items.get(slot).map(|item| item.id),
+            Err(e) => {
+                log::error!("latest_hotkey_item_id({slot}): {e}");
+                None
+            }
+        }
+    }
+
     /// Toggle favorite status for a single item.
     ///
     /// # Tombstones (sync)
@@ -1705,6 +1815,7 @@ impl AppState {
                 item.is_favorite = !item.is_favorite;
                 item.updated_at = chrono::Utc::now();
             }
+            self.refresh_titlebar_filter_availability();
         }
     }
 
@@ -1739,6 +1850,10 @@ impl AppState {
                 }
                 self.sync_dirty.store(true, Ordering::SeqCst);
             }
+            // If this item had a custom hotkey, schedule it for unregistration.
+            if !item.custom_hotkey.is_empty() {
+                self.pending_hotkey_unregister.push(id);
+            }
         } else {
             log::warn!("delete_item({id}): item not found");
             return;
@@ -1747,6 +1862,7 @@ impl AppState {
         // --- Remove from in-memory items and selection ---
         self.items.retain(|it| it.id != id);
         self.selected_ids.retain(|&sid| sid != id);
+        self.refresh_titlebar_filter_availability();
     }
 
     /// Batch toggle favorite on all selected items.
@@ -1798,6 +1914,7 @@ impl AppState {
                     item.updated_at = updated_at;
                 }
             }
+            self.refresh_titlebar_filter_availability();
         }
 
         self.sync_dirty.store(true, Ordering::SeqCst);
@@ -1843,6 +1960,7 @@ impl AppState {
         // --- Remove from in-memory items ---
         let ids: Vec<i64> = self.selected_ids.drain(..).collect();
         self.items.retain(|it| !ids.contains(&it.id));
+        self.refresh_titlebar_filter_availability();
     }
 }
 
@@ -1982,6 +2100,8 @@ mod tests {
             size: full_text.len() as i64,
             tags: Vec::new(),
             meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
         }
     }
 
@@ -1998,6 +2118,8 @@ mod tests {
             items: Vec::new(),
             tags: Vec::new(),
             filters: ClipboardFilters::default(),
+            has_hotkey_items: false,
+            has_favorite_items: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -2008,6 +2130,7 @@ mod tests {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
+            pending_hotkey_unregister: Vec::new(),
             toast_message: None,
             toast_is_warning: false,
             foreground_app_name: String::new(),
@@ -2020,6 +2143,83 @@ mod tests {
             update_phase: UpdatePhase::Idle,
         };
         (state, dirty)
+    }
+
+    #[test]
+    fn item_hotkey_update_is_local_metadata_only() {
+        let (mut state, dirty) = test_state();
+        dirty.store(false, Ordering::SeqCst);
+
+        let mut item = make_item(1, ContentType::PlainText, true, "hello");
+        item.created_at = chrono::Utc::now() - chrono::Duration::days(1);
+        item.updated_at = item.created_at;
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+        let db_item = state.db.get_by_hash(hash).unwrap().unwrap();
+        let item_id = db_item.id;
+        state.items.push(db_item.clone());
+
+        let before_updated_at = db_item.updated_at;
+        let format =
+            serde_json::to_string(&crate::core::types::HotkeyPasteFormat::PlainText).unwrap();
+        state.update_item_hotkey(item_id, "Ctrl+Alt+1", &format);
+
+        let after_set = state.db.get_by_id(item_id).unwrap().unwrap();
+        assert_eq!(after_set.updated_at, before_updated_at);
+        assert_eq!(after_set.custom_hotkey, "Ctrl+Alt+1");
+        assert_eq!(
+            state.get_item_hotkey_format(item_id),
+            crate::core::types::HotkeyPasteFormat::PlainText
+        );
+        assert!(!dirty.load(Ordering::SeqCst));
+
+        state.clear_item_hotkey(item_id);
+        let after_clear = state.db.get_by_id(item_id).unwrap().unwrap();
+        assert_eq!(after_clear.updated_at, before_updated_at);
+        assert!(after_clear.custom_hotkey.is_empty());
+        assert!(!dirty.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn item_hotkey_format_accepts_legacy_variant_names() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(1, ContentType::PlainText, false, "hello");
+        item.custom_hotkey_format = "Hex".to_string();
+        state.items.push(item);
+
+        assert_eq!(
+            state.get_item_hotkey_format(1),
+            crate::core::types::HotkeyPasteFormat::Hex
+        );
+    }
+
+    #[test]
+    fn latest_hotkey_slot_uses_unfiltered_latest_items() {
+        let (mut state, _dirty) = test_state();
+        let base = chrono::Utc::now() - chrono::Duration::hours(1);
+
+        let mut older = make_item(1, ContentType::PlainText, false, "visible older");
+        older.created_at = base;
+        older.updated_at = base;
+        let older_hash = older.content_hash;
+        state.db.upsert(&older).unwrap();
+
+        let mut newer = make_item(2, ContentType::PlainText, false, "hidden newer");
+        newer.created_at = base + chrono::Duration::minutes(10);
+        newer.updated_at = newer.created_at;
+        let newer_hash = newer.content_hash;
+        state.db.upsert(&newer).unwrap();
+
+        let older_id = state.db.get_by_hash(older_hash).unwrap().unwrap().id;
+        let newer_id = state.db.get_by_hash(newer_hash).unwrap().unwrap().id;
+
+        state.filters.set_keyword("visible");
+        state.reload_items();
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].id, older_id);
+
+        assert_eq!(state.latest_hotkey_item_id(0), Some(newer_id));
+        assert_eq!(state.latest_hotkey_item_id(1), Some(older_id));
     }
 
     // ── should_mark_sync_dirty ──────────────────────────────────────

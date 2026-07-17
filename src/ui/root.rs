@@ -103,8 +103,16 @@ impl RootView {
         let items = app_state.items.clone();
         let window_appearance = window.appearance();
         let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window_appearance));
-        let list_view =
-            cx.new(|cx| ClipboardListView::new(items, state.clone(), theme.clone(), window, cx));
+        let list_view = cx.new(|cx| {
+            ClipboardListView::new(
+                items,
+                state.clone(),
+                theme.clone(),
+                window,
+                cx,
+                window_manager.clone(),
+            )
+        });
         list_view.update(cx, |list, _cx| list.focus(window));
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
         let search_bar = cx
@@ -180,9 +188,16 @@ impl RootView {
                 WindowManagerEvent::HotkeyRecordingComplete => {
                     // --- Notify SettingsPanel so it re-renders with the updated ---
                     // --- hotkey display and recording state from AppState. ---
-                    this.settings_panel.update(cx, |_panel, cx| {
+                    let items = this.state.read(cx).items.clone();
+                    this.list_view.update(cx, |list, cx| {
+                        list.finish_hotkey_recording_ui(cx);
+                        list.set_items(items, cx);
+                    });
+                    this.settings_panel.update(cx, |panel, cx| {
+                        panel.recording_paste_shortcut = None;
                         cx.notify();
                     });
+                    cx.notify();
                 }
                 WindowManagerEvent::SyncChanged => {
                     this.settings_panel.update(cx, |_panel, cx| {
@@ -702,6 +717,7 @@ impl Render for RootView {
         let tag_picker_open = self.list_view.read(cx).tag_picker_visible();
         let confirm_dialog_open = self.list_view.read(cx).confirm_dialog_state().is_some();
         let hotkey_confirm_open = self.settings_panel.read(cx).hotkey_confirm.is_some();
+        let latest_hotkeys_popup_open = self.settings_panel.read(cx).latest_hotkeys_popup_open;
 
         let editing_tag_visible = {
             let app_state = self.state.read(cx);
@@ -724,6 +740,7 @@ impl Render for RootView {
         let confirm_dialog_visible = confirm_dialog_open && is_clipboard;
         let hotkey_confirm_visible = is_settings && hotkey_confirm_open;
         let backend_panel_visible = is_settings && backend_panel_open;
+        let latest_hotkeys_popup_visible = is_settings && latest_hotkeys_popup_open;
 
         let view_animating =
             Self::animation_running(self.view_transition_started, VIEW_ANIM_DURATION);
@@ -762,6 +779,8 @@ impl Render for RootView {
         let confirm_dialog_gen = self.overlay_generation("confirm-dialog", confirm_dialog_visible);
         let hotkey_confirm_gen = self.overlay_generation("hotkey-confirm", hotkey_confirm_visible);
         let backend_panel_gen = self.overlay_generation("backend-panel", backend_panel_visible);
+        let latest_hotkeys_popup_gen =
+            self.overlay_generation("latest-hotkeys-popup", latest_hotkeys_popup_visible);
 
         let tag_panel_animating = self.overlay_animating("tag-filter");
         let filter_config_animating = self.overlay_animating("type-filter-config");
@@ -771,6 +790,7 @@ impl Render for RootView {
         let _confirm_dialog_animating = self.overlay_animating("confirm-dialog");
         let _hotkey_confirm_animating = self.overlay_animating("hotkey-confirm");
         let backend_panel_animating = self.overlay_animating("backend-panel");
+        let latest_hotkeys_popup_animating = self.overlay_animating("latest-hotkeys-popup");
 
         let tag_panel_opacity = if tag_panel_visible && tag_panel_animating {
             Self::overlay_opacity(window, cx, tag_panel_gen, "tag-filter")
@@ -827,6 +847,24 @@ impl Render for RootView {
         } else {
             1.0
         };
+        let latest_hotkeys_popup_opacity =
+            if latest_hotkeys_popup_visible && latest_hotkeys_popup_animating {
+                Self::overlay_opacity(window, cx, latest_hotkeys_popup_gen, "latest-hotkeys-popup")
+            } else {
+                1.0
+            };
+        let latest_hotkeys_popup_offset =
+            if latest_hotkeys_popup_visible && latest_hotkeys_popup_animating {
+                Self::overlay_offset(window, cx, latest_hotkeys_popup_gen, "latest-hotkeys-popup")
+            } else {
+                0.0
+            };
+        let latest_hotkeys_popup_scale =
+            if latest_hotkeys_popup_visible && latest_hotkeys_popup_animating {
+                Self::overlay_scale(window, cx, latest_hotkeys_popup_gen, "latest-hotkeys-popup")
+            } else {
+                1.0
+            };
 
         // --- Auto-focus and clear search bar when the window opens ---
         if self.needs_auto_focus && is_clipboard {
@@ -931,6 +969,14 @@ impl Render for RootView {
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
                 }
+                let cancelled_recording = root_this.update(cx, |this, cx| {
+                    this.window_manager
+                        .update(cx, |wm, cx| wm.cancel_active_hotkey_recording(cx))
+                });
+                if cancelled_recording {
+                    cx.stop_propagation();
+                    return;
+                }
                 let is_settings = root_this.read(cx).current_view == "settings";
                 let is_edit = root_this.read(cx).current_view == "edit";
                 if is_settings {
@@ -955,7 +1001,8 @@ impl Render for RootView {
                     cx.stop_propagation();
                 } else {
                     // Clipboard view: delegate to list for panel/multi-select logic
-                    let should_hide = root_list.update(cx, |list, cx| !list.handle_escape(cx));
+                    let should_hide =
+                        root_list.update(cx, |list, cx| !list.handle_escape_from_root(cx));
                     if should_hide {
                         root_this.update(cx, |this, cx| {
                             this.window_manager.update(cx, |wm, cx| wm.hide(cx));
@@ -1012,6 +1059,8 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .occlude()
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                             search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
@@ -1067,6 +1116,8 @@ impl Render for RootView {
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(edit_tag_opacity)
                         .flex()
                         .items_center()
@@ -1214,6 +1265,8 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .occlude()
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(tag_picker_opacity)
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
@@ -1331,6 +1384,26 @@ impl Render for RootView {
                         .bottom(px(0.))
                         .child(dialog_element),
                 )
+            })
+            .when(latest_hotkeys_popup_visible, |root| {
+                let latest_hotkeys = self.state.read(cx).settings.latest_hotkeys.clone();
+                let latest_hotkeys_recording_slot =
+                    self.window_manager.read(cx).recording_latest_slot();
+                root.child(SettingsPanel::render_latest_hotkeys_popup_overlay(
+                    self.settings_panel.clone(),
+                    self.state.clone(),
+                    self.window_manager.clone(),
+                    latest_hotkeys,
+                    latest_hotkeys_recording_slot,
+                    self.theme.clone(),
+                    (
+                        latest_hotkeys_popup_opacity,
+                        latest_hotkeys_popup_scale,
+                        latest_hotkeys_popup_offset,
+                        win_w,
+                        win_h,
+                    ),
+                ))
             })
             // --- Settings hotkey blacklist ConfirmDialog ---
             .when(hotkey_confirm_visible, |root| {

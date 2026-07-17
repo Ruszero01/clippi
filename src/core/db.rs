@@ -72,7 +72,7 @@ fn file_icon_cache_key(file_path: &str, is_dir: bool) -> String {
 
 fn item_select_columns() -> String {
     format!(
-        "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type"
+        "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format"
     )
 }
 
@@ -90,7 +90,7 @@ fn list_item_select_columns() -> String {
                  'drive_label', NULLIF(substr(coalesce(json_extract(rich_data, '$.drive_label'), ''), 1, {LIST_RICH_AUX_LIMIT}), '')
              )
          END,
-         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type"
+         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format"
     )
 }
 
@@ -396,6 +396,42 @@ impl Database {
             params![note, now, id],
         )?;
         Ok(())
+    }
+
+    pub fn set_item_hotkey(&self, id: i64, hotkey: &str, format: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET custom_hotkey = ?1, custom_hotkey_format = ?2 WHERE id = ?3",
+            params![hotkey, format, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_item_hotkey(&self, id: i64) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET custom_hotkey = '', custom_hotkey_format = '' WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn has_favorite_items(&self) -> SqlResult<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE is_favorite = 1 LIMIT 1)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+    }
+
+    pub fn has_custom_hotkey_items(&self) -> SqlResult<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE custom_hotkey <> '' LIMIT 1)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
     }
 
     pub fn update_content_with_rich_data(
@@ -1686,6 +1722,8 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         size,
         tags: Vec::new(), // filled later via batch query
         meta_type,
+        custom_hotkey: row.get(17).unwrap_or_default(),
+        custom_hotkey_format: row.get(18).unwrap_or_default(),
     })
 }
 

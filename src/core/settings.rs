@@ -67,6 +67,14 @@ pub struct PasteShortcutEntry {
     pub shortcut: String,
 }
 
+/// One slot in the "latest 10" hotkey configuration (0 = most recent item).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LatestHotkeyEntry {
+    pub hotkey: String,
+    #[serde(default)]
+    pub paste_format: String, // serialized HotkeyPasteFormat, empty = Default
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub theme: String,
@@ -146,6 +154,8 @@ pub struct AppSettings {
     pub type_filter_config: Vec<TypeFilterEntry>, // custom type filter visibility & order
     #[serde(default)]
     pub paste_shortcuts: Vec<PasteShortcutEntry>,
+    #[serde(default = "default_latest_hotkeys")]
+    pub latest_hotkeys: Vec<LatestHotkeyEntry>,
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
     #[serde(default = "default_auto_fetch_url_title")]
@@ -202,6 +212,15 @@ fn default_copy_sound_file() -> String {
     "copy_penclick.wav".to_string()
 }
 
+fn default_latest_hotkeys() -> Vec<LatestHotkeyEntry> {
+    (0..10)
+        .map(|_| LatestHotkeyEntry {
+            hotkey: String::new(),
+            paste_format: String::new(),
+        })
+        .collect()
+}
+
 fn default_quick_hotkey() -> String {
     "Alt+C".to_string()
 }
@@ -252,6 +271,7 @@ impl Default for AppSettings {
             clear_search_on_show: false,
             type_filter_config: Vec::new(),
             paste_shortcuts: Vec::new(),
+            latest_hotkeys: default_latest_hotkeys(),
             auto_check_updates: true,
             auto_fetch_url_title: true,
             copy_sound_enabled: true,

@@ -88,6 +88,11 @@ const DB_MIGRATIONS: &[DbMigration] = &[
         description: "Add stable sync uid columns for tags and tag tombstones",
         sql: "",
     },
+    DbMigration {
+        version: 7,
+        description: "Add custom_hotkey and custom_hotkey_format columns for per-item hotkeys",
+        sql: "",
+    },
 ];
 
 /// Run all pending database migrations, updating `PRAGMA user_version`.
@@ -118,10 +123,35 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
             if migration.version == 6 {
                 migrate_tag_sync_uids(conn)?;
             }
+            if migration.version == 7 {
+                migrate_item_hotkey_columns(conn)?;
+            }
             conn.pragma_update(None, "user_version", migration.version)?;
         }
     }
 
+    repair_db_schema(conn)?;
+
+    Ok(())
+}
+
+fn repair_db_schema(conn: &Connection) -> rusqlite::Result<()> {
+    migrate_item_hotkey_columns(conn)
+}
+
+fn migrate_item_hotkey_columns(conn: &Connection) -> rusqlite::Result<()> {
+    if !column_exists(conn, "clipboard_items", "custom_hotkey")? {
+        conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN custom_hotkey TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "clipboard_items", "custom_hotkey_format")? {
+        conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN custom_hotkey_format TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -227,5 +257,47 @@ pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
     if payload.version < 4 {
         // v3 → v4: tag uid fields were added with #[serde(default)].
         payload.version = 4;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repairs_v7_database_missing_hotkey_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clipboard_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_type TEXT NOT NULL,
+                full_text TEXT NOT NULL,
+                content_hash INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                image_path TEXT NOT NULL DEFAULT '',
+                rich_data TEXT NOT NULL DEFAULT '',
+                file_data TEXT NOT NULL DEFAULT '',
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                source_app_name TEXT NOT NULL DEFAULT '',
+                source_app_icon TEXT NOT NULL DEFAULT '',
+                image_width INTEGER NOT NULL DEFAULT 0,
+                image_height INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0,
+                meta_type TEXT NOT NULL DEFAULT ''
+            );
+            PRAGMA user_version = 7;",
+        )
+        .unwrap();
+
+        run_db_migrations(&conn).unwrap();
+
+        assert!(column_exists(&conn, "clipboard_items", "custom_hotkey").unwrap());
+        assert!(column_exists(&conn, "clipboard_items", "custom_hotkey_format").unwrap());
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DB_VERSION);
     }
 }

@@ -31,6 +31,7 @@ pub struct MenuItemContext {
     pub is_favorite: bool,
     pub is_link: bool,
     pub is_path: bool,
+    pub has_hotkey: bool,
 }
 
 impl MenuItemContext {
@@ -55,6 +56,7 @@ impl MenuItemContext {
             is_path: item.meta_type == "path"
                 && crate::core::types::path_is_native(&item.full_text)
                 && crate::core::types::path_exists(&item.full_text),
+            has_hotkey: !item.custom_hotkey.is_empty(),
         }
     }
 }
@@ -208,6 +210,35 @@ impl ContextMenu {
             fav: false,
             shortcut: sc("F2"),
         });
+
+        // Custom hotkey
+        if ctx.has_hotkey {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxChangeHotkey.text().into(),
+                action: "set_hotkey".into(),
+                icon: "\u{e66b}".into(),
+                danger: false,
+                fav: false,
+                shortcut: None,
+            });
+            items.push(RawMenuItem {
+                label: I18nKey::CtxRemoveHotkey.text().into(),
+                action: "remove_hotkey".into(),
+                icon: "\u{e7b7}".into(),
+                danger: true,
+                fav: false,
+                shortcut: None,
+            });
+        } else {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxSetHotkey.text().into(),
+                action: "set_hotkey".into(),
+                icon: "\u{e66b}".into(),
+                danger: false,
+                fav: false,
+                shortcut: None,
+            });
+        }
 
         // --- Open original image (image only) ---
         if ctx.is_image {

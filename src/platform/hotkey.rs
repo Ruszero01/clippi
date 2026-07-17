@@ -10,6 +10,10 @@ pub enum HotkeyEvent {
     Main,
     Quick,
     QuickAction(QuickAction),
+    /// Per-item custom hotkey activated, carries the item id.
+    CustomItem(i64),
+    /// Latest-N hotkey activated, carries the slot index (0-9).
+    LatestItem(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +31,12 @@ pub enum QuickAction {
     NextAltMode,     // Ctrl/Cmd+↓ → cycle advanced paste mode
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotkeyRecordingPress {
+    Hotkey(String),
+    Cancel,
+}
+
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
 pub trait HotkeyListener {
     fn stop(&mut self);
@@ -37,8 +47,29 @@ pub trait HotkeyListener {
     fn finish_recording(&mut self);
     fn is_recording(&self) -> bool;
     fn poll_event(&mut self) -> Option<HotkeyEvent>;
-    fn poll_recording_pressed(&mut self) -> Option<String>;
+    fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress>;
     fn set_quick_actions_enabled(&mut self, enabled: bool);
+    /// Register a per-item custom hotkey. Returns error on conflict.
+    fn register_item_hotkey(&mut self, _id: i64, _hotkey_str: &str) -> Result<(), String> {
+        Err("unsupported platform".to_string())
+    }
+    /// Unregister a per-item custom hotkey.
+    fn unregister_item_hotkey(&mut self, _id: i64) {}
+    /// Register a latest-N slot hotkey. Returns error on conflict.
+    fn register_latest_hotkey(&mut self, _slot: usize, _hotkey_str: &str) -> Result<(), String> {
+        Err("unsupported platform".to_string())
+    }
+    /// Unregister a latest-N slot hotkey.
+    fn unregister_latest_hotkey(&mut self, _slot: usize) {}
+    /// Bulk reload all custom hotkeys from persisted state.
+    fn reload_custom_hotkeys(
+        &mut self,
+        _item_hotkeys: &[(i64, String)],
+        _latest_hotkeys: &[(usize, String)],
+    ) {
+    }
+    /// Begin recording for a custom hotkey (does not unregister existing hotkeys).
+    fn start_custom_recording(&mut self);
     /// Temporarily unregister the hotkey (for blacklist).
     /// Does nothing if already unregistered.
     fn unregister(&mut self);
@@ -65,6 +96,10 @@ pub trait HotkeyListener {
 }
 
 /// Shared keycode mapping: name string → Code variant (platform-agnostic).
+fn hotkey_register_error_message() -> String {
+    I18nKey::HotkeyConflictCustom.text().to_string()
+}
+
 pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
     match name {
         "a" => Some(Code::KeyA),
@@ -246,9 +281,25 @@ fn format_pressed_hotkey(modifiers: Modifiers, code: Code) -> String {
     parts.join("+")
 }
 
+fn format_recorded_hotkey(modifiers: Modifiers, code: Code) -> Option<HotkeyRecordingPress> {
+    if code == Code::Escape {
+        return Some(HotkeyRecordingPress::Cancel);
+    }
+    if matches!(code, Code::Enter | Code::NumpadEnter) || modifiers.is_empty() {
+        None
+    } else {
+        Some(HotkeyRecordingPress::Hotkey(format_pressed_hotkey(
+            modifiers, code,
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_hotkey;
+    use super::{
+        format_recorded_hotkey, hotkey_register_error_message, parse_hotkey, HotkeyRecordingPress,
+    };
+    use crate::core::i18n_keys::I18nKey;
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 
     #[test]
@@ -291,6 +342,85 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn recording_ignores_control_keys() {
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::Escape),
+            Some(HotkeyRecordingPress::Cancel)
+        );
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::Enter),
+            None
+        );
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::NumpadEnter),
+            None
+        );
+        assert_eq!(format_recorded_hotkey(Modifiers::empty(), Code::KeyV), None);
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::ALT, Code::KeyV),
+            Some(HotkeyRecordingPress::Hotkey("Alt+V".to_string()))
+        );
+    }
+
+    #[test]
+    fn register_errors_are_user_facing_conflicts() {
+        assert_eq!(
+            hotkey_register_error_message(),
+            I18nKey::HotkeyConflictCustom.text()
+        );
+        assert!(!hotkey_register_error_message().contains("HotKey"));
+    }
+
+    #[test]
+    fn unregister_preserves_custom_hotkey_bindings_for_later_reregister() {
+        let source = include_str!("hotkey.rs");
+        let impl_start = source
+            .rfind("impl HotkeyListener for DesktopHotkeyListener")
+            .unwrap();
+        let unregister_start = source[impl_start..]
+            .find("fn unregister(&mut self)")
+            .unwrap()
+            + impl_start;
+        let register_start = source[unregister_start..]
+            .find("fn register(&mut self)")
+            .unwrap()
+            + unregister_start;
+        let unregister_body = &source[unregister_start..register_start];
+
+        assert!(!unregister_body.contains(".drain("));
+        assert!(unregister_body.contains("for binding in &mut self.item_hotkeys"));
+        assert!(unregister_body.contains("for binding in &mut self.latest_hotkeys"));
+
+        let poll_start = source[register_start..]
+            .find("fn poll_event(&mut self)")
+            .unwrap()
+            + register_start;
+        let register_body = &source[register_start..poll_start];
+        assert!(register_body.contains("if !binding.registered"));
+        assert!(register_body.contains("manager.register(binding.hotkey)"));
+    }
+
+    #[test]
+    fn custom_recording_temporarily_unregisters_hotkeys() {
+        let source = include_str!("hotkey.rs");
+        let impl_start = source
+            .rfind("impl HotkeyListener for DesktopHotkeyListener")
+            .unwrap();
+        let custom_start = source[impl_start..]
+            .find("fn start_custom_recording(&mut self)")
+            .unwrap()
+            + impl_start;
+        let unregister_start = source[custom_start..]
+            .find("fn unregister(&mut self)")
+            .unwrap()
+            + custom_start;
+        let custom_body = &source[custom_start..unregister_start];
+
+        assert!(custom_body.contains("self.unregister();"));
+        assert!(custom_body.contains("self.is_recording = true;"));
+    }
 }
 
 /// Fallback hotkey chain for the main window (V for clipboard).
@@ -308,6 +438,22 @@ const QUICK_FALLBACKS: &[&str] = &["Option+Shift+C", "Ctrl+Option+C", "Cmd+Shift
 /// Fallback hotkey chain for the quick paste window (C for clipboard).
 #[cfg(not(target_os = "macos"))]
 const QUICK_FALLBACKS: &[&str] = &["Alt+Shift+C", "Ctrl+Alt+C", "Win+Shift+C"];
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[derive(Clone, Copy)]
+struct ItemHotkeyBinding {
+    id: i64,
+    hotkey: HotKey,
+    registered: bool,
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[derive(Clone, Copy)]
+struct LatestHotkeyBinding {
+    slot: usize,
+    hotkey: HotKey,
+    registered: bool,
+}
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 struct DesktopHotkeyListener {
@@ -328,6 +474,10 @@ struct DesktopHotkeyListener {
     main_fallback_used: bool,
     /// True when the configured quick hotkey was unavailable → fallback used.
     quick_fallback_used: bool,
+    /// Per-item custom hotkeys.
+    item_hotkeys: Vec<ItemHotkeyBinding>,
+    /// Latest-N slot hotkeys.
+    latest_hotkeys: Vec<LatestHotkeyBinding>,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -341,10 +491,8 @@ impl DesktopHotkeyListener {
         let mut main_fallback = false;
         let mut hotkey = parse_hotkey(hotkey_str)?;
         let mut registered = true;
-        let mut main_register_error = None;
         if let Err(e) = manager.register(hotkey) {
             log::warn!("main hotkey register failed ({hotkey_str}): {e}");
-            main_register_error = Some(e.to_string());
             registered = false;
             // Walk the fallback chain.
             for &fb in MAIN_FALLBACKS {
@@ -362,8 +510,7 @@ impl DesktopHotkeyListener {
             }
         }
         if !registered {
-            let detail = main_register_error.unwrap_or_else(|| hotkey_str.to_string());
-            return Err(format!("{}: {detail}", I18nKey::HotkeyErrRegister.text()));
+            return Err(hotkey_register_error_message());
         }
 
         // ── Quick hotkey: try configured → fallback chain ──
@@ -388,7 +535,6 @@ impl DesktopHotkeyListener {
                 actual_quick = quick_hotkey_str.to_string();
             }
             if !quick_registered {
-                let mut quick_register_error = None;
                 for &fb in QUICK_FALLBACKS {
                     if let Ok(fb_key) = parse_hotkey(fb) {
                         // Also skip if it collides with the actual main hotkey.
@@ -397,7 +543,6 @@ impl DesktopHotkeyListener {
                         }
                         if let Err(e) = manager.register(fb_key) {
                             log::warn!("quick fallback register failed ({fb}): {e}");
-                            quick_register_error = Some(e.to_string());
                         } else {
                             quick_hotkey = fb_key;
                             actual_quick = fb.to_string();
@@ -409,9 +554,7 @@ impl DesktopHotkeyListener {
                 }
                 if !quick_registered {
                     let _ = manager.unregister(hotkey);
-                    let detail =
-                        quick_register_error.unwrap_or_else(|| quick_hotkey_str.to_string());
-                    return Err(format!("{}: {detail}", I18nKey::HotkeyErrRegister.text()));
+                    return Err(hotkey_register_error_message());
                 }
             }
         }
@@ -430,13 +573,51 @@ impl DesktopHotkeyListener {
             actual_quick_hotkey: actual_quick,
             main_fallback_used: main_fallback,
             quick_fallback_used: quick_fallback,
+            item_hotkeys: Vec::new(),
+            latest_hotkeys: Vec::new(),
         })
     }
 
     fn register_hotkey(&self, hotkey: HotKey) -> Result<(), String> {
         self.manager
             .register(hotkey)
-            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))
+            .map_err(|_| hotkey_register_error_message())
+    }
+
+    fn is_conflicting_except(
+        &self,
+        hotkey: HotKey,
+        ignore_item_id: Option<i64>,
+        ignore_latest_slot: Option<usize>,
+        ignore_main: bool,
+        ignore_quick: bool,
+    ) -> bool {
+        let id = hotkey.id();
+        // Check against main hotkey.
+        if !ignore_main && self.hotkey.id() == id {
+            return true;
+        }
+        // Check against quick hotkey.
+        if !ignore_quick && self.quick_enabled && self.quick_hotkey.id() == id {
+            return true;
+        }
+        // Check against item hotkeys.
+        if self
+            .item_hotkeys
+            .iter()
+            .any(|binding| Some(binding.id) != ignore_item_id && binding.hotkey.id() == id)
+        {
+            return true;
+        }
+        // Check against latest hotkeys.
+        if self
+            .latest_hotkeys
+            .iter()
+            .any(|binding| Some(binding.slot) != ignore_latest_slot && binding.hotkey.id() == id)
+        {
+            return true;
+        }
+        false
     }
 }
 
@@ -516,14 +697,14 @@ impl HotkeyListener for DesktopHotkeyListener {
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
         let new_hotkey = parse_hotkey(hotkey_str)?;
         // Refuse to shadow the quick-window hotkey.
-        if self.quick_enabled && new_hotkey.id() == self.quick_hotkey.id() {
-            return Err(I18nKey::HotkeyErrConflictQuick.text().to_string());
+        if self.is_conflicting_except(new_hotkey, None, None, true, false) {
+            return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         // Register the new hotkey *before* dropping the old one so a
         // conflict with another application leaves the current hotkey intact.
         self.manager
             .register(new_hotkey)
-            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+            .map_err(|_| hotkey_register_error_message())?;
         if self.registered {
             let _ = self.manager.unregister(self.hotkey);
         }
@@ -545,8 +726,8 @@ impl HotkeyListener for DesktopHotkeyListener {
 
         let new_hotkey = parse_hotkey(hotkey_str)?;
         // Refuse to shadow the main hotkey.
-        if self.registered && new_hotkey.id() == self.hotkey.id() {
-            return Err(I18nKey::HotkeyErrConflictMain.text().to_string());
+        if self.is_conflicting_except(new_hotkey, None, None, false, true) {
+            return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         if self.quick_registered && new_hotkey.id() == self.quick_hotkey.id() {
             self.quick_enabled = true;
@@ -593,6 +774,11 @@ impl HotkeyListener for DesktopHotkeyListener {
         self.is_recording
     }
 
+    fn start_custom_recording(&mut self) {
+        self.unregister();
+        self.is_recording = true;
+    }
+
     fn unregister(&mut self) {
         if self.registered {
             let _ = self.manager.unregister(self.hotkey);
@@ -601,6 +787,18 @@ impl HotkeyListener for DesktopHotkeyListener {
         if self.quick_registered {
             let _ = self.manager.unregister(self.quick_hotkey);
             self.quick_registered = false;
+        }
+        for binding in &mut self.item_hotkeys {
+            if binding.registered {
+                let _ = self.manager.unregister(binding.hotkey);
+                binding.registered = false;
+            }
+        }
+        for binding in &mut self.latest_hotkeys {
+            if binding.registered {
+                let _ = self.manager.unregister(binding.hotkey);
+                binding.registered = false;
+            }
         }
     }
 
@@ -622,9 +820,30 @@ impl HotkeyListener for DesktopHotkeyListener {
                 Err(e) => log::error!("quick hotkey register failed: {e}"),
             }
         }
+        let manager = &self.manager;
+        for binding in &mut self.item_hotkeys {
+            if !binding.registered {
+                match manager.register(binding.hotkey) {
+                    Ok(()) => binding.registered = true,
+                    Err(e) => log::error!("item hotkey register failed ({}): {e}", binding.id),
+                }
+            }
+        }
+        for binding in &mut self.latest_hotkeys {
+            if !binding.registered {
+                match manager.register(binding.hotkey) {
+                    Ok(()) => binding.registered = true,
+                    Err(e) => log::error!("latest hotkey register failed ({}): {e}", binding.slot),
+                }
+            }
+        }
     }
 
     fn poll_event(&mut self) -> Option<HotkeyEvent> {
+        if self.is_recording {
+            while GlobalHotKeyEvent::receiver().try_recv().is_ok() {}
+            return None;
+        }
         while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
             // Released and stale/unrecognised events must not stop draining the
             // shared queue; otherwise the following press waits for another poll.
@@ -647,16 +866,175 @@ impl HotkeyListener for DesktopHotkeyListener {
             {
                 return Some(action);
             }
+            // Check per-item custom hotkeys.
+            if let Some(binding) = self
+                .item_hotkeys
+                .iter()
+                .find(|binding| binding.registered && binding.hotkey.id() == id)
+            {
+                return Some(HotkeyEvent::CustomItem(binding.id));
+            }
+            // Check latest-N slot hotkeys.
+            if let Some(binding) = self
+                .latest_hotkeys
+                .iter()
+                .find(|binding| binding.registered && binding.hotkey.id() == id)
+            {
+                return Some(HotkeyEvent::LatestItem(binding.slot));
+            }
         }
         None
     }
 
-    fn poll_recording_pressed(&mut self) -> Option<String> {
+    fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress> {
         if !self.is_recording {
             return None;
         }
         let modifiers = platform_input::pressed_modifiers();
-        platform_input::pressed_key().map(|code| format_pressed_hotkey(modifiers, code))
+        platform_input::pressed_key().and_then(|code| format_recorded_hotkey(modifiers, code))
+    }
+
+    fn register_item_hotkey(&mut self, id: i64, hotkey_str: &str) -> Result<(), String> {
+        let hk = parse_hotkey(hotkey_str)?;
+        if self.is_conflicting_except(hk, Some(id), None, false, false) {
+            return Err(I18nKey::HotkeyConflictCustom.text().to_string());
+        }
+        let existing = self
+            .item_hotkeys
+            .iter()
+            .position(|binding| binding.id == id);
+        if existing.is_some_and(|pos| self.item_hotkeys[pos].hotkey.id() == hk.id()) {
+            if !self.item_hotkeys[existing.unwrap()].registered {
+                self.register_hotkey(hk)?;
+                self.item_hotkeys[existing.unwrap()].registered = true;
+            }
+            return Ok(());
+        }
+        self.register_hotkey(hk)?;
+        if let Some(pos) = existing {
+            if self.item_hotkeys[pos].registered {
+                let _ = self.manager.unregister(self.item_hotkeys[pos].hotkey);
+            }
+            self.item_hotkeys[pos] = ItemHotkeyBinding {
+                id,
+                hotkey: hk,
+                registered: true,
+            };
+        } else {
+            self.item_hotkeys.push(ItemHotkeyBinding {
+                id,
+                hotkey: hk,
+                registered: true,
+            });
+        }
+        Ok(())
+    }
+
+    fn unregister_item_hotkey(&mut self, id: i64) {
+        if let Some(pos) = self
+            .item_hotkeys
+            .iter()
+            .position(|binding| binding.id == id)
+        {
+            let binding = self.item_hotkeys.remove(pos);
+            if binding.registered {
+                let _ = self.manager.unregister(binding.hotkey);
+            }
+        }
+    }
+
+    fn register_latest_hotkey(&mut self, slot: usize, hotkey_str: &str) -> Result<(), String> {
+        let hk = parse_hotkey(hotkey_str)?;
+        if self.is_conflicting_except(hk, None, Some(slot), false, false) {
+            return Err(I18nKey::HotkeyConflictCustom.text().to_string());
+        }
+        let existing = self
+            .latest_hotkeys
+            .iter()
+            .position(|binding| binding.slot == slot);
+        if existing.is_some_and(|pos| self.latest_hotkeys[pos].hotkey.id() == hk.id()) {
+            if !self.latest_hotkeys[existing.unwrap()].registered {
+                self.register_hotkey(hk)?;
+                self.latest_hotkeys[existing.unwrap()].registered = true;
+            }
+            return Ok(());
+        }
+        self.register_hotkey(hk)?;
+        if let Some(pos) = existing {
+            if self.latest_hotkeys[pos].registered {
+                let _ = self.manager.unregister(self.latest_hotkeys[pos].hotkey);
+            }
+            self.latest_hotkeys[pos] = LatestHotkeyBinding {
+                slot,
+                hotkey: hk,
+                registered: true,
+            };
+        } else {
+            self.latest_hotkeys.push(LatestHotkeyBinding {
+                slot,
+                hotkey: hk,
+                registered: true,
+            });
+        }
+        Ok(())
+    }
+
+    fn unregister_latest_hotkey(&mut self, slot: usize) {
+        if let Some(pos) = self
+            .latest_hotkeys
+            .iter()
+            .position(|binding| binding.slot == slot)
+        {
+            let binding = self.latest_hotkeys.remove(pos);
+            if binding.registered {
+                let _ = self.manager.unregister(binding.hotkey);
+            }
+        }
+    }
+
+    fn reload_custom_hotkeys(
+        &mut self,
+        item_hotkeys: &[(i64, String)],
+        latest_hotkeys: &[(usize, String)],
+    ) {
+        // Unregister all existing custom hotkeys.
+        for binding in self.item_hotkeys.drain(..) {
+            if binding.registered {
+                let _ = self.manager.unregister(binding.hotkey);
+            }
+        }
+        for binding in self.latest_hotkeys.drain(..) {
+            if binding.registered {
+                let _ = self.manager.unregister(binding.hotkey);
+            }
+        }
+        // Re-register from the provided lists.
+        for &(id, ref s) in item_hotkeys {
+            if let Ok(hk) = parse_hotkey(s) {
+                if !self.is_conflicting_except(hk, None, None, false, false)
+                    && self.manager.register(hk).is_ok()
+                {
+                    self.item_hotkeys.push(ItemHotkeyBinding {
+                        id,
+                        hotkey: hk,
+                        registered: true,
+                    });
+                }
+            }
+        }
+        for &(slot, ref s) in latest_hotkeys {
+            if let Ok(hk) = parse_hotkey(s) {
+                if !self.is_conflicting_except(hk, None, None, false, false)
+                    && self.manager.register(hk).is_ok()
+                {
+                    self.latest_hotkeys.push(LatestHotkeyBinding {
+                        slot,
+                        hotkey: hk,
+                        registered: true,
+                    });
+                }
+            }
+        }
     }
 
     fn set_quick_actions_enabled(&mut self, enabled: bool) {
@@ -937,10 +1315,11 @@ mod linux {
         fn poll_event(&mut self) -> Option<HotkeyEvent> {
             None
         }
-        fn poll_recording_pressed(&mut self) -> Option<String> {
+        fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress> {
             None
         }
         fn set_quick_actions_enabled(&mut self, _enabled: bool) {}
+        fn start_custom_recording(&mut self) {}
         fn unregister(&mut self) {}
         fn register(&mut self) {}
     }
