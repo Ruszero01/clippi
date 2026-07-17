@@ -39,6 +39,7 @@ type AppCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 const LATEST_HOTKEY_POPUP_WIDTH: f32 = 304.;
 const LATEST_HOTKEY_POPUP_HEIGHT: f32 = 316.;
 const LATEST_HOTKEY_SLOT_WIDTH: f32 = 128.;
+const LATEST_HOTKEY_COLUMN_GAP: f32 = 12.;
 
 /// Entry in a per-app list (blacklist or paste shortcut).
 struct AppListEntry {
@@ -747,6 +748,7 @@ impl SettingsPanel {
             .top(px(0.))
             .bottom(px(0.))
             .bg(rgba(0x00000033))
+            .rounded(px(12.))
             .opacity(opacity)
             .cursor(CursorStyle::PointingHand)
             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -763,216 +765,173 @@ impl SettingsPanel {
                     .w(px(popup_width))
                     .max_w(px(popup_width))
                     .rounded(px(8.))
-                    .bg(theme.panel_surface)
+                    .bg(theme.surface)
                     .border(px(1.))
-                    .border_color(theme.panel_sep_line)
+                    .border_color(theme.divider)
                     .shadow_lg()
                     .p(px(12. * scale))
                     .occlude()
                     .flex()
                     .flex_col()
-                    .gap(px(10.))
+                    .gap(px(8.))
                     .cursor(CursorStyle::Arrow)
                     .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
                         cx.stop_propagation();
                     })
                     .child(
                         div()
-                            .h(px(24.))
+                            .h(px(28.))
                             .flex()
-                            .flex_row()
                             .items_center()
                             .justify_between()
                             .child(
                                 div()
                                     .flex()
-                                    .flex_row()
+                                    .flex_1()
                                     .items_center()
-                                    .justify_between()
+                                    .gap(px(14.))
                                     .child(
                                         div()
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .gap(px(8.))
-                                            .child(
-                                                div()
-                                                    .font_family("iconfont")
-                                                    .text_size(px(14.))
-                                                    .text_color(theme.accent)
-                                                    .child("\u{e6a8}"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(13.))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_color(theme.text_1)
-                                                    .child(I18nKey::LatestHotkeysTitle.text()),
-                                            ),
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme.text_1)
+                                            .child(I18nKey::LatestHotkeysTitle.text()),
                                     )
                                     .child(
                                         div()
+                                            .h(px(22.))
+                                            .px(px(8.))
+                                            .rounded(px(11.))
+                                            .bg(theme.accent_soft)
+                                            .border(px(1.))
+                                            .border_color(theme.accent)
                                             .flex()
-                                            .flex_row()
                                             .items_center()
-                                            .gap(px(8.))
-                                            .child(
-                                                div()
-                                                    .h(px(22.))
-                                                    .px(px(8.))
-                                                    .rounded(px(11.))
-                                                    .bg(theme.accent_soft)
-                                                    .border(px(1.))
-                                                    .border_color(theme.accent)
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_size(px(10.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.accent)
-                                                    .child(format!("{}/10", configured)),
-                                            )
-                                            .child({
-                                                let close = panel_entity.clone();
-                                                let close_hover = theme.danger;
-                                                let close_text = theme.text_2;
-                                                div()
-                                                    .w(px(24.))
-                                                    .h(px(24.))
-                                                    .rounded(px(5.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .cursor(CursorStyle::PointingHand)
-                                                    .hover(move |style| {
-                                                        style.bg(close_hover).opacity(0.12)
-                                                    })
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        move |_ev, _window, cx| {
-                                                            cx.stop_propagation();
-                                                            close.update(cx, |panel, cx| {
-                                                                panel.latest_hotkeys_popup_open =
-                                                                    false;
-                                                                cx.notify();
-                                                            });
-                                                        },
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .font_family("iconfont")
-                                                            .text_size(px(13.))
-                                                            .text_color(close_text)
-                                                            .child("\u{e7b7}"),
-                                                    )
-                                            }),
+                                            .justify_center()
+                                            .text_size(px(10.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.accent)
+                                            .child(format!("{}/10", configured)),
                                     ),
                             )
-                            .child(
+                            .child({
+                                let close = panel_entity.clone();
+                                let close_text = theme.text_2;
                                 div()
+                                    .w(px(26.))
+                                    .h(px(26.))
+                                    .rounded(px(6.))
+                                    .font_family("iconfont")
+                                    .text_size(px(13.))
+                                    .text_color(close_text)
                                     .flex()
-                                    .flex_col()
-                                    .gap(px(8.))
-                                    .w(px(2. * LATEST_HOTKEY_SLOT_WIDTH + 8.))
-                                    .children((0..5).map(move |row| {
-                                        let left = row;
-                                        let right = row + 5;
-                                        let latest_l = latest.clone();
-                                        let latest_r = latest.clone();
-                                        let wm_l = wm.clone();
-                                        let wm_r = wm.clone();
-                                        let panel_l = panel_entity.clone();
-                                        let panel_r = panel_entity.clone();
-                                        let state_l = state.clone();
-                                        let state_r = state.clone();
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap(px(8.))
-                                            .child({
-                                                let panel_record = panel_l.clone();
-                                                let rec: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wm_l.update(cx, |wm, cx| {
-                                                            wm.start_latest_slot_recording(
-                                                                left, cx,
-                                                            );
-                                                        });
-                                                        panel_record
-                                                            .update(cx, |_panel, cx| cx.notify());
-                                                    });
-                                                let panel = panel_l.clone();
-                                                let state = state_l.clone();
-                                                let wm_clear = wm.clone();
-                                                let clr: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wm_clear.update(cx, |wm, _cx| {
-                                                            wm.unregister_latest_slot_hotkey(left);
-                                                        });
-                                                        state.update(cx, |st, _cx| {
-                                                            if left
-                                                                < st.settings.latest_hotkeys.len()
-                                                            {
-                                                                st.settings.latest_hotkeys[left]
-                                                                    .hotkey
-                                                                    .clear();
-                                                                st.settings.save();
-                                                            }
-                                                        });
-                                                        panel.update(cx, |_panel, cx| cx.notify());
-                                                    });
-                                                Self::render_latest_slot_cell(
-                                                    left,
-                                                    &latest_l,
-                                                    theme.clone(),
-                                                    recording_slot == Some(left),
-                                                    rec,
-                                                    Some(clr),
-                                                )
-                                            })
-                                            .child({
-                                                let panel_record = panel_r.clone();
-                                                let rec: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wm_r.update(cx, |wm, cx| {
-                                                            wm.start_latest_slot_recording(
-                                                                right, cx,
-                                                            );
-                                                        });
-                                                        panel_record
-                                                            .update(cx, |_panel, cx| cx.notify());
-                                                    });
-                                                let panel = panel_r.clone();
-                                                let state = state_r.clone();
-                                                let wm_clear = wm.clone();
-                                                let clr: AppCallback =
-                                                    Rc::new(move |_window, cx| {
-                                                        wm_clear.update(cx, |wm, _cx| {
-                                                            wm.unregister_latest_slot_hotkey(right);
-                                                        });
-                                                        state.update(cx, |st, _cx| {
-                                                            if right
-                                                                < st.settings.latest_hotkeys.len()
-                                                            {
-                                                                st.settings.latest_hotkeys[right]
-                                                                    .hotkey
-                                                                    .clear();
-                                                                st.settings.save();
-                                                            }
-                                                        });
-                                                        panel.update(cx, |_panel, cx| cx.notify());
-                                                    });
-                                                Self::render_latest_slot_cell(
-                                                    right,
-                                                    &latest_r,
-                                                    theme.clone(),
-                                                    recording_slot == Some(right),
-                                                    rec,
-                                                    Some(clr),
-                                                )
-                                            })
-                                    })),
-                            ),
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|style| style.bg(rgba(0xffffff0d)))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                        close.update(cx, |panel, cx| {
+                                            panel.latest_hotkeys_popup_open = false;
+                                            cx.notify();
+                                        });
+                                    })
+                                    .child("\u{e7b7}")
+                            }),
+                    )
+                    .child(div().h(px(1.)).bg(theme.divider))
+                    .child(
+                        div().w_full().flex().justify_center().child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.))
+                                .w(px(2. * LATEST_HOTKEY_SLOT_WIDTH + LATEST_HOTKEY_COLUMN_GAP))
+                                .children((0..5).map(move |row| {
+                                    let left = row;
+                                    let right = row + 5;
+                                    let latest_l = latest.clone();
+                                    let latest_r = latest.clone();
+                                    let wm_l = wm.clone();
+                                    let wm_r = wm.clone();
+                                    let panel_l = panel_entity.clone();
+                                    let panel_r = panel_entity.clone();
+                                    let state_l = state.clone();
+                                    let state_r = state.clone();
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(LATEST_HOTKEY_COLUMN_GAP))
+                                        .child({
+                                            let panel_record = panel_l.clone();
+                                            let rec: AppCallback = Rc::new(move |_window, cx| {
+                                                wm_l.update(cx, |wm, cx| {
+                                                    wm.start_latest_slot_recording(left, cx);
+                                                });
+                                                panel_record.update(cx, |_panel, cx| cx.notify());
+                                            });
+                                            let panel = panel_l.clone();
+                                            let state = state_l.clone();
+                                            let wm_clear = wm.clone();
+                                            let clr: AppCallback = Rc::new(move |_window, cx| {
+                                                wm_clear.update(cx, |wm, _cx| {
+                                                    wm.unregister_latest_slot_hotkey(left);
+                                                });
+                                                state.update(cx, |st, _cx| {
+                                                    if left < st.settings.latest_hotkeys.len() {
+                                                        st.settings.latest_hotkeys[left]
+                                                            .hotkey
+                                                            .clear();
+                                                        st.settings.save();
+                                                    }
+                                                });
+                                                panel.update(cx, |_panel, cx| cx.notify());
+                                            });
+                                            Self::render_latest_slot_cell(
+                                                left,
+                                                &latest_l,
+                                                theme.clone(),
+                                                recording_slot == Some(left),
+                                                rec,
+                                                Some(clr),
+                                            )
+                                        })
+                                        .child({
+                                            let panel_record = panel_r.clone();
+                                            let rec: AppCallback = Rc::new(move |_window, cx| {
+                                                wm_r.update(cx, |wm, cx| {
+                                                    wm.start_latest_slot_recording(right, cx);
+                                                });
+                                                panel_record.update(cx, |_panel, cx| cx.notify());
+                                            });
+                                            let panel = panel_r.clone();
+                                            let state = state_r.clone();
+                                            let wm_clear = wm.clone();
+                                            let clr: AppCallback = Rc::new(move |_window, cx| {
+                                                wm_clear.update(cx, |wm, _cx| {
+                                                    wm.unregister_latest_slot_hotkey(right);
+                                                });
+                                                state.update(cx, |st, _cx| {
+                                                    if right < st.settings.latest_hotkeys.len() {
+                                                        st.settings.latest_hotkeys[right]
+                                                            .hotkey
+                                                            .clear();
+                                                        st.settings.save();
+                                                    }
+                                                });
+                                                panel.update(cx, |_panel, cx| cx.notify());
+                                            });
+                                            Self::render_latest_slot_cell(
+                                                right,
+                                                &latest_r,
+                                                theme.clone(),
+                                                recording_slot == Some(right),
+                                                rec,
+                                                Some(clr),
+                                            )
+                                        })
+                                })),
+                        ),
                     ),
             )
     }

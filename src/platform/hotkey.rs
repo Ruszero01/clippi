@@ -31,6 +31,12 @@ pub enum QuickAction {
     NextAltMode,     // Ctrl/Cmd+↓ → cycle advanced paste mode
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotkeyRecordingPress {
+    Hotkey(String),
+    Cancel,
+}
+
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
 pub trait HotkeyListener {
     fn stop(&mut self);
@@ -41,7 +47,7 @@ pub trait HotkeyListener {
     fn finish_recording(&mut self);
     fn is_recording(&self) -> bool;
     fn poll_event(&mut self) -> Option<HotkeyEvent>;
-    fn poll_recording_pressed(&mut self) -> Option<String>;
+    fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress>;
     fn set_quick_actions_enabled(&mut self, enabled: bool);
     /// Register a per-item custom hotkey. Returns error on conflict.
     fn register_item_hotkey(&mut self, _id: i64, _hotkey_str: &str) -> Result<(), String> {
@@ -90,6 +96,10 @@ pub trait HotkeyListener {
 }
 
 /// Shared keycode mapping: name string → Code variant (platform-agnostic).
+fn hotkey_register_error_message() -> String {
+    I18nKey::HotkeyConflictCustom.text().to_string()
+}
+
 pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
     match name {
         "a" => Some(Code::KeyA),
@@ -271,17 +281,25 @@ fn format_pressed_hotkey(modifiers: Modifiers, code: Code) -> String {
     parts.join("+")
 }
 
-fn format_recorded_hotkey(modifiers: Modifiers, code: Code) -> Option<String> {
-    if matches!(code, Code::Escape | Code::Enter | Code::NumpadEnter) {
+fn format_recorded_hotkey(modifiers: Modifiers, code: Code) -> Option<HotkeyRecordingPress> {
+    if code == Code::Escape {
+        return Some(HotkeyRecordingPress::Cancel);
+    }
+    if matches!(code, Code::Enter | Code::NumpadEnter) || modifiers.is_empty() {
         None
     } else {
-        Some(format_pressed_hotkey(modifiers, code))
+        Some(HotkeyRecordingPress::Hotkey(format_pressed_hotkey(
+            modifiers, code,
+        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format_recorded_hotkey, parse_hotkey};
+    use super::{
+        format_recorded_hotkey, hotkey_register_error_message, parse_hotkey, HotkeyRecordingPress,
+    };
+    use crate::core::i18n_keys::I18nKey;
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 
     #[test]
@@ -329,7 +347,7 @@ mod tests {
     fn recording_ignores_control_keys() {
         assert_eq!(
             format_recorded_hotkey(Modifiers::empty(), Code::Escape),
-            None
+            Some(HotkeyRecordingPress::Cancel)
         );
         assert_eq!(
             format_recorded_hotkey(Modifiers::empty(), Code::Enter),
@@ -339,10 +357,20 @@ mod tests {
             format_recorded_hotkey(Modifiers::empty(), Code::NumpadEnter),
             None
         );
+        assert_eq!(format_recorded_hotkey(Modifiers::empty(), Code::KeyV), None);
         assert_eq!(
             format_recorded_hotkey(Modifiers::ALT, Code::KeyV),
-            Some("Alt+V".to_string())
+            Some(HotkeyRecordingPress::Hotkey("Alt+V".to_string()))
         );
+    }
+
+    #[test]
+    fn register_errors_are_user_facing_conflicts() {
+        assert_eq!(
+            hotkey_register_error_message(),
+            I18nKey::HotkeyConflictCustom.text()
+        );
+        assert!(!hotkey_register_error_message().contains("HotKey"));
     }
 
     #[test]
@@ -463,10 +491,8 @@ impl DesktopHotkeyListener {
         let mut main_fallback = false;
         let mut hotkey = parse_hotkey(hotkey_str)?;
         let mut registered = true;
-        let mut main_register_error = None;
         if let Err(e) = manager.register(hotkey) {
             log::warn!("main hotkey register failed ({hotkey_str}): {e}");
-            main_register_error = Some(e.to_string());
             registered = false;
             // Walk the fallback chain.
             for &fb in MAIN_FALLBACKS {
@@ -484,8 +510,7 @@ impl DesktopHotkeyListener {
             }
         }
         if !registered {
-            let detail = main_register_error.unwrap_or_else(|| hotkey_str.to_string());
-            return Err(format!("{}: {detail}", I18nKey::HotkeyErrRegister.text()));
+            return Err(hotkey_register_error_message());
         }
 
         // ── Quick hotkey: try configured → fallback chain ──
@@ -510,7 +535,6 @@ impl DesktopHotkeyListener {
                 actual_quick = quick_hotkey_str.to_string();
             }
             if !quick_registered {
-                let mut quick_register_error = None;
                 for &fb in QUICK_FALLBACKS {
                     if let Ok(fb_key) = parse_hotkey(fb) {
                         // Also skip if it collides with the actual main hotkey.
@@ -519,7 +543,6 @@ impl DesktopHotkeyListener {
                         }
                         if let Err(e) = manager.register(fb_key) {
                             log::warn!("quick fallback register failed ({fb}): {e}");
-                            quick_register_error = Some(e.to_string());
                         } else {
                             quick_hotkey = fb_key;
                             actual_quick = fb.to_string();
@@ -531,9 +554,7 @@ impl DesktopHotkeyListener {
                 }
                 if !quick_registered {
                     let _ = manager.unregister(hotkey);
-                    let detail =
-                        quick_register_error.unwrap_or_else(|| quick_hotkey_str.to_string());
-                    return Err(format!("{}: {detail}", I18nKey::HotkeyErrRegister.text()));
+                    return Err(hotkey_register_error_message());
                 }
             }
         }
@@ -560,7 +581,7 @@ impl DesktopHotkeyListener {
     fn register_hotkey(&self, hotkey: HotKey) -> Result<(), String> {
         self.manager
             .register(hotkey)
-            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))
+            .map_err(|_| hotkey_register_error_message())
     }
 
     fn is_conflicting_except(
@@ -683,7 +704,7 @@ impl HotkeyListener for DesktopHotkeyListener {
         // conflict with another application leaves the current hotkey intact.
         self.manager
             .register(new_hotkey)
-            .map_err(|e| format!("{}: {e}", I18nKey::HotkeyErrRegister.text()))?;
+            .map_err(|_| hotkey_register_error_message())?;
         if self.registered {
             let _ = self.manager.unregister(self.hotkey);
         }
@@ -865,7 +886,7 @@ impl HotkeyListener for DesktopHotkeyListener {
         None
     }
 
-    fn poll_recording_pressed(&mut self) -> Option<String> {
+    fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress> {
         if !self.is_recording {
             return None;
         }
@@ -1294,7 +1315,7 @@ mod linux {
         fn poll_event(&mut self) -> Option<HotkeyEvent> {
             None
         }
-        fn poll_recording_pressed(&mut self) -> Option<String> {
+        fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress> {
             None
         }
         fn set_quick_actions_enabled(&mut self, _enabled: bool) {}

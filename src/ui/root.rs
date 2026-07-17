@@ -193,7 +193,8 @@ impl RootView {
                         list.finish_hotkey_recording_ui(cx);
                         list.set_items(items, cx);
                     });
-                    this.settings_panel.update(cx, |_panel, cx| {
+                    this.settings_panel.update(cx, |panel, cx| {
+                        panel.recording_paste_shortcut = None;
                         cx.notify();
                     });
                     cx.notify();
@@ -968,6 +969,14 @@ impl Render for RootView {
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
                 }
+                let cancelled_recording = root_this.update(cx, |this, cx| {
+                    this.window_manager
+                        .update(cx, |wm, cx| wm.cancel_active_hotkey_recording(cx))
+                });
+                if cancelled_recording {
+                    cx.stop_propagation();
+                    return;
+                }
                 let is_settings = root_this.read(cx).current_view == "settings";
                 let is_edit = root_this.read(cx).current_view == "edit";
                 if is_settings {
@@ -1050,6 +1059,8 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .occlude()
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                             search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
@@ -1105,6 +1116,8 @@ impl Render for RootView {
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(edit_tag_opacity)
                         .flex()
                         .items_center()
@@ -1252,6 +1265,8 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .occlude()
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(tag_picker_opacity)
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();

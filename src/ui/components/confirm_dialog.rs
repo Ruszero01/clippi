@@ -217,6 +217,8 @@ impl ConfirmDialog {
         div()
             .absolute()
             .size_full()
+            .bg(rgba(0x00000033))
+            .rounded(px(12.))
             .flex()
             .items_center()
             .justify_center()

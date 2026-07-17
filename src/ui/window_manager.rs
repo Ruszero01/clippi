@@ -18,7 +18,9 @@ use crate::core::frontend::{
 };
 use crate::core::i18n_keys::I18nKey;
 use crate::platform::focus::{start_focus_watcher, FocusWatcher};
-use crate::platform::hotkey::{create_hotkey_listener, HotkeyEvent, HotkeyListener, QuickAction};
+use crate::platform::hotkey::{
+    create_hotkey_listener, HotkeyEvent, HotkeyListener, HotkeyRecordingPress, QuickAction,
+};
 use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
 use crate::services::gpui_clipboard::GpuiClipboardService;
@@ -630,7 +632,22 @@ impl WindowManager {
         if let Some(ref mut hk) = self.hotkey {
             // poll_recording_pressed() returns None when not recording —            // it checks the hotkey's internal is_recording flag directly,
             // --- avoiding any AppState synchronization gap. ---
-            if let Some(new_hotkey) = hk.poll_recording_pressed() {
+            if let Some(recording_press) = hk.poll_recording_pressed() {
+                let HotkeyRecordingPress::Hotkey(new_hotkey) = recording_press else {
+                    self.recording_paste_shortcut_app = None;
+                    self.recording_item_hotkey_id = None;
+                    self.recording_item_hotkey_format = None;
+                    self.recording_latest_slot = None;
+                    hk.finish_recording();
+                    hk.register();
+                    self.state.update(cx, |state, _cx| {
+                        state.hotkey_recording = false;
+                        state.recording_quick_hotkey = false;
+                    });
+                    cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+                    cx.notify();
+                    return;
+                };
                 // Check if recording for paste shortcut
                 if let Some(app_name) = self.recording_paste_shortcut_app.take() {
                     hk.finish_recording();
@@ -2394,6 +2411,38 @@ impl WindowManager {
             hk.finish_recording();
             hk.register();
         }
+    }
+
+    /// Cancel the currently active hotkey recording, if any.
+    pub fn cancel_active_hotkey_recording(&mut self, cx: &mut Context<Self>) -> bool {
+        let state_recording = self.state.read(cx).hotkey_recording
+            || self.state.read(cx).recording_quick_hotkey
+            || self.recording_paste_shortcut_app.is_some()
+            || self.recording_item_hotkey_id.is_some()
+            || self.recording_latest_slot.is_some()
+            || self
+                .hotkey
+                .as_ref()
+                .is_some_and(|hotkey| hotkey.is_recording());
+        if !state_recording {
+            return false;
+        }
+
+        self.recording_paste_shortcut_app = None;
+        self.recording_item_hotkey_id = None;
+        self.recording_item_hotkey_format = None;
+        self.recording_latest_slot = None;
+        self.state.update(cx, |state, _cx| {
+            state.hotkey_recording = false;
+            state.recording_quick_hotkey = false;
+        });
+        if let Some(ref mut hk) = self.hotkey {
+            hk.finish_recording();
+            hk.register();
+        }
+        cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+        cx.notify();
+        true
     }
 
     /// Register the item hotkey that was just recorded.
