@@ -36,8 +36,9 @@ pub enum HotkeyConfirmAction {
 
 /// GPUI callback type alias for per-app list entries.
 type AppCallback = Rc<dyn Fn(&mut Window, &mut App)>;
-const LATEST_HOTKEY_POPUP_WIDTH: f32 = 344.;
-const LATEST_HOTKEY_SLOT_WIDTH: f32 = 144.;
+const LATEST_HOTKEY_POPUP_WIDTH: f32 = 304.;
+const LATEST_HOTKEY_POPUP_HEIGHT: f32 = 316.;
+const LATEST_HOTKEY_SLOT_WIDTH: f32 = 128.;
 
 /// Entry in a per-app list (blacklist or paste shortcut).
 struct AppListEntry {
@@ -725,9 +726,14 @@ impl SettingsPanel {
         latest: Vec<LatestHotkeyEntry>,
         recording_slot: Option<usize>,
         theme: ClippiTheme,
-        motion: (f32, f32, f32),
+        layout: (f32, f32, f32, f32, f32),
     ) -> impl IntoElement {
-        let (opacity, scale, offset) = motion;
+        let (opacity, scale, offset, viewport_width, viewport_height) = layout;
+        let popup_width = LATEST_HOTKEY_POPUP_WIDTH * scale;
+        let popup_height = LATEST_HOTKEY_POPUP_HEIGHT * scale;
+        let main_width = (viewport_width - 36.).max(popup_width);
+        let popup_left = ((main_width - popup_width) * 0.5).max(8.);
+        let popup_top = ((viewport_height - popup_height) * 0.5).max(8.) + offset;
         let configured = latest
             .iter()
             .filter(|entry| !entry.hotkey.is_empty())
@@ -740,9 +746,6 @@ impl SettingsPanel {
             .right(px(0.))
             .top(px(0.))
             .bottom(px(0.))
-            .flex()
-            .items_center()
-            .justify_center()
             .bg(rgba(0x00000033))
             .opacity(opacity)
             .cursor(CursorStyle::PointingHand)
@@ -754,28 +757,32 @@ impl SettingsPanel {
             })
             .child(
                 div()
-                    .w(px(LATEST_HOTKEY_POPUP_WIDTH * scale))
-                    .max_w(px(LATEST_HOTKEY_POPUP_WIDTH * scale))
-                    .flex_shrink_0()
-                    .mt(px(offset))
+                    .absolute()
+                    .left(px(popup_left))
+                    .top(px(popup_top))
+                    .w(px(popup_width))
+                    .max_w(px(popup_width))
+                    .rounded(px(8.))
+                    .bg(theme.panel_surface)
+                    .border(px(1.))
+                    .border_color(theme.panel_sep_line)
+                    .shadow_lg()
+                    .p(px(12. * scale))
+                    .occlude()
                     .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .cursor(CursorStyle::Arrow)
+                    .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
+                        cx.stop_propagation();
+                    })
                     .child(
                         div()
-                            .w_full()
-                            .rounded(px(12.))
-                            .bg(theme.panel_surface)
-                            .border(px(1.))
-                            .border_color(theme.panel_sep_line)
-                            .shadow_lg()
-                            .p(px(14. * scale))
-                            .occlude()
+                            .h(px(24.))
                             .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .cursor(CursorStyle::Arrow)
-                            .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
-                                cx.stop_propagation();
-                            })
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
                             .child(
                                 div()
                                     .flex()

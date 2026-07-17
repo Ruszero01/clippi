@@ -1385,6 +1385,8 @@ impl Render for RootView {
                         latest_hotkeys_popup_opacity,
                         latest_hotkeys_popup_scale,
                         latest_hotkeys_popup_offset,
+                        win_w,
+                        win_h,
                     ),
                 ))
             })
