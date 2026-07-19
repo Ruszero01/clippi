@@ -23,15 +23,29 @@ pub struct CleanupStats {
     pub expired_tombstones: u32,
     /// Number of clipboard items removed due to retention_days expiry.
     pub expired_items: u32,
+    /// Deleted item IDs that had custom hotkeys and need unregistering.
+    pub expired_hotkey_item_ids: Vec<i64>,
+    /// Whether cleanup wrote sync tombstones and should trigger a sync push.
+    pub sync_dirty: bool,
 }
 
 impl CleanupStats {
     pub fn is_empty(&self) -> bool {
+        // Side-effect fields (`expired_hotkey_item_ids`, `sync_dirty`) are
+        // derived from row cleanup and are intentionally excluded here.
         self.orphan_images == 0
             && self.unreferenced_icons == 0
             && self.expired_tombstones == 0
             && self.expired_items == 0
     }
+}
+
+/// Sync settings needed when retention cleanup deletes live clipboard items.
+#[derive(Debug, Clone)]
+pub struct CleanupSyncScope {
+    pub include_images: bool,
+    pub favorites_only: bool,
+    pub device_name: String,
 }
 
 // ── Per-task helpers ──────────────────────────────────────────────────
@@ -164,12 +178,46 @@ fn clean_expired_tombstones(db: &Database) -> u32 {
 }
 
 /// Remove non-favorite clipboard items older than `retention_days`.
-fn clean_expired_clipboard_items(db: &Database, retention_days: u32) -> u32 {
+fn clean_expired_clipboard_items(
+    db: &Database,
+    retention_days: u32,
+    sync_scope: Option<&CleanupSyncScope>,
+) -> (u32, bool, Vec<i64>) {
     match db.prune_expired_items(retention_days) {
-        Ok(ids) => ids.len() as u32,
+        Ok(items) => {
+            let mut sync_dirty = false;
+            let hotkey_item_ids = items
+                .iter()
+                .filter(|item| !item.custom_hotkey.is_empty())
+                .map(|item| item.id)
+                .collect();
+            if let Some(scope) = sync_scope {
+                let now = chrono::Utc::now().to_rfc3339();
+                for item in &items {
+                    if crate::core::sync_scope::item_in_sync_scope(
+                        item.content_type,
+                        item.is_favorite,
+                        scope.include_images,
+                        scope.favorites_only,
+                    ) {
+                        if let Err(e) =
+                            db.record_item_deletion(item.content_hash, &now, &scope.device_name)
+                        {
+                            log::error!(
+                                "clean_expired_clipboard_items: record tombstone {}: {e}",
+                                item.content_hash
+                            );
+                        } else {
+                            sync_dirty = true;
+                        }
+                    }
+                }
+            }
+            (items.len() as u32, sync_dirty, hotkey_item_ids)
+        }
         Err(e) => {
             log::error!("clean_expired_clipboard_items: {e}");
-            0
+            (0, false, Vec::new())
         }
     }
 }
@@ -179,17 +227,24 @@ fn clean_expired_clipboard_items(db: &Database, retention_days: u32) -> u32 {
 /// Run all cleanup tasks synchronously. Returns aggregated stats.
 ///
 /// Called at startup and periodically via the poll loop / UI button.
-pub fn run_cleanup(db: &Database, retention_days: u32) -> CleanupStats {
+pub fn run_cleanup(
+    db: &Database,
+    retention_days: u32,
+    sync_scope: Option<&CleanupSyncScope>,
+) -> CleanupStats {
     let orphan_images = clean_orphan_images(db);
     let unreferenced_icons = clean_unreferenced_icons(db);
     let expired_tombstones = clean_expired_tombstones(db);
-    let expired_items = clean_expired_clipboard_items(db, retention_days);
+    let (expired_items, sync_dirty, expired_hotkey_item_ids) =
+        clean_expired_clipboard_items(db, retention_days, sync_scope);
 
     let stats = CleanupStats {
         orphan_images,
         unreferenced_icons,
         expired_tombstones,
         expired_items,
+        expired_hotkey_item_ids,
+        sync_dirty,
     };
 
     if !stats.is_empty() {

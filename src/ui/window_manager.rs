@@ -5,7 +5,8 @@
 //! Slint-era `Frontend` + `FocusService` + `HotkeyService` + `Looper` combo.
 
 #[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::AtomicIsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -352,6 +353,10 @@ pub struct WindowManager {
     pending_restart_result: Arc<Mutex<Option<Result<(), String>>>>,
     /// Last update check time for 24h periodic check throttling.
     last_update_check: Option<Instant>,
+    /// Set by background cleanup when expired rows were removed and AppState should reload.
+    pending_cleanup_refresh: Arc<AtomicBool>,
+    /// Custom hotkeys deleted by background cleanup and waiting to be unregistered.
+    pending_cleanup_hotkey_unregister: Arc<Mutex<Vec<i64>>>,
 }
 
 impl EventEmitter<WindowManagerEvent> for WindowManager {}
@@ -433,6 +438,8 @@ impl WindowManager {
             pending_update_phase: Arc::new(Mutex::new(update::UpdatePhase::Idle)),
             pending_restart_result: Arc::new(Mutex::new(None)),
             last_update_check: None,
+            pending_cleanup_refresh: Arc::new(AtomicBool::new(false)),
+            pending_cleanup_hotkey_unregister: Arc::new(Mutex::new(Vec::new())),
         };
 
         // --- Share the batch_pasting flag with AppState so it can suppress ---
@@ -549,6 +556,30 @@ impl WindowManager {
 
         // --- 10. Periodic cache cleanup ---
         self.poll_cleanup(cx);
+
+        self.poll_cleanup_refresh(cx);
+    }
+
+    fn poll_cleanup_refresh(&mut self, cx: &mut Context<Self>) {
+        let hotkey_ids = self
+            .pending_cleanup_hotkey_unregister
+            .lock()
+            .map(|mut ids| std::mem::take(&mut *ids))
+            .unwrap_or_default();
+        if !hotkey_ids.is_empty() {
+            if let Some(ref mut hk) = self.hotkey {
+                for id in hotkey_ids {
+                    hk.unregister_item_hotkey(id);
+                }
+            }
+        }
+        if self.pending_cleanup_refresh.swap(false, Ordering::AcqRel) {
+            self.state.update(cx, |state, _cx| {
+                state.reload_items();
+                state.reload_tags();
+            });
+            cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
@@ -1431,12 +1462,10 @@ impl WindowManager {
         // Reload custom hotkeys from persisted state.
         if let Some(ref mut hk) = self.hotkey {
             let state = self.state.read(cx);
-            let item_hotkeys: Vec<(i64, String)> = state
-                .items
-                .iter()
-                .filter(|it| !it.custom_hotkey.is_empty())
-                .map(|it| (it.id, it.custom_hotkey.clone()))
-                .collect();
+            let item_hotkeys = state.db.get_all_custom_item_hotkeys().unwrap_or_else(|e| {
+                log::error!("Failed to load custom item hotkeys: {e}");
+                Vec::new()
+            });
             let latest_hotkeys: Vec<(usize, String)> = state
                 .settings
                 .latest_hotkeys
@@ -3072,10 +3101,33 @@ impl WindowManager {
         }
 
         let db_path = settings.resolve_db_path();
+        let sync_scope = crate::core::cache_cleanup::CleanupSyncScope {
+            include_images: settings.sync_include_images,
+            favorites_only: settings.sync_favorites_only,
+            device_name: crate::services::backends::local_folder::hostname(),
+        };
+        let sync_dirty = self.state.read(cx).sync_dirty.clone();
+        let pending_cleanup_refresh = self.pending_cleanup_refresh.clone();
+        let pending_cleanup_hotkey_unregister = self.pending_cleanup_hotkey_unregister.clone();
         std::thread::spawn(move || {
             match crate::core::db::Database::open(&db_path.to_string_lossy()) {
                 Ok(db) => {
-                    let stats = crate::core::cache_cleanup::run_cleanup(&db, retention_days);
+                    let stats = crate::core::cache_cleanup::run_cleanup(
+                        &db,
+                        retention_days,
+                        Some(&sync_scope),
+                    );
+                    if stats.sync_dirty {
+                        sync_dirty.store(true, Ordering::SeqCst);
+                    }
+                    if stats.expired_items > 0 {
+                        pending_cleanup_refresh.store(true, Ordering::Release);
+                    }
+                    if !stats.expired_hotkey_item_ids.is_empty() {
+                        if let Ok(mut ids) = pending_cleanup_hotkey_unregister.lock() {
+                            ids.extend(stats.expired_hotkey_item_ids.iter().copied());
+                        }
+                    }
                     if !stats.is_empty() {
                         log::info!(
                             "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items",

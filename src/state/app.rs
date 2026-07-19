@@ -251,9 +251,18 @@ impl AppState {
         };
         let db = Database::open(&db_path.to_string_lossy())
             .unwrap_or_else(|e| panic!("Failed to open database at {db_path:?}: {e}"));
-        if settings.cleanup_interval != "never" || settings.retention_days > 0 {
-            crate::core::cache_cleanup::run_cleanup(&db, settings.retention_days);
-        }
+        let initial_cleanup_dirty =
+            if settings.cleanup_interval != "never" || settings.retention_days > 0 {
+                let scope = crate::core::cache_cleanup::CleanupSyncScope {
+                    include_images: settings.sync_include_images,
+                    favorites_only: settings.sync_favorites_only,
+                    device_name: crate::services::backends::local_folder::hostname(),
+                };
+                crate::core::cache_cleanup::run_cleanup(&db, settings.retention_days, Some(&scope))
+                    .sync_dirty
+            } else {
+                false
+            };
 
         let items = db
             .load_filtered_list_with_tags(&ClipboardFilters::default(), query_limit, order_by)
@@ -293,7 +302,7 @@ impl AppState {
             editing_item: None,
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
-            sync_dirty: Arc::new(AtomicBool::new(false)),
+            sync_dirty: Arc::new(AtomicBool::new(initial_cleanup_dirty)),
             pending_hotkey_unregister: Vec::new(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
@@ -311,16 +320,16 @@ impl AppState {
 
     /// Check whether a mutation on this item should mark sync as dirty.
     ///
-    /// Image/file types are never synced. In favorites-only mode, only
-    /// favorite items trigger sync cycles.
+    /// File items are never synced. Image items are synced only when image
+    /// sync is enabled. In favorites-only mode, only favorite items trigger
+    /// sync cycles.
     pub fn should_mark_sync_dirty(&self, item: &ClipboardItem) -> bool {
-        if matches!(item.content_type, ContentType::Image | ContentType::File) {
-            return false;
-        }
-        if self.settings.sync_favorites_only && !item.is_favorite {
-            return false;
-        }
-        true
+        crate::core::sync_scope::item_in_sync_scope(
+            item.content_type,
+            item.is_favorite,
+            self.settings.sync_include_images,
+            self.settings.sync_favorites_only,
+        )
     }
 
     fn refresh_titlebar_filter_availability(&mut self) {
@@ -1940,6 +1949,9 @@ impl AppState {
                         if in_sync {
                             hashes.push(item.content_hash);
                         }
+                        if !item.custom_hotkey.is_empty() {
+                            self.pending_hotkey_unregister.push(id);
+                        }
                     }
                     Err(e) => log::error!("batch delete_item({id}): {e}"),
                 }
@@ -2225,10 +2237,19 @@ mod tests {
     // ── should_mark_sync_dirty ──────────────────────────────────────
 
     #[test]
-    fn dirty_image_type_always_false() {
+    fn dirty_image_type_false_when_image_sync_disabled() {
         let (state, _dirty) = test_state();
         let item = make_item(1, ContentType::Image, false, "img.png");
         assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn dirty_image_type_true_when_image_sync_enabled() {
+        let (mut state, _dirty) = test_state();
+        state.settings.sync_include_images = true;
+        state.settings.sync_favorites_only = false;
+        let item = make_item(1, ContentType::Image, false, "img.png");
+        assert!(state.should_mark_sync_dirty(&item));
     }
 
     #[test]
@@ -2263,9 +2284,8 @@ mod tests {
     }
 
     #[test]
-    fn dirty_image_favorite_still_false() {
+    fn dirty_image_favorite_still_false_when_image_sync_disabled() {
         let (mut state, _dirty) = test_state();
-        // Image is never synced, regardless of favorite status or sync mode
         state.settings.sync_favorites_only = false;
         let item = make_item(1, ContentType::Image, true, "img.png");
         assert!(!state.should_mark_sync_dirty(&item));
@@ -2758,8 +2778,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_item_skips_tombstone_for_image() {
-        // Image items are never synced
+    fn delete_item_skips_tombstone_for_image_when_image_sync_disabled() {
         let (mut state, dirty) = test_state();
         let item = make_item(1, ContentType::Image, false, "image_data");
         let hash = item.content_hash;
@@ -2774,6 +2793,27 @@ mod tests {
         assert!(
             !dirty.load(Ordering::SeqCst),
             "delete image should NOT set dirty"
+        );
+    }
+
+    #[test]
+    fn delete_item_records_tombstone_for_image_when_image_sync_enabled() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_include_images = true;
+        state.settings.sync_favorites_only = false;
+        let item = make_item(1, ContentType::Image, false, "image_data");
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.delete_item(1);
+        assert!(
+            state.db.is_item_tombstoned(hash).unwrap(),
+            "delete synced image should record tombstone"
+        );
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "delete synced image should set dirty"
         );
     }
 
@@ -2837,6 +2877,26 @@ mod tests {
             !dirty.load(Ordering::SeqCst),
             "batch delete outside sync scope should NOT set dirty"
         );
+    }
+
+    #[test]
+    fn batch_delete_queues_custom_hotkeys_for_unregister() {
+        let (mut state, _dirty) = test_state();
+
+        let mut item = make_item(1, ContentType::PlainText, false, "hotkey item");
+        item.custom_hotkey = "Ctrl+Alt+1".to_string();
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+        let item_id = state.db.get_by_hash(hash).unwrap().unwrap().id;
+        state.db.set_item_hotkey(item_id, "Ctrl+Alt+1", "").unwrap();
+        state
+            .items
+            .push(state.db.get_by_id(item_id).unwrap().unwrap());
+        state.selected_ids = vec![item_id];
+
+        state.batch_delete();
+
+        assert_eq!(state.pending_hotkey_unregister, vec![item_id]);
     }
 
     #[test]

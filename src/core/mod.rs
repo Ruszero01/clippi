@@ -14,4 +14,5 @@ pub mod paths;
 pub mod qr;
 pub mod settings;
 pub mod sync;
+pub mod sync_scope;
 pub mod types;

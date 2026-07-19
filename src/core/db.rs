@@ -19,6 +19,15 @@ pub struct Database {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrunedClipboardItem {
+    pub id: i64,
+    pub content_hash: u64,
+    pub content_type: ContentType,
+    pub is_favorite: bool,
+    pub custom_hotkey: String,
+}
+
 const SOURCE_APP_ICON_INLINE_LIMIT: usize = 256 * 1024;
 const LIST_FULL_TEXT_LIMIT: usize = 8192;
 const LIST_RICH_HTML_LIMIT: usize = 4096;
@@ -432,6 +441,18 @@ impl Database {
                 |row| row.get::<_, i64>(0),
             )
             .map(|value| value != 0)
+    }
+
+    pub fn get_all_custom_item_hotkeys(&self) -> SqlResult<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, custom_hotkey FROM clipboard_items
+             WHERE custom_hotkey <> ''
+             ORDER BY updated_at DESC",
+        )?;
+        let hotkeys = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect();
+        hotkeys
     }
 
     pub fn update_content_with_rich_data(
@@ -1095,8 +1116,7 @@ impl Database {
         )?;
         let all_ids: Vec<i64> = stmt
             .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<SqlResult<Vec<_>>>()?;
         let pruned_ids: Vec<i64> = all_ids.iter().take(excess).copied().collect();
         if pruned_ids.is_empty() {
             return Ok(Vec::new());
@@ -1106,23 +1126,33 @@ impl Database {
     }
 
     /// Prune non-favorite items not updated within retention_days.
-    /// Returns the ids of deleted items. retention_days == 0 means no limit.
+    /// Returns the deleted items. retention_days == 0 means no limit.
     /// Uses updated_at so frequently re-captured content stays fresh.
-    pub fn prune_expired_items(&self, retention_days: u32) -> SqlResult<Vec<i64>> {
+    pub fn prune_expired_items(&self, retention_days: u32) -> SqlResult<Vec<PrunedClipboardItem>> {
         if retention_days == 0 {
             return Ok(Vec::new());
         }
         let cutoff = format!("-{} days", retention_days);
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM clipboard_items \
+            "SELECT id, content_hash, content_type, is_favorite, custom_hotkey FROM clipboard_items \
              WHERE is_favorite = 0 AND updated_at < datetime('now', ?1)",
         )?;
-        let expired_ids: Vec<i64> = stmt
-            .query_map(params![&cutoff], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+        let expired_items: Vec<PrunedClipboardItem> = stmt
+            .query_map(params![&cutoff], |row| {
+                let content_type: String = row.get(2)?;
+                let is_favorite: i32 = row.get(3)?;
+                Ok(PrunedClipboardItem {
+                    id: row.get(0)?,
+                    content_hash: row.get::<_, i64>(1)? as u64,
+                    content_type: ContentType::from_str(&content_type),
+                    is_favorite: is_favorite != 0,
+                    custom_hotkey: row.get(4).unwrap_or_default(),
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        let expired_ids: Vec<i64> = expired_items.iter().map(|item| item.id).collect();
         self.delete_items_in_chunks(&expired_ids)?;
-        Ok(expired_ids)
+        Ok(expired_items)
     }
 
     /// Clean up tombstones older than N days.
@@ -2137,6 +2167,8 @@ mod tests {
         // With 30-day retention, only the old item should be removed.
         let removed = db.prune_expired_items(30).unwrap();
         assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].content_hash, 1);
+        assert_eq!(removed[0].content_type, ContentType::PlainText);
         assert_eq!(count_items(&db), 1);
 
         let remaining: String = db
@@ -2177,6 +2209,24 @@ mod tests {
     }
 
     #[test]
+    fn prune_expired_returns_custom_hotkey_metadata() {
+        let (_path, db) = temp_db("prune-exp-hotkey");
+        insert_item(&db, 1, "hotkey_old", "2020-01-01T00:00:00Z");
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET custom_hotkey = 'Ctrl+Alt+1' WHERE content_hash = 1",
+                [],
+            )
+            .unwrap();
+
+        let removed = db.prune_expired_items(30).unwrap();
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].content_hash, 1);
+        assert_eq!(removed[0].custom_hotkey, "Ctrl+Alt+1");
+    }
+
+    #[test]
     fn prune_expired_recent_items_not_removed() {
         let (_path, db) = temp_db("prune-exp-recent");
         db.conn
@@ -2192,5 +2242,25 @@ mod tests {
         let removed = db.prune_expired_items(7).unwrap();
         assert!(removed.is_empty());
         assert_eq!(count_items(&db), 1);
+    }
+
+    #[test]
+    fn get_all_custom_item_hotkeys_reads_beyond_loaded_item_pages() {
+        let (_path, db) = temp_db("all-hotkeys");
+        insert_item(&db, 1, "plain", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "hotkey", "2025-01-02T00:00:00Z");
+        let hotkey_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        db.set_item_hotkey(hotkey_id, "Ctrl+Alt+2", "").unwrap();
+
+        let hotkeys = db.get_all_custom_item_hotkeys().unwrap();
+
+        assert_eq!(hotkeys, vec![(hotkey_id, "Ctrl+Alt+2".to_string())]);
     }
 }

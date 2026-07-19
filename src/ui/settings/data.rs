@@ -675,10 +675,19 @@ impl SettingsPanel {
                                         let stats = match crate::core::db::Database::open(
                                             &db_path.to_string_lossy(),
                                         ) {
-                                            Ok(db) => crate::core::cache_cleanup::run_cleanup(
-                                                &db,
-                                                retention_days,
-                                            ),
+                                            Ok(db) => {
+                                                let scope =
+                                                    crate::core::cache_cleanup::CleanupSyncScope {
+                                                        include_images: settings.sync_include_images,
+                                                        favorites_only: settings.sync_favorites_only,
+                                                        device_name: crate::services::backends::local_folder::hostname(),
+                                                    };
+                                                crate::core::cache_cleanup::run_cleanup(
+                                                    &db,
+                                                    retention_days,
+                                                    Some(&scope),
+                                                )
+                                            }
                                             Err(e) => {
                                                 log::error!("cleanup: failed to open DB: {e}");
                                                 return;
@@ -700,7 +709,16 @@ impl SettingsPanel {
                                         };
                                         state.update(cx, |s, _cx| {
                                             s.settings.cleanup_last_date = last_cleanup;
+                                            if stats.sync_dirty {
+                                                s.sync_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                                            }
+                                            s.pending_hotkey_unregister
+                                                .extend(stats.expired_hotkey_item_ids.iter().copied());
                                             s.settings.save();
+                                            if stats.expired_items > 0 {
+                                                s.reload_items();
+                                                s.reload_tags();
+                                            }
                                         });
                                         // Show toast
                                         if stats.is_empty() {
