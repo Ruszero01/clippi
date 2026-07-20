@@ -236,7 +236,7 @@ impl GpuiClipboardService {
             // the listener detects a PlainText item with empty rich_data. If
             // the content_hash matches an existing RichText record, carry over
             // rich_data so it isn't overwritten by the upsert below.
-            if item.rich_data.is_empty() {
+            if !state.settings.copy_as_plain_text && item.rich_data.is_empty() {
                 if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
                     if !existing.rich_data.is_empty() {
                         item.rich_data = existing.rich_data.clone();

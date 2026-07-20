@@ -1,7 +1,7 @@
 //! --- Clipboard listener trait and platform implementations ---
 //!
 //! --- Provides multi-format clipboard monitoring with detection priority: ---
-//! --- Files > Image > Link > Color > RichText > PlainText ---
+//! --- Files > Image (Image+RichText coexistence -> Text) > Link > Color > RichText > PlainText ---
 
 use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
@@ -127,12 +127,25 @@ pub trait ClipboardListener: Send {
 }
 
 /// Shared clipboard content detection (platform-agnostic).
-/// Priority: Files > Image > Link > Color > RichText > PlainText
+/// Priority: Files > Image (Image+RichText coexistence -> Text) > Link > Color > RichText > PlainText
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     // --- Capture source app info at detection time (only once, not on re-copy) ---
     let source_info = source::get_clipboard_owner_info();
+
     detect_files(ctx, &source_info)
-        .or_else(|| detect_image(ctx, &source_info))
+        .or_else(|| {
+            // When both image and rich text (HTML/RTF) coexist on the clipboard,
+            // prefer the text. Apps like OneNote and Excel put both a rendered
+            // image and formatted text on the clipboard simultaneously; users
+            // expect to see the text content, not the image rendering.
+            if ctx.has(ContentFormat::Image)
+                && (ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf))
+            {
+                detect_text_content(ctx, &source_info).or_else(|| detect_image(ctx, &source_info))
+            } else {
+                detect_image(ctx, &source_info)
+            }
+        })
         .or_else(|| detect_text_content(ctx, &source_info))
 }
 
