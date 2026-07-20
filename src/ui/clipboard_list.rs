@@ -21,7 +21,7 @@ use super::search_bar::SearchBar;
 use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
 
-const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 16.0;
+const CLIPBOARD_ROW_VERTICAL_SPACE: f32 = 12.0;
 const CLIPBOARD_BOTTOM_SCROLL_INSET: f32 = 36.0;
 const CLIPBOARD_SCROLLBAR_WIDTH: f32 = 16.0;
 const TAG_PICKER_WIDTH: f32 = 304.0;
@@ -1519,7 +1519,7 @@ impl Render for ClipboardListView {
                 }
             })
             .pt(px(4.))
-            .pb(px(14.))
+            .pb(px(8.))
             .px(px(8.))
             .when(empty_state, |el| {
                 el.child(
@@ -1637,7 +1637,7 @@ impl Render for ClipboardListView {
                                                 .w_full()
                                                 .h_full()
                                                 .overflow_hidden()
-                                                .py(px(5.))
+                                                .py(px(4.))
                                                 .on_scroll_wheel({
                                                     let list_for_scroll_lock =
                                                         list_entity.clone();

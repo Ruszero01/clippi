@@ -1070,7 +1070,7 @@ impl Render for RootView {
                             div()
                                 .absolute()
                                 .right(px(8.))
-                                .top(px(106. - tag_panel_offset))
+                                .top(px(93. - tag_panel_offset))
                                 .occlude()
                                 .child(tag_filter_panel),
                         ),
@@ -1088,6 +1088,8 @@ impl Render for RootView {
                         .top(px(0.))
                         .bottom(px(0.))
                         .occlude()
+                        .bg(rgba(0x00000033))
+                        .rounded(px(12.))
                         .opacity(filter_config_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                             search_for_backdrop.update(cx, |bar, cx| bar.close_filter_config(cx));
@@ -1096,7 +1098,7 @@ impl Render for RootView {
                             div()
                                 .absolute()
                                 .right(px(8.))
-                                .top(px(106. - filter_config_offset))
+                                .top(px(93. - filter_config_offset))
                                 .occlude()
                                 .child(config_panel),
                         ),

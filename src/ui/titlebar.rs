@@ -16,7 +16,7 @@ use super::clipboard_list::ClipboardListView;
 use super::theme::ClippiTheme;
 
 /// Titlebar height matching original Slint design.
-pub const TITLEBAR_HEIGHT: f32 = 38.0;
+pub const TITLEBAR_HEIGHT: f32 = 30.0;
 
 fn titlebar_logo_image() -> Arc<Image> {
     static LOGO: OnceLock<Arc<Image>> = OnceLock::new();

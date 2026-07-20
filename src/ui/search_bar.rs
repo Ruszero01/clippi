@@ -245,9 +245,9 @@ impl Render for SearchBar {
             .flex_col()
             .w_full()
             .flex_shrink_0()
-            .pt(px(4.))
+            .pt(px(1.))
             .px(px(8.))
-            .pb(px(8.))
+            .pb(px(2.))
             .child(
                 div()
                     .flex()
