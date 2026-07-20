@@ -420,6 +420,7 @@ define_i18n! {
     CardChars:              ("{0} 字符", "{0} chars"),
     CardFilesCount:         ("{0} 个文件", "{0} files"),
     CardStaleFile:          ("已失效", "Stale"),
+    CardImageNotLoaded:     ("待加载", "Pending"),
     CardCrossPlatform:      ("跨平台", "Cross-platform"),
     QuickFileCount:         ("等{0}个文件", "and {0} more"),
 

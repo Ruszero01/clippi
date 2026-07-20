@@ -343,6 +343,11 @@ fn image_display_name(item: &ClipboardItem) -> String {
         .to_string()
 }
 
+fn image_path_is_cache_path(image_path: &str) -> bool {
+    !image_path.is_empty()
+        && std::path::Path::new(image_path).starts_with(crate::core::paths::images_dir())
+}
+
 /// Get a cached file system icon for a given file path.
 /// Icons are cached by extension (or "folder" for dirs) in `images_dir()/file_icons/`.
 /// Check if a favicon is cached for a URL's domain.
@@ -1742,6 +1747,9 @@ impl RenderOnce for ClipboardCard {
                     ContentType::Image => {
                         let img_missing = !item.image_path.is_empty()
                             && !std::path::Path::new(&item.image_path).exists();
+                        let img_not_loaded =
+                            img_missing && image_path_is_cache_path(&item.image_path);
+                        let img_stale = img_missing && !img_not_loaded;
                         // Show previews only when the full image exists locally. Synced images
                         // regenerate thumbnails after the blob is downloaded.
                         if let Some(preview_img_path) =
@@ -1785,20 +1793,53 @@ impl RenderOnce for ClipboardCard {
                                         .border(px(4.))
                                         .border_color(surface),
                                 )
-                        } else if img_missing {
+                        } else if img_missing || preview_img_path.is_none() {
+                            let (placeholder_text, placeholder_color, placeholder_icon) =
+                                if img_stale {
+                                    (
+                                        I18nKey::CardStaleFile.text().to_string(),
+                                        danger,
+                                        "\u{e607}",
+                                    )
+                                } else {
+                                    (
+                                        I18nKey::CardImageNotLoaded.text().to_string(),
+                                        text_3,
+                                        "\u{e626}",
+                                    )
+                                };
                             div()
                                 .flex_1()
+                                .w_full()
+                                .h_full()
                                 .flex()
-                                .flex_col()
                                 .items_center()
                                 .justify_center()
-                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
                                 .child(
                                     div()
-                                        .text_size(px(24.))
-                                        .font_family("iconfont")
-                                        .text_color(rgba(0xff5f5780))
-                                        .child("\u{e607}"),
+                                        .rounded(px(6.))
+                                        .bg(subtle_row_bg)
+                                        .px(px(10.))
+                                        .py(px(6.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(5.))
+                                        .child(
+                                            div()
+                                                .text_size(px(16.))
+                                                .font_family("iconfont")
+                                                .text_color(placeholder_color)
+                                                .child(placeholder_icon),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .line_height(px(14.))
+                                                .text_color(placeholder_color)
+                                                .whitespace_nowrap()
+                                                .child(placeholder_text),
+                                        ),
                                 )
                         } else {
                             div()
@@ -2157,7 +2198,10 @@ impl RenderOnce for ClipboardCard {
             ContentType::Image => {
                 let img_missing =
                     !item.image_path.is_empty() && !std::path::Path::new(&item.image_path).exists();
-                if img_missing {
+                let img_not_loaded = img_missing && image_path_is_cache_path(&item.image_path);
+                if img_not_loaded {
+                    Some(I18nKey::CardImageNotLoaded.text().to_string())
+                } else if img_missing {
                     size_label_danger = true;
                     Some(I18nKey::CardStaleFile.text().to_string())
                 } else if img_w > 0 && img_h > 0 {
