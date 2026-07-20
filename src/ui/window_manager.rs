@@ -257,6 +257,12 @@ pub enum WindowManagerEvent {
     ResetToClipboard,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateCheckMode {
+    Manual,
+    Scheduled,
+}
+
 /// Unified window manager entity.
 ///
 /// Owns the window lifecycle and all cross-service polling. Created once
@@ -351,8 +357,8 @@ pub struct WindowManager {
     pending_update_phase: Arc<Mutex<update::UpdatePhase>>,
     /// Result of the restart installer launch (consumed by poll_update).
     pending_restart_result: Arc<Mutex<Option<Result<(), String>>>>,
-    /// Last update check time for 24h periodic check throttling.
-    last_update_check: Option<Instant>,
+    /// True while the background GitHub release check is running.
+    update_check_running: Arc<AtomicBool>,
     /// Set by background cleanup when expired rows were removed and AppState should reload.
     pending_cleanup_refresh: Arc<AtomicBool>,
     /// Custom hotkeys deleted by background cleanup and waiting to be unregistered.
@@ -437,7 +443,7 @@ impl WindowManager {
             pending_update: Arc::new(Mutex::new(None)),
             pending_update_phase: Arc::new(Mutex::new(update::UpdatePhase::Idle)),
             pending_restart_result: Arc::new(Mutex::new(None)),
-            last_update_check: None,
+            update_check_running: Arc::new(AtomicBool::new(false)),
             pending_cleanup_refresh: Arc::new(AtomicBool::new(false)),
             pending_cleanup_hotkey_unregister: Arc::new(Mutex::new(Vec::new())),
         };
@@ -2891,11 +2897,12 @@ impl WindowManager {
                 }
                 Err(error) => {
                     log::error!("Failed to launch prepared update: {error}");
+                    let message = update::user_message_for_kind(update::UpdateErrorKind::Launch);
                     self.state.update(cx, |state, _| {
-                        state.update_phase = update::UpdatePhase::Error(error.clone())
+                        state.update_phase = update::UpdatePhase::Error(message.clone())
                     });
                     cx.emit(WindowManagerEvent::UpdateProgress(
-                        update::UpdatePhase::Error(error),
+                        update::UpdatePhase::Error(message),
                     ));
                 }
             }
@@ -2919,22 +2926,30 @@ impl WindowManager {
             }
         }
 
-        // 4. Periodic check: every 24 hours
-        let auto_check = self.state.read(cx).settings.auto_check_updates;
-        if auto_check {
-            let should_check = match self.last_update_check {
-                None => true,
-                Some(t) => t.elapsed().as_secs() >= 24 * 3600,
-            };
-            if should_check {
-                self.last_update_check = Some(Instant::now());
-                self.start_update_check(cx);
-            }
+        // 4. Periodic check: use the software update frequency and persist
+        // attempt time, so offline restarts do not repeatedly surface errors.
+        let settings = self.state.read(cx).settings.clone();
+        if settings.auto_check_updates
+            && !self.update_check_running.load(Ordering::Acquire)
+            && update::scheduled_update_check_due(
+                &settings.update_last_check_at,
+                chrono::Utc::now(),
+            )
+        {
+            self.start_scheduled_update_check(cx);
         }
     }
 
     /// Start an update check (manual or periodic). Spawns a background thread.
     pub fn start_update_check(&mut self, cx: &mut Context<Self>) {
+        self.start_update_check_with_mode(UpdateCheckMode::Manual, cx);
+    }
+
+    fn start_scheduled_update_check(&mut self, cx: &mut Context<Self>) {
+        self.start_update_check_with_mode(UpdateCheckMode::Scheduled, cx);
+    }
+
+    fn start_update_check_with_mode(&mut self, mode: UpdateCheckMode, cx: &mut Context<Self>) {
         if matches!(
             self.state.read(cx).update_phase,
             update::UpdatePhase::Checking
@@ -2946,15 +2961,29 @@ impl WindowManager {
         ) {
             return;
         }
-        self.last_update_check = Some(Instant::now());
-        self.state
-            .update(cx, |s, _| s.update_phase = update::UpdatePhase::Checking);
-        cx.emit(WindowManagerEvent::UpdateProgress(
-            update::UpdatePhase::Checking,
-        ));
+        if self
+            .update_check_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        self.state.update(cx, |s, _| {
+            s.settings.update_last_check_at = chrono::Utc::now().to_rfc3339();
+            s.settings.save();
+            if mode == UpdateCheckMode::Manual {
+                s.update_phase = update::UpdatePhase::Checking;
+            }
+        });
+        if mode == UpdateCheckMode::Manual {
+            cx.emit(WindowManagerEvent::UpdateProgress(
+                update::UpdatePhase::Checking,
+            ));
+        }
 
         let pending = self.pending_update.clone();
         let pending_phase = self.pending_update_phase.clone();
+        let running = self.update_check_running.clone();
         std::thread::spawn(move || {
             let checker =
                 update::UpdateChecker::new(env!("CARGO_PKG_VERSION"), "Ruszero01", "clippi");
@@ -2975,12 +3004,21 @@ impl WindowManager {
                     }
                 }
                 Err(error) => {
-                    log::warn!("[wm] update check failed: {error}");
-                    if let Ok(mut phase) = pending_phase.lock() {
-                        *phase = update::UpdatePhase::Error(error);
+                    log::warn!(
+                        "[wm] update check failed ({:?}): {}",
+                        error.kind(),
+                        error.detail()
+                    );
+                    if mode == UpdateCheckMode::Manual {
+                        if let Ok(mut phase) = pending_phase.lock() {
+                            *phase = update::UpdatePhase::Error(error.user_message());
+                        }
+                    } else if !error.is_network_failure() {
+                        log::warn!("[wm] scheduled update check suppressed UI error");
                     }
                 }
             }
+            running.store(false, Ordering::Release);
         });
     }
 
@@ -3015,8 +3053,9 @@ impl WindowManager {
                 }
             });
             if let Err(e) = result {
+                log::error!("[wm] update download/prepare failed: {e}");
                 if let Ok(mut p) = pending_phase_err.lock() {
-                    *p = update::UpdatePhase::Error(e);
+                    *p = update::UpdatePhase::Error(update::summarize_update_error(&e));
                 }
             }
         });

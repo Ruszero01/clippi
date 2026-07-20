@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 
 use crate::core::db::Database;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::{AppSettings, BackendConfig};
 use crate::core::sync::{self, BackendStatus, MergeStats, SyncBackend};
 use crate::services::backends::local_folder::LocalFolderBackend;
@@ -271,7 +272,17 @@ impl GpuiSyncService {
             || result.cycle.stats.items_deleted > 0
             || result.cycle.stats.tags_added > 0
             || result.cycle.stats.tags_deleted > 0;
-        self.last_message = result.cycle.message.clone();
+        let ui_message = if result.cycle.success {
+            result.cycle.message.clone()
+        } else {
+            log::warn!(
+                "sync backend {} failed: {}",
+                result.backend_id,
+                result.cycle.message
+            );
+            summarize_sync_error(&result.cycle.message)
+        };
+        self.last_message = ui_message.clone();
 
         let Some(runtime) = self
             .backends
@@ -286,8 +297,8 @@ impl GpuiSyncService {
             runtime.status_message.clear();
             update_backend_sync_metadata(&mut runtime.config, &result.cycle, has_merge);
         } else {
-            runtime.status = BackendStatus::Error(result.cycle.message.clone());
-            runtime.status_message = result.cycle.message;
+            runtime.status = BackendStatus::Error(ui_message.clone());
+            runtime.status_message = ui_message;
         }
 
         if let Some(config) = app
@@ -362,8 +373,68 @@ fn status_message(status: &BackendStatus) -> String {
     match status {
         BackendStatus::Online => String::new(),
         BackendStatus::Offline => "Unavailable".into(),
-        BackendStatus::Error(error) => error.clone(),
+        BackendStatus::Error(error) => {
+            log::warn!("sync backend status error: {error}");
+            summarize_sync_error(error)
+        }
     }
+}
+
+fn summarize_sync_error(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("auth")
+        || lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("credential")
+        || lower.contains("permission")
+    {
+        return I18nKey::SyncErrAuth.text().to_string();
+    }
+    if lower.contains("connect")
+        || lower.contains("connection")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("dns")
+        || lower.contains("transport")
+        || lower.contains("propfind")
+        || lower.contains("mkcol")
+        || lower.contains("head")
+    {
+        return I18nKey::SyncErrConnect.text().to_string();
+    }
+    if lower.contains("parse") || lower.contains("json") || lower.contains("toml") {
+        return I18nKey::SyncErrParse.text().to_string();
+    }
+    if lower.contains("serialize") {
+        return I18nKey::SyncErrSerialize.text().to_string();
+    }
+    if lower.contains("not found")
+        || lower.contains("no such file")
+        || lower.contains("404")
+        || lower.contains("不存在")
+    {
+        return I18nKey::SyncErrNotFound.text().to_string();
+    }
+    if lower.contains("push")
+        || lower.contains("write")
+        || lower.contains("replace")
+        || lower.contains("rename")
+        || lower.contains("upload")
+        || lower.contains("create")
+    {
+        return I18nKey::SyncErrPush.text().to_string();
+    }
+    if lower.contains("pull")
+        || lower.contains("read")
+        || lower.contains("download")
+        || lower.contains("response")
+    {
+        return I18nKey::SyncErrPull.text().to_string();
+    }
+    if lower.contains("merge") || lower.contains("snapshot") || lower.contains("db") {
+        return I18nKey::ErrDataOp.text().to_string();
+    }
+    I18nKey::ErrDataOp.text().to_string()
 }
 
 pub fn format_last_sync(rfc3339: &str) -> String {
@@ -844,6 +915,23 @@ mod tests {
             ])
         });
         img.save(path).expect("save png");
+    }
+
+    #[test]
+    fn sync_errors_are_summarized_for_ui() {
+        let raw = "Pull failed: Failed to parse sync file: expected value at line 1 column 1 in G:\\very\\long\\cloud\\path\\clippi_sync.json";
+        let message = summarize_sync_error(raw);
+        assert_eq!(message, I18nKey::SyncErrParse.text());
+        assert!(!message.contains("G:\\"));
+        assert!(!message.contains("line 1"));
+    }
+
+    #[test]
+    fn sync_connection_status_hides_transport_details() {
+        let raw = "Connection failed: timed out while connecting to https://example.invalid/webdav";
+        let message = status_message(&BackendStatus::Error(raw.into()));
+        assert_eq!(message, I18nKey::SyncErrConnect.text());
+        assert!(!message.contains("example.invalid"));
     }
 
     #[test]

@@ -71,17 +71,12 @@ enum DeferredStartupAction {
     /// Used when the window starts hidden (silent_start) to keep
     /// memory low without calling hide() (which would be redundant).
     ReleaseMemory,
-    /// Start an update check on startup when auto_check_updates is enabled.
-    CheckUpdate,
 }
 
-fn deferred_startup_actions(silent_start: bool, auto_check: bool) -> Vec<DeferredStartupAction> {
+fn deferred_startup_actions(silent_start: bool, _auto_check: bool) -> Vec<DeferredStartupAction> {
     let mut actions = vec![DeferredStartupAction::InitializeHotkey];
     if silent_start {
         actions.push(DeferredStartupAction::ReleaseMemory);
-    }
-    if auto_check {
-        actions.push(DeferredStartupAction::CheckUpdate);
     }
     actions
 }
@@ -594,9 +589,6 @@ fn main() {
                         DeferredStartupAction::ReleaseMemory => {
                             wm.update(cx, |wm, cx| wm.release_memory(cx));
                         }
-                        DeferredStartupAction::CheckUpdate => {
-                            wm.update(cx, |wm, cx| wm.start_update_check(cx));
-                        }
                     });
                 }
 
@@ -635,13 +627,10 @@ mod tests {
                 DeferredStartupAction::ReleaseMemory,
             ]
         );
-        // When auto_check is enabled: CheckUpdate follows.
+        // Auto update checks are scheduled by WindowManager's update poller.
         assert_eq!(
             deferred_startup_actions(false, true),
-            vec![
-                DeferredStartupAction::InitializeHotkey,
-                DeferredStartupAction::CheckUpdate,
-            ]
+            vec![DeferredStartupAction::InitializeHotkey]
         );
     }
 }

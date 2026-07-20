@@ -1,5 +1,10 @@
 //! Update checker — queries GitHub Releases API, compares versions via semver,
 //! --- caches results, and opens the releases page in the browser. ---
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+
+use crate::core::i18n_keys::I18nKey;
+
+const SCHEDULED_UPDATE_CHECK_INTERVAL_HOURS: i64 = 24;
 
 /// Info about the latest available release, if any.
 #[derive(Debug, Clone)]
@@ -31,6 +36,131 @@ pub enum UpdatePhase {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateErrorKind {
+    Network,
+    Server,
+    InvalidResponse,
+    Version,
+    Package,
+    UnsupportedPlatform,
+    Download,
+    Verify,
+    Install,
+    Launch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateCheckError {
+    kind: UpdateErrorKind,
+    detail: String,
+}
+
+impl UpdateCheckError {
+    fn new(kind: UpdateErrorKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn kind(&self) -> UpdateErrorKind {
+        self.kind
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    pub fn user_message(&self) -> String {
+        user_message_for_kind(self.kind)
+    }
+
+    pub fn is_network_failure(&self) -> bool {
+        self.kind == UpdateErrorKind::Network
+    }
+}
+
+pub fn user_message_for_kind(kind: UpdateErrorKind) -> String {
+    match kind {
+        UpdateErrorKind::Network => I18nKey::UpdateErrNetwork.text().to_string(),
+        UpdateErrorKind::Server => I18nKey::UpdateErrServer.text().to_string(),
+        UpdateErrorKind::InvalidResponse => I18nKey::UpdateErrResponse.text().to_string(),
+        UpdateErrorKind::Version => I18nKey::UpdateErrVersion.text().to_string(),
+        UpdateErrorKind::Package => I18nKey::UpdateErrPackage.text().to_string(),
+        UpdateErrorKind::UnsupportedPlatform => I18nKey::UpdateErrUnsupported.text().to_string(),
+        UpdateErrorKind::Download => I18nKey::UpdateErrDownload.text().to_string(),
+        UpdateErrorKind::Verify => I18nKey::UpdateErrVerify.text().to_string(),
+        UpdateErrorKind::Install => I18nKey::UpdateErrInstall.text().to_string(),
+        UpdateErrorKind::Launch => I18nKey::UpdateErrLaunch.text().to_string(),
+    }
+}
+
+pub fn summarize_update_error(error: &str) -> String {
+    user_message_for_kind(classify_update_error(error))
+}
+
+fn classify_update_error(error: &str) -> UpdateErrorKind {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("checksum") || lower.contains("sha256") || lower.contains("verify") {
+        return UpdateErrorKind::Verify;
+    }
+    if lower.contains("download failed")
+        || lower.contains("cannot fetch checksum")
+        || lower.contains("network")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("dns")
+        || lower.contains("connection")
+        || lower.contains("transport")
+    {
+        return UpdateErrorKind::Network;
+    }
+    if lower.contains("incomplete download") {
+        return UpdateErrorKind::Download;
+    }
+    if lower.contains("not supported") || lower.contains("unsupported") {
+        return UpdateErrorKind::UnsupportedPlatform;
+    }
+    if lower.contains("installer") || lower.contains("launch") || lower.contains("restart") {
+        return UpdateErrorKind::Launch;
+    }
+    if lower.contains("create")
+        || lower.contains("write")
+        || lower.contains("read")
+        || lower.contains("flush")
+        || lower.contains("open")
+        || lower.contains("permission")
+        || lower.contains("access")
+    {
+        return UpdateErrorKind::Download;
+    }
+    UpdateErrorKind::Install
+}
+
+pub fn scheduled_update_check_due(last_check_at: &str, now: DateTime<Utc>) -> bool {
+    scheduled_update_check_due_after(
+        last_check_at,
+        now,
+        ChronoDuration::hours(SCHEDULED_UPDATE_CHECK_INTERVAL_HOURS),
+    )
+}
+
+fn scheduled_update_check_due_after(
+    last_check_at: &str,
+    now: DateTime<Utc>,
+    interval: ChronoDuration,
+) -> bool {
+    let trimmed = last_check_at.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let Ok(last) = DateTime::parse_from_rfc3339(trimmed) else {
+        return true;
+    };
+    now.signed_duration_since(last.with_timezone(&Utc)) >= interval
+}
+
 /// GitHub Releases update checker.
 pub struct UpdateChecker {
     current_version: String,
@@ -48,12 +178,12 @@ impl UpdateChecker {
     }
 
     /// Full check — version, release notes, and platform-appropriate asset.
-    pub fn check_full(&self) -> Result<Option<UpdateInfo>, String> {
+    pub fn check_full(&self) -> Result<Option<UpdateInfo>, UpdateCheckError> {
         self.fetch_latest_release_full()
     }
 
     /// Full fetch — version, release notes, and platform-appropriate asset with checksum.
-    fn fetch_latest_release_full(&self) -> Result<Option<UpdateInfo>, String> {
+    fn fetch_latest_release_full(&self) -> Result<Option<UpdateInfo>, UpdateCheckError> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",
             self.repo_owner, self.repo_name
@@ -70,25 +200,25 @@ impl UpdateChecker {
             .set("User-Agent", &user_agent)
             .set("Accept", "application/vnd.github.v3+json")
             .call()
-            .map_err(|e| format!("Failed to query GitHub Releases: {e}"))?;
+            .map_err(classify_github_query_error)?;
 
         let body = response
             .into_string()
-            .map_err(|e| format!("Failed to read GitHub response: {e}"))?;
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| format!("Invalid GitHub response: {e}"))?;
+            .map_err(|e| UpdateCheckError::new(UpdateErrorKind::InvalidResponse, e.to_string()))?;
+        let parsed: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| UpdateCheckError::new(UpdateErrorKind::InvalidResponse, e.to_string()))?;
 
-        let tag_name = parsed["tag_name"]
-            .as_str()
-            .ok_or("GitHub release is missing tag_name")?;
+        let tag_name = parsed["tag_name"].as_str().ok_or_else(|| {
+            UpdateCheckError::new(UpdateErrorKind::InvalidResponse, "missing tag_name")
+        })?;
 
         // Strip leading 'v' if present
         let latest_ver = tag_name.strip_prefix('v').unwrap_or(tag_name);
 
         let current = semver::Version::parse(&self.current_version)
-            .map_err(|e| format!("Invalid current version: {e}"))?;
+            .map_err(|e| UpdateCheckError::new(UpdateErrorKind::Version, e.to_string()))?;
         let latest = semver::Version::parse(latest_ver)
-            .map_err(|e| format!("Invalid release version {latest_ver:?}: {e}"))?;
+            .map_err(|e| UpdateCheckError::new(UpdateErrorKind::Version, e.to_string()))?;
 
         if latest <= current {
             return Ok(None); // No update available
@@ -112,14 +242,28 @@ impl UpdateChecker {
     }
 }
 
+fn classify_github_query_error(error: ureq::Error) -> UpdateCheckError {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let detail = response
+                .into_string()
+                .unwrap_or_else(|_| format!("GitHub returned HTTP {status}"));
+            UpdateCheckError::new(UpdateErrorKind::Server, format!("HTTP {status}: {detail}"))
+        }
+        ureq::Error::Transport(transport) => {
+            UpdateCheckError::new(UpdateErrorKind::Network, transport.to_string())
+        }
+    }
+}
+
 /// Pick the right asset for the current platform from the release JSON.
 fn select_platform_asset(
     release: &serde_json::Value,
     version: &str,
-) -> Result<(String, String, String, u64), String> {
-    let assets = release["assets"]
-        .as_array()
-        .ok_or("GitHub release is missing assets")?;
+) -> Result<(String, String, String, u64), UpdateCheckError> {
+    let assets = release["assets"].as_array().ok_or_else(|| {
+        UpdateCheckError::new(UpdateErrorKind::InvalidResponse, "missing release assets")
+    })?;
 
     // Build a map: filename → (download_url, size)
     let mut asset_map: std::collections::HashMap<&str, (&str, u64)> =
@@ -140,14 +284,24 @@ fn select_platform_asset(
     let (main_name, (download_url, size)) = asset_map
         .iter()
         .find(|(name, _)| name.ends_with(&asset_pattern))
-        .ok_or_else(|| format!("Release asset not found: {asset_pattern}"))?;
+        .ok_or_else(|| {
+            UpdateCheckError::new(
+                UpdateErrorKind::Package,
+                format!("release asset not found: {asset_pattern}"),
+            )
+        })?;
 
     // Find the corresponding checksum file.
     let checksum_url = asset_map
         .iter()
         .find(|(name, _)| name.ends_with(&checksum_pattern))
         .map(|(_, (url, _))| url.to_string())
-        .ok_or_else(|| format!("Release checksum not found: {checksum_pattern}"))?;
+        .ok_or_else(|| {
+            UpdateCheckError::new(
+                UpdateErrorKind::Package,
+                format!("release checksum not found: {checksum_pattern}"),
+            )
+        })?;
 
     Ok((
         download_url.to_string(),
@@ -159,26 +313,30 @@ fn select_platform_asset(
 
 /// Returns (asset_name_fragment, checksum_name_fragment) for the current platform.
 #[cfg(target_os = "windows")]
-fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+fn platform_asset_patterns(version: &str) -> Result<(String, String), UpdateCheckError> {
     asset_patterns_for("windows", std::env::consts::ARCH, version)
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+fn platform_asset_patterns(version: &str) -> Result<(String, String), UpdateCheckError> {
     asset_patterns_for("macos", "aarch64", version)
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+fn platform_asset_patterns(version: &str) -> Result<(String, String), UpdateCheckError> {
     asset_patterns_for("macos", "x86_64", version)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn platform_asset_patterns(version: &str) -> Result<(String, String), String> {
+fn platform_asset_patterns(version: &str) -> Result<(String, String), UpdateCheckError> {
     asset_patterns_for(std::env::consts::OS, std::env::consts::ARCH, version)
 }
 
-fn asset_patterns_for(os: &str, arch: &str, version: &str) -> Result<(String, String), String> {
+fn asset_patterns_for(
+    os: &str,
+    arch: &str,
+    version: &str,
+) -> Result<(String, String), UpdateCheckError> {
     match (os, arch) {
         // Always use the NSIS installer on Windows — portable mode only affects
         // the data directory, not how the software itself is updated.
@@ -194,8 +352,9 @@ fn asset_patterns_for(os: &str, arch: &str, version: &str) -> Result<(String, St
             "Clippi_x86_64.dmg".to_string(),
             "Clippi_x86_64.dmg.sha256".to_string(),
         )),
-        _ => Err(format!(
-            "Automatic updates are not supported on {os}/{arch}"
+        _ => Err(UpdateCheckError::new(
+            UpdateErrorKind::UnsupportedPlatform,
+            format!("automatic updates are not supported on {os}/{arch}"),
         )),
     }
 }
@@ -273,6 +432,38 @@ mod tests {
         });
         assert!(select_platform_asset(&release, "1.2.3")
             .unwrap_err()
+            .detail()
             .contains("checksum"));
+    }
+
+    #[test]
+    fn scheduled_update_check_uses_daily_interval() {
+        let now = DateTime::parse_from_rfc3339("2026-07-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(scheduled_update_check_due("", now));
+        assert!(scheduled_update_check_due("not a date", now));
+        assert!(!scheduled_update_check_due("2026-07-19T12:30:00Z", now));
+        assert!(scheduled_update_check_due("2026-07-19T11:59:59Z", now));
+    }
+
+    #[test]
+    fn user_facing_update_errors_are_summarized() {
+        let raw = "Download failed: very long transport error containing https://api.github.com/repos/Ruszero01/clippi/releases/latest and many details";
+        let message = summarize_update_error(raw);
+        assert!(!message.contains("api.github.com"));
+        assert!(!message.contains("transport error"));
+        assert!(message.chars().count() <= 32);
+    }
+
+    #[test]
+    fn check_error_keeps_detail_for_logs_only() {
+        let err = UpdateCheckError::new(
+            UpdateErrorKind::Network,
+            "dns failure while resolving api.github.com",
+        );
+        assert!(err.is_network_failure());
+        assert!(err.detail().contains("api.github.com"));
+        assert!(!err.user_message().contains("api.github.com"));
     }
 }

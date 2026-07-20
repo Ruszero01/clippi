@@ -584,8 +584,9 @@ impl RootView {
                         cx.notify();
                     }
                     SettingsEvent::DataError(msg) => {
+                        log::error!("data settings error: {msg}");
                         this.state.update(cx, |s, _cx| {
-                            s.toast_message = Some(format!("{}: {msg}", I18nKey::ErrDataOp.text()));
+                            s.toast_message = Some(I18nKey::ErrDataOp.text().to_string());
                         });
                         cx.notify();
                     }

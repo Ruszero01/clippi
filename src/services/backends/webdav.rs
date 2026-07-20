@@ -76,10 +76,8 @@ pub fn check_webdav_connection(
                 return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
             }
             Err(error) => {
-                return Err(BackendStatus::Error(format!(
-                    "{}: {error}",
-                    I18nKey::SyncErrConnect.text()
-                )));
+                log::warn!("WebDAV connection HEAD failed: {error}");
+                return Err(BackendStatus::Error(I18nKey::SyncErrConnect.text().into()));
             }
             _ => {}
         }
@@ -106,10 +104,10 @@ fn check_collection(agent: &ureq::Agent, url: &str, auth: &str) -> CollectionChe
         Err(ureq::Error::Status(code, _)) if is_auth_status(code) => {
             CollectionCheck::Error(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()))
         }
-        Err(error) => CollectionCheck::Error(BackendStatus::Error(format!(
-            "{}: {error}",
-            I18nKey::SyncErrConnect.text()
-        ))),
+        Err(error) => {
+            log::warn!("WebDAV collection PROPFIND failed: {error}");
+            CollectionCheck::Error(BackendStatus::Error(I18nKey::SyncErrConnect.text().into()))
+        }
         _ => CollectionCheck::Missing,
     }
 }
@@ -156,10 +154,8 @@ fn create_collection_path(agent: &ureq::Agent, url: &str, auth: &str) -> Result<
                 return Err(BackendStatus::Error(I18nKey::SyncErrAuth.text().into()));
             }
             Err(error) => {
-                return Err(BackendStatus::Error(format!(
-                    "{}: {error}",
-                    I18nKey::SyncErrConnect.text()
-                )));
+                log::warn!("WebDAV MKCOL failed: {error}");
+                return Err(BackendStatus::Error(I18nKey::SyncErrConnect.text().into()));
             }
             _ => return Err(BackendStatus::Error(I18nKey::SyncErrConnect.text().into())),
         }

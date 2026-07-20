@@ -41,7 +41,7 @@ define_i18n! {
 
     // ─── Update settings ───
     SettingAutoCheckUpdate: ("自动检查更新", "Auto update check"),
-    DescAutoCheckUpdate:    ("启动时和每天检查一次新版本", "Check daily and on startup"),
+    DescAutoCheckUpdate:    ("每天检查一次新版本", "Check daily for new versions"),
 
     // ─── General settings ───
     SettingAutoStart:   ("开机自启", "Auto-start"),
@@ -253,6 +253,16 @@ define_i18n! {
     // ─── Toast ───
     ToastUpdateAvailable: ("发现新版本 {0}", "New version {0} available"),
     ToastUpdateError:   ("更新失败: {0}", "Update failed: {0}"),
+    UpdateErrNetwork:   ("网络不可用", "Network unavailable"),
+    UpdateErrServer:    ("更新服务器暂不可用", "Update server unavailable"),
+    UpdateErrResponse:  ("更新信息异常", "Invalid update information"),
+    UpdateErrVersion:   ("版本信息异常", "Invalid version information"),
+    UpdateErrPackage:   ("更新包不可用", "Update package unavailable"),
+    UpdateErrUnsupported: ("当前平台不支持自动更新", "Auto update unsupported"),
+    UpdateErrDownload:  ("下载更新失败", "Update download failed"),
+    UpdateErrVerify:    ("更新校验失败", "Update verification failed"),
+    UpdateErrInstall:   ("准备更新失败", "Update preparation failed"),
+    UpdateErrLaunch:    ("启动安装程序失败", "Installer launch failed"),
     ToastNoQr:          ("未检测到二维码", "No QR code detected"),
     ToastNoOcr:         ("未检测到 OCR 文本", "No OCR text detected"),
     ToastQrCopied:      ("二维码内容已复制", "QR code content copied to clipboard"),
