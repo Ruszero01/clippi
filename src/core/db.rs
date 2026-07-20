@@ -209,8 +209,8 @@ impl Database {
 
     pub fn upsert(&self, item: &ClipboardItem) -> SqlResult<()> {
         let changed = self.conn.execute(
-            "UPDATE clipboard_items SET updated_at = ?1, image_path = ?3, rich_data = ?4, file_data = ?5, image_width = ?6, image_height = ?7, size = ?8, meta_type = ?9 WHERE content_hash = ?2",
-            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64, item.size, item.meta_type],
+            "UPDATE clipboard_items SET updated_at = ?1, content_type = ?3, image_path = ?4, rich_data = ?5, file_data = ?6, image_width = ?7, image_height = ?8, size = ?9, meta_type = ?10 WHERE content_hash = ?2",
+            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.content_type.as_str(), item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64, item.size, item.meta_type],
         )?;
         if changed == 0 {
             self.conn.execute(
