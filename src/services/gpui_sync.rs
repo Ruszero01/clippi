@@ -568,7 +568,18 @@ fn run_sync_cycle_for_backend(
     let snapshot_counts = (payload.items.len() as u32, payload.tags.len() as u32);
 
     if include_images {
-        images_uploaded = upload_prepared_images(backend, image_blobs);
+        match upload_prepared_images(backend, image_blobs) {
+            Ok(count) => images_uploaded = count,
+            Err(error) => {
+                return SyncCycleResult {
+                    success: false,
+                    message: format!("Image upload failed: {error}"),
+                    stats,
+                    snapshot_counts: Some(snapshot_counts),
+                    did_push: false,
+                };
+            }
+        }
     }
 
     if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
@@ -776,16 +787,19 @@ fn prepare_image_snapshot_data(
     blobs
 }
 
-fn upload_prepared_images(backend: &dyn SyncBackend, blobs: Vec<PreparedImageBlob>) -> u32 {
+fn upload_prepared_images(
+    backend: &dyn SyncBackend,
+    blobs: Vec<PreparedImageBlob>,
+) -> Result<u32, String> {
     if blobs.is_empty() {
-        return 0;
+        return Ok(0);
     }
 
     let remote_blobs = match backend.list_remote_blobs() {
         Ok(blobs) => blobs,
         Err(e) => {
             log::warn!("sync: list remote blobs failed: {e}");
-            return 0;
+            return Err(e);
         }
     };
 
@@ -798,14 +812,17 @@ fn upload_prepared_images(backend: &dyn SyncBackend, blobs: Vec<PreparedImageBlo
 
         match backend.upload_blob(&blob.hash_hex, &blob.ext, &blob.data) {
             Ok(()) => count += 1,
-            Err(e) => log::warn!("sync: upload blob {filename} failed: {e}"),
+            Err(e) => {
+                log::warn!("sync: upload blob {filename} failed: {e}");
+                return Err(e);
+            }
         }
     }
 
     if count > 0 {
         log::info!("sync: uploaded {count} image(s)");
     }
-    count
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -890,6 +907,33 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect())
+        }
+    }
+
+    struct FailingBlobBackend {
+        pushed: AtomicUsize,
+    }
+
+    impl SyncBackend for FailingBlobBackend {
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
+            Err("not found".into())
+        }
+
+        fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
+            self.pushed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+
+        fn upload_blob(&self, _hash_hex: &str, _ext: &str, _data: &[u8]) -> Result<(), String> {
+            Err("simulated blob failure".into())
         }
     }
 
@@ -1033,6 +1077,45 @@ mod tests {
         assert!(blobs
             .keys()
             .all(|name| !name.starts_with("0000000000002222")));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn image_blob_upload_failure_prevents_metadata_push() {
+        let dir = unique_temp_dir();
+        let image_path = dir.join("favorite.png");
+        write_test_png(&image_path, [24, 64, 96]);
+
+        let db = Database::open(":memory:").expect("open in-memory database");
+        let image = ClipboardItem::new_image(0, image_path.to_str().unwrap(), 0x3333, 32, 32, None);
+        db.upsert(&image).expect("insert image");
+        let image_id = db
+            .get_by_hash(0x3333)
+            .expect("load image")
+            .expect("image exists")
+            .id;
+        db.set_favorite(image_id, true).expect("favorite image");
+
+        let db = Mutex::new(db);
+        let backend = FailingBlobBackend {
+            pushed: AtomicUsize::new(0),
+        };
+
+        let result = run_sync_cycle_for_backend(
+            &backend,
+            &db,
+            &AtomicBool::new(false),
+            true,
+            true,
+            true,
+            false,
+        );
+
+        assert!(!result.success);
+        assert!(result.message.contains("Image upload failed"));
+        assert!(!result.did_push);
+        assert_eq!(backend.pushed.load(Ordering::SeqCst), 0);
 
         let _ = std::fs::remove_dir_all(dir);
     }

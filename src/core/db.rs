@@ -1135,7 +1135,7 @@ impl Database {
         let cutoff = format!("-{} days", retention_days);
         let mut stmt = self.conn.prepare(
             "SELECT id, content_hash, content_type, is_favorite, custom_hotkey FROM clipboard_items \
-             WHERE is_favorite = 0 AND updated_at < datetime('now', ?1)",
+             WHERE is_favorite = 0 AND julianday(updated_at) < julianday('now', ?1)",
         )?;
         let expired_items: Vec<PrunedClipboardItem> = stmt
             .query_map(params![&cutoff], |row| {
@@ -2176,6 +2176,31 @@ mod tests {
             .query_row("SELECT full_text FROM clipboard_items", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, "recent_item");
+    }
+
+    #[test]
+    fn prune_expired_compares_rfc3339_timestamps_by_time_value() {
+        let (_path, db) = temp_db("prune-exp-rfc3339");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES (
+                     'plain_text',
+                     'older_than_one_day',
+                     1,
+                     strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-25 hours'),
+                     strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-25 hours'),
+                     ''
+                 )",
+                [],
+            )
+            .unwrap();
+
+        let removed = db.prune_expired_items(1).unwrap();
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].content_hash, 1);
+        assert_eq!(count_items(&db), 0);
     }
 
     #[test]
