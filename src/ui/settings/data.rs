@@ -693,22 +693,27 @@ impl SettingsPanel {
                                                 return;
                                             }
                                         };
-                                        // Update last cleanup marker using the active interval format.
+                                        // Update cache and retention cleanup markers separately.
                                         let interval = settings.cleanup_interval.as_str();
+                                        let today = chrono::Local::now().date_naive();
                                         let last_cleanup = match interval {
                                             "weekly" => {
-                                                let wk = chrono::Local::now().iso_week();
+                                                let wk = today.iso_week();
                                                 format!("{}-W{:02}", wk.year(), wk.week())
                                             }
                                             "daily" => {
-                                                chrono::Local::now().format("%Y-%m-%d").to_string()
+                                                today.format("%Y-%m-%d").to_string()
                                             }
                                             _ => {
-                                                chrono::Local::now().format("%Y-%m-%d").to_string()
+                                                today.format("%Y-%m-%d").to_string()
                                             }
                                         };
+                                        let retention_cleanup =
+                                            today.format("%Y-%m-%d").to_string();
                                         state.update(cx, |s, _cx| {
                                             s.settings.cleanup_last_date = last_cleanup;
+                                            s.settings.retention_cleanup_last_date =
+                                                retention_cleanup;
                                             if stats.sync_dirty {
                                                 s.sync_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
                                             }

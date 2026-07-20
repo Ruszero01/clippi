@@ -263,6 +263,24 @@ enum UpdateCheckMode {
     Scheduled,
 }
 
+fn cleanup_marker_for_interval(interval: &str, today: chrono::NaiveDate) -> String {
+    match interval {
+        "weekly" => {
+            let wk = today.iso_week();
+            format!("{}-W{:02}", wk.year(), wk.week())
+        }
+        _ => today.format("%Y-%m-%d").to_string(),
+    }
+}
+
+fn cache_cleanup_due(interval: &str, last_marker: &str, today: chrono::NaiveDate) -> bool {
+    interval != "never" && cleanup_marker_for_interval(interval, today) != last_marker
+}
+
+fn retention_cleanup_due(retention_days: u32, last_date: &str, today: chrono::NaiveDate) -> bool {
+    retention_days > 0 && today.format("%Y-%m-%d").to_string() != last_date
+}
+
 /// Unified window manager entity.
 ///
 /// Owns the window lifecycle and all cross-service polling. Created once
@@ -3118,22 +3136,10 @@ impl WindowManager {
         let settings = self.state.read(cx).settings.clone();
         let interval = settings.cleanup_interval.as_str();
         let retention_days = settings.retention_days;
-
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-
-        let cache_needed = interval != "never"
-            && match interval {
-                "daily" => settings.cleanup_last_date != today,
-                "weekly" => {
-                    let current_week = chrono::Local::now().iso_week();
-                    let current_week_str =
-                        format!("{}-W{:02}", current_week.year(), current_week.week());
-                    settings.cleanup_last_date != current_week_str
-                }
-                _ => false,
-            };
-
-        let retention_needed = retention_days > 0 && settings.cleanup_last_date != today;
+        let today = chrono::Local::now().date_naive();
+        let cache_needed = cache_cleanup_due(interval, &settings.cleanup_last_date, today);
+        let retention_needed =
+            retention_cleanup_due(retention_days, &settings.retention_cleanup_last_date, today);
 
         if !cache_needed && !retention_needed {
             return;
@@ -3182,18 +3188,42 @@ impl WindowManager {
         });
 
         // Update last cleanup date immediately (don't wait for thread).
-        let new_date = match interval {
-            "daily" => today,
-            "weekly" => {
-                let wk = chrono::Local::now().iso_week();
-                format!("{}-W{:02}", wk.year(), wk.week())
-            }
-            _ => today,
-        };
+        let cache_marker = cleanup_marker_for_interval(interval, today);
+        let retention_marker = today.format("%Y-%m-%d").to_string();
         self.state.update(cx, |s, _cx| {
-            s.settings.cleanup_last_date = new_date;
+            if cache_needed {
+                s.settings.cleanup_last_date = cache_marker;
+            }
+            if retention_needed {
+                s.settings.retention_cleanup_last_date = retention_marker;
+            }
             s.settings.save();
         });
+    }
+}
+
+#[cfg(test)]
+mod cleanup_schedule_tests {
+    use super::{cache_cleanup_due, cleanup_marker_for_interval, retention_cleanup_due};
+    use chrono::NaiveDate;
+
+    #[test]
+    fn weekly_cache_marker_does_not_drive_daily_retention_marker() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let weekly_marker = cleanup_marker_for_interval("weekly", today);
+
+        assert_eq!(weekly_marker, "2026-W30");
+        assert!(!cache_cleanup_due("weekly", &weekly_marker, today));
+        assert!(retention_cleanup_due(7, &weekly_marker, today));
+        assert!(!retention_cleanup_due(7, "2026-07-20", today));
+    }
+
+    #[test]
+    fn never_cache_interval_still_allows_retention_cleanup() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+
+        assert!(!cache_cleanup_due("never", "", today));
+        assert!(retention_cleanup_due(1, "", today));
     }
 }
 
