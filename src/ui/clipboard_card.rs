@@ -1742,8 +1742,8 @@ impl RenderOnce for ClipboardCard {
                     ContentType::Image => {
                         let img_missing = !item.image_path.is_empty()
                             && !std::path::Path::new(&item.image_path).exists();
-                        // Show image preview if path is available, otherwise show dimensions.
-                        // When the source file is gone, show the path text instead of a blank preview.
+                        // Show previews only when the full image exists locally. Synced images
+                        // regenerate thumbnails after the blob is downloaded.
                         if let Some(preview_img_path) =
                             preview_img_path.clone().filter(|_| !img_missing)
                         {

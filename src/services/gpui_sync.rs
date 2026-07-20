@@ -472,27 +472,29 @@ fn run_sync_cycle_for_backend(
     let mut stats = MergeStats::default();
     let mut remote_hash = None;
     let mut remote_for_push = None;
+    let mut remote_needs_rewrite = false;
     let mut remote_unchanged = false;
     let mut images_downloaded: u32 = 0;
     let mut images_uploaded: u32 = 0;
 
     match backend.pull(force_push) {
         Ok(mut remote) => {
+            remote_needs_rewrite = remote.version < crate::core::migration::SYNC_VERSION;
             crate::core::migration::migrate_sync_payload(&mut remote);
             sync::sanitize_payload(&mut remote);
             remote_hash = Some(sync::payload_semantic_hash(&remote));
             match sync::merge_remote_into_local(db, &mut remote, &local_device) {
                 Ok(merge_stats) => {
                     stats = merge_stats;
-                    remote_for_push = Some(remote);
                     let fetched = crate::services::url_assets::backfill_link_favicons_from_db(db);
                     if fetched > 0 {
                         log::debug!("sync: backfilled {fetched} URL favicon(s)");
                     }
 
                     if include_images {
-                        images_downloaded = download_missing_images(backend, db);
+                        images_downloaded = download_missing_images(backend, db, &remote);
                     }
+                    remote_for_push = Some(remote);
                 }
                 Err(error) => {
                     return SyncCycleResult {
@@ -582,7 +584,9 @@ fn run_sync_cycle_for_backend(
         }
     }
 
-    if remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload)) {
+    if !remote_needs_rewrite
+        && remote_hash.is_some_and(|hash| hash == sync::payload_semantic_hash(&payload))
+    {
         let _ = backend.post_push_cleanup();
         let message = if images_uploaded > 0 {
             format!("Up to date, images: up {images_uploaded}")
@@ -627,22 +631,29 @@ fn run_sync_cycle_for_backend(
     }
 }
 
-/// Download images and thumbnails that exist in the DB but not on local disk.
-fn download_missing_images(backend: &dyn SyncBackend, db: &Mutex<Database>) -> u32 {
+/// Download image blobs described by the remote payload and map them to local paths.
+fn download_missing_images(
+    backend: &dyn SyncBackend,
+    db: &Mutex<Database>,
+    remote: &crate::core::sync::SyncPayload,
+) -> u32 {
     let images_dir = crate::core::paths::images_dir();
     let _ = std::fs::create_dir_all(&images_dir);
 
     let image_items = match db.lock() {
-        Ok(db) => match db.get_all_sync_items_with_tags(true) {
-            Ok(items) => items
-                .into_iter()
-                .filter(|item| item.content_type.as_str() == "image")
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                log::warn!("sync: query images for download failed: {e}");
-                return 0;
-            }
-        },
+        Ok(db) => remote
+            .items
+            .iter()
+            .filter_map(|remote_item| {
+                let blob = remote_image_blob_name(remote_item)?;
+                let local_item = db.get_by_hash(remote_item.content_hash).ok().flatten()?;
+                (local_item.content_type.as_str() == "image").then_some((
+                    remote_item.content_hash,
+                    local_item.image_path,
+                    blob,
+                ))
+            })
+            .collect::<Vec<_>>(),
         Err(e) => {
             log::warn!("sync: db lock for image download failed: {e}");
             return 0;
@@ -651,47 +662,38 @@ fn download_missing_images(backend: &dyn SyncBackend, db: &Mutex<Database>) -> u
 
     let mut count: u32 = 0;
 
-    for item in &image_items {
-        // Check if full image file exists
-        let image_path = std::path::PathBuf::from(&item.image_path);
-        if image_path.exists() {
-            continue; // Already have it
+    for (content_hash, current_image_path, blob) in &image_items {
+        let Some((hash_hex, ext)) = image_blob_parts(blob, *content_hash) else {
+            continue;
+        };
+        let dest = images_dir.join(blob);
+        let dest_text = dest.to_string_lossy().to_string();
+
+        if dest.exists() {
+            if current_image_path != &dest_text {
+                if let Ok(db) = db.lock() {
+                    let _ = db.set_item_image_path(*content_hash, &dest_text);
+                }
+            }
+            crate::platform::clipboard::ensure_thumbnail_for_image(&dest_text, *content_hash);
+            continue;
         }
 
-        // Determine filename from image_path or fall back to hash
-        let (hash_hex, ext) = if item.image_path.is_empty() {
-            (format!("{:016x}", item.content_hash), "png".to_string())
-        } else {
-            let path = std::path::Path::new(&item.image_path);
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown");
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("png")
-                .to_string();
-            (stem.to_string(), ext)
-        };
+        if !current_image_path.is_empty() && std::path::Path::new(current_image_path).exists() {
+            continue;
+        }
 
-        // Download blob
         match backend.download_blob(&hash_hex, &ext) {
             Ok(data) => {
-                let dest = images_dir.join(format!("{hash_hex}.{ext}"));
-                // Atomic write
-                let tmp = images_dir.join(format!(".{hash_hex}.{ext}.tmp"));
+                let tmp = images_dir.join(format!(".{blob}.tmp"));
                 if std::fs::write(&tmp, &data).is_ok() && std::fs::rename(&tmp, &dest).is_ok() {
-                    // Update DB image_path
                     if let Ok(db) = db.lock() {
-                        let new_path = dest.to_string_lossy().to_string();
-                        let _ = db.set_item_image_path(item.content_hash, &new_path);
+                        let _ = db.set_item_image_path(*content_hash, &dest_text);
                     }
 
-                    // Generate thumbnail from downloaded image
                     crate::platform::clipboard::ensure_thumbnail_for_image(
-                        &dest.to_string_lossy(),
-                        item.content_hash,
+                        &dest_text,
+                        *content_hash,
                     );
 
                     count += 1;
@@ -714,6 +716,40 @@ fn download_missing_images(backend: &dyn SyncBackend, db: &Mutex<Database>) -> u
     count
 }
 
+fn remote_image_blob_name(item: &crate::core::sync::SyncItem) -> Option<String> {
+    if item.content_type != "image" {
+        return None;
+    }
+
+    if item.image_blob.is_empty() {
+        return Some(format!("{:016x}.png", item.content_hash));
+    }
+
+    let filename = item
+        .image_blob
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())?;
+    image_blob_parts(filename, item.content_hash)?;
+    Some(filename.to_string())
+}
+
+fn image_blob_parts(blob: &str, content_hash: u64) -> Option<(String, String)> {
+    let (stem, ext) = blob.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    let valid_ext = matches!(ext.as_str(), "png" | "jpg" | "jpeg");
+    let expected_hash = format!("{:016x}", content_hash);
+    let valid_name = stem == expected_hash
+        && valid_ext
+        && blob
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.');
+    if !valid_name {
+        return None;
+    }
+    Some((expected_hash, ext))
+}
+
 struct PreparedImageBlob {
     hash_hex: String,
     ext: String,
@@ -725,7 +761,6 @@ fn prepare_image_snapshot_data(
     db: &Mutex<Database>,
     compress: bool,
 ) -> Vec<PreparedImageBlob> {
-    let images_dir = crate::core::paths::images_dir();
     let wanted_hashes: Vec<u64> = payload
         .items
         .iter()
@@ -776,12 +811,6 @@ fn prepare_image_snapshot_data(
 
         if item.image_blob.is_empty() {
             item.image_blob = format!("{hash_hex}.png");
-        }
-
-        let thumb_path = images_dir.join(format!("thumb_{hash_hex}.png"));
-        if let Ok(thumb_data) = std::fs::read(&thumb_path) {
-            use base64::Engine;
-            item.thumb_data = base64::engine::general_purpose::STANDARD.encode(&thumb_data);
         }
     }
     blobs
@@ -937,6 +966,36 @@ mod tests {
         }
     }
 
+    struct RecordingDownloadBackend {
+        requests: Mutex<Vec<(String, String)>>,
+    }
+
+    impl SyncBackend for RecordingDownloadBackend {
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
+            Err("not found".into())
+        }
+
+        fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+
+        fn download_blob(&self, hash_hex: &str, ext: &str) -> Result<Vec<u8>, String> {
+            self.requests
+                .lock()
+                .expect("requests lock")
+                .push((hash_hex.to_string(), ext.to_string()));
+            Err("blob not found".into())
+        }
+    }
+
     fn unique_temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "clippi-sync-test-{}",
@@ -996,7 +1055,6 @@ mod tests {
             image_width: 0,
             image_height: 0,
             image_blob: String::new(),
-            thumb_data: String::new(),
         })
         .expect("insert sync item");
         let db = Mutex::new(db);
@@ -1121,6 +1179,73 @@ mod tests {
     }
 
     #[test]
+    fn image_download_uses_remote_blob_not_local_absolute_path() {
+        let db = Database::open(":memory:").expect("open in-memory database");
+        let image = ClipboardItem::new_image(
+            0,
+            r"C:\Users\123\AppData\Local\PixPin\Temp\PixPin_20260720.png",
+            0xBEEF,
+            32,
+            32,
+            None,
+        );
+        db.upsert(&image).expect("insert image");
+        let db = Mutex::new(db);
+        let remote = SyncPayload {
+            version: crate::core::migration::SYNC_VERSION,
+            device_name: "remote-device".into(),
+            synced_at: "2026-07-20T08:00:00Z".into(),
+            items: vec![SyncItem {
+                content_type: "image".into(),
+                full_text: "PixPin_20260720.png".into(),
+                content_hash: 0xBEEF,
+                created_at: "2026-07-20T08:00:00Z".into(),
+                updated_at: "2026-07-20T08:00:00Z".into(),
+                rich_data: String::new(),
+                is_favorite: false,
+                note: String::new(),
+                size: 0,
+                tags: vec![],
+                meta_type: String::new(),
+                image_width: 32,
+                image_height: 32,
+                image_blob: "000000000000beef.jpg".into(),
+            }],
+            tags: vec![],
+            deleted_items: vec![],
+            deleted_tags: vec![],
+            unfavorited_items: vec![],
+        };
+        let backend = RecordingDownloadBackend {
+            requests: Mutex::new(Vec::new()),
+        };
+
+        let downloaded = download_missing_images(&backend, &db, &remote);
+
+        assert_eq!(downloaded, 0);
+        assert_eq!(
+            *backend.requests.lock().expect("requests lock"),
+            vec![("000000000000beef".to_string(), "jpg".to_string())]
+        );
+    }
+
+    #[test]
+    fn image_blob_parts_rejects_local_path_like_blob_names() {
+        assert_eq!(
+            image_blob_parts(
+                r"C:\Users\123\AppData\Local\PixPin\Temp\PixPin_20260720.png",
+                0xBEEF,
+            ),
+            None
+        );
+        assert_eq!(image_blob_parts("PixPin_20260720.png", 0xBEEF), None);
+        assert_eq!(
+            image_blob_parts("000000000000beef.png", 0xBEEF),
+            Some(("000000000000beef".to_string(), "png".to_string()))
+        );
+    }
+
+    #[test]
     fn remote_snapshot_is_merged_before_push_in_favorites_only_mode() {
         let db = Database::open(":memory:").expect("open in-memory database");
         db.insert_sync_item_raw(&SyncItem {
@@ -1138,7 +1263,6 @@ mod tests {
             image_width: 0,
             image_height: 0,
             image_blob: String::new(),
-            thumb_data: String::new(),
         })
         .expect("insert local item");
         let db = Mutex::new(db);
@@ -1161,7 +1285,6 @@ mod tests {
                 image_width: 0,
                 image_height: 0,
                 image_blob: String::new(),
-                thumb_data: String::new(),
             }],
             tags: vec![],
             deleted_items: vec![],
@@ -1186,6 +1309,39 @@ mod tests {
         assert!(result.success);
         assert!(!result.did_push);
         assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn old_sync_protocol_is_rewritten_even_when_semantically_unchanged() {
+        let db = Mutex::new(Database::open(":memory:").expect("open in-memory database"));
+        let remote = SyncPayload {
+            version: crate::core::migration::SYNC_VERSION - 1,
+            device_name: "remote-device".into(),
+            synced_at: "2026-07-20T08:00:00Z".into(),
+            items: vec![],
+            tags: vec![],
+            deleted_items: vec![],
+            deleted_tags: vec![],
+            unfavorited_items: vec![],
+        };
+        let backend = MemoryBackend {
+            payload: remote,
+            pushes: AtomicUsize::new(0),
+        };
+
+        let result = run_sync_cycle_for_backend(
+            &backend,
+            &db,
+            &AtomicBool::new(false),
+            false,
+            true,
+            false,
+            false,
+        );
+
+        assert!(result.success);
+        assert!(result.did_push);
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 1);
     }
 
     #[test]

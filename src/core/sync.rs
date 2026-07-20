@@ -103,9 +103,6 @@ pub struct SyncItem {
     /// Remote image blob filename (e.g. "a1b2c3d4e5f60789.png" or ".jpg").
     #[serde(default)]
     pub image_blob: String,
-    /// Thumbnail base64-encoded PNG (310px wide, typically 10-33 KB).
-    #[serde(default)]
-    pub thumb_data: String,
 }
 
 /// Tag reference embedded in a SyncItem.
@@ -238,9 +235,15 @@ pub fn build_snapshot(
             })
             .collect();
 
+        let full_text = if item.content_type == crate::core::types::ContentType::Image {
+            portable_image_text(&item.full_text, &item.image_path)
+        } else {
+            item.full_text.clone()
+        };
+
         sync_items.push(SyncItem {
             content_type: item.content_type.as_str().to_string(),
-            full_text: item.full_text.clone(),
+            full_text,
             content_hash: item.content_hash,
             created_at: item.created_at.to_rfc3339(),
             updated_at: item.updated_at.to_rfc3339(),
@@ -253,7 +256,6 @@ pub fn build_snapshot(
             image_width: item.image_width,
             image_height: item.image_height,
             image_blob: String::new(),
-            thumb_data: String::new(),
         });
     }
 
@@ -325,6 +327,24 @@ pub fn build_snapshot(
     };
     sanitize_payload(&mut payload);
     Ok(payload)
+}
+
+fn portable_image_text(full_text: &str, image_path: &str) -> String {
+    portable_path_filename(full_text)
+        .or_else(|| portable_path_filename(image_path))
+        .unwrap_or_else(|| "Image".to_string())
+}
+
+fn portable_path_filename(path: &str) -> Option<String> {
+    let trimmed = path.trim().trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn tag_key(uid: &str, name: &str) -> String {
@@ -821,10 +841,15 @@ pub fn payload_semantic_hash(payload: &SyncPayload) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for item in &payload.items {
+        item.content_type.hash(&mut h);
+        item.full_text.hash(&mut h);
         item.content_hash.hash(&mut h);
         item.updated_at.hash(&mut h);
+        item.rich_data.hash(&mut h);
         item.is_favorite.hash(&mut h);
         item.note.hash(&mut h);
+        item.size.hash(&mut h);
+        item.meta_type.hash(&mut h);
         item.image_width.hash(&mut h);
         item.image_height.hash(&mut h);
         item.image_blob.hash(&mut h);
@@ -1010,7 +1035,6 @@ pub fn sanitize_payload(payload: &mut SyncPayload) {
 fn sanitize_sync_item_image_fields(item: &mut SyncItem) {
     if item.content_type != "image" {
         item.image_blob.clear();
-        item.thumb_data.clear();
         return;
     }
 
@@ -1293,7 +1317,6 @@ mod tests {
                 image_width: 0,
                 image_height: 0,
                 image_blob: String::new(),
-                thumb_data: String::new(),
             }],
             tags: vec![SyncTag {
                 uid: "tag-work".into(),
@@ -1371,7 +1394,6 @@ mod tests {
             image_width: 0,
             image_height: 0,
             image_blob: String::new(),
-            thumb_data: String::new(),
         }
     }
 
@@ -1380,14 +1402,116 @@ mod tests {
         let mut item = make_item(0xABCD, "2026-05-14T09:00:00Z", "image");
         item.content_type = "image".into();
         item.image_blob = "..\\outside.png".into();
-        item.thumb_data = "thumb".into();
 
         let mut payload = make_payload(vec![item], vec![]);
 
         sanitize_payload(&mut payload);
 
         assert_eq!(payload.items[0].image_blob, "000000000000abcd.png");
-        assert_eq!(payload.items[0].thumb_data, "thumb");
+    }
+
+    #[test]
+    fn legacy_thumb_data_is_dropped_when_payload_is_rewritten() {
+        let old_json = r##"{
+            "version": 4,
+            "device_name": "old-device",
+            "synced_at": "2026-07-20T08:00:00Z",
+            "items": [{
+                "content_type": "image",
+                "full_text": "shot.png",
+                "content_hash": 4660,
+                "created_at": "2026-07-20T08:00:00Z",
+                "updated_at": "2026-07-20T08:00:00Z",
+                "rich_data": "",
+                "is_favorite": false,
+                "note": "",
+                "size": 0,
+                "tags": [],
+                "meta_type": "",
+                "image_width": 24,
+                "image_height": 16,
+                "image_blob": "0000000000001234.png",
+                "thumb_data": "legacy-base64"
+            }],
+            "tags": [],
+            "deleted_items": [],
+            "deleted_tags": [],
+            "unfavorited_items": []
+        }"##;
+        let mut payload: SyncPayload =
+            serde_json::from_str(old_json).expect("parse legacy payload");
+
+        crate::core::migration::migrate_sync_payload(&mut payload);
+        sanitize_payload(&mut payload);
+        let rewritten = serde_json::to_string(&payload).expect("serialize migrated payload");
+
+        assert_eq!(payload.version, crate::core::migration::SYNC_VERSION);
+        assert!(!rewritten.contains("thumb_data"));
+        assert_eq!(payload.items[0].image_blob, "0000000000001234.png");
+    }
+
+    #[test]
+    fn image_snapshot_exports_filename_instead_of_absolute_path() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        let item = crate::core::types::ClipboardItem::new_image(
+            0,
+            r"C:\Users\123\AppData\Local\PixPin\Temp\PixPin_20260720.png",
+            0x1234,
+            24,
+            16,
+            None,
+        );
+        db.upsert(&item).expect("insert image");
+        let db = std::sync::Mutex::new(db);
+
+        let payload = build_snapshot(&db, "device-a", false, true).expect("build snapshot");
+
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].full_text, "PixPin_20260720.png");
+
+        let json = serde_json::to_string(&payload).expect("serialize payload");
+        assert!(!json.contains(r"C:\Users\123"));
+        assert!(!json.contains("thumb_data"));
+    }
+
+    #[test]
+    fn image_snapshot_exports_posix_filename_instead_of_absolute_path() {
+        let db = Database::open(":memory:").expect("open :memory:");
+        let item = crate::core::types::ClipboardItem::new_image(
+            0,
+            "/Users/alice/Library/Application Support/PixPin/Temp/capture.png",
+            0x1235,
+            24,
+            16,
+            None,
+        );
+        db.upsert(&item).expect("insert image");
+        let db = std::sync::Mutex::new(db);
+
+        let payload = build_snapshot(&db, "device-b", false, true).expect("build snapshot");
+
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].full_text, "capture.png");
+
+        let json = serde_json::to_string(&payload).expect("serialize payload");
+        assert!(!json.contains("/Users/alice"));
+        assert!(!json.contains("thumb_data"));
+    }
+
+    #[test]
+    fn payload_semantic_hash_includes_item_text() {
+        let mut a = make_payload(
+            vec![make_item(0x1111, "2026-05-14T09:00:00Z", "old")],
+            vec![],
+        );
+        let mut b = make_payload(
+            vec![make_item(0x1111, "2026-05-14T09:00:00Z", "new")],
+            vec![],
+        );
+        sanitize_payload(&mut a);
+        sanitize_payload(&mut b);
+
+        assert_ne!(payload_semantic_hash(&a), payload_semantic_hash(&b));
     }
 
     fn make_tag(name: &str, color: &str, updated_at: &str) -> SyncTag {
@@ -1578,7 +1702,6 @@ mod tests {
             image_width: 0,
             image_height: 0,
             image_blob: String::new(),
-            thumb_data: String::new(),
         };
         let id = db.insert_sync_item_raw(&item).expect("insert");
         (std::sync::Mutex::new(db), id, 0xABCD)
@@ -1607,7 +1730,6 @@ mod tests {
             image_width: 0,
             image_height: 0,
             image_blob: String::new(),
-            thumb_data: String::new(),
         };
         db.insert_sync_item_raw(&item).expect("insert")
     }
@@ -1940,7 +2062,6 @@ mod tests {
                 image_width: 0,
                 image_height: 0,
                 image_blob: String::new(),
-                thumb_data: String::new(),
             }],
             vec![],
         );
@@ -1987,7 +2108,6 @@ mod tests {
                 image_width: 0,
                 image_height: 0,
                 image_blob: String::new(),
-                thumb_data: String::new(),
             }],
             vec![],
         );
@@ -2049,7 +2169,6 @@ mod tests {
                 image_width: 0,
                 image_height: 0,
                 image_blob: String::new(),
-                thumb_data: String::new(),
             }],
             vec![SyncUnfavoritedItem {
                 content_hash: 100,

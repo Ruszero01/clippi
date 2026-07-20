@@ -26,7 +26,7 @@ use uuid::Uuid;
 pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 
 /// Current sync protocol version — written into every `SyncPayload` snapshot.
-pub const SYNC_VERSION: u32 = 4;
+pub const SYNC_VERSION: u32 = 5;
 
 /// A registered database migration.
 struct DbMigration {
@@ -257,6 +257,12 @@ pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
     if payload.version < 4 {
         // v3 → v4: tag uid fields were added with #[serde(default)].
         payload.version = 4;
+    }
+    if payload.version < 5 {
+        // v4 -> v5: remove inline thumbnail data from sync items. Unknown
+        // `thumb_data` fields from old JSON are ignored during deserialization;
+        // rewriting the migrated payload cleans them from the sync file.
+        payload.version = 5;
     }
 }
 
