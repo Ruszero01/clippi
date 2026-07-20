@@ -1,7 +1,7 @@
 //! --- Clipboard listener trait and platform implementations ---
 //!
 //! --- Provides multi-format clipboard monitoring with detection priority: ---
-//! --- Files > Image (Image+RichText coexistence -> Text) > Link > Color > RichText > PlainText ---
+//! --- Files > Image (Image+RichText coexistence -> Text) > Link > Path > Color > Email/Phone > RichText > Markdown > PlainText ---
 
 use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
@@ -127,7 +127,7 @@ pub trait ClipboardListener: Send {
 }
 
 /// Shared clipboard content detection (platform-agnostic).
-/// Priority: Files > Image (Image+RichText coexistence -> Text) > Link > Color > RichText > PlainText
+/// Priority: Files > Image (Image+RichText coexistence -> Text) > Link > Path > Color > Email/Phone > RichText > Markdown > PlainText
 fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
     // --- Capture source app info at detection time (only once, not on re-copy) ---
     let source_info = source::get_clipboard_owner_info();
@@ -284,6 +284,8 @@ fn detect_text_content(
             return None;
         }
 
+        let rich_data = read_clipboard_rich_data(ctx);
+
         if is_url(&text) {
             // --- Prefetch favicon in background thread (non-critical) ---
             let domain = crate::core::types::url_to_domain(&text);
@@ -293,7 +295,7 @@ fn detect_text_content(
                 &text,
                 ContentType::PlainText,
                 source_info.as_ref(),
-                None,
+                rich_data.as_ref(),
             );
             item.meta_type = "link".to_string();
             return Some(item);
@@ -301,10 +303,10 @@ fn detect_text_content(
 
         if is_path(&text) {
             let drive_label = crate::core::types::path_drive_label(&text);
-            let rich = drive_label.as_ref().map(|label| RichData {
-                drive_label: Some(label.clone()),
-                ..Default::default()
-            });
+            let mut rich = rich_data.clone();
+            if let Some(label) = drive_label {
+                rich.get_or_insert_with(RichData::default).drive_label = Some(label);
+            }
             let mut item = ClipboardItem::new_text(
                 0,
                 &text,
@@ -326,7 +328,7 @@ fn detect_text_content(
                 &text,
                 ContentType::PlainText,
                 source_info.as_ref(),
-                None,
+                rich_data.as_ref(),
             );
             // Override the text-based hash with the normalized color hash for dedup
             item.content_hash = hash;
@@ -346,32 +348,20 @@ fn detect_text_content(
                 &text,
                 ContentType::PlainText,
                 source_info.as_ref(),
-                None,
+                rich_data.as_ref(),
             );
             item.meta_type = meta;
             return Some(item);
         }
 
-        if ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf) {
-            let html = ctx
-                .get_html()
-                .ok()
-                .map(|html| normalize_clipboard_html(&html));
-            let rtf = ctx.get_rich_text().ok();
-            if html.is_some() || rtf.is_some() {
-                let rich = RichData {
-                    html,
-                    rtf,
-                    ..Default::default()
-                };
-                return Some(ClipboardItem::new_text(
-                    0,
-                    &text,
-                    ContentType::RichText,
-                    source_info.as_ref(),
-                    Some(&rich),
-                ));
-            }
+        if let Some(rich) = rich_data {
+            return Some(ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::RichText,
+                source_info.as_ref(),
+                Some(&rich),
+            ));
         }
 
         if is_markdown_like(&text) {
@@ -396,6 +386,23 @@ fn detect_text_content(
     }
 
     None
+}
+
+fn read_clipboard_rich_data(ctx: &ClipboardContext) -> Option<RichData> {
+    if !(ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf)) {
+        return None;
+    }
+
+    let html = ctx
+        .get_html()
+        .ok()
+        .map(|html| normalize_clipboard_html(&html));
+    let rtf = ctx.get_rich_text().ok();
+    (html.is_some() || rtf.is_some()).then_some(RichData {
+        html,
+        rtf,
+        ..Default::default()
+    })
 }
 
 fn normalize_clipboard_html(html: &str) -> String {
