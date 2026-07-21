@@ -2144,7 +2144,7 @@ impl AppState {
             }
         };
         let file_data = FileData::from_json(&item.file_data);
-        if file_data.is_transfer() {
+        if file_data.is_transfer() || !file_data.remote_hash.is_empty() {
             self.toast_message = Some(I18nKey::TransferAlreadyUploaded.text().into());
             return;
         }
@@ -2158,6 +2158,7 @@ impl AppState {
             return;
         }
         self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Upload {
+            source_item_id: item_id,
             source_path: file.path.clone(),
             file_name: file.name.clone(),
         });

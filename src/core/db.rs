@@ -928,6 +928,71 @@ impl Database {
         Ok(items)
     }
 
+    /// Persist the remote hash on the original local file item after upload.
+    /// The transfer flag remains false so the item stays in normal history.
+    pub fn set_file_transfer_hash(&self, item_id: i64, remote_hash: &str) -> SqlResult<bool> {
+        let changed = self.conn.execute(
+            "UPDATE clipboard_items
+             SET file_data = json_set(file_data, '$.remote_hash', ?1)
+             WHERE id = ?2
+               AND content_type = 'file'
+               AND meta_type != 'transfer'
+               AND json_valid(file_data)",
+            params![remote_hash, item_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Remove the upload marker from every original file item referencing a
+    /// blob that has been deleted or expired.
+    pub fn clear_file_transfer_hash(&self, remote_hash: &str) -> SqlResult<usize> {
+        self.conn.execute(
+            "UPDATE clipboard_items
+             SET file_data = json_set(file_data, '$.remote_hash', '')
+             WHERE content_type = 'file'
+               AND meta_type != 'transfer'
+               AND json_valid(file_data)
+               AND json_extract(file_data, '$.remote_hash') = ?1",
+            params![remote_hash],
+        )
+    }
+
+    /// Clear markers removed remotely by another device during manifest refresh.
+    pub fn clear_stale_file_transfer_hashes(
+        &self,
+        active_hashes: &std::collections::HashSet<String>,
+    ) -> SqlResult<usize> {
+        let marked = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, json_extract(file_data, '$.remote_hash')
+                 FROM clipboard_items
+                 WHERE content_type = 'file'
+                   AND meta_type != 'transfer'
+                   AND json_valid(file_data)
+                   AND COALESCE(json_extract(file_data, '$.remote_hash'), '') != ''",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<SqlResult<Vec<_>>>()?;
+            rows
+        };
+
+        let mut cleared = 0;
+        for (item_id, hash) in marked {
+            if !active_hashes.contains(&hash) {
+                cleared += self.conn.execute(
+                    "UPDATE clipboard_items
+                     SET file_data = json_set(file_data, '$.remote_hash', '')
+                     WHERE id = ?1",
+                    params![item_id],
+                )?;
+            }
+        }
+        Ok(cleared)
+    }
+
     /// Delete a transfer item by its remote_hash (stored in file_data JSON).
     /// Returns true if an item was deleted.
     pub fn delete_transfer_by_hash(&self, remote_hash: &str) -> SqlResult<bool> {
@@ -1853,6 +1918,54 @@ mod tests {
         db.conn
             .query_row("SELECT COUNT(*) FROM tags", [], |r| r.get::<_, usize>(0))
             .unwrap()
+    }
+
+    #[test]
+    fn original_file_transfer_hash_tracks_manifest_lifecycle() {
+        let (_path, db) = temp_db("file-transfer-marker");
+        let file_data = crate::core::types::FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "report.pdf".into(),
+                path: r"C:\files\report.pdf".into(),
+                is_dir: false,
+            }],
+            ..Default::default()
+        }
+        .to_json();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items
+                 (content_type, full_text, content_hash, created_at, updated_at, file_data, meta_type)
+                 VALUES ('file', 'report.pdf', 42, '2026-01-01T00:00:00Z',
+                         '2026-01-01T00:00:00Z', ?1, '')",
+                params![file_data],
+            )
+            .unwrap();
+        let item_id = db.conn.last_insert_rowid();
+        let hash = "a".repeat(64);
+
+        assert!(db.set_file_transfer_hash(item_id, &hash).unwrap());
+        let item = db.get_by_id(item_id).unwrap().unwrap();
+        assert_eq!(
+            crate::core::types::FileData::from_json(&item.file_data).remote_hash,
+            hash
+        );
+
+        let active = std::collections::HashSet::from([hash.clone()]);
+        assert_eq!(db.clear_stale_file_transfer_hashes(&active).unwrap(), 0);
+        assert_eq!(
+            db.clear_stale_file_transfer_hashes(&std::collections::HashSet::new())
+                .unwrap(),
+            1
+        );
+
+        let item = db.get_by_id(item_id).unwrap().unwrap();
+        assert!(crate::core::types::FileData::from_json(&item.file_data)
+            .remote_hash
+            .is_empty());
+
+        assert!(db.set_file_transfer_hash(item_id, &hash).unwrap());
+        assert_eq!(db.clear_file_transfer_hash(&hash).unwrap(), 1);
     }
 
     #[test]

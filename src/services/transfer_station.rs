@@ -28,6 +28,7 @@ const MANIFEST_UPDATE_RETRIES: usize = 5;
 pub enum TransferCommand {
     Refresh,
     Upload {
+        source_item_id: i64,
         source_path: String,
         file_name: String,
     },
@@ -53,6 +54,7 @@ enum TransferAction {
 struct TransferJobResult {
     action: Result<TransferAction, (TransferCommand, String)>,
     entries: Option<Vec<ResolvedEntry>>,
+    markers_cleared: bool,
 }
 
 #[derive(Default)]
@@ -182,13 +184,15 @@ impl GpuiTransferService {
                 retention_days,
             );
             *pending.lock().expect("transfer result lock poisoned") = Some(match result {
-                Ok((action, entries)) => TransferJobResult {
+                Ok((action, entries, markers_cleared)) => TransferJobResult {
                     action: Ok(action),
                     entries: Some(entries),
+                    markers_cleared,
                 },
                 Err(error) => TransferJobResult {
                     action: Err((command, error)),
                     entries: None,
+                    markers_cleared: false,
                 },
             });
             running.store(false, Ordering::Release);
@@ -221,18 +225,20 @@ fn run_command(
     command: TransferCommand,
     device_name: &str,
     retention_days: u32,
-) -> Result<(TransferAction, Vec<ResolvedEntry>), String> {
+) -> Result<(TransferAction, Vec<ResolvedEntry>, bool), String> {
     let db = Database::open(&db_path.to_string_lossy())
         .map_err(|error| format!("open transfer database: {error}"))?;
     let action = match command {
         TransferCommand::Refresh => TransferAction::Refresh,
         TransferCommand::Upload {
+            source_item_id,
             source_path,
             file_name,
         } => {
             let name = upload_file(
                 backend,
                 &db,
+                source_item_id,
                 &source_path,
                 &file_name,
                 device_name,
@@ -254,8 +260,8 @@ fn run_command(
             TransferAction::Cleanup(count)
         }
     };
-    let entries = fetch_and_resolve(backend, &db)?;
-    Ok((action, entries))
+    let (entries, cleared_markers) = fetch_and_resolve(backend, &db)?;
+    Ok((action, entries, cleared_markers > 0))
 }
 
 fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOutcome {
@@ -265,7 +271,10 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
         app.transfer_entries = entries;
     }
 
-    let mut data_changed = false;
+    let mut data_changed = result.markers_cleared;
+    if result.markers_cleared {
+        app.reload_items();
+    }
     match result.action {
         Ok(TransferAction::Refresh) => {}
         Ok(TransferAction::Upload(name)) => {
@@ -321,7 +330,7 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
 pub fn fetch_and_resolve(
     backend: &dyn SyncBackend,
     db: &Database,
-) -> Result<Vec<ResolvedEntry>, String> {
+) -> Result<(Vec<ResolvedEntry>, usize), String> {
     let mut snapshot = backend.pull_file_manifest()?;
     if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
         return Err(format!(
@@ -331,12 +340,24 @@ pub fn fetch_and_resolve(
     }
     migration::migrate_file_manifest(&mut snapshot.manifest);
     let local_paths = get_local_transfer_paths(db);
-    snapshot
+    for entry in &snapshot.manifest.files {
+        entry.validate()?;
+    }
+    let active_hashes = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|entry| entry.hash.clone())
+        .collect();
+    let cleared_markers = db
+        .clear_stale_file_transfer_hashes(&active_hashes)
+        .map_err(|error| format!("clear stale transfer markers: {error}"))?;
+
+    let entries = snapshot
         .manifest
         .files
         .into_iter()
         .map(|entry| {
-            entry.validate()?;
             let local_path = local_paths.get(&entry.hash).cloned();
             Ok(ResolvedEntry {
                 is_local: local_path.is_some(),
@@ -344,12 +365,14 @@ pub fn fetch_and_resolve(
                 entry,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((entries, cleared_markers))
 }
 
 fn upload_file(
     backend: &dyn SyncBackend,
     db: &Database,
+    source_item_id: i64,
     local_path: &str,
     file_name: &str,
     device_name: &str,
@@ -393,6 +416,8 @@ fn upload_file(
 
     let canonical_path = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
     upsert_transfer_item(db, &entry, &canonical_path.to_string_lossy(), &data)?;
+    db.set_file_transfer_hash(source_item_id, &hash)
+        .map_err(|error| format!("mark original transfer item: {error}"))?;
     Ok(name)
 }
 
@@ -679,6 +704,9 @@ fn clean_local_transfer(db: &Database, hash: &str) {
     let hash_dir = cache_root.join(hash);
     if hash_dir.is_dir() {
         let _ = std::fs::remove_dir(&hash_dir);
+    }
+    if let Err(error) = db.clear_file_transfer_hash(hash) {
+        log::warn!("[transfer] clear original upload marker failed: {error}");
     }
     let _ = db.delete_transfer_by_hash(hash);
 }

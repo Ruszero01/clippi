@@ -49,8 +49,9 @@ impl MenuItemContext {
             item.display_kind(),
             DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf
         );
+        let file_data = crate::core::types::FileData::from_json(&item.file_data);
         let is_transfer = item.content_type == ContentType::File
-            && crate::core::types::FileData::from_json(&item.file_data).is_transfer();
+            && (file_data.is_transfer() || !file_data.remote_hash.is_empty());
         Self {
             is_image: item.content_type == ContentType::Image,
             is_file: item.content_type == ContentType::File,

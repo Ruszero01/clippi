@@ -1002,6 +1002,9 @@ impl RenderOnce for ClipboardCard {
                 .files
                 .first()
                 .is_none_or(|file| file.path.is_empty());
+        let source_is_uploaded = content_type == ContentType::File
+            && !transfer_file_data.transfer
+            && !transfer_file_data.remote_hash.is_empty();
         let icon = type_icon(&item);
         let has_qr = has_qr_code(&item);
         let show_source = show_source_app && !item.source_app_name.is_empty();
@@ -2322,6 +2325,9 @@ impl RenderOnce for ClipboardCard {
                 window,
             ));
         }
+        if source_is_uploaded {
+            fixed_widths.push(18.);
+        }
         if let Some(label) = size_label.as_deref() {
             fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
         }
@@ -2456,6 +2462,23 @@ impl RenderOnce for ClipboardCard {
                                 .text_color(pill_text_color)
                                 .child(label),
                         ),
+                )
+            })
+            .when(source_is_uploaded, |el| {
+                el.child(
+                    div()
+                        .size(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(pill_border)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_family("iconfont")
+                        .text_size(px(10.))
+                        .text_color(rgb(0x3B82F6))
+                        .child("\u{e794}"),
                 )
             })
             .when_some(size_label, |el, label| {
