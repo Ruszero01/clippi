@@ -1204,6 +1204,7 @@ impl ClipboardListView {
                     let hash = file_data.remote_hash;
                     self.state
                         .update(cx, |state, _cx| state.download_transfer_entry(&hash));
+                    self.sync_items_from_state(cx);
                 }
             }
             "delete_transfer" => {
@@ -1945,6 +1946,7 @@ impl Render for ClipboardListView {
                                                                                 }
                                                                             },
                                                                         );
+                                                                        this.sync_items_from_state(cx);
                                                                         return;
                                                                     }
                                                                     let item_id = item.id;

@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;
@@ -51,6 +52,13 @@ const CARD_PADDING_X: f32 = 10.0;
 const CARD_ICON_WIDTH: f32 = 36.0;
 const CARD_CONTENT_GAP: f32 = 10.0;
 const MAX_ICON_CACHE_JOBS: usize = 4;
+
+#[derive(Clone, Copy)]
+enum TransferPillKind {
+    Cloud,
+    Local,
+    Downloading,
+}
 
 static ICON_CACHE_JOBS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -2252,14 +2260,20 @@ impl RenderOnce for ClipboardCard {
             && tags.iter().any(|tag| {
                 tag.name == I18nKey::TransferLocal.text()
                     || tag.name == I18nKey::TransferCloud.text()
+                    || tag.name == I18nKey::TransferDownloading.text()
             });
         let transfer_is_local =
             is_transfer && tags.iter().any(|t| t.name == I18nKey::TransferLocal.text());
+        let transfer_is_downloading = is_transfer
+            && tags
+                .iter()
+                .any(|t| t.name == I18nKey::TransferDownloading.text());
         let display_tags: Vec<_> = if is_transfer {
             tags.iter()
                 .filter(|t| {
                     t.name != I18nKey::TransferLocal.text()
                         && t.name != I18nKey::TransferCloud.text()
+                        && t.name != I18nKey::TransferDownloading.text()
                 })
                 .cloned()
                 .collect()
@@ -2281,22 +2295,29 @@ impl RenderOnce for ClipboardCard {
             fixed_widths.push(hotkey_pill_width(hk, window));
         }
         // Transfer status pill (for transfer station items)
-        let transfer_pill: Option<(String, bool)> = if is_transfer {
-            if transfer_is_local {
-                Some((I18nKey::TransferLocal.text().to_string(), true))
+        let transfer_pill: Option<(String, TransferPillKind)> = if is_transfer {
+            if transfer_is_downloading {
+                Some((
+                    I18nKey::TransferDownloading.text().to_string(),
+                    TransferPillKind::Downloading,
+                ))
+            } else if transfer_is_local {
+                Some((
+                    I18nKey::TransferLocal.text().to_string(),
+                    TransferPillKind::Local,
+                ))
             } else {
-                Some((I18nKey::TransferCloud.text().to_string(), false))
+                Some((
+                    I18nKey::TransferCloud.text().to_string(),
+                    TransferPillKind::Cloud,
+                ))
             }
         } else {
             None
         };
-        if transfer_pill.is_some() {
+        if let Some((label, _)) = transfer_pill.as_ref() {
             fixed_widths.push(info_pill_width(
-                if transfer_is_local {
-                    I18nKey::TransferLocal.text()
-                } else {
-                    I18nKey::TransferCloud.text()
-                },
+                label,
                 INFO_PILL_PADDING_X + 16., // extra space for icon
                 window,
             ));
@@ -2383,30 +2404,52 @@ impl RenderOnce for ClipboardCard {
                         .child(div().text_size(px(9.)).text_color(accent).child(hk)),
                 )
             })
-            .when_some(transfer_pill, |el, (label, is_local)| {
-                let pill_text_color = if is_local {
-                    rgb(0x22C55E) // 绿色
-                } else {
-                    accent // 蓝色/强调色
+            .when_some(transfer_pill, |el, (label, kind)| {
+                let pill_text_color = match kind {
+                    TransferPillKind::Local => rgb(0x22C55E),
+                    TransferPillKind::Cloud | TransferPillKind::Downloading => rgb(0x3B82F6),
                 };
+                let animation_id: SharedString =
+                    format!("transfer-download-spinner-{}", item.id).into();
                 el.child(
                     div()
                         .h(px(18.))
                         .rounded(px(9.))
                         .bg(pill_bg)
                         .border(px(1.))
-                        .border_color(accent)
+                        .border_color(pill_border)
                         .px(px(5.))
                         .flex()
                         .items_center()
                         .gap(px(2.))
-                        .child(
+                        .child(if matches!(kind, TransferPillKind::Downloading) {
+                            div()
+                                .w(px(10.))
+                                .text_size(px(10.))
+                                .text_color(pill_text_color)
+                                .with_animation(
+                                    animation_id,
+                                    Animation::new(Duration::from_millis(800)).repeat(),
+                                    |spinner, delta| {
+                                        const FRAMES: [&str; 4] = ["◴", "◷", "◶", "◵"];
+                                        let index = ((delta * FRAMES.len() as f32) as usize)
+                                            .min(FRAMES.len() - 1);
+                                        spinner.child(FRAMES[index])
+                                    },
+                                )
+                                .into_any_element()
+                        } else {
                             div()
                                 .font_family("iconfont")
                                 .text_size(px(9.))
                                 .text_color(pill_text_color)
-                                .child("\u{e601}"),
-                        )
+                                .child(match kind {
+                                    TransferPillKind::Cloud => "\u{e794}",
+                                    TransferPillKind::Local => "\u{e609}",
+                                    TransferPillKind::Downloading => unreachable!(),
+                                })
+                                .into_any_element()
+                        })
                         .child(
                             div()
                                 .text_size(px(9.))

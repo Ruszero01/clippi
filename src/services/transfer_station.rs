@@ -117,6 +117,7 @@ impl GpuiTransferService {
         if !app.settings.transfer_station_enabled || self.backend.is_none() {
             app.transfer_busy = false;
             app.pending_transfer_commands.clear();
+            app.pending_transfer_downloads.clear();
             return outcome;
         }
 
@@ -273,6 +274,7 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
             data_changed = true;
         }
         Ok(TransferAction::Download(entry, path)) => {
+            app.pending_transfer_downloads.remove(&entry.hash);
             app.reload_items();
             app.toast_message = Some(
                 I18nKey::TransferDownloaded
@@ -296,6 +298,9 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
         }
         Err((command, error)) => {
             log::warn!("[transfer] command failed: {error}");
+            if let TransferCommand::Download { ref entry } = command {
+                app.pending_transfer_downloads.remove(&entry.hash);
+            }
             let key = match command {
                 TransferCommand::Upload { .. } => I18nKey::TransferUploadFailed,
                 TransferCommand::Download { .. } => I18nKey::TransferDownloadFailed,

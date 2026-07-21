@@ -335,6 +335,7 @@ define_i18n! {
     DownloadTransfer:        ("下载文件", "Download"),
     TransferCloud:           ("云端", "Cloud"),
     TransferLocal:           ("本地", "Local"),
+    TransferDownloading:     ("下载中", "Downloading"),
     TransferAlreadyUploaded: ("已在中转站中", "Already in station"),
     TransferNoBackend:       ("请先配置并启用后端", "Configure and enable a backend first"),
     TransferNotFile:         ("不是文件条目", "Not a file item"),

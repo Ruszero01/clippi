@@ -19,7 +19,7 @@ use crate::core::types::TagInfo;
 use crate::services::update::{UpdateInfo, UpdatePhase};
 use crate::state::sync::SyncState;
 use pinyin::ToPinyin;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -60,6 +60,9 @@ pub struct AppState {
     pub transfer_entries: Vec<crate::core::transfer_types::ResolvedEntry>,
     /// Commands consumed by the background transfer runtime.
     pub pending_transfer_commands: VecDeque<crate::services::transfer_station::TransferCommand>,
+    /// Hashes of cloud entries queued for or currently being downloaded.
+    /// Used to render per-entry progress feedback and suppress duplicate jobs.
+    pub pending_transfer_downloads: HashSet<String>,
     /// Whether a transfer worker is currently running.
     pub transfer_busy: bool,
     /// Currently selected item IDs (for batch operations)
@@ -310,6 +313,7 @@ impl AppState {
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
             pending_transfer_commands: VecDeque::new(),
+            pending_transfer_downloads: HashSet::new(),
             transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
@@ -2160,6 +2164,9 @@ impl AppState {
     }
 
     pub fn download_transfer_entry(&mut self, hash: &str) {
+        if self.pending_transfer_downloads.contains(hash) {
+            return;
+        }
         let Some(entry) = self
             .transfer_entries
             .iter()
@@ -2169,6 +2176,7 @@ impl AppState {
             self.toast_message = Some(I18nKey::TransferEntryExpired.text().into());
             return;
         };
+        self.pending_transfer_downloads.insert(hash.to_string());
         self.queue_transfer_command(
             crate::services::transfer_station::TransferCommand::Download { entry },
         );
@@ -2215,7 +2223,15 @@ impl AppState {
                             .map(|dt| dt.with_timezone(&chrono::Utc))
                             .unwrap_or_else(|_| chrono::Utc::now());
                     // Determine status tags based on is_local
-                    let status_tags = if re.is_local {
+                    let status_tags = if self.pending_transfer_downloads.contains(&re.entry.hash) {
+                        vec![TagInfo {
+                            id: -3,
+                            uid: String::new(),
+                            name: I18nKey::TransferDownloading.text().to_string(),
+                            color: "#3B82F6".to_string(),
+                            updated_at: String::new(),
+                        }]
+                    } else if re.is_local {
                         vec![TagInfo {
                             id: -1,
                             uid: String::new(),
@@ -2346,6 +2362,7 @@ mod tests {
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
             pending_transfer_commands: VecDeque::new(),
+            pending_transfer_downloads: HashSet::new(),
             transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
@@ -2520,6 +2537,35 @@ mod tests {
         let visible_after_db_filter = state.visible_items();
         assert_eq!(visible_after_db_filter.len(), 1);
         assert!(visible_after_db_filter[0].id < 0);
+    }
+
+    #[test]
+    fn transfer_download_is_tracked_per_entry_and_deduplicated() {
+        let (mut state, _dirty) = test_state();
+        let hash = "b".repeat(64);
+        state.transfer_filter_active = true;
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: hash.clone(),
+                name: "archive.zip".into(),
+                ext: "zip".into(),
+                size: 42,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+            },
+            is_local: false,
+            local_path: None,
+        }];
+
+        state.download_transfer_entry(&hash);
+        state.download_transfer_entry(&hash);
+
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert!(state.pending_transfer_downloads.contains(&hash));
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].tags[0].name, I18nKey::TransferDownloading.text());
     }
 
     #[test]
