@@ -32,6 +32,13 @@ impl SettingsPanel {
         let accent_soft = self.theme.accent_soft;
         let text_1 = self.theme.text_1;
         let text_2 = self.theme.text_2;
+        let transfer_enabled = self.state.read(cx).settings.transfer_station_enabled;
+        let transfer_retention = self.state.read(cx).settings.transfer_retention_days;
+        let enabled_backend_count = sync
+            .backends
+            .iter()
+            .filter(|backend| backend.config.enabled)
+            .count();
 
         let backend_cards: Vec<AnyElement> = sync
             .backends
@@ -139,6 +146,115 @@ impl SettingsPanel {
                                         }
                                     },
                                 ))),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .h(px(38.))
+                            .px(px(14.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::TransferStation.text()),
+                                    )
+                                    .when(enabled_backend_count == 0, |row| {
+                                        row.child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .text_color(text_2)
+                                                .child(I18nKey::TransferNoBackend.text()),
+                                        )
+                                    }),
+                            )
+                            .child(render_toggle(
+                                transfer_enabled,
+                                "transfer-station-enabled",
+                                ToggleColors {
+                                    accent,
+                                    track_off: divider,
+                                },
+                                &mut self.toggle_states,
+                                window,
+                                cx,
+                                {
+                                    let wm = wm.clone();
+                                    move |_window, cx| {
+                                        wm.update(cx, |wm, cx| {
+                                            wm.toggle_transfer_station(cx);
+                                        });
+                                    }
+                                },
+                            )),
+                    )
+                    .when(transfer_enabled, |card| {
+                        card.child(div().h(px(1.)).bg(divider)).child(
+                            div()
+                                .h(px(38.))
+                                .px(px(14.))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .w(px(76.))
+                                        .text_size(px(11.))
+                                        .text_color(text_2)
+                                        .child(I18nKey::TransferRetention.text()),
+                                )
+                                .children([0_u32, 1, 3, 7, 30].into_iter().map(|days| {
+                                    let selected = transfer_retention == days;
+                                    let wm = wm.clone();
+                                    let label = if days == 0 {
+                                        I18nKey::TransferKeepForever.text().to_string()
+                                    } else {
+                                        format!("{days}d")
+                                    };
+                                    div()
+                                        .flex_1()
+                                        .h(px(22.))
+                                        .rounded(px(6.))
+                                        .bg(if selected { accent } else { rgba(0x00000000) })
+                                        .text_size(px(10.))
+                                        .text_color(if selected { rgb(0xffffff) } else { text_2 })
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(move |style| {
+                                            if selected {
+                                                style.opacity(0.88)
+                                            } else {
+                                                style.bg(accent_soft)
+                                            }
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_event, _window, cx| {
+                                                wm.update(cx, |wm, cx| {
+                                                    wm.set_transfer_retention_days(days, cx);
+                                                });
+                                            },
+                                        )
+                                        .child(label)
+                                })),
                         )
                     }),
             )
@@ -326,6 +442,7 @@ impl SettingsPanel {
     ) -> impl IntoElement {
         let id = backend.config.id.clone();
         let enabled = backend.config.enabled;
+        let transfer_selected = self.state.read(cx).settings.transfer_backend_id == id;
         let (previous, generation, changed) = match self.backend_collapse_states.get_mut(&id) {
             Some(state) => {
                 let previous = state.enabled;
@@ -476,7 +593,21 @@ impl SettingsPanel {
                                             .flex()
                                             .items_center()
                                             .child(backend.service_label.clone()),
-                                    ),
+                                    )
+                                    .when(transfer_selected, |el| {
+                                        el.child(
+                                            div()
+                                                .h(px(16.))
+                                                .px(px(5.))
+                                                .rounded(px(3.))
+                                                .bg(accent_soft)
+                                                .text_size(px(10.))
+                                                .text_color(accent)
+                                                .flex()
+                                                .items_center()
+                                                .child(I18nKey::TransferBackend.text()),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
@@ -499,6 +630,25 @@ impl SettingsPanel {
                                     .flex()
                                     .items_center()
                                     .gap(px(4.))
+                                    .child(if auto_enabled && enabled {
+                                        icon_button(
+                                            "\u{e794}",
+                                            if transfer_selected { accent } else { text_3 },
+                                            accent,
+                                            {
+                                                let id = id.clone();
+                                                let wm = wm.clone();
+                                                move |_window, cx| {
+                                                    wm.update(cx, |wm, cx| {
+                                                        wm.set_transfer_backend(&id, cx);
+                                                    });
+                                                }
+                                            },
+                                        )
+                                        .into_any_element()
+                                    } else {
+                                        disabled_icon_button("\u{e794}", text_3).into_any_element()
+                                    })
                                     .child(if auto_enabled {
                                         icon_button("\u{e648}", text_3, accent, {
                                             let config = backend.config.clone();

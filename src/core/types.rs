@@ -227,6 +227,13 @@ pub struct FileInfo {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct FileData {
     pub files: Vec<FileInfo>,
+    /// Whether this is a transfer-station entry (uploaded to cloud).
+    #[serde(default)]
+    pub transfer: bool,
+    /// Remote blob hash reference for transfer-station entries.
+    /// Matches `ManifestEntry.hash`. Empty for non-transfer items.
+    #[serde(default)]
+    pub remote_hash: String,
 }
 
 impl FileData {
@@ -247,6 +254,11 @@ impl FileData {
             .map(|f| f.name.clone())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Whether this is a transfer-station entry.
+    pub fn is_transfer(&self) -> bool {
+        self.transfer && !self.remote_hash.is_empty()
     }
 }
 

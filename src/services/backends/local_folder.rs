@@ -6,11 +6,28 @@
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{self, BackendStatus, SyncBackend, SyncPayload};
+use crate::core::transfer_types::{FileManifest, ManifestSnapshot, ManifestWriteError};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
 const SYNC_FILENAME: &str = "clippi_sync.json";
+const MANIFEST_FILENAME: &str = "clippi_files.json";
+const MANIFEST_LOCK_FILENAME: &str = ".clippi_files.lock";
+
+struct ManifestLock(PathBuf);
+
+impl Drop for ManifestLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn manifest_revision(data: &[u8]) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(data);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 pub struct LocalFolderBackend {
     config: BackendConfig,
@@ -237,6 +254,138 @@ impl SyncBackend for LocalFolderBackend {
             }
         }
         Ok(files)
+    }
+
+    // --- ── Transfer station file manifest ── ---
+
+    fn pull_file_manifest(&self) -> Result<ManifestSnapshot, String> {
+        let path = self.manifest_path();
+        if !path.exists() {
+            return Ok(ManifestSnapshot {
+                manifest: FileManifest {
+                    version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+                    device_name: String::new(),
+                    updated_at: String::new(),
+                    files: Vec::new(),
+                },
+                revision: None,
+            });
+        }
+        let data = std::fs::read(&path).map_err(|e| format!("read manifest: {e}"))?;
+        let manifest = serde_json::from_slice(&data).map_err(|e| format!("parse manifest: {e}"))?;
+        Ok(ManifestSnapshot {
+            manifest,
+            revision: Some(manifest_revision(&data)),
+        })
+    }
+
+    fn push_file_manifest(
+        &self,
+        manifest: &FileManifest,
+        expected_revision: Option<&str>,
+    ) -> Result<String, ManifestWriteError> {
+        let dir = PathBuf::from(&self.config.folder_path);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| ManifestWriteError::Other(format!("create dir: {e}")))?;
+
+        let lock_path = dir.join(MANIFEST_LOCK_FILENAME);
+        let mut acquired = false;
+        for _ in 0..40 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(_) => {
+                    acquired = true;
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&lock_path)
+                        .and_then(|metadata| metadata.modified())
+                        .ok()
+                        .and_then(|modified| modified.elapsed().ok())
+                        .is_some_and(|age| age >= std::time::Duration::from_secs(120));
+                    if stale {
+                        let _ = std::fs::remove_file(&lock_path);
+                        continue;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => {
+                    return Err(ManifestWriteError::Other(format!(
+                        "create manifest lock: {error}"
+                    )));
+                }
+            }
+        }
+        if !acquired {
+            return Err(ManifestWriteError::Conflict);
+        }
+        let _lock = ManifestLock(lock_path);
+
+        let file_path = self.manifest_path();
+        let current_revision = if file_path.exists() {
+            let data = std::fs::read(&file_path)
+                .map_err(|e| ManifestWriteError::Other(format!("read manifest: {e}")))?;
+            Some(manifest_revision(&data))
+        } else {
+            None
+        };
+        if current_revision.as_deref() != expected_revision {
+            return Err(ManifestWriteError::Conflict);
+        }
+
+        let json = serde_json::to_string_pretty(manifest)
+            .map_err(|e| ManifestWriteError::Other(format!("serialize manifest: {e}")))?;
+
+        let tmp_path = dir.join(format!(".{MANIFEST_FILENAME}.tmp"));
+        std::fs::write(&tmp_path, &json)
+            .map_err(|e| ManifestWriteError::Other(format!("write manifest tmp: {e}")))?;
+        crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            ManifestWriteError::Other(format!("rename manifest: {e}"))
+        })?;
+        Ok(manifest_revision(json.as_bytes()))
+    }
+
+    // --- ── Transfer station file blobs ── ---
+
+    fn upload_file_blob(&self, hash: &str, _ext: &str, data: &[u8]) -> Result<(), String> {
+        let dir = PathBuf::from(&self.config.folder_path).join("files");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create files dir: {e}"))?;
+
+        let file_path = dir.join(hash);
+        let tmp_path = dir.join(format!(".{hash}.tmp"));
+        std::fs::write(&tmp_path, data).map_err(|e| format!("write file blob tmp: {e}"))?;
+        std::fs::rename(&tmp_path, &file_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("rename file blob: {e}")
+        })
+    }
+
+    fn download_file_blob(&self, hash: &str, _ext: &str) -> Result<Vec<u8>, String> {
+        let file_path = PathBuf::from(&self.config.folder_path)
+            .join("files")
+            .join(hash);
+        std::fs::read(&file_path).map_err(|e| format!("read file blob: {e}"))
+    }
+
+    fn delete_file_blob(&self, hash: &str, _ext: &str) -> Result<(), String> {
+        let file_path = PathBuf::from(&self.config.folder_path)
+            .join("files")
+            .join(hash);
+        if file_path.exists() {
+            std::fs::remove_file(&file_path).map_err(|e| format!("delete file blob: {e}"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl LocalFolderBackend {
+    fn manifest_path(&self) -> PathBuf {
+        PathBuf::from(&self.config.folder_path).join(MANIFEST_FILENAME)
     }
 }
 

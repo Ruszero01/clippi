@@ -82,6 +82,13 @@ impl Render for Titlebar {
                 fav_active || state.has_favorite_items,
             )
         };
+        let (transfer_active, show_transfer_filter) = {
+            let state = self.state.read(cx);
+            (
+                state.transfer_filter_active,
+                state.settings.transfer_station_enabled,
+            )
+        };
         let pinned = self.pinned;
         let accent = theme.accent;
         let text_2 = theme.text_2;
@@ -90,8 +97,11 @@ impl Render for Titlebar {
         let hotkey_list_view = self.list_view.clone();
         let fav_state = self.state.clone();
         let fav_list_view = self.list_view.clone();
+        let transfer_state = self.state.clone();
+        let transfer_list_view = self.list_view.clone();
         let hotkey_titlebar = cx.entity().clone();
         let fav_titlebar = cx.entity().clone();
+        let transfer_titlebar = cx.entity().clone();
         let pin_titlebar = cx.entity().clone();
         let settings_titlebar = cx.entity().clone();
         let logo = titlebar_logo_image();
@@ -162,7 +172,7 @@ impl Render for Titlebar {
                                 .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                     let items = hotkey_state.update(cx, |state, _cx| {
                                         state.toggle_hotkeys_filter();
-                                        state.items.clone()
+                                        state.visible_items()
                                     });
                                     hotkey_list_view
                                         .update(cx, |list, cx| list.set_items(items, cx));
@@ -174,6 +184,42 @@ impl Render for Titlebar {
                                         .font_family("iconfont")
                                         .text_color(if hotkeys_active { accent } else { text_2 })
                                         .child("\u{e66b}"),
+                                ),
+                        )
+                    })
+                    // --- Transfer station filter button (28x28) ---
+                    .when(show_transfer_filter, |bar| {
+                        bar.child(
+                            div()
+                                .id("titlebar-transfer-filter")
+                                .w(px(28.))
+                                .h(px(28.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .tooltip(|window, cx| {
+                                    let label = I18nKey::TransferStation.text();
+                                    Tooltip::element(move |_window, _cx| {
+                                        div().text_size(px(10.)).child(label)
+                                    })
+                                    .build(window, cx)
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                    let items = transfer_state.update(cx, |state, _cx| {
+                                        state.toggle_transfer_filter();
+                                        state.visible_items()
+                                    });
+                                    transfer_list_view
+                                        .update(cx, |list, cx| list.set_items(items, cx));
+                                    transfer_titlebar.update(cx, |_titlebar, cx| cx.notify());
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(15.))
+                                        .font_family("iconfont")
+                                        .text_color(if transfer_active { accent } else { text_2 })
+                                        .child("\u{e794}"),
                                 ),
                         )
                     })
@@ -198,7 +244,7 @@ impl Render for Titlebar {
                                 .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                     let items = fav_state.update(cx, |state, _cx| {
                                         state.toggle_favorites_filter();
-                                        state.items.clone()
+                                        state.visible_items()
                                     });
                                     fav_list_view.update(cx, |list, cx| list.set_items(items, cx));
                                     fav_titlebar.update(cx, |_titlebar, cx| cx.notify());

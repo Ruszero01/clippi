@@ -60,7 +60,7 @@ impl TagFilterPanel {
     }
 
     pub(crate) fn refresh_list(&self, cx: &mut App) {
-        let items = self.state.read(cx).items.clone();
+        let items = self.state.read(cx).visible_items();
         self.list_view.update(cx, |l, cx| l.set_items(items, cx));
         self.search_bar.update(cx, |_b, cx| cx.notify());
     }

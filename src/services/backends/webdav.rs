@@ -7,12 +7,14 @@
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
+use crate::core::transfer_types::{FileManifest, ManifestSnapshot, ManifestWriteError};
 use base64::Engine;
 use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
 const SYNC_FILENAME: &str = "clippi_sync.json";
+const MANIFEST_FILENAME: &str = "clippi_files.json";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum CollectionCheck {
@@ -409,6 +411,153 @@ impl SyncBackend for WebDAVBackend {
             }
             Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
             Err(e) => Err(format!("PROPFIND failed: {e}")),
+        }
+    }
+
+    // --- ── Transfer station file manifest ── ---
+
+    fn pull_file_manifest(&self) -> Result<ManifestSnapshot, String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let url = format!("{base}/{MANIFEST_FILENAME}");
+        let auth = self.auth_header();
+
+        match self.agent.get(&url).set("Authorization", &auth).call() {
+            Ok(resp) => {
+                let revision = resp
+                    .header("ETag")
+                    .map(|value| format!("etag:{value}"))
+                    .or_else(|| {
+                        resp.header("Last-Modified")
+                            .map(|value| format!("modified:{value}"))
+                    })
+                    .or_else(|| Some("unsupported".into()));
+                let body = resp
+                    .into_string()
+                    .map_err(|e| format!("read manifest: {e}"))?;
+                let manifest =
+                    serde_json::from_str(&body).map_err(|e| format!("parse manifest: {e}"))?;
+                Ok(ManifestSnapshot { manifest, revision })
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(ManifestSnapshot {
+                manifest: FileManifest {
+                    version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+                    device_name: String::new(),
+                    updated_at: String::new(),
+                    files: Vec::new(),
+                },
+                revision: None,
+            }),
+            Err(e) => Err(format!("pull manifest: {e}")),
+        }
+    }
+
+    fn push_file_manifest(
+        &self,
+        manifest: &FileManifest,
+        expected_revision: Option<&str>,
+    ) -> Result<String, ManifestWriteError> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let url = format!("{base}/{MANIFEST_FILENAME}");
+        let auth = self.auth_header();
+        let json = serde_json::to_string_pretty(manifest)
+            .map_err(|e| ManifestWriteError::Other(format!("serialize manifest: {e}")))?;
+
+        if expected_revision == Some("unsupported") {
+            return Err(ManifestWriteError::Other(
+                "WebDAV server does not expose ETag or Last-Modified; refusing an unsafe manifest overwrite"
+                    .into(),
+            ));
+        }
+
+        let mut request = self
+            .agent
+            .put(&url)
+            .set("Authorization", &auth)
+            .set("Content-Type", "application/json");
+        request = match expected_revision {
+            Some(value) if value.starts_with("etag:") => {
+                request.set("If-Match", value.trim_start_matches("etag:"))
+            }
+            Some(value) if value.starts_with("modified:") => {
+                request.set("If-Unmodified-Since", value.trim_start_matches("modified:"))
+            }
+            Some(_) => request,
+            None => request.set("If-None-Match", "*"),
+        };
+
+        match request.send_bytes(json.as_bytes()) {
+            Ok(resp) => Ok(resp
+                .header("ETag")
+                .map(|value| format!("etag:{value}"))
+                .or_else(|| {
+                    resp.header("Last-Modified")
+                        .map(|value| format!("modified:{value}"))
+                })
+                .unwrap_or_else(|| "unsupported".into())),
+            Err(ureq::Error::Status(409 | 412, _)) => Err(ManifestWriteError::Conflict),
+            Err(e) => Err(ManifestWriteError::Other(format!("push manifest: {e}"))),
+        }
+    }
+
+    // --- ── Transfer station file blobs ── ---
+
+    fn upload_file_blob(&self, hash: &str, _ext: &str, data: &[u8]) -> Result<(), String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let files_url = format!("{base}/files");
+        let blob_url = format!("{files_url}/{hash}");
+        let auth = self.auth_header();
+
+        // Ensure files/ directory exists
+        let _ = self
+            .agent
+            .request("MKCOL", &files_url)
+            .set("Authorization", &auth)
+            .call();
+
+        match self
+            .agent
+            .put(&blob_url)
+            .set("Authorization", &auth)
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(data)
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("file blob upload failed: {e}")),
+        }
+    }
+
+    fn download_file_blob(&self, hash: &str, _ext: &str) -> Result<Vec<u8>, String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let blob_url = format!("{base}/files/{hash}");
+        let auth = self.auth_header();
+
+        match self.agent.get(&blob_url).set("Authorization", &auth).call() {
+            Ok(resp) => {
+                let mut buf = Vec::new();
+                resp.into_reader()
+                    .read_to_end(&mut buf)
+                    .map_err(|e| format!("blob read failed: {e}"))?;
+                Ok(buf)
+            }
+            Err(ureq::Error::Status(404, _)) => Err("blob not found".into()),
+            Err(e) => Err(format!("file blob download failed: {e}")),
+        }
+    }
+
+    fn delete_file_blob(&self, hash: &str, _ext: &str) -> Result<(), String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let blob_url = format!("{base}/files/{hash}");
+        let auth = self.auth_header();
+
+        match self
+            .agent
+            .delete(&blob_url)
+            .set("Authorization", &auth)
+            .call()
+        {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(404, _)) => Ok(()),
+            Err(e) => Err(format!("file blob delete failed: {e}")),
         }
     }
 }

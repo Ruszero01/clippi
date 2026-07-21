@@ -19,6 +19,7 @@ use crate::core::types::TagInfo;
 use crate::services::update::{UpdateInfo, UpdatePhase};
 use crate::state::sync::SyncState;
 use pinyin::ToPinyin;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -50,6 +51,17 @@ pub struct AppState {
     pub has_hotkey_items: bool,
     /// Whether any persisted item is currently favorited.
     pub has_favorite_items: bool,
+    /// Whether remote transfer station files exist (controls titlebar button visibility).
+    pub has_transfer_files: bool,
+    /// Whether the transfer station filter/view is active.
+    pub transfer_filter_active: bool,
+    /// Resolved transfer entries (manifest entries with is_local status).
+    /// Populated when `transfer_filter_active` is true, cleared when false.
+    pub transfer_entries: Vec<crate::core::transfer_types::ResolvedEntry>,
+    /// Commands consumed by the background transfer runtime.
+    pub pending_transfer_commands: VecDeque<crate::services::transfer_station::TransferCommand>,
+    /// Whether a transfer worker is currently running.
+    pub transfer_busy: bool,
     /// Currently selected item IDs (for batch operations)
     pub selected_ids: Vec<i64>,
     /// Tag editing state for TagFilterPanel overlay
@@ -294,6 +306,11 @@ impl AppState {
             filters: ClipboardFilters::default(),
             has_hotkey_items,
             has_favorite_items,
+            has_transfer_files: false,
+            transfer_filter_active: false,
+            transfer_entries: Vec::new(),
+            pending_transfer_commands: VecDeque::new(),
+            transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -2077,6 +2094,199 @@ fn item_texts_for_merge(items: &[&ClipboardItem]) -> String {
     items.iter().map(|item| item.full_text.as_str()).collect()
 }
 
+// --- ── Transfer station methods ── ---
+
+impl AppState {
+    pub fn transfer_available(&self) -> bool {
+        self.settings.transfer_station_enabled
+            && self
+                .settings
+                .sync_backends
+                .iter()
+                .any(|backend| backend.enabled)
+    }
+
+    pub fn toggle_transfer_filter(&mut self) {
+        if !self.transfer_filter_active && !self.transfer_available() {
+            self.toast_message = Some(I18nKey::TransferNoBackend.text().into());
+            return;
+        }
+        self.transfer_filter_active = !self.transfer_filter_active;
+        if self.transfer_filter_active {
+            self.queue_transfer_command(
+                crate::services::transfer_station::TransferCommand::Refresh,
+            );
+        }
+    }
+
+    fn queue_transfer_command(
+        &mut self,
+        command: crate::services::transfer_station::TransferCommand,
+    ) {
+        self.pending_transfer_commands.push_back(command);
+        self.transfer_busy = true;
+    }
+
+    pub fn upload_to_transfer_station(&mut self, item_id: i64) {
+        if !self.transfer_available() {
+            self.toast_message = Some(I18nKey::TransferNoBackend.text().into());
+            return;
+        }
+        let item = match self.db.get_by_id(item_id).ok().flatten() {
+            Some(item) if item.content_type == ContentType::File => item,
+            _ => {
+                self.toast_message = Some(I18nKey::TransferNotFile.text().into());
+                return;
+            }
+        };
+        let file_data = FileData::from_json(&item.file_data);
+        if file_data.is_transfer() {
+            self.toast_message = Some(I18nKey::TransferAlreadyUploaded.text().into());
+            return;
+        }
+        if file_data.files.len() != 1 {
+            self.toast_message = Some(I18nKey::TransferSingleFileOnly.text().into());
+            return;
+        }
+        let file = &file_data.files[0];
+        if file.is_dir || !std::path::Path::new(&file.path).is_file() {
+            self.toast_message = Some(I18nKey::TransferInvalidPath.text().into());
+            return;
+        }
+        self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Upload {
+            source_path: file.path.clone(),
+            file_name: file.name.clone(),
+        });
+    }
+
+    pub fn download_transfer_entry(&mut self, hash: &str) {
+        let Some(entry) = self
+            .transfer_entries
+            .iter()
+            .find(|resolved| resolved.entry.hash == hash)
+            .map(|resolved| resolved.entry.clone())
+        else {
+            self.toast_message = Some(I18nKey::TransferEntryExpired.text().into());
+            return;
+        };
+        self.queue_transfer_command(
+            crate::services::transfer_station::TransferCommand::Download { entry },
+        );
+    }
+
+    pub fn delete_transfer_entry(&mut self, hash: &str) {
+        let Some(entry) = self
+            .transfer_entries
+            .iter()
+            .find(|resolved| resolved.entry.hash == hash)
+            .map(|resolved| resolved.entry.clone())
+        else {
+            self.toast_message = Some(I18nKey::TransferEntryExpired.text().into());
+            return;
+        };
+        self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Delete {
+            entry,
+        });
+    }
+
+    pub fn open_transfer_location(&self, path: &str) {
+        if !std::path::Path::new(path).is_file() {
+            return;
+        }
+        let path = path.to_string();
+        std::thread::spawn(move || reveal_file_location(&path));
+    }
+
+    pub fn copy_transfer_path(&mut self, path: &str) {
+        if std::path::Path::new(path).is_file() {
+            self.write_text_to_clipboard_internal(path);
+        }
+    }
+
+    /// Get visible items based on current filter mode.
+    /// In transfer mode, returns converted manifest entries. Otherwise returns DB items.
+    pub fn visible_items(&self) -> Vec<ClipboardItem> {
+        if self.transfer_filter_active {
+            self.transfer_entries
+                .iter()
+                .map(|re| {
+                    let uploaded_at: chrono::DateTime<chrono::Utc> =
+                        chrono::DateTime::parse_from_rfc3339(&re.entry.uploaded_at)
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .unwrap_or_else(|_| chrono::Utc::now());
+                    // Determine status tags based on is_local
+                    let status_tags = if re.is_local {
+                        vec![TagInfo {
+                            id: -1,
+                            uid: String::new(),
+                            name: I18nKey::TransferLocal.text().to_string(),
+                            color: "#22C55E".to_string(),
+                            updated_at: String::new(),
+                        }]
+                    } else {
+                        vec![TagInfo {
+                            id: -2,
+                            uid: String::new(),
+                            name: I18nKey::TransferCloud.text().to_string(),
+                            color: "#3B82F6".to_string(),
+                            updated_at: String::new(),
+                        }]
+                    };
+                    ClipboardItem {
+                        id: transfer_item_id(&re.entry.hash),
+                        content_type: ContentType::File,
+                        full_text: re.entry.name.clone(),
+                        content_hash: 0,
+                        created_at: uploaded_at,
+                        updated_at: uploaded_at,
+                        image_path: String::new(),
+                        image_width: 0,
+                        image_height: 0,
+                        rich_data: String::new(),
+                        file_data: FileData {
+                            files: vec![crate::core::types::FileInfo {
+                                name: re.entry.name.clone(),
+                                path: re.local_path.clone().unwrap_or_default(),
+                                is_dir: false,
+                            }],
+                            transfer: true,
+                            remote_hash: re.entry.hash.clone(),
+                        }
+                        .to_json(),
+                        is_favorite: false,
+                        note: String::new(),
+                        source_app_name: String::new(),
+                        source_app_icon: String::new(),
+                        size: re.entry.size as i64,
+                        tags: status_tags,
+                        meta_type: "transfer".to_string(),
+                        custom_hotkey: String::new(),
+                        custom_hotkey_format: String::new(),
+                    }
+                })
+                .collect()
+        } else {
+            // Transfer records persist local cache/original paths in the shared
+            // clipboard table, but they are internal backing records rather than
+            // ordinary clipboard history. Render them only through the dedicated
+            // transfer view above, otherwise an uploaded file appears twice.
+            self.items
+                .iter()
+                .filter(|item| {
+                    item.content_type != ContentType::File
+                        || !FileData::from_json(&item.file_data).is_transfer()
+                })
+                .cloned()
+                .collect()
+        }
+    }
+}
+
+fn transfer_item_id(hash: &str) -> i64 {
+    let value = u64::from_str_radix(hash.get(..15).unwrap_or_default(), 16).unwrap_or(1);
+    -(value.max(1) as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2132,6 +2342,11 @@ mod tests {
             filters: ClipboardFilters::default(),
             has_hotkey_items: false,
             has_favorite_items: false,
+            has_transfer_files: false,
+            transfer_filter_active: false,
+            transfer_entries: Vec::new(),
+            pending_transfer_commands: VecDeque::new(),
+            transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -2257,6 +2472,54 @@ mod tests {
         let (state, _dirty) = test_state();
         let item = make_item(1, ContentType::File, false, "doc.pdf");
         assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn transfer_backing_records_are_visible_only_in_transfer_view() {
+        let (mut state, _dirty) = test_state();
+        let ordinary = make_item(1, ContentType::File, false, "report.pdf");
+        let mut backing = make_item(2, ContentType::File, false, "report.pdf");
+        backing.meta_type = "transfer".into();
+        backing.file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "report.pdf".into(),
+                path: "C:\\cache\\report.pdf".into(),
+                is_dir: false,
+            }],
+            transfer: true,
+            remote_hash: "a".repeat(64),
+        }
+        .to_json();
+        state.items = vec![ordinary.clone(), backing];
+
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, ordinary.id);
+
+        state.transfer_filter_active = true;
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: "a".repeat(64),
+                name: "report.pdf".into(),
+                ext: "pdf".into(),
+                size: 42,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+            },
+            is_local: true,
+            local_path: Some("C:\\cache\\report.pdf".into()),
+        }];
+
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert!(visible[0].id < 0);
+        assert!(FileData::from_json(&visible[0].file_data).is_transfer());
+
+        state.toggle_type_filter("file");
+        let visible_after_db_filter = state.visible_items();
+        assert_eq!(visible_after_db_filter.len(), 1);
+        assert!(visible_after_db_filter[0].id < 0);
     }
 
     #[test]

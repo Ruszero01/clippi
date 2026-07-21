@@ -52,6 +52,39 @@ pub trait SyncBackend: Send + Sync {
     fn list_remote_blobs(&self) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
+
+    // --- ── Transfer station file manifest methods ── ---
+
+    /// Pull the transfer station file manifest (`clippi_files.json`).
+    fn pull_file_manifest(&self) -> Result<crate::core::transfer_types::ManifestSnapshot, String> {
+        Err("not supported".into())
+    }
+
+    /// Push the transfer station file manifest (atomic write).
+    fn push_file_manifest(
+        &self,
+        _manifest: &crate::core::transfer_types::FileManifest,
+        _expected_revision: Option<&str>,
+    ) -> Result<String, crate::core::transfer_types::ManifestWriteError> {
+        Err(crate::core::transfer_types::ManifestWriteError::Other(
+            "not supported".into(),
+        ))
+    }
+
+    /// Upload a file blob to `{remote}/files/{hash}.{ext}`.
+    fn upload_file_blob(&self, _hash: &str, _ext: &str, _data: &[u8]) -> Result<(), String> {
+        Err("not supported".into())
+    }
+
+    /// Download a file blob from `{remote}/files/{hash}.{ext}`.
+    fn download_file_blob(&self, _hash: &str, _ext: &str) -> Result<Vec<u8>, String> {
+        Err("not supported".into())
+    }
+
+    /// Delete a file blob from `{remote}/files/{hash}.{ext}`.
+    fn delete_file_blob(&self, _hash: &str, _ext: &str) -> Result<(), String> {
+        Err("not supported".into())
+    }
 }
 
 /// Top-level sync payload stored as JSON on the cloud folder.

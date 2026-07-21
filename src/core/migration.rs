@@ -28,6 +28,9 @@ pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 /// Current sync protocol version — written into every `SyncPayload` snapshot.
 pub const SYNC_VERSION: u32 = 5;
 
+/// Current transfer station protocol version — written into every `FileManifest`.
+pub const TRANSFER_PROTOCOL_VERSION: u32 = 1;
+
 /// A registered database migration.
 struct DbMigration {
     /// Sequential version number (1-based, matches `PRAGMA user_version` after applied).
@@ -264,6 +267,38 @@ pub fn migrate_sync_payload(payload: &mut crate::core::sync::SyncPayload) {
         // rewriting the migrated payload cleans them from the sync file.
         payload.version = 5;
     }
+}
+
+/// Migrate an older file manifest to the current transfer protocol version.
+///
+/// When `TRANSFER_PROTOCOL_VERSION` is bumped, add transform logic here to
+/// upgrade manifests from older versions. Pattern matches `migrate_sync_payload`.
+///
+/// Called every time a manifest is pulled from the backend, before any
+/// processing. Unknown versions reset to an empty manifest as a safety fallback.
+pub fn migrate_file_manifest(manifest: &mut crate::core::transfer_types::FileManifest) {
+    if manifest.version > TRANSFER_PROTOCOL_VERSION {
+        log::warn!(
+            "[transfer] manifest version {} is newer than supported version {}",
+            manifest.version,
+            TRANSFER_PROTOCOL_VERSION
+        );
+        return;
+    }
+    if manifest.version < 1 {
+        // Unknown/invalid version — safety reset to empty.
+        log::warn!(
+            "[transfer] unknown manifest version {}, resetting",
+            manifest.version
+        );
+        manifest.version = TRANSFER_PROTOCOL_VERSION;
+        manifest.files.clear();
+    }
+    // Future upgrades:
+    // if manifest.version < 2 {
+    //     // v1 → v2: ...
+    //     manifest.version = 2;
+    // }
 }
 
 #[cfg(test)]

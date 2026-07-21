@@ -328,6 +328,29 @@ define_i18n! {
     // ─── Data operation ───
     ErrDataOp:              ("数据操作失败", "Data operation failed"),
 
+    // ─── Transfer station ───
+    TransferStation:         ("文件中转站", "Transfer Station"),
+    UploadToTransfer:        ("上传到中转站", "Upload to Station"),
+    RemoveFromTransfer:      ("从中转站删除", "Remove from Station"),
+    DownloadTransfer:        ("下载文件", "Download"),
+    TransferCloud:           ("云端", "Cloud"),
+    TransferLocal:           ("本地", "Local"),
+    TransferAlreadyUploaded: ("已在中转站中", "Already in station"),
+    TransferNoBackend:       ("请先配置并启用后端", "Configure and enable a backend first"),
+    TransferNotFile:         ("不是文件条目", "Not a file item"),
+    TransferInvalidPath:     ("文件路径无效", "Invalid file path"),
+    TransferEntryExpired:    ("条目已失效", "Entry expired"),
+    TransferUploaded:        ("已上传: {0}", "Uploaded: {0}"),
+    TransferDownloaded:      ("已下载: {0}", "Downloaded: {0}"),
+    TransferDeleted:         ("已删除: {0}", "Deleted: {0}"),
+    TransferUploadFailed:    ("上传失败: {0}", "Upload failed: {0}"),
+    TransferDownloadFailed:  ("下载失败: {0}", "Download failed: {0}"),
+    TransferDeleteFailed:    ("删除失败: {0}", "Delete failed: {0}"),
+    TransferSingleFileOnly:   ("中转站目前仅支持单个文件", "Transfer station currently supports one file at a time"),
+    TransferRetention:        ("自动过期", "Auto expiration"),
+    TransferKeepForever:      ("永久", "Forever"),
+    TransferBackend:          ("中转后端", "Transfer backend"),
+
     // ─── Search bar / Filters ───
     FilterTextLabel:        ("文本", "Text"),
     FilterRtfLabel:         ("富文本", "RTF"),

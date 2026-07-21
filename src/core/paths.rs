@@ -198,6 +198,14 @@ pub fn images_dir() -> PathBuf {
     dir
 }
 
+/// Directory for transfer station cached files.
+///
+/// Files are stored as `{hash}.{ext}` and are only used for local access —
+/// status determination ("cloud" vs "local") is done via DB comparison.
+pub fn transfer_cache_dir() -> PathBuf {
+    resolve_data_dir("").join("file_cache")
+}
+
 fn ensure_app_data_dir() -> std::io::Result<()> {
     let dir = app_data_dir();
     if !dir.exists() {

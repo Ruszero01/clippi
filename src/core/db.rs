@@ -913,6 +913,35 @@ impl Database {
         Ok(())
     }
 
+    // --- ── Transfer station queries ── ---
+
+    /// Get all clipboard items with `meta_type = "transfer"`.
+    pub fn get_transfer_items(&self) -> SqlResult<Vec<ClipboardItem>> {
+        let query = format!(
+            "SELECT {} FROM clipboard_items WHERE content_type = 'file' AND meta_type = 'transfer' ORDER BY updated_at DESC",
+            item_select_columns()
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let items: Vec<ClipboardItem> = stmt
+            .query_map([], row_to_item)?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    /// Delete a transfer item by its remote_hash (stored in file_data JSON).
+    /// Returns true if an item was deleted.
+    pub fn delete_transfer_by_hash(&self, remote_hash: &str) -> SqlResult<bool> {
+        let mut stmt = self.conn.prepare(
+            "DELETE FROM clipboard_items
+             WHERE content_type = 'file'
+               AND meta_type = 'transfer'
+               AND json_valid(file_data)
+               AND json_extract(file_data, '$.remote_hash') = ?1",
+        )?;
+        let deleted = stmt.execute(rusqlite::params![remote_hash])?;
+        Ok(deleted > 0)
+    }
+
     // --- ── Tombstone operations ── ---
 
     /// Record a deleted item tombstone for sync propagation.

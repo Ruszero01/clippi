@@ -15,4 +15,5 @@ pub mod qr;
 pub mod settings;
 pub mod sync;
 pub mod sync_scope;
+pub mod transfer_types;
 pub mod types;

@@ -987,6 +987,13 @@ impl RenderOnce for ClipboardCard {
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
         let tags = item.tags.clone();
+        let transfer_file_data = FileData::from_json(&item.file_data);
+        let transfer_is_cloud = meta_type == "transfer"
+            && transfer_file_data.is_transfer()
+            && transfer_file_data
+                .files
+                .first()
+                .is_none_or(|file| file.path.is_empty());
         let icon = type_icon(&item);
         let has_qr = has_qr_code(&item);
         let show_source = show_source_app && !item.source_app_name.is_empty();
@@ -1167,18 +1174,23 @@ impl RenderOnce for ClipboardCard {
                 ),
             DisplayKind::File => {
                 // --- Single file: prefer file system icon over source app icon ---
-                let file_icon = serde_json::from_str::<FileData>(&item.file_data)
-                    .ok()
-                    .and_then(|fd| {
-                        if fd.files.len() == 1 {
-                            fd.files
-                                .first()
-                                .and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
-                        } else {
-                            None
-                        }
-                    });
+                let file_icon = if transfer_is_cloud {
+                    None
+                } else {
+                    serde_json::from_str::<FileData>(&item.file_data)
+                        .ok()
+                        .and_then(|fd| {
+                            if fd.files.len() == 1 {
+                                fd.files
+                                    .first()
+                                    .and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
+                            } else {
+                                None
+                            }
+                        })
+                };
                 let effective_icon = file_icon.or(source_icon_path);
+                let fallback_icon = if transfer_is_cloud { "\u{e794}" } else { icon };
                 div()
                     .w(px(36.))
                     .flex()
@@ -1209,7 +1221,7 @@ impl RenderOnce for ClipboardCard {
                                     .text_size(px(18.))
                                     .font_family("iconfont")
                                     .text_color(tag_text)
-                                    .child(icon.to_string())
+                                    .child(fallback_icon.to_string())
                                     .into_any_element()
                             }),
                     )
@@ -2010,10 +2022,12 @@ impl RenderOnce for ClipboardCard {
                             serde_json::from_str(&item.file_data).unwrap_or_default();
                         let files: Vec<FileInfo> = file_data.files;
                         let multi = files.len() > 1;
-                        let file_missing = !multi
-                            && files
-                                .first()
-                                .is_some_and(|f| !std::path::Path::new(&f.path).exists());
+                        let file_missing = !transfer_is_cloud
+                            && !multi
+                            && files.first().is_some_and(|file| {
+                                crate::services::file_status::cached_file_exists(&file.path)
+                                    == Some(false)
+                            });
                         if file_missing {
                             let fi = &files[0];
                             let (stem, ext) = if fi.is_dir {
@@ -2214,11 +2228,11 @@ impl RenderOnce for ClipboardCard {
                 let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
                 let count = fd.files.len();
                 // Only check single-file items for missing sources.
-                let file_missing = count == 1
-                    && fd
-                        .files
-                        .first()
-                        .is_some_and(|f| !std::path::Path::new(&f.path).exists());
+                let file_missing = !transfer_is_cloud
+                    && count == 1
+                    && fd.files.first().is_some_and(|file| {
+                        crate::services::file_status::cached_file_exists(&file.path) == Some(false)
+                    });
                 if file_missing {
                     size_label_danger = true;
                     Some(I18nKey::CardStaleFile.text().to_string())
@@ -2233,7 +2247,26 @@ impl RenderOnce for ClipboardCard {
         };
 
         // --- Bottom info row: tags → size label → time ---
-        let tag_widths = tags
+        // Detect transfer items and filter out status tags (handled separately)
+        let is_transfer = item.meta_type == "transfer"
+            && tags.iter().any(|tag| {
+                tag.name == I18nKey::TransferLocal.text()
+                    || tag.name == I18nKey::TransferCloud.text()
+            });
+        let transfer_is_local =
+            is_transfer && tags.iter().any(|t| t.name == I18nKey::TransferLocal.text());
+        let display_tags: Vec<_> = if is_transfer {
+            tags.iter()
+                .filter(|t| {
+                    t.name != I18nKey::TransferLocal.text()
+                        && t.name != I18nKey::TransferCloud.text()
+                })
+                .cloned()
+                .collect()
+        } else {
+            tags.clone()
+        };
+        let tag_widths = display_tags
             .iter()
             .map(|tag| info_pill_width(&tag.name, INFO_PILL_PADDING_X, window))
             .collect::<Vec<_>>();
@@ -2247,6 +2280,27 @@ impl RenderOnce for ClipboardCard {
         if let Some(ref hk) = hotkey_pill {
             fixed_widths.push(hotkey_pill_width(hk, window));
         }
+        // Transfer status pill (for transfer station items)
+        let transfer_pill: Option<(String, bool)> = if is_transfer {
+            if transfer_is_local {
+                Some((I18nKey::TransferLocal.text().to_string(), true))
+            } else {
+                Some((I18nKey::TransferCloud.text().to_string(), false))
+            }
+        } else {
+            None
+        };
+        if transfer_pill.is_some() {
+            fixed_widths.push(info_pill_width(
+                if transfer_is_local {
+                    I18nKey::TransferLocal.text()
+                } else {
+                    I18nKey::TransferCloud.text()
+                },
+                INFO_PILL_PADDING_X + 16., // extra space for icon
+                window,
+            ));
+        }
         if let Some(label) = size_label.as_deref() {
             fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
         }
@@ -2259,7 +2313,7 @@ impl RenderOnce for ClipboardCard {
                 info_pill_width(&format!("+{hidden_count}"), INFO_PILL_PADDING_X, window)
             },
         );
-        let hidden_tag_count = tags.len() - visible_tag_count;
+        let hidden_tag_count = display_tags.len() - visible_tag_count;
 
         let bottom_info = div()
             .absolute()
@@ -2327,6 +2381,38 @@ impl RenderOnce for ClipboardCard {
                                 .child("\u{e66b}"),
                         )
                         .child(div().text_size(px(9.)).text_color(accent).child(hk)),
+                )
+            })
+            .when_some(transfer_pill, |el, (label, is_local)| {
+                let pill_text_color = if is_local {
+                    rgb(0x22C55E) // 绿色
+                } else {
+                    accent // 蓝色/强调色
+                };
+                el.child(
+                    div()
+                        .h(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(accent)
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .font_family("iconfont")
+                                .text_size(px(9.))
+                                .text_color(pill_text_color)
+                                .child("\u{e601}"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(pill_text_color)
+                                .child(label),
+                        ),
                 )
             })
             .when_some(size_label, |el, label| {
