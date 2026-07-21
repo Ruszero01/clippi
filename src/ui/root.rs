@@ -188,10 +188,9 @@ impl RootView {
                 WindowManagerEvent::HotkeyRecordingComplete => {
                     // --- Notify SettingsPanel so it re-renders with the updated ---
                     // --- hotkey display and recording state from AppState. ---
-                    let items = this.state.read(cx).visible_items();
                     this.list_view.update(cx, |list, cx| {
                         list.finish_hotkey_recording_ui(cx);
-                        list.set_items(items, cx);
+                        list.sync_items_from_state(cx);
                     });
                     this.settings_panel.update(cx, |panel, cx| {
                         panel.recording_paste_shortcut = None;
@@ -1173,6 +1172,7 @@ impl Render for RootView {
                 let menu_y =
                     menu_y + Self::directional_overlay_offset(menu_y, win_h, context_menu_offset);
                 let is_batch = list.read(cx).context_menu_is_batch();
+                let is_transfer_batch = list.read(cx).context_menu_is_transfer_batch();
                 let item = list.read(cx).context_menu_item().cloned();
 
                 // --- Backdrop — click / scroll to dismiss ---
@@ -1204,7 +1204,28 @@ impl Render for RootView {
                         .occlude()
                         .child({
                             let l = list_for_action.clone();
-                            if is_batch {
+                            if is_transfer_batch {
+                                ContextMenu::for_transfer_batch()
+                                    .with_position(menu_x, menu_y, win_w, win_h)
+                                    .theme(self.theme.clone())
+                                    .on_action({
+                                        let l = l.clone();
+                                        move |action, window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.handle_menu_action(action, window, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_dismiss({
+                                        let l = l.clone();
+                                        move |_window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.hide_context_menu(cx);
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else if is_batch {
                                 let count = l.read(cx).selected_count;
                                 let can_merge = l.read(cx).can_merge_selected_items(cx);
                                 ContextMenu::for_batch(count, can_merge)
@@ -1408,6 +1429,30 @@ impl Render for RootView {
                             }
                         })
                         .render_animated(window, cx, confirm_dialog_gen),
+                    Some(ConfirmDialogState::TransferBatch { hashes }) => {
+                        ConfirmDialog::delete_batch(hashes.len())
+                            .theme(self.theme.clone())
+                            .focus_handle(dialog_focus.clone())
+                            .on_confirm({
+                                let state = app_state.clone();
+                                let list = list.clone();
+                                move |_window, cx| {
+                                    state.update(cx, |state, _cx| {
+                                        state.delete_transfer_entries(&hashes)
+                                    });
+                                    list.update(cx, |list, cx| {
+                                        list.dismiss_confirm_dialog(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let list = list.clone();
+                                move |_window, cx| {
+                                    list.update(cx, |list, cx| list.dismiss_confirm_dialog(cx));
+                                }
+                            })
+                            .render_animated(window, cx, confirm_dialog_gen)
+                    }
                     Some(ConfirmDialogState::Transfer { hash }) => ConfirmDialog::delete_single()
                         .theme(self.theme.clone())
                         .focus_handle(dialog_focus.clone())

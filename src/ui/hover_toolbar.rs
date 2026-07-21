@@ -263,6 +263,12 @@ impl RenderOnce for HoverToolbar {
                 "delete",
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
+        } else if is_batch && props.is_transfer {
+            buttons.push((
+                "\u{e8b6}",
+                "batch_delete_transfer",
+                Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
+            ));
         } else if is_batch {
             // --- Batch paste ---
             buttons.push((

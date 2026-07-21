@@ -14,21 +14,32 @@ use crate::core::{migration, paths};
 use crate::services::backends::local_folder::LocalFolderBackend;
 use crate::services::backends::webdav::WebDAVBackend;
 use crate::state::app::AppState;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MANIFEST_UPDATE_RETRIES: usize = 5;
 
+#[derive(Clone)]
+struct CachedFileHash {
+    length: u64,
+    modified: Option<SystemTime>,
+    hash: String,
+}
+
+static ORIGINAL_FILE_HASH_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedFileHash>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 #[derive(Debug, Clone)]
 pub enum TransferCommand {
     Refresh,
     Upload {
-        source_item_id: i64,
         source_path: String,
         file_name: String,
     },
@@ -54,7 +65,7 @@ enum TransferAction {
 struct TransferJobResult {
     action: Result<TransferAction, (TransferCommand, String)>,
     entries: Option<Vec<ResolvedEntry>>,
-    markers_cleared: bool,
+    markers_changed: bool,
 }
 
 #[derive(Default)]
@@ -184,15 +195,15 @@ impl GpuiTransferService {
                 retention_days,
             );
             *pending.lock().expect("transfer result lock poisoned") = Some(match result {
-                Ok((action, entries, markers_cleared)) => TransferJobResult {
+                Ok((action, entries, markers_changed)) => TransferJobResult {
                     action: Ok(action),
                     entries: Some(entries),
-                    markers_cleared,
+                    markers_changed,
                 },
                 Err(error) => TransferJobResult {
                     action: Err((command, error)),
                     entries: None,
-                    markers_cleared: false,
+                    markers_changed: false,
                 },
             });
             running.store(false, Ordering::Release);
@@ -231,14 +242,12 @@ fn run_command(
     let action = match command {
         TransferCommand::Refresh => TransferAction::Refresh,
         TransferCommand::Upload {
-            source_item_id,
             source_path,
             file_name,
         } => {
             let name = upload_file(
                 backend,
                 &db,
-                source_item_id,
                 &source_path,
                 &file_name,
                 device_name,
@@ -260,8 +269,8 @@ fn run_command(
             TransferAction::Cleanup(count)
         }
     };
-    let (entries, cleared_markers) = fetch_and_resolve(backend, &db)?;
-    Ok((action, entries, cleared_markers > 0))
+    let (entries, changed_markers) = fetch_and_resolve(backend, &db)?;
+    Ok((action, entries, changed_markers > 0))
 }
 
 fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOutcome {
@@ -271,8 +280,8 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
         app.transfer_entries = entries;
     }
 
-    let mut data_changed = result.markers_cleared;
-    if result.markers_cleared {
+    let mut data_changed = result.markers_changed;
+    if result.markers_changed {
         app.reload_items();
     }
     match result.action {
@@ -343,15 +352,19 @@ pub fn fetch_and_resolve(
     for entry in &snapshot.manifest.files {
         entry.validate()?;
     }
-    let active_hashes = snapshot
+    let active_hashes: HashSet<String> = snapshot
         .manifest
         .files
         .iter()
         .map(|entry| entry.hash.clone())
         .collect();
-    let cleared_markers = db
-        .clear_stale_file_transfer_hashes(&active_hashes)
-        .map_err(|error| format!("clear stale transfer markers: {error}"))?;
+    let active_sizes: HashSet<u64> = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|entry| entry.size)
+        .collect();
+    let changed_markers = reconcile_original_file_markers(db, &active_hashes, &active_sizes)?;
 
     let entries = snapshot
         .manifest
@@ -366,13 +379,114 @@ pub fn fetch_and_resolve(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok((entries, cleared_markers))
+    Ok((entries, changed_markers))
 }
 
+fn reconcile_original_file_markers(
+    db: &Database,
+    active_hashes: &HashSet<String>,
+    active_sizes: &HashSet<u64>,
+) -> Result<usize, String> {
+    let items = db
+        .get_original_file_items()
+        .map_err(|error| format!("load original file items: {error}"))?;
+    let mut changed = 0;
+    let mut seen_paths = HashSet::new();
+
+    for item in items {
+        let file_data = FileData::from_json(&item.file_data);
+        let derived_hash = if let [file] = file_data.files.as_slice() {
+            if file.is_dir {
+                None
+            } else {
+                match cached_file_hash(Path::new(&file.path), active_sizes) {
+                    Ok(Some((cache_key, hash))) => {
+                        seen_paths.insert(cache_key);
+                        active_hashes.contains(&hash).then_some(hash)
+                    }
+                    Ok(None) | Err(_) => None,
+                }
+            }
+        } else {
+            None
+        };
+
+        changed += usize::from(
+            db.set_derived_file_transfer_hash(item.id, derived_hash.as_deref())
+                .map_err(|error| format!("update derived transfer marker: {error}"))?,
+        );
+    }
+
+    ORIGINAL_FILE_HASH_CACHE
+        .lock()
+        .expect("transfer file hash cache lock poisoned")
+        .retain(|path, _| seen_paths.contains(path));
+    Ok(changed)
+}
+
+fn cached_file_hash(
+    path: &Path,
+    active_sizes: &HashSet<u64>,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let cache_key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let metadata = std::fs::metadata(&cache_key)
+        .map_err(|error| format!("read local file metadata: {error}"))?;
+    if !metadata.is_file() || !active_sizes.contains(&metadata.len()) {
+        return Ok(None);
+    }
+
+    let modified = metadata.modified().ok();
+    if modified.is_some() {
+        let cache = ORIGINAL_FILE_HASH_CACHE
+            .lock()
+            .expect("transfer file hash cache lock poisoned");
+        if let Some(cached) = cache.get(&cache_key) {
+            if cached.length == metadata.len() && cached.modified == modified {
+                return Ok(Some((cache_key, cached.hash.clone())));
+            }
+        }
+    }
+
+    use sha2::Digest;
+    let file = File::open(&cache_key).map_err(|error| format!("open local file: {error}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut digest = sha2::Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("hash local file: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+
+    let current_metadata = std::fs::metadata(&cache_key)
+        .map_err(|error| format!("recheck local file metadata: {error}"))?;
+    if current_metadata.len() != metadata.len() || current_metadata.modified().ok() != modified {
+        return Err("local file changed while hashing".into());
+    }
+
+    let hash = format!("{:x}", digest.finalize());
+    if modified.is_some() {
+        ORIGINAL_FILE_HASH_CACHE
+            .lock()
+            .expect("transfer file hash cache lock poisoned")
+            .insert(
+                cache_key.clone(),
+                CachedFileHash {
+                    length: metadata.len(),
+                    modified,
+                    hash: hash.clone(),
+                },
+            );
+    }
+    Ok(Some((cache_key, hash)))
+}
 fn upload_file(
     backend: &dyn SyncBackend,
     db: &Database,
-    source_item_id: i64,
     local_path: &str,
     file_name: &str,
     device_name: &str,
@@ -416,8 +530,6 @@ fn upload_file(
 
     let canonical_path = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
     upsert_transfer_item(db, &entry, &canonical_path.to_string_lossy(), &data)?;
-    db.set_file_transfer_hash(source_item_id, &hash)
-        .map_err(|error| format!("mark original transfer item: {error}"))?;
     Ok(name)
 }
 
@@ -705,9 +817,6 @@ fn clean_local_transfer(db: &Database, hash: &str) {
     if hash_dir.is_dir() {
         let _ = std::fs::remove_dir(&hash_dir);
     }
-    if let Err(error) = db.clear_file_transfer_hash(hash) {
-        log::warn!("[transfer] clear original upload marker failed: {error}");
-    }
     let _ = db.delete_transfer_by_hash(hash);
 }
 
@@ -771,5 +880,80 @@ mod tests {
         entry.expires_at.clear();
         assert!(entry_expired(&entry, now, 1));
         assert!(!entry_expired(&entry, now, 3));
+    }
+
+    #[test]
+    fn original_file_marker_is_derived_from_manifest_content_hash() {
+        let unique = format!(
+            "clippi-transfer-marker-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let directory = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file_path = directory.join("report.bin");
+        let contents = b"passive transfer marker";
+        std::fs::write(&file_path, contents).unwrap();
+
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let now = chrono::Utc::now();
+        let content_hash = default_hash(contents);
+        db.upsert(&ClipboardItem {
+            id: 0,
+            content_type: ContentType::File,
+            full_text: "report.bin".into(),
+            content_hash,
+            created_at: now,
+            updated_at: now,
+            image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rich_data: String::new(),
+            file_data: FileData {
+                files: vec![FileInfo {
+                    name: "report.bin".into(),
+                    path: file_path.to_string_lossy().into_owned(),
+                    is_dir: false,
+                }],
+                transfer: false,
+                remote_hash: "legacy-active-marker".into(),
+            }
+            .to_json(),
+            is_favorite: false,
+            note: String::new(),
+            source_app_name: String::new(),
+            source_app_icon: String::new(),
+            size: contents.len() as i64,
+            tags: Vec::new(),
+            meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
+        })
+        .unwrap();
+
+        let sha256 = compute_file_hash(contents);
+        let active_hashes = HashSet::from([sha256.clone()]);
+        let active_sizes = HashSet::from([contents.len() as u64]);
+        assert_eq!(
+            reconcile_original_file_markers(&db, &active_hashes, &active_sizes).unwrap(),
+            1
+        );
+        let item = db.get_by_hash(content_hash).unwrap().unwrap();
+        assert_eq!(FileData::from_json(&item.file_data).remote_hash, sha256);
+        assert_eq!(
+            reconcile_original_file_markers(&db, &active_hashes, &active_sizes).unwrap(),
+            0
+        );
+
+        assert_eq!(
+            reconcile_original_file_markers(&db, &HashSet::new(), &HashSet::new()).unwrap(),
+            1
+        );
+        let item = db.get_by_hash(content_hash).unwrap().unwrap();
+        assert!(FileData::from_json(&item.file_data).remote_hash.is_empty());
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

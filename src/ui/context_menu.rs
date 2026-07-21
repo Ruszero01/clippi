@@ -464,6 +464,18 @@ impl ContextMenu {
         Self::new().items(items)
     }
 
+    /// Build a batch context menu for transfer-station entries.
+    pub fn for_transfer_batch() -> Self {
+        Self::new().items(vec![RawMenuItem {
+            label: I18nKey::RemoveSelectedFromTransfer.text().into(),
+            action: "batch_delete_transfer".into(),
+            icon: "\u{e8b6}".into(),
+            danger: true,
+            fav: false,
+            shortcut: sc("Delete"),
+        }])
+    }
+
     /// Build a context menu for a transfer station entry.
     /// Shows download (cloud-only), open location (local-only), and delete.
     pub fn for_transfer_entry(is_local: bool) -> Self {

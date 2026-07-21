@@ -2158,7 +2158,6 @@ impl AppState {
             return;
         }
         self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Upload {
-            source_item_id: item_id,
             source_path: file.path.clone(),
             file_name: file.name.clone(),
         });
@@ -2181,6 +2180,23 @@ impl AppState {
         self.queue_transfer_command(
             crate::services::transfer_station::TransferCommand::Download { entry },
         );
+    }
+
+    pub fn delete_transfer_entries(&mut self, hashes: &[String]) {
+        let entries = hashes
+            .iter()
+            .filter_map(|hash| {
+                self.transfer_entries
+                    .iter()
+                    .find(|resolved| resolved.entry.hash == *hash)
+                    .map(|resolved| resolved.entry.clone())
+            })
+            .collect::<Vec<_>>();
+        for entry in entries {
+            self.queue_transfer_command(
+                crate::services::transfer_station::TransferCommand::Delete { entry },
+            );
+        }
     }
 
     pub fn delete_transfer_entry(&mut self, hash: &str) {
@@ -2567,6 +2583,40 @@ mod tests {
         let visible = state.visible_items();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].tags[0].name, I18nKey::TransferDownloading.text());
+    }
+
+    #[test]
+    fn transfer_batch_delete_queues_only_existing_entries() {
+        let (mut state, _dirty) = test_state();
+        let first_hash = "c".repeat(64);
+        let second_hash = "d".repeat(64);
+        state.transfer_entries = [first_hash.clone(), second_hash.clone()]
+            .into_iter()
+            .map(|hash| crate::core::transfer_types::ResolvedEntry {
+                entry: crate::core::transfer_types::ManifestEntry {
+                    hash,
+                    name: "file.bin".into(),
+                    ext: "bin".into(),
+                    size: 42,
+                    uploaded_at: chrono::Utc::now().to_rfc3339(),
+                    expires_at: String::new(),
+                    uploaded_by: "test".into(),
+                },
+                is_local: false,
+                local_path: None,
+            })
+            .collect();
+
+        state.delete_transfer_entries(&[first_hash, "e".repeat(64), second_hash]);
+
+        assert_eq!(state.pending_transfer_commands.len(), 2);
+        assert!(state
+            .pending_transfer_commands
+            .iter()
+            .all(|command| matches!(
+                command,
+                crate::services::transfer_station::TransferCommand::Delete { .. }
+            )));
     }
 
     #[test]

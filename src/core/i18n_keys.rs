@@ -332,6 +332,7 @@ define_i18n! {
     TransferStation:         ("文件中转站", "Transfer Station"),
     UploadToTransfer:        ("上传到中转站", "Upload to Station"),
     RemoveFromTransfer:      ("从中转站删除", "Remove from Station"),
+    RemoveSelectedFromTransfer: ("从中转站删除所选文件", "Remove selected from Station"),
     DownloadTransfer:        ("下载文件", "Download"),
     TransferCloud:           ("云端", "Cloud"),
     TransferLocal:           ("本地", "Local"),
