@@ -7,12 +7,14 @@
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
+use crate::core::transfer_types::{FileManifest, ManifestSnapshot, ManifestWriteError};
 use base64::Engine;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
 
 const SYNC_FILENAME: &str = "clippi_sync.json";
+const MANIFEST_FILENAME: &str = "clippi_files.json";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum CollectionCheck {
@@ -27,6 +29,11 @@ fn is_success_status(status: u16) -> bool {
 
 fn is_auth_status(status: u16) -> bool {
     status == 401 || status == 403
+}
+
+fn strong_etag(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && !value.starts_with("W/")).then(|| value.to_string())
 }
 
 pub fn check_webdav_connection(
@@ -196,9 +203,17 @@ fn join_url(origin: &str, segments: &[String]) -> String {
 
 pub struct WebDAVBackend {
     config: BackendConfig,
-    /// Cached ETag from the last GET, used for If-None-Match.
-    last_etag: Mutex<Option<String>>,
+    /// Revision observed by the last GET. Writes use it as an optimistic lock.
+    sync_revision: Mutex<SyncRevision>,
     agent: ureq::Agent,
+}
+
+#[derive(Debug, Clone)]
+enum SyncRevision {
+    Unknown,
+    Missing,
+    ETag(String),
+    Unsupported,
 }
 
 impl WebDAVBackend {
@@ -210,7 +225,7 @@ impl WebDAVBackend {
             .build();
         Self {
             config,
-            last_etag: Mutex::new(None),
+            sync_revision: Mutex::new(SyncRevision::Unknown),
             agent,
         }
     }
@@ -255,10 +270,15 @@ impl SyncBackend for WebDAVBackend {
         let cached_etag = if bypass_cache {
             None
         } else {
-            self.last_etag
+            match self
+                .sync_revision
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(|error| error.into_inner())
                 .clone()
+            {
+                SyncRevision::ETag(etag) => Some(etag),
+                _ => None,
+            }
         };
         let attempts = if cached_etag.is_some() { 2 } else { 1 };
 
@@ -273,23 +293,34 @@ impl SyncBackend for WebDAVBackend {
 
             match req.call() {
                 Ok(resp) => {
-                    // --- Cache the new ETag ---
-                    if let Some(etag) = resp.header("ETag") {
-                        *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) =
-                            Some(etag.to_string());
-                    }
+                    let revision = resp
+                        .header("ETag")
+                        .and_then(strong_etag)
+                        .map(SyncRevision::ETag)
+                        .unwrap_or(SyncRevision::Unsupported);
                     let body = resp
                         .into_string()
                         .map_err(|e| format!("{}: {e}", I18nKey::SyncErrReadResp.text()))?;
-                    return serde_json::from_str::<SyncPayload>(&body)
-                        .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()));
+                    let payload = serde_json::from_str::<SyncPayload>(&body)
+                        .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))?;
+                    // Only cache a revision after its payload has been read and
+                    // parsed. Otherwise the next 304 could hide corrupt data.
+                    *self
+                        .sync_revision
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = revision;
+                    return Ok(payload);
                 }
                 Err(ureq::Error::Status(304, _)) => {
                     // --- Not Modified — no changes ---
                     return Err("@@unchanged".into());
                 }
                 Err(ureq::Error::Status(404, _)) => {
-                    return Err(I18nKey::SyncErrNotFound.text().into());
+                    *self
+                        .sync_revision
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = SyncRevision::Missing;
+                    return Err(crate::core::sync::SYNC_PULL_NOT_FOUND.into());
                 }
                 Err(ureq::Error::Status(code, response))
                     if use_cached_etag && !is_auth_status(code) =>
@@ -313,20 +344,43 @@ impl SyncBackend for WebDAVBackend {
         let json = serde_json::to_string_pretty(payload)
             .map_err(|e| format!("{}: {e}", I18nKey::SyncErrSerialize.text()))?;
 
-        match self
+        let revision = self
+            .sync_revision
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let mut request = self
             .agent
             .put(&url)
             .set("Authorization", &auth)
-            .set("Content-Type", "application/json")
-            .send_bytes(json.as_bytes())
-        {
+            .set("Content-Type", "application/json");
+        request = match revision {
+            SyncRevision::ETag(etag) => request.set("If-Match", &etag),
+            SyncRevision::Missing => request.set("If-None-Match", "*"),
+            SyncRevision::Unsupported => {
+                return Err(
+                    "WebDAV server does not expose ETag; refusing an unsafe sync overwrite".into(),
+                );
+            }
+            SyncRevision::Unknown => {
+                return Err("sync push attempted without first reading the remote revision".into());
+            }
+        };
+
+        match request.send_bytes(json.as_bytes()) {
             Ok(resp) => {
-                // --- Cache the new ETag ---
-                if let Some(etag) = resp.header("ETag") {
-                    *self.last_etag.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some(etag.to_string());
-                }
+                *self
+                    .sync_revision
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = resp
+                    .header("ETag")
+                    .and_then(strong_etag)
+                    .map(SyncRevision::ETag)
+                    .unwrap_or(SyncRevision::Unsupported);
                 Ok(())
+            }
+            Err(ureq::Error::Status(409 | 412, _)) => {
+                Err(crate::core::sync::SYNC_PUSH_CONFLICT.into())
             }
             Err(e) => Err(format!("{}: {e}", I18nKey::SyncErrPush.text())),
         }
@@ -371,8 +425,12 @@ impl SyncBackend for WebDAVBackend {
             Ok(resp) => {
                 let mut buf = Vec::new();
                 resp.into_reader()
+                    .take(crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES + 1)
                     .read_to_end(&mut buf)
                     .map_err(|e| format!("blob read failed: {e}"))?;
+                if buf.len() as u64 > crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES {
+                    return Err("remote file exceeds the transfer size limit".into());
+                }
                 Ok(buf)
             }
             Err(ureq::Error::Status(404, _)) => Err("blob not found".into()),
@@ -409,6 +467,168 @@ impl SyncBackend for WebDAVBackend {
             }
             Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
             Err(e) => Err(format!("PROPFIND failed: {e}")),
+        }
+    }
+
+    // --- ── Transfer station file manifest ── ---
+
+    fn pull_file_manifest(&self) -> Result<ManifestSnapshot, String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let url = format!("{base}/{MANIFEST_FILENAME}");
+        let auth = self.auth_header();
+
+        match self.agent.get(&url).set("Authorization", &auth).call() {
+            Ok(resp) => {
+                let revision = resp
+                    .header("ETag")
+                    .and_then(strong_etag)
+                    .map(|value| format!("etag:{value}"))
+                    .or_else(|| Some("unsupported".into()));
+                let body = resp
+                    .into_string()
+                    .map_err(|e| format!("read manifest: {e}"))?;
+                let manifest =
+                    serde_json::from_str(&body).map_err(|e| format!("parse manifest: {e}"))?;
+                Ok(ManifestSnapshot { manifest, revision })
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(ManifestSnapshot {
+                manifest: FileManifest {
+                    version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+                    device_name: String::new(),
+                    updated_at: String::new(),
+                    files: Vec::new(),
+                },
+                revision: None,
+            }),
+            Err(e) => Err(format!("pull manifest: {e}")),
+        }
+    }
+
+    fn push_file_manifest(
+        &self,
+        manifest: &FileManifest,
+        expected_revision: Option<&str>,
+    ) -> Result<String, ManifestWriteError> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let url = format!("{base}/{MANIFEST_FILENAME}");
+        let auth = self.auth_header();
+        let json = serde_json::to_string_pretty(manifest)
+            .map_err(|e| ManifestWriteError::Other(format!("serialize manifest: {e}")))?;
+
+        if expected_revision == Some("unsupported") {
+            return Err(ManifestWriteError::Other(
+                "WebDAV server does not expose ETag; refusing an unsafe manifest overwrite".into(),
+            ));
+        }
+
+        let mut request = self
+            .agent
+            .put(&url)
+            .set("Authorization", &auth)
+            .set("Content-Type", "application/json");
+        request = match expected_revision {
+            Some(value) if value.starts_with("etag:") => {
+                request.set("If-Match", value.trim_start_matches("etag:"))
+            }
+            Some(_) => {
+                return Err(ManifestWriteError::Other(
+                    "unrecognized WebDAV manifest revision; refusing an unsafe overwrite".into(),
+                ));
+            }
+            None => request.set("If-None-Match", "*"),
+        };
+
+        match request.send_bytes(json.as_bytes()) {
+            Ok(resp) => Ok(resp
+                .header("ETag")
+                .and_then(strong_etag)
+                .map(|value| format!("etag:{value}"))
+                .unwrap_or_else(|| "unsupported".into())),
+            Err(ureq::Error::Status(409 | 412, _)) => Err(ManifestWriteError::Conflict),
+            Err(e) => Err(ManifestWriteError::Other(format!("push manifest: {e}"))),
+        }
+    }
+
+    // --- ── Transfer station file blobs ── ---
+
+    fn upload_file_blob(
+        &self,
+        blob_key: &str,
+        _ext: &str,
+        reader: &mut dyn Read,
+        content_length: u64,
+    ) -> Result<(), String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let files_url = format!("{base}/files");
+        let blob_url = format!("{files_url}/{blob_key}");
+        let auth = self.auth_header();
+
+        // Ensure files/ directory exists
+        let _ = self
+            .agent
+            .request("MKCOL", &files_url)
+            .set("Authorization", &auth)
+            .call();
+
+        match self
+            .agent
+            .put(&blob_url)
+            .set("Authorization", &auth)
+            .set("Content-Type", "application/octet-stream")
+            .set("Content-Length", &content_length.to_string())
+            // HTTP request bodies must match Content-Length exactly, so unlike
+            // the local backend this reader must not consume a sentinel byte.
+            // The caller rechecks the streamed digest and source metadata after
+            // the request to detect replacement, truncation, or growth.
+            .send(reader.take(content_length))
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("file blob upload failed: {e}")),
+        }
+    }
+
+    fn download_file_blob(
+        &self,
+        blob_key: &str,
+        _ext: &str,
+        writer: &mut dyn Write,
+        max_bytes: u64,
+    ) -> Result<u64, String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let blob_url = format!("{base}/files/{blob_key}");
+        let auth = self.auth_header();
+
+        match self.agent.get(&blob_url).set("Authorization", &auth).call() {
+            Ok(resp) => {
+                let copied = std::io::copy(
+                    &mut resp.into_reader().take(max_bytes.saturating_add(1)),
+                    writer,
+                )
+                .map_err(|e| format!("blob read failed: {e}"))?;
+                if copied > max_bytes {
+                    return Err("remote file exceeds the transfer size limit".into());
+                }
+                Ok(copied)
+            }
+            Err(ureq::Error::Status(404, _)) => Err("blob not found".into()),
+            Err(e) => Err(format!("file blob download failed: {e}")),
+        }
+    }
+
+    fn delete_file_blob(&self, blob_key: &str, _ext: &str) -> Result<(), String> {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        let blob_url = format!("{base}/files/{blob_key}");
+        let auth = self.auth_header();
+
+        match self
+            .agent
+            .delete(&blob_url)
+            .set("Authorization", &auth)
+            .call()
+        {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(404, _)) => Ok(()),
+            Err(e) => Err(format!("file blob delete failed: {e}")),
         }
     }
 }
@@ -462,5 +682,11 @@ mod tests {
             join_url("https://dav.jianguoyun.com", &segments),
             "https://dav.jianguoyun.com/dav/我的坚果云"
         );
+    }
+
+    #[test]
+    fn optimistic_writes_require_a_strong_etag() {
+        assert_eq!(strong_etag("\"revision-1\""), Some("\"revision-1\"".into()));
+        assert_eq!(strong_etag("W/\"revision-1\""), None);
     }
 }

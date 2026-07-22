@@ -27,6 +27,8 @@ pub struct HoverToolbarProps {
     pub selected_count: usize,
     pub is_selected: bool,
     pub can_merge_selection: bool,
+    pub is_transfer: bool,
+    pub transfer_is_local: bool,
 }
 
 impl HoverToolbarProps {
@@ -37,6 +39,11 @@ impl HoverToolbarProps {
         is_selected: bool,
     ) -> Self {
         Self {
+            is_transfer: item.id < 0 && item.meta_type == "transfer",
+            transfer_is_local: crate::core::types::FileData::from_json(&item.file_data)
+                .files
+                .first()
+                .is_some_and(|file| !file.path.is_empty()),
             content_type: item.content_type,
             meta_type: item.meta_type.clone(),
             full_text: item.full_text.clone(),
@@ -128,7 +135,26 @@ impl RenderOnce for HoverToolbar {
         type ColorFn = Box<dyn Fn(bool) -> Rgba>;
         let mut buttons: Vec<(&str, &str, ColorFn)> = Vec::new();
 
-        if is_single {
+        if is_single && props.is_transfer {
+            if props.transfer_is_local {
+                buttons.push((
+                    "\u{e609}",
+                    "open_transfer_location",
+                    Box::new(move |hovered| if hovered { accent } else { text_2 }),
+                ));
+            } else {
+                buttons.push((
+                    "\u{e7c8}",
+                    "download_transfer",
+                    Box::new(move |hovered| if hovered { accent } else { text_2 }),
+                ));
+            }
+            buttons.push((
+                "\u{e8b6}",
+                "delete_transfer",
+                Box::new(move |hovered| if hovered { danger } else { text_2 }),
+            ));
+        } else if is_single {
             // Copy
             buttons.push((
                 "\u{e7e1}",
@@ -230,6 +256,12 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e8b6}",
                 "delete",
+                Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
+            ));
+        } else if is_batch && props.is_transfer {
+            buttons.push((
+                "\u{e8b6}",
+                "batch_delete_transfer",
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
         } else if is_batch {

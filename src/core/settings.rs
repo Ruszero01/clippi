@@ -129,6 +129,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub sync_compress_images: bool, // compress images before syncing (JPEG quality 85)
     #[serde(default)]
+    pub transfer_station_enabled: bool, // transfer station feature gate
+    #[serde(default)]
+    pub transfer_backend_id: String, // explicitly selected backend for transfer station
+    #[serde(default = "default_transfer_retention_days")]
+    pub transfer_retention_days: u32, // transfer file retention days (default 3)
+    #[serde(default)]
     pub max_items: u32, // max saved items (0=unlimited, default 0)
     #[serde(default)]
     pub retention_days: u32, // auto-delete items not updated within N days (0=forever)
@@ -200,6 +206,10 @@ fn default_sync_interval() -> u64 {
     60
 }
 
+fn default_transfer_retention_days() -> u32 {
+    3
+}
+
 fn default_auto_check_updates() -> bool {
     true
 }
@@ -262,6 +272,9 @@ impl Default for AppSettings {
             sync_favorites_only: true,
             sync_include_images: false,
             sync_compress_images: false,
+            transfer_station_enabled: false,
+            transfer_backend_id: String::new(),
+            transfer_retention_days: 3,
             max_items: 0,
             retention_days: 0,
             hotkey_blacklist: Vec::new(),

@@ -26,6 +26,7 @@ use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
 use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::services::gpui_sync::GpuiSyncService;
+use crate::services::transfer_station::GpuiTransferService;
 use crate::services::update;
 use crate::state::app::AppState;
 #[cfg(target_os = "macos")]
@@ -236,6 +237,9 @@ pub enum WindowManagerEvent {
     HotkeyRecordingComplete,
     /// Sync backend status or settings changed.
     SyncChanged,
+    /// A background source-file existence probe completed; repaint cards
+    /// without replacing the list or resetting selection.
+    FileStatusChanged,
     /// Paste shortcut recording completed for an app.
     PasteShortcutRecorded {
         app_name: String,
@@ -325,6 +329,7 @@ pub struct WindowManager {
     state: Entity<AppState>,
     clipboard_service: GpuiClipboardService,
     sync_service: GpuiSyncService,
+    transfer_service: GpuiTransferService,
 
     // --- Raw window handle (HWND on Windows) ---
     #[allow(dead_code)]
@@ -407,6 +412,7 @@ impl WindowManager {
 
         let clipboard_service = GpuiClipboardService::new();
         let sync_service = GpuiSyncService::new(&settings, state.read(cx).sync_dirty.clone());
+        let transfer_service = GpuiTransferService::new(&settings);
 
         // --- Initialize tray ---
         let tray = Some(TrayManager::new());
@@ -435,6 +441,7 @@ impl WindowManager {
             state,
             clipboard_service,
             sync_service,
+            transfer_service,
             tray,
             hwnd: 0,
             #[cfg(target_os = "windows")]
@@ -582,6 +589,14 @@ impl WindowManager {
         self.poll_cleanup(cx);
 
         self.poll_cleanup_refresh(cx);
+
+        // --- 11. Transfer station status check ---
+        self.poll_transfer(cx);
+
+        // --- 12. Background file availability probes ---
+        if crate::services::file_status::take_status_changed() {
+            cx.emit(WindowManagerEvent::FileStatusChanged);
+        }
     }
 
     fn poll_cleanup_refresh(&mut self, cx: &mut Context<Self>) {
@@ -602,6 +617,14 @@ impl WindowManager {
                 state.reload_items();
                 state.reload_tags();
             });
+            cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
+    }
+
+    fn poll_transfer(&mut self, cx: &mut Context<Self>) {
+        let service = &mut self.transfer_service;
+        let outcome = self.state.update(cx, |state, _cx| service.poll(state));
+        if outcome.state_changed || outcome.data_changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
         }
     }
@@ -2583,6 +2606,85 @@ impl WindowManager {
         } else {
             cx.emit(WindowManagerEvent::SyncChanged);
         }
+    }
+
+    pub fn toggle_transfer_station(&mut self, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            if state.settings.transfer_station_enabled && state.transfer_busy {
+                state.toast_message = Some(I18nKey::TransferBusy.text().into());
+                return state.settings.clone();
+            }
+            let has_backend = state
+                .settings
+                .sync_backends
+                .iter()
+                .any(|backend| backend.enabled);
+            if !state.settings.transfer_station_enabled && !has_backend {
+                state.toast_message = Some(I18nKey::TransferNoBackend.text().into());
+                return state.settings.clone();
+            }
+            state.settings.transfer_station_enabled = !state.settings.transfer_station_enabled;
+            if state.settings.transfer_station_enabled
+                && !state.settings.sync_backends.iter().any(|backend| {
+                    backend.enabled && backend.id == state.settings.transfer_backend_id
+                })
+            {
+                state.settings.transfer_backend_id = state
+                    .settings
+                    .sync_backends
+                    .iter()
+                    .find(|backend| backend.enabled)
+                    .map(|backend| backend.id.clone())
+                    .unwrap_or_default();
+            }
+            if !state.settings.transfer_station_enabled {
+                state.transfer_filter_active = false;
+                state.pending_transfer_commands.clear();
+                state.pending_transfer_downloads.clear();
+                state.pending_transfer_uploads.clear();
+            }
+            state.settings.save();
+            state.settings.clone()
+        });
+        self.transfer_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+        cx.emit(WindowManagerEvent::ClipboardChanged);
+    }
+
+    pub fn set_transfer_retention_days(&mut self, days: u32, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, _cx| {
+            state.settings.transfer_retention_days = days;
+            state.settings.save();
+        });
+        cx.emit(WindowManagerEvent::SyncChanged);
+    }
+
+    pub fn set_transfer_backend(&mut self, id: &str, cx: &mut Context<Self>) {
+        let settings = self.state.update(cx, |state, _cx| {
+            if state.transfer_busy && state.settings.transfer_backend_id != id {
+                state.toast_message = Some(I18nKey::TransferBusy.text().into());
+                return state.settings.clone();
+            }
+            if state
+                .settings
+                .sync_backends
+                .iter()
+                .any(|backend| backend.enabled && backend.id == id)
+            {
+                state.settings.transfer_backend_id = id.to_string();
+                state.transfer_entries.clear();
+                state.pending_transfer_downloads.clear();
+                state.pending_transfer_uploads.clear();
+                state
+                    .pending_transfer_commands
+                    .push_back(crate::services::transfer_station::TransferCommand::Refresh);
+                state.settings.save();
+            }
+            state.settings.clone()
+        });
+        self.transfer_service.reload_from_settings(&settings);
+        cx.emit(WindowManagerEvent::SyncChanged);
+        cx.emit(WindowManagerEvent::ClipboardChanged);
     }
 
     pub fn toggle_sync_favorites_only(&mut self, cx: &mut Context<Self>) {

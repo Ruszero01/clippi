@@ -32,6 +32,10 @@ pub struct MenuItemContext {
     pub is_link: bool,
     pub is_path: bool,
     pub has_hotkey: bool,
+    /// True if this file item has been uploaded to the transfer station.
+    pub is_transfer: bool,
+    /// True if the transfer station is enabled and has a usable backend.
+    pub transfer_enabled: bool,
 }
 
 impl MenuItemContext {
@@ -45,6 +49,9 @@ impl MenuItemContext {
             item.display_kind(),
             DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf
         );
+        let file_data = crate::core::types::FileData::from_json(&item.file_data);
+        let is_transfer = item.content_type == ContentType::File
+            && (file_data.is_transfer() || !file_data.remote_hash.is_empty());
         Self {
             is_image: item.content_type == ContentType::Image,
             is_file: item.content_type == ContentType::File,
@@ -57,6 +64,8 @@ impl MenuItemContext {
                 && crate::core::types::path_is_native(&item.full_text)
                 && crate::core::types::path_exists(&item.full_text),
             has_hotkey: !item.custom_hotkey.is_empty(),
+            is_transfer,
+            transfer_enabled: false,
         }
     }
 }
@@ -338,6 +347,17 @@ impl ContextMenu {
                 shortcut: None,
             });
         }
+        // --- Upload to transfer station (file only, not already uploaded) ---
+        if ctx.is_file && !ctx.is_transfer && ctx.transfer_enabled {
+            items.push(RawMenuItem {
+                label: I18nKey::UploadToTransfer.text().into(),
+                action: "upload_to_transfer".into(),
+                icon: "\u{e61c}".into(),
+                danger: false,
+                fav: false,
+                shortcut: None,
+            });
+        }
 
         // --- Separator ---
         items.push(RawMenuItem {
@@ -441,6 +461,62 @@ impl ContextMenu {
                 shortcut: sc("Delete"),
             },
         ]);
+        Self::new().items(items)
+    }
+
+    /// Build a batch context menu for transfer-station entries.
+    pub fn for_transfer_batch() -> Self {
+        Self::new().items(vec![RawMenuItem {
+            label: I18nKey::RemoveSelectedFromTransfer.text().into(),
+            action: "batch_delete_transfer".into(),
+            icon: "\u{e8b6}".into(),
+            danger: true,
+            fav: false,
+            shortcut: sc("Delete"),
+        }])
+    }
+
+    /// Build a context menu for a transfer station entry.
+    /// Shows download (cloud-only), open location (local-only), and delete.
+    pub fn for_transfer_entry(is_local: bool) -> Self {
+        let mut items = Vec::new();
+        if !is_local {
+            items.push(RawMenuItem {
+                label: I18nKey::DownloadTransfer.text().into(),
+                action: "download_transfer".into(),
+                icon: "\u{e7c8}".into(),
+                danger: false,
+                fav: false,
+                shortcut: None,
+            });
+        }
+        if is_local {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxOpenFolder.text().into(),
+                action: "open_transfer_location".into(),
+                icon: "\u{e609}".into(),
+                danger: false,
+                fav: false,
+                shortcut: sc("Space"),
+            });
+        }
+        // Separator
+        items.push(RawMenuItem {
+            label: SEPARATOR_LABEL.into(),
+            action: String::new(),
+            icon: String::new(),
+            danger: false,
+            fav: false,
+            shortcut: None,
+        });
+        items.push(RawMenuItem {
+            label: I18nKey::RemoveFromTransfer.text().into(),
+            action: "delete_transfer".into(),
+            icon: "\u{e8b6}".into(),
+            danger: true,
+            fav: false,
+            shortcut: sc("Delete"),
+        });
         Self::new().items(items)
     }
 

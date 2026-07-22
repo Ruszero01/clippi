@@ -421,6 +421,7 @@ fn summarize_sync_error(error: &str) -> String {
         || lower.contains("rename")
         || lower.contains("upload")
         || lower.contains("create")
+        || lower.contains("etag")
     {
         return I18nKey::SyncErrPush.text().to_string();
     }
@@ -460,6 +461,43 @@ pub fn test_webdav_connection(url: &str, username: &str, password: &str) -> bool
 }
 
 fn run_sync_cycle_for_backend(
+    backend: &dyn SyncBackend,
+    db: &Mutex<Database>,
+    cancel: &AtomicBool,
+    favorites_only: bool,
+    force_push: bool,
+    include_images: bool,
+    compress_images: bool,
+) -> SyncCycleResult {
+    const MAX_CONFLICT_RETRIES: usize = 5;
+    for attempt in 0..MAX_CONFLICT_RETRIES {
+        let result = run_sync_cycle_attempt(
+            backend,
+            db,
+            cancel,
+            favorites_only,
+            force_push || attempt > 0,
+            include_images,
+            compress_images,
+        );
+        if result.message != sync::SYNC_PUSH_CONFLICT {
+            return result;
+        }
+        log::info!(
+            "sync: remote changed during push; retrying ({}/{MAX_CONFLICT_RETRIES})",
+            attempt + 1
+        );
+    }
+    SyncCycleResult {
+        success: false,
+        message: "Remote changed repeatedly; retry the sync".into(),
+        stats: MergeStats::default(),
+        snapshot_counts: None,
+        did_push: false,
+    }
+}
+
+fn run_sync_cycle_attempt(
     backend: &dyn SyncBackend,
     db: &Mutex<Database>,
     cancel: &AtomicBool,
@@ -508,10 +546,7 @@ fn run_sync_cycle_for_backend(
             }
         }
         Err(error) if error == "@@unchanged" => remote_unchanged = true,
-        Err(error)
-            if error.contains("not found")
-                || error.contains("No such file")
-                || error.contains("404") => {}
+        Err(error) if error == sync::SYNC_PULL_NOT_FOUND => {}
         Err(error) => {
             return SyncCycleResult {
                 success: false,
@@ -602,6 +637,15 @@ fn run_sync_cycle_for_backend(
         };
     }
     if let Err(error) = backend.push(&payload) {
+        if error == sync::SYNC_PUSH_CONFLICT {
+            return SyncCycleResult {
+                success: false,
+                message: sync::SYNC_PUSH_CONFLICT.into(),
+                stats,
+                snapshot_counts: Some(snapshot_counts),
+                did_push: false,
+            };
+        }
         return SyncCycleResult {
             success: false,
             message: format!("Push failed: {error}"),
@@ -908,7 +952,7 @@ mod tests {
         }
 
         fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
-            Err("not found".into())
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
         }
 
         fn push(&self, payload: &SyncPayload) -> Result<(), String> {
@@ -949,7 +993,7 @@ mod tests {
         }
 
         fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
-            Err("not found".into())
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
         }
 
         fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
@@ -966,6 +1010,32 @@ mod tests {
         }
     }
 
+    struct ConflictThenSuccessBackend {
+        pushes: AtomicUsize,
+    }
+
+    impl SyncBackend for ConflictThenSuccessBackend {
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
+        }
+
+        fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
+            if self.pushes.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(sync::SYNC_PUSH_CONFLICT.into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+    }
+
     struct RecordingDownloadBackend {
         requests: Mutex<Vec<(String, String)>>,
     }
@@ -976,7 +1046,7 @@ mod tests {
         }
 
         fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
-            Err("not found".into())
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
         }
 
         fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
@@ -1376,5 +1446,26 @@ mod tests {
         assert_eq!(config.last_item_count, 7);
         assert_eq!(config.last_tag_count, 2);
         assert_eq!(config.last_sync_at, "2026-06-09T08:00:00Z");
+    }
+
+    #[test]
+    fn conditional_push_conflict_repulls_and_retries() {
+        let db = Mutex::new(Database::open(":memory:").expect("open in-memory database"));
+        let backend = ConflictThenSuccessBackend {
+            pushes: AtomicUsize::new(0),
+        };
+
+        let result = run_sync_cycle_for_backend(
+            &backend,
+            &db,
+            &AtomicBool::new(false),
+            false,
+            false,
+            false,
+            false,
+        );
+
+        assert!(result.success);
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 2);
     }
 }

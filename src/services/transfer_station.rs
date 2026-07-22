@@ -1,0 +1,1538 @@
+//! Background transfer-station runtime and backend-independent operations.
+//!
+//! All blocking filesystem, database, hashing, and network work runs on a
+//! worker thread. The GPUI poll loop only queues commands and applies compact
+//! results to AppState.
+
+use crate::core::db::Database;
+use crate::core::i18n_keys::I18nKey;
+use crate::core::settings::{AppSettings, BackendConfig};
+use crate::core::sync::SyncBackend;
+use crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES;
+use crate::core::transfer_types::{FileManifest, ManifestEntry, ManifestWriteError, ResolvedEntry};
+use crate::core::types::{ClipboardItem, ContentType, FileData, FileInfo};
+use crate::core::{migration, paths};
+use crate::services::backends::local_folder::LocalFolderBackend;
+use crate::services::backends::webdav::WebDAVBackend;
+use crate::state::app::AppState;
+use sha2::Digest;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::hash::Hasher;
+use std::io::{BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime};
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const MANIFEST_UPDATE_RETRIES: usize = 5;
+const STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileDigest {
+    size: u64,
+    sha256: String,
+    content_hash: u64,
+}
+
+struct DigestState {
+    size: u64,
+    sha256: sha2::Sha256,
+    content_hash: std::collections::hash_map::DefaultHasher,
+}
+
+impl DigestState {
+    fn new() -> Self {
+        Self {
+            size: 0,
+            sha256: sha2::Sha256::new(),
+            content_hash: std::collections::hash_map::DefaultHasher::new(),
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.size = self.size.saturating_add(data.len() as u64);
+        self.sha256.update(data);
+        self.content_hash.write(data);
+    }
+
+    fn finish(self) -> FileDigest {
+        FileDigest {
+            size: self.size,
+            sha256: format!("{:x}", self.sha256.finalize()),
+            content_hash: self.content_hash.finish(),
+        }
+    }
+}
+
+struct DigestingReader<R> {
+    inner: R,
+    digest: DigestState,
+}
+
+impl<R> DigestingReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            digest: DigestState::new(),
+        }
+    }
+
+    fn finish(self) -> FileDigest {
+        self.digest.finish()
+    }
+}
+
+impl<R: Read> Read for DigestingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        self.digest.update(&buffer[..count]);
+        Ok(count)
+    }
+}
+
+struct DigestingWriter<W> {
+    inner: W,
+    digest: DigestState,
+}
+
+impl<W> DigestingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            digest: DigestState::new(),
+        }
+    }
+}
+
+impl<W: Write> DigestingWriter<W> {
+    fn finish(mut self) -> std::io::Result<(W, FileDigest)> {
+        self.inner.flush()?;
+        Ok((self.inner, self.digest.finish()))
+    }
+}
+
+impl<W: Write> Write for DigestingWriter<W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let count = self.inner.write(data)?;
+        self.digest.update(&data[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[derive(Clone)]
+struct CachedFileHash {
+    length: u64,
+    modified: Option<SystemTime>,
+    hash: String,
+}
+
+static ORIGINAL_FILE_HASH_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedFileHash>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone)]
+pub enum TransferCommand {
+    Refresh,
+    Upload {
+        source_path: String,
+        file_name: String,
+    },
+    Download {
+        entry: ManifestEntry,
+    },
+    Delete {
+        entry: ManifestEntry,
+    },
+    Cleanup,
+}
+
+#[derive(Debug, Clone)]
+enum TransferAction {
+    Refresh,
+    Upload { source_path: String, name: String },
+    Download(ManifestEntry, String),
+    Delete(String),
+    Cleanup(u32),
+}
+
+#[derive(Debug, Clone)]
+struct TransferJobResult {
+    generation: u64,
+    action: Result<TransferAction, (TransferCommand, String)>,
+    entries: Option<Vec<ResolvedEntry>>,
+    markers_changed: bool,
+}
+
+#[derive(Default)]
+pub struct TransferPollOutcome {
+    pub state_changed: bool,
+    pub data_changed: bool,
+}
+
+pub struct GpuiTransferService {
+    backend_key: String,
+    backend: Option<Arc<dyn SyncBackend>>,
+    backend_generation: u64,
+    db_path: PathBuf,
+    running: Arc<AtomicBool>,
+    pending_result: Arc<Mutex<Option<TransferJobResult>>>,
+    last_refresh: Option<Instant>,
+    last_cleanup: Option<Instant>,
+}
+
+impl GpuiTransferService {
+    pub fn new(settings: &AppSettings) -> Self {
+        let mut service = Self {
+            backend_key: String::new(),
+            backend: None,
+            backend_generation: 0,
+            db_path: settings.resolve_db_path(),
+            running: Arc::new(AtomicBool::new(false)),
+            pending_result: Arc::new(Mutex::new(None)),
+            last_refresh: None,
+            last_cleanup: None,
+        };
+        service.reload_from_settings(settings);
+        service
+    }
+
+    pub fn reload_from_settings(&mut self, settings: &AppSettings) {
+        let next_db_path = settings.resolve_db_path();
+        let db_key = next_db_path.to_string_lossy().into_owned();
+        let selected = selected_backend(settings);
+        let next_key = selected
+            .and_then(|config| {
+                serde_json::to_string(&(
+                    settings.transfer_station_enabled,
+                    &config.id,
+                    &config.backend_type,
+                    &config.folder_path,
+                    &config.device_name,
+                    &config.webdav_url,
+                    &config.webdav_root_url,
+                    &config.webdav_path,
+                    &config.webdav_username,
+                    &config.webdav_password,
+                    &db_key,
+                ))
+                .ok()
+            })
+            .unwrap_or_default();
+        if next_key == self.backend_key {
+            self.db_path = next_db_path;
+            return;
+        }
+        self.db_path = next_db_path;
+        self.backend_key = next_key;
+        self.backend_generation = self.backend_generation.wrapping_add(1);
+        self.backend = selected.map(build_backend);
+        self.last_refresh = None;
+        self.last_cleanup = None;
+    }
+
+    pub fn poll(&mut self, app: &mut AppState) -> TransferPollOutcome {
+        self.reload_from_settings(&app.settings);
+        let mut outcome = TransferPollOutcome::default();
+
+        if let Some(result) = self
+            .pending_result
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            if result.generation == self.backend_generation {
+                outcome = apply_result(app, result);
+            } else {
+                clear_pending_for_stale_result(app, &result);
+                app.transfer_busy = false;
+                outcome.state_changed = true;
+            }
+        }
+
+        if !app.settings.transfer_station_enabled || self.backend.is_none() {
+            if app.transfer_filter_active
+                || app.has_transfer_files
+                || !app.transfer_entries.is_empty()
+            {
+                outcome.state_changed = true;
+            }
+            app.transfer_busy = false;
+            app.transfer_filter_active = false;
+            app.has_transfer_files = false;
+            app.transfer_entries.clear();
+            app.pending_transfer_commands.clear();
+            app.pending_transfer_downloads.clear();
+            app.pending_transfer_uploads.clear();
+            return outcome;
+        }
+
+        if self.running.load(Ordering::Acquire) {
+            app.transfer_busy = true;
+            return outcome;
+        }
+
+        let now = Instant::now();
+        let command = app.pending_transfer_commands.pop_front().or_else(|| {
+            let cleanup_due = self
+                .last_cleanup
+                .is_none_or(|last| now.duration_since(last) >= CLEANUP_INTERVAL);
+            if cleanup_due {
+                Some(TransferCommand::Cleanup)
+            } else if self
+                .last_refresh
+                .is_none_or(|last| now.duration_since(last) >= REFRESH_INTERVAL)
+            {
+                Some(TransferCommand::Refresh)
+            } else {
+                None
+            }
+        });
+
+        if let Some(command) = command {
+            if matches!(command, TransferCommand::Refresh) {
+                self.last_refresh = Some(now);
+            }
+            if matches!(command, TransferCommand::Cleanup) {
+                self.last_cleanup = Some(now);
+            }
+            app.transfer_busy = true;
+            self.start(command, &app.settings);
+            outcome.state_changed = true;
+        } else {
+            app.transfer_busy = false;
+        }
+        outcome
+    }
+
+    fn start(&mut self, command: TransferCommand, settings: &AppSettings) {
+        if self.running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let backend = Arc::clone(self.backend.as_ref().expect("backend checked before start"));
+        let db_path = self.db_path.clone();
+        let pending = Arc::clone(&self.pending_result);
+        let running = Arc::clone(&self.running);
+        let retention_days = settings.transfer_retention_days;
+        let generation = self.backend_generation;
+        let device_name = selected_backend(settings)
+            .map(|config| config.device_name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(crate::services::backends::local_folder::hostname);
+
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_command(
+                    backend.as_ref(),
+                    &db_path,
+                    command.clone(),
+                    &device_name,
+                    retention_days,
+                )
+            }))
+            .unwrap_or_else(|_| Err("transfer worker terminated unexpectedly".into()));
+            *pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(match result {
+                Ok((action, entries, markers_changed)) => TransferJobResult {
+                    generation,
+                    action: Ok(action),
+                    entries: Some(entries),
+                    markers_changed,
+                },
+                Err(error) => TransferJobResult {
+                    generation,
+                    action: Err((command, error)),
+                    entries: None,
+                    markers_changed: false,
+                },
+            });
+            running.store(false, Ordering::Release);
+        });
+    }
+}
+
+fn clear_pending_for_stale_result(app: &mut AppState, result: &TransferJobResult) {
+    match &result.action {
+        Ok(TransferAction::Upload { source_path, .. }) => {
+            app.pending_transfer_uploads.remove(source_path);
+        }
+        Ok(TransferAction::Download(entry, _)) => {
+            app.pending_transfer_downloads.remove(&entry.hash);
+        }
+        Err((TransferCommand::Upload { source_path, .. }, _)) => {
+            app.pending_transfer_uploads.remove(source_path);
+        }
+        Err((TransferCommand::Download { entry }, _)) => {
+            app.pending_transfer_downloads.remove(&entry.hash);
+        }
+        _ => {}
+    }
+}
+
+fn selected_backend(settings: &AppSettings) -> Option<&BackendConfig> {
+    if settings.transfer_backend_id.is_empty() {
+        settings.sync_backends.iter().find(|config| config.enabled)
+    } else {
+        settings
+            .sync_backends
+            .iter()
+            .find(|config| config.enabled && config.id == settings.transfer_backend_id)
+    }
+}
+
+fn build_backend(config: &BackendConfig) -> Arc<dyn SyncBackend> {
+    match config.backend_type.as_str() {
+        "webdav" => Arc::new(WebDAVBackend::new(config.clone())),
+        _ => Arc::new(LocalFolderBackend::new(config.clone())),
+    }
+}
+
+fn run_command(
+    backend: &dyn SyncBackend,
+    db_path: &Path,
+    command: TransferCommand,
+    device_name: &str,
+    retention_days: u32,
+) -> Result<(TransferAction, Vec<ResolvedEntry>, bool), String> {
+    let db = Database::open(&db_path.to_string_lossy())
+        .map_err(|error| format!("open transfer database: {error}"))?;
+    let action = match command {
+        TransferCommand::Refresh => TransferAction::Refresh,
+        TransferCommand::Upload {
+            source_path,
+            file_name,
+        } => {
+            let name = upload_file(
+                backend,
+                &db,
+                &source_path,
+                &file_name,
+                device_name,
+                retention_days,
+            )?;
+            TransferAction::Upload { source_path, name }
+        }
+        TransferCommand::Download { entry } => {
+            let path = download_file(backend, &db, &entry)?;
+            TransferAction::Download(entry, path)
+        }
+        TransferCommand::Delete { entry } => {
+            let name = entry.name.clone();
+            delete_file(backend, &db, &entry)?;
+            TransferAction::Delete(name)
+        }
+        TransferCommand::Cleanup => {
+            let count = cleanup_expired(backend, &db, retention_days)?;
+            TransferAction::Cleanup(count)
+        }
+    };
+    let (entries, changed_markers) = fetch_and_resolve(backend, &db)?;
+    Ok((action, entries, changed_markers > 0))
+}
+
+fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOutcome {
+    app.transfer_busy = false;
+    if let Some(entries) = result.entries {
+        app.has_transfer_files = !entries.is_empty();
+        app.transfer_entries = entries;
+    }
+
+    let mut data_changed = result.markers_changed;
+    if result.markers_changed {
+        app.reload_items();
+    }
+    match result.action {
+        Ok(TransferAction::Refresh) => {}
+        Ok(TransferAction::Upload { source_path, name }) => {
+            app.pending_transfer_uploads.remove(&source_path);
+            app.reload_items();
+            app.toast_message = Some(I18nKey::TransferUploaded.text().replace("{0}", &name));
+            data_changed = true;
+        }
+        Ok(TransferAction::Download(entry, path)) => {
+            app.pending_transfer_downloads.remove(&entry.hash);
+            app.reload_items();
+            app.toast_message = Some(
+                I18nKey::TransferDownloaded
+                    .text()
+                    .replace("{0}", &entry.name),
+            );
+            let item = transfer_clipboard_item(&entry, &path);
+            crate::services::clipboard_ops::write_item_to_clipboard(&item, false);
+            data_changed = true;
+        }
+        Ok(TransferAction::Delete(name)) => {
+            app.reload_items();
+            app.toast_message = Some(I18nKey::TransferDeleted.text().replace("{0}", &name));
+            data_changed = true;
+        }
+        Ok(TransferAction::Cleanup(count)) => {
+            if count > 0 {
+                app.reload_items();
+                data_changed = true;
+            }
+        }
+        Err((command, error)) => {
+            log::warn!("[transfer] command failed: {error}");
+            if let TransferCommand::Download { ref entry } = command {
+                app.pending_transfer_downloads.remove(&entry.hash);
+            }
+            if let TransferCommand::Upload {
+                ref source_path, ..
+            } = command
+            {
+                app.pending_transfer_uploads.remove(source_path);
+            }
+            let key = match command {
+                TransferCommand::Upload { .. } => I18nKey::TransferUploadFailed,
+                TransferCommand::Download { .. } => I18nKey::TransferDownloadFailed,
+                TransferCommand::Delete { .. } => I18nKey::TransferDeleteFailed,
+                TransferCommand::Refresh | TransferCommand::Cleanup => I18nKey::SyncErrPull,
+            };
+            app.toast_message = Some(key.text().replace("{0}", &error));
+            app.toast_is_warning = true;
+        }
+    }
+
+    TransferPollOutcome {
+        state_changed: true,
+        data_changed,
+    }
+}
+
+pub fn fetch_and_resolve(
+    backend: &dyn SyncBackend,
+    db: &Database,
+) -> Result<(Vec<ResolvedEntry>, usize), String> {
+    let mut snapshot = backend.pull_file_manifest()?;
+    if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported transfer manifest version {}",
+            snapshot.manifest.version
+        ));
+    }
+    migration::migrate_file_manifest(&mut snapshot.manifest);
+    validate_manifest(&snapshot.manifest)?;
+    let active_hashes: HashSet<String> = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|entry| entry.hash.clone())
+        .collect();
+    let active_sizes: HashSet<u64> = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|entry| entry.size)
+        .collect();
+    let removed_stale_records = reconcile_transfer_records(db, &active_hashes);
+    let local_paths = get_local_transfer_paths(db);
+    let changed_markers =
+        reconcile_original_file_markers(db, &active_hashes, &active_sizes)? + removed_stale_records;
+
+    let entries = snapshot
+        .manifest
+        .files
+        .into_iter()
+        .map(|entry| {
+            let local_path = local_paths.get(&entry.hash).cloned();
+            Ok(ResolvedEntry {
+                is_local: local_path.is_some(),
+                local_path,
+                entry,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((entries, changed_markers))
+}
+
+fn reconcile_original_file_markers(
+    db: &Database,
+    active_hashes: &HashSet<String>,
+    active_sizes: &HashSet<u64>,
+) -> Result<usize, String> {
+    let items = db
+        .get_original_file_items()
+        .map_err(|error| format!("load original file items: {error}"))?;
+    let mut changed = 0;
+    let mut seen_paths = HashSet::new();
+
+    for item in items {
+        let file_data = FileData::from_json(&item.file_data);
+        let derived_hash = if let [file] = file_data.files.as_slice() {
+            if file.is_dir {
+                None
+            } else {
+                match cached_file_hash(Path::new(&file.path), active_sizes) {
+                    Ok(Some((cache_key, hash))) => {
+                        seen_paths.insert(cache_key);
+                        active_hashes.contains(&hash).then_some(hash)
+                    }
+                    Ok(None) | Err(_) => None,
+                }
+            }
+        } else {
+            None
+        };
+
+        changed += usize::from(
+            db.set_derived_file_transfer_hash(item.id, derived_hash.as_deref())
+                .map_err(|error| format!("update derived transfer marker: {error}"))?,
+        );
+    }
+
+    ORIGINAL_FILE_HASH_CACHE
+        .lock()
+        .expect("transfer file hash cache lock poisoned")
+        .retain(|path, _| seen_paths.contains(path));
+    Ok(changed)
+}
+
+fn cached_file_hash(
+    path: &Path,
+    active_sizes: &HashSet<u64>,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let cache_key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let metadata = std::fs::metadata(&cache_key)
+        .map_err(|error| format!("read local file metadata: {error}"))?;
+    if !metadata.is_file() || !active_sizes.contains(&metadata.len()) {
+        return Ok(None);
+    }
+
+    let modified = metadata.modified().ok();
+    if modified.is_some() {
+        let cache = ORIGINAL_FILE_HASH_CACHE
+            .lock()
+            .expect("transfer file hash cache lock poisoned");
+        if let Some(cached) = cache.get(&cache_key) {
+            if cached.length == metadata.len() && cached.modified == modified {
+                return Ok(Some((cache_key, cached.hash.clone())));
+            }
+        }
+    }
+
+    use sha2::Digest;
+    let file = File::open(&cache_key).map_err(|error| format!("open local file: {error}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut digest = sha2::Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("hash local file: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+
+    let current_metadata = std::fs::metadata(&cache_key)
+        .map_err(|error| format!("recheck local file metadata: {error}"))?;
+    if current_metadata.len() != metadata.len() || current_metadata.modified().ok() != modified {
+        return Err("local file changed while hashing".into());
+    }
+
+    let hash = format!("{:x}", digest.finalize());
+    if modified.is_some() {
+        ORIGINAL_FILE_HASH_CACHE
+            .lock()
+            .expect("transfer file hash cache lock poisoned")
+            .insert(
+                cache_key.clone(),
+                CachedFileHash {
+                    length: metadata.len(),
+                    modified,
+                    hash: hash.clone(),
+                },
+            );
+    }
+    Ok(Some((cache_key, hash)))
+}
+fn upload_file(
+    backend: &dyn SyncBackend,
+    db: &Database,
+    local_path: &str,
+    file_name: &str,
+    device_name: &str,
+    retention_days: u32,
+) -> Result<String, String> {
+    let source = Path::new(local_path);
+    if !source.is_file() {
+        return Err(I18nKey::TransferInvalidPath.text().into());
+    }
+    let name = portable_file_name(file_name)?;
+    let source_size = std::fs::metadata(source)
+        .map_err(|error| format!("read file metadata: {error}"))?
+        .len();
+    if source_size > MAX_TRANSFER_FILE_SIZE_BYTES {
+        return Err(format!(
+            "file exceeds the {} MiB transfer limit",
+            MAX_TRANSFER_FILE_SIZE_BYTES / 1024 / 1024
+        ));
+    }
+    let source_modified = std::fs::metadata(source)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let digest = digest_file(source, MAX_TRANSFER_FILE_SIZE_BYTES)?;
+    if digest.size != source_size || !file_metadata_matches(source, source_size, source_modified) {
+        return Err("local file changed while preparing the upload".into());
+    }
+    let hash = digest.sha256.clone();
+    let ext = Path::new(&name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    let now = chrono::Utc::now();
+    let expires_at = if retention_days == 0 {
+        String::new()
+    } else {
+        (now + chrono::Duration::days(retention_days as i64)).to_rfc3339()
+    };
+    let entry = ManifestEntry {
+        hash: hash.clone(),
+        blob_id: format!("{hash}-{}", uuid::Uuid::new_v4()),
+        name: name.clone(),
+        ext: ext.clone(),
+        size: digest.size,
+        uploaded_at: now.to_rfc3339(),
+        expires_at,
+        uploaded_by: device_name.to_string(),
+    };
+    entry.validate()?;
+
+    let source_file = File::open(source).map_err(|error| format!("open file: {error}"))?;
+    let mut upload_reader =
+        DigestingReader::new(BufReader::with_capacity(STREAM_BUFFER_BYTES, source_file));
+    let upload_result =
+        backend.upload_file_blob(entry.blob_key(), &ext, &mut upload_reader, digest.size);
+    let uploaded_digest = upload_reader.finish();
+    if let Err(error) = upload_result {
+        if let Err(cleanup_error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+            log::warn!("[transfer] failed partial upload cleanup: {cleanup_error}");
+        }
+        return Err(error);
+    }
+    if uploaded_digest != digest || !file_metadata_matches(source, source_size, source_modified) {
+        if let Err(cleanup_error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+            log::warn!("[transfer] changed upload cleanup failed: {cleanup_error}");
+        }
+        return Err("local file changed while uploading".into());
+    }
+    let replaced = match mutate_manifest(backend, |manifest| {
+        let replaced = manifest
+            .files
+            .iter()
+            .find(|existing| existing.hash == hash)
+            .cloned();
+        manifest.files.retain(|existing| existing.hash != hash);
+        manifest.files.push(entry.clone());
+        manifest.device_name = device_name.to_string();
+        replaced
+    }) {
+        Ok(replaced) => replaced,
+        Err(error) => {
+            if let Err(cleanup_error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+                log::warn!("[transfer] failed upload rollback cleanup: {cleanup_error}");
+            }
+            return Err(error);
+        }
+    };
+    if let Some(replaced) = replaced.filter(|old| old.blob_key() != entry.blob_key()) {
+        if let Err(error) = backend.delete_file_blob(replaced.blob_key(), &replaced.ext) {
+            log::warn!("[transfer] replaced blob cleanup failed: {error}");
+        }
+    }
+
+    let canonical_path = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
+    upsert_transfer_item(
+        db,
+        &entry,
+        &canonical_path.to_string_lossy(),
+        digest.content_hash,
+    )?;
+    Ok(name)
+}
+
+fn download_file(
+    backend: &dyn SyncBackend,
+    db: &Database,
+    entry: &ManifestEntry,
+) -> Result<String, String> {
+    entry.validate()?;
+    let directory = paths::transfer_cache_dir().join(&entry.hash);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("create transfer cache: {error}"))?;
+    let destination = directory.join(&entry.name);
+    let temporary = directory.join(format!(".download-{}.tmp", uuid::Uuid::new_v4()));
+    let download_result = stream_blob_to_file(backend, entry, &temporary);
+    let digest = match download_result {
+        Ok(digest) => digest,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
+    if let Err(error) = validate_download_digest(entry, &digest) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    crate::services::file_ops::replace_file(&temporary, &destination).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("replace cache file: {error}")
+    })?;
+    remove_stale_cache_files(&directory, &destination);
+    upsert_transfer_item(
+        db,
+        entry,
+        &destination.to_string_lossy(),
+        digest.content_hash,
+    )?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+fn delete_file(
+    backend: &dyn SyncBackend,
+    db: &Database,
+    entry: &ManifestEntry,
+) -> Result<(), String> {
+    entry.validate()?;
+    let blob_key = entry.blob_key().to_string();
+    let removed = mutate_manifest(backend, |manifest| {
+        let before = manifest.files.len();
+        manifest.files.retain(|existing| {
+            existing.hash != entry.hash || existing.blob_key() != entry.blob_key()
+        });
+        before != manifest.files.len()
+    })?;
+    if !removed {
+        return Err(I18nKey::TransferEntryExpired.text().into());
+    }
+    if let Err(error) = backend.delete_file_blob(&blob_key, &entry.ext) {
+        log::warn!("[transfer] orphaned blob cleanup failed after manifest deletion: {error}");
+    }
+    clean_local_transfer(db, &entry.hash);
+    Ok(())
+}
+
+fn cleanup_expired(
+    backend: &dyn SyncBackend,
+    db: &Database,
+    retention_days: u32,
+) -> Result<u32, String> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+    let now = chrono::Utc::now();
+    let snapshot = backend.pull_file_manifest()?;
+    let expired: Vec<ManifestEntry> = snapshot
+        .manifest
+        .files
+        .into_iter()
+        .filter(|entry| entry_expired(entry, now, retention_days))
+        .collect();
+    if expired.is_empty() {
+        return Ok(0);
+    }
+    let expired_keys: HashSet<String> = expired
+        .iter()
+        .map(|entry| entry.blob_key().to_string())
+        .collect();
+    let removed = mutate_manifest(backend, |manifest| {
+        let mut removed = Vec::new();
+        manifest.files.retain(|entry| {
+            if expired_keys.contains(entry.blob_key()) && entry_expired(entry, now, retention_days)
+            {
+                removed.push(entry.clone());
+                false
+            } else {
+                true
+            }
+        });
+        removed
+    })?;
+    for entry in &removed {
+        if let Err(error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+            log::warn!("[transfer] expired blob cleanup failed: {error}");
+        }
+        clean_local_transfer(db, &entry.hash);
+    }
+    Ok(removed.len() as u32)
+}
+
+fn entry_expired(
+    entry: &ManifestEntry,
+    now: chrono::DateTime<chrono::Utc>,
+    retention_days: u32,
+) -> bool {
+    let expires_at = chrono::DateTime::parse_from_rfc3339(&entry.expires_at)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::DateTime::parse_from_rfc3339(&entry.uploaded_at).map(|value| {
+                value.with_timezone(&chrono::Utc) + chrono::Duration::days(retention_days as i64)
+            })
+        });
+    expires_at.is_ok_and(|value| value <= now)
+}
+
+fn mutate_manifest<T>(
+    backend: &dyn SyncBackend,
+    mutate: impl Fn(&mut FileManifest) -> T,
+) -> Result<T, String> {
+    for _ in 0..MANIFEST_UPDATE_RETRIES {
+        let mut snapshot = backend.pull_file_manifest()?;
+        if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
+            return Err(format!(
+                "unsupported transfer manifest version {}",
+                snapshot.manifest.version
+            ));
+        }
+        migration::migrate_file_manifest(&mut snapshot.manifest);
+        validate_manifest(&snapshot.manifest)?;
+        let value = mutate(&mut snapshot.manifest);
+        validate_manifest(&snapshot.manifest)?;
+        snapshot.manifest.version = migration::TRANSFER_PROTOCOL_VERSION;
+        snapshot.manifest.updated_at = chrono::Utc::now().to_rfc3339();
+        match backend.push_file_manifest(&snapshot.manifest, snapshot.revision.as_deref()) {
+            Ok(_) => return Ok(value),
+            Err(ManifestWriteError::Conflict) => continue,
+            Err(ManifestWriteError::Other(error)) => return Err(error),
+        }
+    }
+    Err("manifest changed repeatedly; retry the operation".into())
+}
+
+fn portable_file_name(value: &str) -> Result<String, String> {
+    let name = Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| I18nKey::TransferInvalidPath.text().to_string())?;
+    if name != value
+        || name.is_empty()
+        || name.len() > 255
+        || name.encode_utf16().count() > 255
+        || name == "."
+        || name == ".."
+        || name.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+        })
+        || name.ends_with([' ', '.'])
+    {
+        return Err("file name is not portable across supported platforms".into());
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        return Err("reserved file name is not portable".into());
+    }
+    Ok(name.to_string())
+}
+
+fn get_local_transfer_paths(db: &Database) -> HashMap<String, String> {
+    db.get_transfer_items()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let file_data = FileData::from_json(&item.file_data);
+            let path = file_data.files.first()?.path.clone();
+            (!file_data.remote_hash.is_empty() && Path::new(&path).is_file())
+                .then_some((file_data.remote_hash, path))
+        })
+        .collect()
+}
+
+fn validate_manifest(manifest: &FileManifest) -> Result<(), String> {
+    let mut hashes = HashSet::new();
+    for entry in &manifest.files {
+        entry.validate()?;
+        if !hashes.insert(entry.hash.as_str()) {
+            return Err(format!("duplicate transfer hash {}", entry.hash));
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_transfer_records(db: &Database, active_hashes: &HashSet<String>) -> usize {
+    let stale_hashes: HashSet<String> = db
+        .get_transfer_items()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let hash = FileData::from_json(&item.file_data).remote_hash;
+            (!hash.is_empty() && !active_hashes.contains(&hash)).then_some(hash)
+        })
+        .collect();
+    for hash in &stale_hashes {
+        clean_local_transfer(db, hash);
+    }
+    stale_hashes.len()
+}
+
+fn remove_stale_cache_files(directory: &Path, destination: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path != destination && path.is_file() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn file_metadata_matches(
+    path: &Path,
+    expected_size: u64,
+    expected_modified: Option<SystemTime>,
+) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| {
+        metadata.is_file()
+            && metadata.len() == expected_size
+            && metadata.modified().ok() == expected_modified
+    })
+}
+
+fn digest_file(path: &Path, max_bytes: u64) -> Result<FileDigest, String> {
+    let file = File::open(path).map_err(|error| format!("open file for hashing: {error}"))?;
+    let mut reader = DigestingReader::new(BufReader::with_capacity(STREAM_BUFFER_BYTES, file));
+    let copied = std::io::copy(
+        &mut reader.by_ref().take(max_bytes.saturating_add(1)),
+        &mut std::io::sink(),
+    )
+    .map_err(|error| format!("hash file: {error}"))?;
+    let digest = reader.finish();
+    if copied > max_bytes {
+        return Err(format!(
+            "file exceeds the {} MiB transfer limit",
+            MAX_TRANSFER_FILE_SIZE_BYTES / 1024 / 1024
+        ));
+    }
+    Ok(digest)
+}
+
+fn stream_blob_to_file(
+    backend: &dyn SyncBackend,
+    entry: &ManifestEntry,
+    destination: &Path,
+) -> Result<FileDigest, String> {
+    let file = File::create(destination).map_err(|error| format!("create cache temp: {error}"))?;
+    let mut writer = DigestingWriter::new(file);
+    let backend_result = backend.download_file_blob(
+        entry.blob_key(),
+        &entry.ext,
+        &mut writer,
+        MAX_TRANSFER_FILE_SIZE_BYTES,
+    );
+    let finish_result = writer
+        .finish()
+        .map_err(|error| format!("flush cache temp: {error}"));
+    let copied = backend_result?;
+    let (file, digest) = finish_result?;
+    if copied != digest.size {
+        return Err(format!(
+            "download length mismatch: backend reported {copied}, wrote {}",
+            digest.size
+        ));
+    }
+    file.sync_all()
+        .map_err(|error| format!("sync cache temp: {error}"))?;
+    Ok(digest)
+}
+
+fn validate_download_digest(entry: &ManifestEntry, digest: &FileDigest) -> Result<(), String> {
+    if digest.size != entry.size || digest.sha256 != entry.hash {
+        Err("downloaded file failed integrity verification".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn upsert_transfer_item(
+    db: &Database,
+    entry: &ManifestEntry,
+    local_path: &str,
+    content_hash: u64,
+) -> Result<(), String> {
+    let now = chrono::Utc::now();
+    let item = ClipboardItem {
+        id: 0,
+        content_type: ContentType::File,
+        full_text: entry.name.clone(),
+        content_hash,
+        created_at: now,
+        updated_at: now,
+        image_path: String::new(),
+        image_width: 0,
+        image_height: 0,
+        rich_data: String::new(),
+        file_data: FileData {
+            files: vec![FileInfo {
+                name: entry.name.clone(),
+                path: local_path.to_string(),
+                is_dir: false,
+            }],
+            transfer: true,
+            remote_hash: entry.hash.clone(),
+        }
+        .to_json(),
+        is_favorite: false,
+        note: String::new(),
+        source_app_name: String::new(),
+        source_app_icon: String::new(),
+        size: entry.size as i64,
+        tags: Vec::new(),
+        meta_type: "transfer".to_string(),
+        custom_hotkey: String::new(),
+        custom_hotkey_format: String::new(),
+    };
+    db.upsert(&item)
+        .map_err(|error| format!("save transfer item: {error}"))
+}
+
+fn transfer_clipboard_item(entry: &ManifestEntry, local_path: &str) -> ClipboardItem {
+    let now = chrono::Utc::now();
+    ClipboardItem {
+        id: 0,
+        content_type: ContentType::File,
+        full_text: entry.name.clone(),
+        content_hash: 0,
+        created_at: now,
+        updated_at: now,
+        image_path: String::new(),
+        image_width: 0,
+        image_height: 0,
+        rich_data: String::new(),
+        file_data: FileData {
+            files: vec![FileInfo {
+                name: entry.name.clone(),
+                path: local_path.to_string(),
+                is_dir: false,
+            }],
+            transfer: true,
+            remote_hash: entry.hash.clone(),
+        }
+        .to_json(),
+        is_favorite: false,
+        note: String::new(),
+        source_app_name: String::new(),
+        source_app_icon: String::new(),
+        size: entry.size as i64,
+        tags: Vec::new(),
+        meta_type: "transfer".to_string(),
+        custom_hotkey: String::new(),
+        custom_hotkey_format: String::new(),
+    }
+}
+
+fn clean_local_transfer(db: &Database, hash: &str) {
+    let cache_root = paths::transfer_cache_dir();
+    let safe_hash = hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    let hash_dir = safe_hash.then(|| cache_root.join(hash));
+    if let Ok(items) = db.get_transfer_items() {
+        for item in items {
+            let file_data = FileData::from_json(&item.file_data);
+            if file_data.remote_hash != hash {
+                continue;
+            }
+            for file in file_data.files {
+                let path = PathBuf::from(file.path);
+                if hash_dir
+                    .as_ref()
+                    .is_some_and(|directory| path.parent() == Some(directory.as_path()))
+                {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
+    if let Some(hash_dir) = hash_dir.filter(|directory| directory.is_dir()) {
+        let _ = std::fs::remove_dir(hash_dir);
+    }
+    let _ = db.delete_transfer_by_hash(hash);
+}
+
+#[cfg(test)]
+fn compute_file_hash(data: &[u8]) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(data);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+fn default_hash(data: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(data);
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::sync::BackendStatus;
+    use std::sync::atomic::AtomicUsize;
+
+    struct ConflictManifestBackend {
+        manifest: Mutex<FileManifest>,
+        conflicts_remaining: AtomicUsize,
+        pushes: AtomicUsize,
+    }
+
+    impl ConflictManifestBackend {
+        fn new(conflicts: usize) -> Self {
+            Self {
+                manifest: Mutex::new(FileManifest {
+                    version: migration::TRANSFER_PROTOCOL_VERSION,
+                    device_name: String::new(),
+                    updated_at: String::new(),
+                    files: Vec::new(),
+                }),
+                conflicts_remaining: AtomicUsize::new(conflicts),
+                pushes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl SyncBackend for ConflictManifestBackend {
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<crate::core::sync::SyncPayload, String> {
+            Err("unused".into())
+        }
+
+        fn push(&self, _payload: &crate::core::sync::SyncPayload) -> Result<(), String> {
+            Err("unused".into())
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+
+        fn pull_file_manifest(
+            &self,
+        ) -> Result<crate::core::transfer_types::ManifestSnapshot, String> {
+            Ok(crate::core::transfer_types::ManifestSnapshot {
+                manifest: self.manifest.lock().expect("manifest lock").clone(),
+                revision: Some(format!("r{}", self.pushes.load(Ordering::SeqCst))),
+            })
+        }
+
+        fn push_file_manifest(
+            &self,
+            manifest: &FileManifest,
+            _expected_revision: Option<&str>,
+        ) -> Result<String, ManifestWriteError> {
+            if self
+                .conflicts_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    if remaining > 0 {
+                        Some(remaining - 1)
+                    } else {
+                        None
+                    }
+                })
+                .is_ok()
+            {
+                return Err(ManifestWriteError::Conflict);
+            }
+            *self.manifest.lock().expect("manifest lock") = manifest.clone();
+            let push = self.pushes.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(format!("r{push}"))
+        }
+    }
+
+    fn valid_entry(hash_byte: char, name: &str) -> ManifestEntry {
+        let hash = hash_byte.to_string().repeat(64);
+        ManifestEntry {
+            blob_id: format!("{hash}-{}", uuid::Uuid::new_v4()),
+            hash,
+            name: name.into(),
+            ext: "bin".into(),
+            size: 4,
+            uploaded_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: String::new(),
+            uploaded_by: "test".into(),
+        }
+    }
+
+    #[test]
+    fn portable_file_names_reject_paths_and_windows_reserved_names() {
+        assert!(portable_file_name("report.pdf").is_ok());
+        assert!(portable_file_name("中文 报告.final.pdf").is_ok());
+        assert!(portable_file_name("README").is_ok());
+        assert!(portable_file_name("../report.pdf").is_err());
+        assert!(portable_file_name("folder\\report.pdf").is_err());
+        assert!(portable_file_name("CON.txt").is_err());
+        assert!(portable_file_name("bad?.txt").is_err());
+        assert!(portable_file_name("trailing. ").is_err());
+    }
+
+    #[test]
+    fn streaming_digest_matches_whole_buffer_hashes_and_enforces_limit() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-stream-digest-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("large.bin");
+        let data: Vec<u8> = (0..STREAM_BUFFER_BYTES * 2 + 137)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        std::fs::write(&path, &data).unwrap();
+
+        let digest = digest_file(&path, data.len() as u64).unwrap();
+        assert_eq!(digest.size, data.len() as u64);
+        assert_eq!(digest.sha256, compute_file_hash(&data));
+        assert_eq!(digest.content_hash, default_hash(&data));
+        assert!(digest_file(&path, data.len() as u64 - 1).is_err());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn streamed_download_digest_rejects_corrupt_content_and_wrong_length() {
+        let data = b"verified streamed download";
+        let mut entry = valid_entry('a', "download.bin");
+        entry.hash = compute_file_hash(data);
+        entry.blob_id = format!("{}-{}", entry.hash, uuid::Uuid::new_v4());
+        entry.size = data.len() as u64;
+        let digest = FileDigest {
+            size: data.len() as u64,
+            sha256: compute_file_hash(data),
+            content_hash: default_hash(data),
+        };
+        assert!(validate_download_digest(&entry, &digest).is_ok());
+
+        let mut corrupt = digest.clone();
+        corrupt.sha256 = compute_file_hash(b"different content");
+        assert!(validate_download_digest(&entry, &corrupt).is_err());
+
+        let mut truncated = digest;
+        truncated.size -= 1;
+        assert!(validate_download_digest(&entry, &truncated).is_err());
+    }
+
+    #[test]
+    fn manifest_entry_rejects_path_traversal() {
+        let entry = ManifestEntry {
+            hash: "a".repeat(64),
+            blob_id: String::new(),
+            name: "../file.txt".into(),
+            ext: "txt".into(),
+            size: 1,
+            uploaded_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: String::new(),
+            uploaded_by: String::new(),
+        };
+        assert!(entry.validate().is_err());
+    }
+
+    #[test]
+    fn manifest_validation_rejects_noncanonical_hashes_timestamps_and_duplicates() {
+        let mut entry = valid_entry('a', "file.bin");
+        entry.hash = "A".repeat(64);
+        assert!(entry.validate().is_err());
+
+        let mut entry = valid_entry('a', "file.bin");
+        entry.uploaded_at = "not-a-time".into();
+        assert!(entry.validate().is_err());
+
+        let mut entry = valid_entry('a', "file.bin");
+        entry.size = MAX_TRANSFER_FILE_SIZE_BYTES + 1;
+        assert!(entry.validate().is_err());
+
+        let entry = valid_entry('a', "file.bin");
+        let manifest = FileManifest {
+            version: migration::TRANSFER_PROTOCOL_VERSION,
+            device_name: "test".into(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            files: vec![entry.clone(), entry],
+        };
+        assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn manifest_mutation_retries_conflicts_and_stops_at_the_limit() {
+        let backend = ConflictManifestBackend::new(2);
+        mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![valid_entry('a', "file.bin")];
+        })
+        .unwrap();
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.manifest.lock().unwrap().files.len(), 1);
+
+        let backend = ConflictManifestBackend::new(MANIFEST_UPDATE_RETRIES);
+        let error = mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![valid_entry('b', "other.bin")];
+        })
+        .unwrap_err();
+        assert!(error.contains("changed repeatedly"));
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn expiry_prefers_explicit_timestamp_and_supports_legacy_entries() {
+        let now = chrono::Utc::now();
+        let mut entry = ManifestEntry {
+            hash: "a".repeat(64),
+            blob_id: String::new(),
+            name: "file.txt".into(),
+            ext: "txt".into(),
+            size: 1,
+            uploaded_at: (now - chrono::Duration::days(2)).to_rfc3339(),
+            expires_at: (now + chrono::Duration::hours(1)).to_rfc3339(),
+            uploaded_by: String::new(),
+        };
+        assert!(!entry_expired(&entry, now, 1));
+
+        entry.expires_at.clear();
+        assert!(entry_expired(&entry, now, 1));
+        assert!(!entry_expired(&entry, now, 3));
+    }
+
+    #[test]
+    fn original_file_marker_is_derived_from_manifest_content_hash() {
+        let unique = format!(
+            "clippi-transfer-marker-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let directory = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file_path = directory.join("report.bin");
+        let contents = b"passive transfer marker";
+        std::fs::write(&file_path, contents).unwrap();
+
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let now = chrono::Utc::now();
+        let content_hash = default_hash(contents);
+        db.upsert(&ClipboardItem {
+            id: 0,
+            content_type: ContentType::File,
+            full_text: "report.bin".into(),
+            content_hash,
+            created_at: now,
+            updated_at: now,
+            image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rich_data: String::new(),
+            file_data: FileData {
+                files: vec![FileInfo {
+                    name: "report.bin".into(),
+                    path: file_path.to_string_lossy().into_owned(),
+                    is_dir: false,
+                }],
+                transfer: false,
+                remote_hash: "legacy-active-marker".into(),
+            }
+            .to_json(),
+            is_favorite: false,
+            note: String::new(),
+            source_app_name: String::new(),
+            source_app_icon: String::new(),
+            size: contents.len() as i64,
+            tags: Vec::new(),
+            meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
+        })
+        .unwrap();
+
+        let sha256 = compute_file_hash(contents);
+        let active_hashes = HashSet::from([sha256.clone()]);
+        let active_sizes = HashSet::from([contents.len() as u64]);
+        assert_eq!(
+            reconcile_original_file_markers(&db, &active_hashes, &active_sizes).unwrap(),
+            1
+        );
+        let item = db.get_by_hash(content_hash).unwrap().unwrap();
+        assert_eq!(FileData::from_json(&item.file_data).remote_hash, sha256);
+        assert_eq!(
+            reconcile_original_file_markers(&db, &active_hashes, &active_sizes).unwrap(),
+            0
+        );
+
+        assert_eq!(
+            reconcile_original_file_markers(&db, &HashSet::new(), &HashSet::new()).unwrap(),
+            1
+        );
+        let item = db.get_by_hash(content_hash).unwrap().unwrap();
+        assert!(FileData::from_json(&item.file_data).remote_hash.is_empty());
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn refresh_removes_backing_records_for_remote_entries_that_disappeared() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-stale-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.bin");
+        let data = b"kept user source";
+        std::fs::write(&source, data).unwrap();
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let mut entry = valid_entry('a', "source.bin");
+        entry.hash = compute_file_hash(data);
+        entry.blob_id = format!("{}-{}", entry.hash, uuid::Uuid::new_v4());
+        entry.size = data.len() as u64;
+        upsert_transfer_item(&db, &entry, &source.to_string_lossy(), default_hash(data)).unwrap();
+
+        assert_eq!(db.get_transfer_items().unwrap().len(), 1);
+        assert_eq!(reconcile_transfer_records(&db, &HashSet::new()), 1);
+        assert!(db.get_transfer_items().unwrap().is_empty());
+        assert!(source.is_file());
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}

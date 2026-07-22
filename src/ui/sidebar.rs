@@ -258,7 +258,7 @@ impl Render for Sidebar {
                     row.on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                         let items = state_for_left.update(cx, |state, _cx| {
                             state.toggle_tag_filter(tag_id);
-                            state.items.clone()
+                            state.visible_items()
                         });
                         list_for_left.update(cx, |list, cx| list.set_items(items, cx));
                     })

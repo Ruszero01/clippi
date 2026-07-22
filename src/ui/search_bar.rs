@@ -121,7 +121,7 @@ impl SearchBar {
             let keyword = input_for_read.read(cx).value().to_string();
             let items = state_for_input.update(cx, |state, _cx| {
                 state.set_keyword(&keyword);
-                state.items.clone()
+                state.visible_items()
             });
             list_for_input.update(cx, |list, cx| list.set_items(items, cx));
             cx.notify();
@@ -184,7 +184,7 @@ impl SearchBar {
     ) {
         let items = state.update(cx, |state, _cx| {
             state.toggle_type_filter(type_name);
-            state.items.clone()
+            state.visible_items()
         });
         list_view.update(cx, |list, cx| list.set_items(items, cx));
     }

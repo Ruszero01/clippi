@@ -19,6 +19,7 @@ use crate::core::types::TagInfo;
 use crate::services::update::{UpdateInfo, UpdatePhase};
 use crate::state::sync::SyncState;
 use pinyin::ToPinyin;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -50,6 +51,22 @@ pub struct AppState {
     pub has_hotkey_items: bool,
     /// Whether any persisted item is currently favorited.
     pub has_favorite_items: bool,
+    /// Whether remote transfer station files exist (controls titlebar button visibility).
+    pub has_transfer_files: bool,
+    /// Whether the transfer station filter/view is active.
+    pub transfer_filter_active: bool,
+    /// Resolved transfer entries (manifest entries with is_local status).
+    /// Populated when `transfer_filter_active` is true, cleared when false.
+    pub transfer_entries: Vec<crate::core::transfer_types::ResolvedEntry>,
+    /// Commands consumed by the background transfer runtime.
+    pub pending_transfer_commands: VecDeque<crate::services::transfer_station::TransferCommand>,
+    /// Hashes of cloud entries queued for or currently being downloaded.
+    /// Used to render per-entry progress feedback and suppress duplicate jobs.
+    pub pending_transfer_downloads: HashSet<String>,
+    /// Source paths queued for or currently being uploaded.
+    pub pending_transfer_uploads: HashSet<String>,
+    /// Whether a transfer worker is currently running.
+    pub transfer_busy: bool,
     /// Currently selected item IDs (for batch operations)
     pub selected_ids: Vec<i64>,
     /// Tag editing state for TagFilterPanel overlay
@@ -176,6 +193,31 @@ fn item_matches_keywords(item: &crate::core::types::ClipboardItem, keywords: &[S
         .iter()
         .all(|keyword| item_matches_keyword(item, keyword))
 }
+fn path_text_matches_selected_types(
+    file_active: bool,
+    path_active: bool,
+    kind: Option<crate::services::file_status::CachedPathKind>,
+) -> bool {
+    if !file_active && !path_active {
+        return true;
+    }
+    let points_to_file = matches!(
+        kind,
+        Some(crate::services::file_status::CachedPathKind::File)
+    );
+    (file_active && points_to_file) || (path_active && !points_to_file)
+}
+
+fn item_matches_runtime_path_type(item: &ClipboardItem, filters: &ClipboardFilters) -> bool {
+    if item.meta_type != "path" || item.content_type == ContentType::File {
+        return true;
+    }
+    path_text_matches_selected_types(
+        filters.is_type_active("file"),
+        filters.is_type_active("path"),
+        crate::services::file_status::cached_path_kind(&item.full_text),
+    )
+}
 
 fn truncate_chars(text: &mut String, limit: usize) {
     if let Some((idx, _)) = text.char_indices().nth(limit) {
@@ -294,6 +336,13 @@ impl AppState {
             filters: ClipboardFilters::default(),
             has_hotkey_items,
             has_favorite_items,
+            has_transfer_files: false,
+            transfer_filter_active: false,
+            transfer_entries: Vec::new(),
+            pending_transfer_commands: VecDeque::new(),
+            pending_transfer_downloads: HashSet::new(),
+            pending_transfer_uploads: HashSet::new(),
+            transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -360,6 +409,7 @@ impl AppState {
                 if !keyword_filtered && !keywords.is_empty() {
                     items.retain(|item| item_matches_keywords(item, &keywords));
                 }
+                items.retain(|item| item_matches_runtime_path_type(item, &self.filters));
                 // Hide non-native platform paths when the setting is enabled.
                 if self.settings.filter_foreign_paths {
                     items.retain(|item| {
@@ -407,6 +457,9 @@ impl AppState {
             }
 
             for item in page.drain(..) {
+                if !item_matches_runtime_path_type(&item, &self.filters) {
+                    continue;
+                }
                 if self.settings.filter_foreign_paths
                     && item.meta_type == "path"
                     && !crate::core::types::path_is_native(&item.full_text)
@@ -2077,6 +2130,225 @@ fn item_texts_for_merge(items: &[&ClipboardItem]) -> String {
     items.iter().map(|item| item.full_text.as_str()).collect()
 }
 
+// --- ── Transfer station methods ── ---
+
+impl AppState {
+    pub fn transfer_available(&self) -> bool {
+        self.settings.transfer_station_enabled
+            && self.settings.sync_backends.iter().any(|backend| {
+                backend.enabled
+                    && (self.settings.transfer_backend_id.is_empty()
+                        || backend.id == self.settings.transfer_backend_id)
+            })
+    }
+
+    pub fn toggle_transfer_filter(&mut self) {
+        if !self.transfer_filter_active && !self.transfer_available() {
+            self.toast_message = Some(I18nKey::TransferNoBackend.text().into());
+            return;
+        }
+        self.transfer_filter_active = !self.transfer_filter_active;
+        if self.transfer_filter_active {
+            self.queue_transfer_command(
+                crate::services::transfer_station::TransferCommand::Refresh,
+            );
+        }
+    }
+
+    fn queue_transfer_command(
+        &mut self,
+        command: crate::services::transfer_station::TransferCommand,
+    ) {
+        self.pending_transfer_commands.push_back(command);
+        self.transfer_busy = true;
+    }
+
+    pub fn upload_to_transfer_station(&mut self, item_id: i64) {
+        if !self.transfer_available() {
+            self.toast_message = Some(I18nKey::TransferNoBackend.text().into());
+            return;
+        }
+        let item = match self.db.get_by_id(item_id).ok().flatten() {
+            Some(item) if item.content_type == ContentType::File => item,
+            _ => {
+                self.toast_message = Some(I18nKey::TransferNotFile.text().into());
+                return;
+            }
+        };
+        let file_data = FileData::from_json(&item.file_data);
+        if file_data.is_transfer() || !file_data.remote_hash.is_empty() {
+            self.toast_message = Some(I18nKey::TransferAlreadyUploaded.text().into());
+            return;
+        }
+        if file_data.files.len() != 1 {
+            self.toast_message = Some(I18nKey::TransferSingleFileOnly.text().into());
+            return;
+        }
+        let file = &file_data.files[0];
+        if file.is_dir || !std::path::Path::new(&file.path).is_file() {
+            self.toast_message = Some(I18nKey::TransferInvalidPath.text().into());
+            return;
+        }
+        if !self.pending_transfer_uploads.insert(file.path.clone()) {
+            return;
+        }
+        self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Upload {
+            source_path: file.path.clone(),
+            file_name: file.name.clone(),
+        });
+    }
+
+    pub fn download_transfer_entry(&mut self, hash: &str) {
+        if self.pending_transfer_downloads.contains(hash) {
+            return;
+        }
+        let Some(entry) = self
+            .transfer_entries
+            .iter()
+            .find(|resolved| resolved.entry.hash == hash)
+            .map(|resolved| resolved.entry.clone())
+        else {
+            self.toast_message = Some(I18nKey::TransferEntryExpired.text().into());
+            return;
+        };
+        self.pending_transfer_downloads.insert(hash.to_string());
+        self.queue_transfer_command(
+            crate::services::transfer_station::TransferCommand::Download { entry },
+        );
+    }
+
+    pub fn delete_transfer_entries(&mut self, hashes: &[String]) {
+        let entries = hashes
+            .iter()
+            .filter_map(|hash| {
+                self.transfer_entries
+                    .iter()
+                    .find(|resolved| resolved.entry.hash == *hash)
+                    .map(|resolved| resolved.entry.clone())
+            })
+            .collect::<Vec<_>>();
+        for entry in entries {
+            self.queue_transfer_command(
+                crate::services::transfer_station::TransferCommand::Delete { entry },
+            );
+        }
+    }
+
+    pub fn delete_transfer_entry(&mut self, hash: &str) {
+        let Some(entry) = self
+            .transfer_entries
+            .iter()
+            .find(|resolved| resolved.entry.hash == hash)
+            .map(|resolved| resolved.entry.clone())
+        else {
+            self.toast_message = Some(I18nKey::TransferEntryExpired.text().into());
+            return;
+        };
+        self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Delete {
+            entry,
+        });
+    }
+
+    pub fn open_transfer_location(&self, path: &str) {
+        if !std::path::Path::new(path).is_file() {
+            return;
+        }
+        let path = path.to_string();
+        std::thread::spawn(move || reveal_file_location(&path));
+    }
+
+    /// Get visible items based on current filter mode.
+    /// In transfer mode, returns converted manifest entries. Otherwise returns DB items.
+    pub fn visible_items(&self) -> Vec<ClipboardItem> {
+        if self.transfer_filter_active {
+            self.transfer_entries
+                .iter()
+                .map(|re| {
+                    let uploaded_at: chrono::DateTime<chrono::Utc> =
+                        chrono::DateTime::parse_from_rfc3339(&re.entry.uploaded_at)
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .unwrap_or_else(|_| chrono::Utc::now());
+                    // Determine status tags based on is_local
+                    let status_tags = if self.pending_transfer_downloads.contains(&re.entry.hash) {
+                        vec![TagInfo {
+                            id: -3,
+                            uid: String::new(),
+                            name: I18nKey::TransferDownloading.text().to_string(),
+                            color: "#3B82F6".to_string(),
+                            updated_at: String::new(),
+                        }]
+                    } else if re.is_local {
+                        vec![TagInfo {
+                            id: -1,
+                            uid: String::new(),
+                            name: I18nKey::TransferLocal.text().to_string(),
+                            color: "#22C55E".to_string(),
+                            updated_at: String::new(),
+                        }]
+                    } else {
+                        vec![TagInfo {
+                            id: -2,
+                            uid: String::new(),
+                            name: I18nKey::TransferCloud.text().to_string(),
+                            color: "#3B82F6".to_string(),
+                            updated_at: String::new(),
+                        }]
+                    };
+                    ClipboardItem {
+                        id: transfer_item_id(&re.entry.hash),
+                        content_type: ContentType::File,
+                        full_text: re.entry.name.clone(),
+                        content_hash: 0,
+                        created_at: uploaded_at,
+                        updated_at: uploaded_at,
+                        image_path: String::new(),
+                        image_width: 0,
+                        image_height: 0,
+                        rich_data: String::new(),
+                        file_data: FileData {
+                            files: vec![crate::core::types::FileInfo {
+                                name: re.entry.name.clone(),
+                                path: re.local_path.clone().unwrap_or_default(),
+                                is_dir: false,
+                            }],
+                            transfer: true,
+                            remote_hash: re.entry.hash.clone(),
+                        }
+                        .to_json(),
+                        is_favorite: false,
+                        note: String::new(),
+                        source_app_name: String::new(),
+                        source_app_icon: String::new(),
+                        size: re.entry.size as i64,
+                        tags: status_tags,
+                        meta_type: "transfer".to_string(),
+                        custom_hotkey: String::new(),
+                        custom_hotkey_format: String::new(),
+                    }
+                })
+                .collect()
+        } else {
+            // Transfer records persist local cache/original paths in the shared
+            // clipboard table, but they are internal backing records rather than
+            // ordinary clipboard history. Render them only through the dedicated
+            // transfer view above, otherwise an uploaded file appears twice.
+            self.items
+                .iter()
+                .filter(|item| {
+                    item.content_type != ContentType::File
+                        || !FileData::from_json(&item.file_data).is_transfer()
+                })
+                .cloned()
+                .collect()
+        }
+    }
+}
+
+fn transfer_item_id(hash: &str) -> i64 {
+    let value = u64::from_str_radix(hash.get(..15).unwrap_or_default(), 16).unwrap_or(1);
+    -(value.max(1) as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2132,6 +2404,13 @@ mod tests {
             filters: ClipboardFilters::default(),
             has_hotkey_items: false,
             has_favorite_items: false,
+            has_transfer_files: false,
+            transfer_filter_active: false,
+            transfer_entries: Vec::new(),
+            pending_transfer_commands: VecDeque::new(),
+            pending_transfer_downloads: HashSet::new(),
+            pending_transfer_uploads: HashSet::new(),
+            transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -2157,6 +2436,42 @@ mod tests {
         (state, dirty)
     }
 
+    #[test]
+    fn path_text_type_filter_separates_files_from_directories_and_missing_paths() {
+        use crate::services::file_status::CachedPathKind;
+
+        assert!(path_text_matches_selected_types(
+            true,
+            false,
+            Some(CachedPathKind::File)
+        ));
+        assert!(!path_text_matches_selected_types(
+            true,
+            false,
+            Some(CachedPathKind::Directory)
+        ));
+        assert!(!path_text_matches_selected_types(
+            true,
+            false,
+            Some(CachedPathKind::Missing)
+        ));
+        assert!(path_text_matches_selected_types(
+            false,
+            true,
+            Some(CachedPathKind::Directory)
+        ));
+        assert!(path_text_matches_selected_types(false, true, None));
+        assert!(path_text_matches_selected_types(
+            true,
+            true,
+            Some(CachedPathKind::File)
+        ));
+        assert!(path_text_matches_selected_types(
+            true,
+            true,
+            Some(CachedPathKind::Directory)
+        ));
+    }
     #[test]
     fn item_hotkey_update_is_local_metadata_only() {
         let (mut state, dirty) = test_state();
@@ -2257,6 +2572,176 @@ mod tests {
         let (state, _dirty) = test_state();
         let item = make_item(1, ContentType::File, false, "doc.pdf");
         assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn transfer_backing_records_are_visible_only_in_transfer_view() {
+        let (mut state, _dirty) = test_state();
+        let ordinary = make_item(1, ContentType::File, false, "report.pdf");
+        let mut backing = make_item(2, ContentType::File, false, "report.pdf");
+        backing.meta_type = "transfer".into();
+        backing.file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "report.pdf".into(),
+                path: "C:\\cache\\report.pdf".into(),
+                is_dir: false,
+            }],
+            transfer: true,
+            remote_hash: "a".repeat(64),
+        }
+        .to_json();
+        state.items = vec![ordinary.clone(), backing];
+
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, ordinary.id);
+
+        state.transfer_filter_active = true;
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: "a".repeat(64),
+                blob_id: String::new(),
+                name: "report.pdf".into(),
+                ext: "pdf".into(),
+                size: 42,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+            },
+            is_local: true,
+            local_path: Some("C:\\cache\\report.pdf".into()),
+        }];
+
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert!(visible[0].id < 0);
+        assert!(FileData::from_json(&visible[0].file_data).is_transfer());
+
+        state.toggle_type_filter("file");
+        let visible_after_db_filter = state.visible_items();
+        assert_eq!(visible_after_db_filter.len(), 1);
+        assert!(visible_after_db_filter[0].id < 0);
+    }
+
+    #[test]
+    fn transfer_download_is_tracked_per_entry_and_deduplicated() {
+        let (mut state, _dirty) = test_state();
+        let hash = "b".repeat(64);
+        state.transfer_filter_active = true;
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: hash.clone(),
+                blob_id: String::new(),
+                name: "archive.zip".into(),
+                ext: "zip".into(),
+                size: 42,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+            },
+            is_local: false,
+            local_path: None,
+        }];
+
+        state.download_transfer_entry(&hash);
+        state.download_transfer_entry(&hash);
+
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert!(state.pending_transfer_downloads.contains(&hash));
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].tags[0].name, I18nKey::TransferDownloading.text());
+    }
+
+    #[test]
+    fn transfer_upload_is_deduplicated_while_the_source_is_pending() {
+        let (mut state, _dirty) = test_state();
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-pending-upload-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("file.bin");
+        std::fs::write(&path, b"test").unwrap();
+        let mut item = make_item(0, ContentType::File, false, "file.bin");
+        item.content_hash = 0xabcdef;
+        item.file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "file.bin".into(),
+                path: path.to_string_lossy().into_owned(),
+                is_dir: false,
+            }],
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+        let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
+        state.settings.transfer_station_enabled = true;
+        state
+            .settings
+            .sync_backends
+            .push(crate::core::settings::BackendConfig {
+                id: "local".into(),
+                enabled: true,
+                backend_type: "local_folder".into(),
+                name: "local".into(),
+                folder_path: directory.to_string_lossy().into_owned(),
+                device_name: "test".into(),
+                last_sync_at: String::new(),
+                last_item_count: 0,
+                last_tag_count: 0,
+                sync_interval_secs: None,
+                webdav_url: String::new(),
+                webdav_root_url: String::new(),
+                webdav_path: String::new(),
+                webdav_username: String::new(),
+                webdav_password: String::new(),
+            });
+
+        state.upload_to_transfer_station(item_id);
+        state.upload_to_transfer_station(item_id);
+
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert!(state
+            .pending_transfer_uploads
+            .contains(path.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn transfer_batch_delete_queues_only_existing_entries() {
+        let (mut state, _dirty) = test_state();
+        let first_hash = "c".repeat(64);
+        let second_hash = "d".repeat(64);
+        state.transfer_entries = [first_hash.clone(), second_hash.clone()]
+            .into_iter()
+            .map(|hash| crate::core::transfer_types::ResolvedEntry {
+                entry: crate::core::transfer_types::ManifestEntry {
+                    hash,
+                    blob_id: String::new(),
+                    name: "file.bin".into(),
+                    ext: "bin".into(),
+                    size: 42,
+                    uploaded_at: chrono::Utc::now().to_rfc3339(),
+                    expires_at: String::new(),
+                    uploaded_by: "test".into(),
+                },
+                is_local: false,
+                local_path: None,
+            })
+            .collect();
+
+        state.delete_transfer_entries(&[first_hash, "e".repeat(64), second_hash]);
+
+        assert_eq!(state.pending_transfer_commands.len(), 2);
+        assert!(state
+            .pending_transfer_commands
+            .iter()
+            .all(|command| matches!(
+                command,
+                crate::services::transfer_station::TransferCommand::Delete { .. }
+            )));
     }
 
     #[test]

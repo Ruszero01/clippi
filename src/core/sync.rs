@@ -52,7 +52,60 @@ pub trait SyncBackend: Send + Sync {
     fn list_remote_blobs(&self) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
+
+    // --- ── Transfer station file manifest methods ── ---
+
+    /// Pull the transfer station file manifest (`clippi_files.json`).
+    fn pull_file_manifest(&self) -> Result<crate::core::transfer_types::ManifestSnapshot, String> {
+        Err("not supported".into())
+    }
+
+    /// Push the transfer station file manifest (atomic write).
+    fn push_file_manifest(
+        &self,
+        _manifest: &crate::core::transfer_types::FileManifest,
+        _expected_revision: Option<&str>,
+    ) -> Result<String, crate::core::transfer_types::ManifestWriteError> {
+        Err(crate::core::transfer_types::ManifestWriteError::Other(
+            "not supported".into(),
+        ))
+    }
+
+    /// Stream an immutable file blob to `{remote}/files/{blob_key}`.
+    fn upload_file_blob(
+        &self,
+        _blob_key: &str,
+        _ext: &str,
+        _reader: &mut dyn std::io::Read,
+        _content_length: u64,
+    ) -> Result<(), String> {
+        Err("not supported".into())
+    }
+
+    /// Stream a file blob from `{remote}/files/{blob_key}` into `writer`.
+    /// Implementations must stop after `max_bytes + 1` so callers can reject
+    /// oversized content without buffering the response.
+    fn download_file_blob(
+        &self,
+        _blob_key: &str,
+        _ext: &str,
+        _writer: &mut dyn std::io::Write,
+        _max_bytes: u64,
+    ) -> Result<u64, String> {
+        Err("not supported".into())
+    }
+
+    /// Delete a file blob from `{remote}/files/{blob_key}`.
+    fn delete_file_blob(&self, _blob_key: &str, _ext: &str) -> Result<(), String> {
+        Err("not supported".into())
+    }
 }
+
+/// Internal backend signal indicating that no remote sync snapshot exists yet.
+/// The sync service treats this as an empty remote and creates the file on push.
+pub const SYNC_PULL_NOT_FOUND: &str = "@@not_found";
+/// Internal signal that a conditional push lost a race with another client.
+pub const SYNC_PUSH_CONFLICT: &str = "@@push_conflict";
 
 /// Top-level sync payload stored as JSON on the cloud folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -913,6 +913,69 @@ impl Database {
         Ok(())
     }
 
+    // --- ── Transfer station queries ── ---
+
+    /// Get all clipboard items with `meta_type = "transfer"`.
+    pub fn get_transfer_items(&self) -> SqlResult<Vec<ClipboardItem>> {
+        let query = format!(
+            "SELECT {} FROM clipboard_items WHERE content_type = 'file' AND meta_type = 'transfer' ORDER BY updated_at DESC",
+            item_select_columns()
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let items: Vec<ClipboardItem> = stmt
+            .query_map([], row_to_item)?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    /// Get ordinary file entries whose transfer marker is derived from the
+    /// current remote manifest. Transfer backing records are excluded.
+    pub fn get_original_file_items(&self) -> SqlResult<Vec<ClipboardItem>> {
+        let query = format!(
+            "SELECT {} FROM clipboard_items WHERE content_type = 'file' AND meta_type != 'transfer' ORDER BY updated_at DESC",
+            item_select_columns()
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let items = stmt
+            .query_map([], row_to_item)?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    /// Store a transfer hash derived by comparing local file contents with the
+    /// current manifest. This value is a local cache, not upload state.
+    pub fn set_derived_file_transfer_hash(
+        &self,
+        item_id: i64,
+        remote_hash: Option<&str>,
+    ) -> SqlResult<bool> {
+        let remote_hash = remote_hash.unwrap_or_default();
+        let changed = self.conn.execute(
+            "UPDATE clipboard_items
+             SET file_data = json_set(file_data, '$.remote_hash', ?1)
+             WHERE id = ?2
+               AND content_type = 'file'
+               AND meta_type != 'transfer'
+               AND json_valid(file_data)
+               AND COALESCE(json_extract(file_data, '$.remote_hash'), '') != ?1",
+            params![remote_hash, item_id],
+        )?;
+        Ok(changed > 0)
+    }
+    /// Delete a transfer item by its remote_hash (stored in file_data JSON).
+    /// Returns true if an item was deleted.
+    pub fn delete_transfer_by_hash(&self, remote_hash: &str) -> SqlResult<bool> {
+        let mut stmt = self.conn.prepare(
+            "DELETE FROM clipboard_items
+             WHERE content_type = 'file'
+               AND meta_type = 'transfer'
+               AND json_valid(file_data)
+               AND json_extract(file_data, '$.remote_hash') = ?1",
+        )?;
+        let deleted = stmt.execute(rusqlite::params![remote_hash])?;
+        Ok(deleted > 0)
+    }
+
     // --- ── Tombstone operations ── ---
 
     /// Record a deleted item tombstone for sync propagation.
@@ -1103,7 +1166,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let non_fav_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 0",
+            "SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer'",
             [],
             |row| row.get(0),
         )?;
@@ -1112,7 +1175,7 @@ impl Database {
         }
         let excess = (non_fav_count - max_items as i64) as usize;
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM clipboard_items WHERE is_favorite = 0 ORDER BY created_at ASC",
+            "SELECT id FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer' ORDER BY created_at ASC",
         )?;
         let all_ids: Vec<i64> = stmt
             .query_map([], |row| row.get(0))?
@@ -1135,7 +1198,8 @@ impl Database {
         let cutoff = format!("-{} days", retention_days);
         let mut stmt = self.conn.prepare(
             "SELECT id, content_hash, content_type, is_favorite, custom_hotkey FROM clipboard_items \
-             WHERE is_favorite = 0 AND julianday(updated_at) < julianday('now', ?1)",
+             WHERE is_favorite = 0 AND meta_type != 'transfer' \
+               AND julianday(updated_at) < julianday('now', ?1)",
         )?;
         let expired_items: Vec<PrunedClipboardItem> = stmt
             .query_map(params![&cutoff], |row| {
@@ -2061,6 +2125,32 @@ mod tests {
         let removed = db.prune_excess_non_favorites(0).unwrap();
         assert!(removed.is_empty());
         assert_eq!(count_items(&db), 2);
+    }
+
+    #[test]
+    fn transfer_backing_rows_do_not_consume_history_limits_or_expire() {
+        let (_path, db) = temp_db("prune-transfer-backing");
+        insert_item(&db, 1, "ordinary", "2025-01-01T00:00:00Z");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items
+                 (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES ('file', 'transfer.bin', 2, '2020-01-01T00:00:00Z',
+                         '2020-01-01T00:00:00Z', 'transfer')",
+                [],
+            )
+            .unwrap();
+
+        assert!(db.prune_excess_non_favorites(1).unwrap().is_empty());
+        assert_eq!(db.prune_expired_items(1).unwrap().len(), 1);
+        assert_eq!(count_items(&db), 1);
+        let remaining_meta: String = db
+            .conn
+            .query_row("SELECT meta_type FROM clipboard_items", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining_meta, "transfer");
     }
 
     #[test]

@@ -186,6 +186,11 @@ define_i18n! {
     BackendPhPass:      ("密码", "Password"),
     BackendNameRequired:        ("请输入后端名称", "Please enter a backend name"),
     BackendDeleteConfirmMsg:    ("确定要删除此后端吗？此操作不可撤销", "Delete this backend? This cannot be undone."),
+    BackendTooltipSetTransfer:  ("设为中转后端", "Use for transfer station"),
+    BackendTooltipEnableTransfer:("请先开启文件中转站", "Enable transfer station first"),
+    BackendTooltipTransferActive:("当前中转后端", "Current transfer backend"),
+    BackendTooltipEdit:         ("编辑后端", "Edit backend"),
+    BackendTooltipDelete:       ("删除后端", "Delete backend"),
 
     // ─── Cache cleanup ───
     SettingCleanup:         ("缓存清理", "Cache cleanup"),
@@ -327,6 +332,33 @@ define_i18n! {
 
     // ─── Data operation ───
     ErrDataOp:              ("数据操作失败", "Data operation failed"),
+
+    // ─── Transfer station ───
+    TransferStation:         ("文件中转站", "Transfer Station"),
+    UploadToTransfer:        ("上传到中转站", "Upload to Station"),
+    RemoveFromTransfer:      ("从中转站删除", "Remove from Station"),
+    RemoveSelectedFromTransfer: ("从中转站删除", "Remove from Station"),
+    DownloadTransfer:        ("下载文件", "Download"),
+    TransferCloud:           ("云端", "Cloud"),
+    TransferLocal:           ("本地", "Local"),
+    TransferDownloading:     ("下载中", "Downloading"),
+    TransferAlreadyUploaded: ("已在中转站中", "Already in station"),
+    TransferNoBackend:       ("请先配置并启用后端", "Configure and enable a backend first"),
+    TransferBusy:            ("中转任务进行中，请稍后重试", "Transfer operation in progress; try again shortly"),
+    TransferNotFile:         ("不是文件条目", "Not a file item"),
+    TransferInvalidPath:     ("文件路径无效", "Invalid file path"),
+    TransferEntryExpired:    ("条目已失效", "Entry expired"),
+    TransferUploaded:        ("已上传: {0}", "Uploaded: {0}"),
+    TransferDownloaded:      ("已下载: {0}", "Downloaded: {0}"),
+    TransferDeleted:         ("已删除: {0}", "Deleted: {0}"),
+    TransferUploadFailed:    ("上传失败: {0}", "Upload failed: {0}"),
+    TransferDownloadFailed:  ("下载失败: {0}", "Download failed: {0}"),
+    TransferDeleteFailed:    ("删除失败: {0}", "Delete failed: {0}"),
+    TransferSingleFileOnly:   ("中转站目前仅支持单个文件", "Transfer station currently supports one file at a time"),
+    TransferRetention:        ("自动过期", "Auto expiration"),
+    TransferRetentionDays:    ("{0}天", "{0}d"),
+    TransferKeepForever:      ("永久", "Forever"),
+    TransferBackend:          ("中转后端", "Transfer backend"),
 
     // ─── Search bar / Filters ───
     FilterTextLabel:        ("文本", "Text"),

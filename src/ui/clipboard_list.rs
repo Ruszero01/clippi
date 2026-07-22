@@ -48,8 +48,10 @@ fn macos_control_modifier_pressed() -> bool {
 /// (e.g. RemoveBlacklist { app_name: String } for hotkey settings).
 #[derive(Clone)]
 pub(crate) enum ConfirmDialogState {
-    DeleteSingle { id: i64 },
-    DeleteBatch { count: usize },
+    Single { id: i64 },
+    Batch { count: usize },
+    Transfer { hash: String },
+    TransferBatch { hashes: Vec<String> },
 }
 
 pub enum ClipboardListEvent {
@@ -252,7 +254,7 @@ impl ClipboardListView {
     /// Use after mutations (toggle_favorite, tag ops, delete) to keep the list
     /// in sync. Items retain their current order; re-sort on next window open.
     pub(crate) fn sync_items_from_state(&mut self, cx: &mut Context<Self>) {
-        let app_items = self.state.read(cx).items.clone();
+        let app_items = self.state.read(cx).visible_items();
         self.item_sizes = Rc::new(Self::compute_sizes(&app_items, &self.card_height_mode));
         self.items = app_items;
         cx.notify();
@@ -552,14 +554,46 @@ impl ClipboardListView {
             .unwrap_or(TAG_PICKER_FALLBACK_Y)
     }
 
+    fn selected_transfer_hashes(&self) -> Vec<String> {
+        self.selected_ids
+            .iter()
+            .filter_map(|selected_id| {
+                let item = self.items.iter().find(|item| item.id == *selected_id)?;
+                let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                (item.id < 0 && item.meta_type == "transfer" && !file_data.remote_hash.is_empty())
+                    .then_some(file_data.remote_hash)
+            })
+            .collect()
+    }
+
+    fn show_transfer_batch_delete_confirm(&mut self, cx: &mut Context<Self>) {
+        let hashes = self.selected_transfer_hashes();
+        if hashes.is_empty() {
+            return;
+        }
+        self.confirm_dialog = Some(ConfirmDialogState::TransferBatch { hashes });
+        cx.notify();
+    }
+
     /// Show the delete confirmation dialog for selected item(s).
     pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) {
-        if self.selected_count > 1 {
+        let transfer_hashes = self.selected_transfer_hashes();
+        if !transfer_hashes.is_empty() && transfer_hashes.len() == self.selected_ids.len() {
+            if transfer_hashes.len() == 1 {
+                self.confirm_dialog = Some(ConfirmDialogState::Transfer {
+                    hash: transfer_hashes[0].clone(),
+                });
+            } else {
+                self.confirm_dialog = Some(ConfirmDialogState::TransferBatch {
+                    hashes: transfer_hashes,
+                });
+            }
+        } else if self.selected_count > 1 {
             let count = self.selected_ids.len();
-            self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
+            self.confirm_dialog = Some(ConfirmDialogState::Batch { count });
         } else if let Some(idx) = self.selected_index {
             if let Some(item) = self.items.get(idx) {
-                self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle { id: item.id });
+                self.confirm_dialog = Some(ConfirmDialogState::Single { id: item.id });
             }
         }
         cx.notify();
@@ -631,6 +665,12 @@ impl ClipboardListView {
 
     pub fn context_menu_is_batch(&self) -> bool {
         self.context_menu_is_batch
+    }
+
+    pub fn context_menu_is_transfer_batch(&self) -> bool {
+        self.context_menu_is_batch
+            && !self.selected_ids.is_empty()
+            && self.selected_transfer_hashes().len() == self.selected_ids.len()
     }
 
     pub fn can_merge_selected_items(&self, cx: &App) -> bool {
@@ -770,12 +810,6 @@ impl ClipboardListView {
                 .update(cx, |s, _cx| s.toggle_item_tag(target_id, tag_id));
         }
         self.sync_items_from_state(cx);
-        // --- Keep the affected item selected and visible. ---
-        // --- (updated_at is bumped but position is preserved — see AppState) ---
-        // --- Skip in batch mode to preserve multi-selection state. ---
-        if !self.tag_picker_is_batch {
-            self.scroll_to_item_if_visible(target_id, cx);
-        }
     }
 
     pub fn create_tag_from_picker(&mut self, name: &str, cx: &mut Context<Self>) {
@@ -793,14 +827,11 @@ impl ClipboardListView {
             self.state.update(cx, |s, _cx| s.clear_item_tags(target_id));
         }
         self.sync_items_from_state(cx);
-        if !self.tag_picker_is_batch {
-            self.scroll_to_item_if_visible(target_id, cx);
-        }
     }
 
-    /// After a tag/favorite/note operation bumps `updated_at`, keep the affected
-    /// item selected and in view. The item retains its current list position;
-    /// re-sort happens on next window open.
+    /// Keep an affected item selected and visible when an operation explicitly
+    /// needs to relocate it. Tag and hotkey metadata updates do not use this
+    /// helper because they must preserve the current scroll offset.
     fn scroll_to_item_if_visible(&mut self, item_id: i64, cx: &mut Context<Self>) {
         if item_id <= 0 {
             return;
@@ -1057,7 +1088,7 @@ impl ClipboardListView {
                 if let Some(ref item) = self.context_menu_item {
                     let id = item.id;
                     self.hide_context_menu(cx);
-                    self.confirm_dialog = Some(ConfirmDialogState::DeleteSingle { id });
+                    self.confirm_dialog = Some(ConfirmDialogState::Single { id });
                     return; // Don't call hide_context_menu again at end
                 }
             }
@@ -1067,8 +1098,11 @@ impl ClipboardListView {
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
-                self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
+                self.confirm_dialog = Some(ConfirmDialogState::Batch { count });
                 cx.notify();
+            }
+            "batch_delete_transfer" => {
+                self.show_transfer_batch_delete_confirm(cx);
             }
             "open_image" => {
                 if let Some(ref item) = self.context_menu_item {
@@ -1089,6 +1123,42 @@ impl ClipboardListView {
                     let item_id = item.id;
                     self.state.update(cx, |s, _cx| s.paste_file_path(item_id));
                     self.sync_items_from_state_for_usage(cx);
+                }
+            }
+            "upload_to_transfer" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let item_id = item.id;
+                    self.state
+                        .update(cx, |s, _cx| s.upload_to_transfer_station(item_id));
+                    self.sync_items_from_state(cx);
+                }
+            }
+            "download_transfer" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let fd = crate::core::types::FileData::from_json(&item.file_data);
+                    let hash = fd.remote_hash.clone();
+                    self.state
+                        .update(cx, |s, _cx| s.download_transfer_entry(&hash));
+                    self.sync_items_from_state(cx);
+                }
+            }
+            "delete_transfer" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let fd = crate::core::types::FileData::from_json(&item.file_data);
+                    self.confirm_dialog = Some(ConfirmDialogState::Transfer {
+                        hash: fd.remote_hash,
+                    });
+                    cx.notify();
+                }
+            }
+            "open_transfer_location" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                    if let Some(file) = file_data.files.first() {
+                        let path = file.path.clone();
+                        self.state
+                            .update(cx, |state, _cx| state.open_transfer_location(&path));
+                    }
                 }
             }
             "paste_image_bitmap" => {
@@ -1151,6 +1221,34 @@ impl ClipboardListView {
 
         let plain = self.state.read(cx).settings.copy_as_plain_text;
         match action {
+            "download_transfer" => {
+                if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
+                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                    let hash = file_data.remote_hash;
+                    self.state
+                        .update(cx, |state, _cx| state.download_transfer_entry(&hash));
+                    self.sync_items_from_state(cx);
+                }
+            }
+            "delete_transfer" => {
+                if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
+                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                    self.confirm_dialog = Some(ConfirmDialogState::Transfer {
+                        hash: file_data.remote_hash,
+                    });
+                    cx.notify();
+                }
+            }
+            "open_transfer_location" => {
+                if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
+                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                    if let Some(file) = file_data.files.first() {
+                        let path = file.path.clone();
+                        self.state
+                            .update(cx, |state, _cx| state.open_transfer_location(&path));
+                    }
+                }
+            }
             "copy" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
@@ -1209,8 +1307,7 @@ impl ClipboardListView {
             "delete" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
-                        self.confirm_dialog =
-                            Some(ConfirmDialogState::DeleteSingle { id: item.id });
+                        self.confirm_dialog = Some(ConfirmDialogState::Single { id: item.id });
                         cx.notify();
                     }
                 }
@@ -1221,8 +1318,11 @@ impl ClipboardListView {
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
-                self.confirm_dialog = Some(ConfirmDialogState::DeleteBatch { count });
+                self.confirm_dialog = Some(ConfirmDialogState::Batch { count });
                 cx.notify();
+            }
+            "batch_delete_transfer" => {
+                self.show_transfer_batch_delete_confirm(cx);
             }
             "open_image" => {
                 if let Some(index) = self.hovered_index {
@@ -1827,6 +1927,44 @@ impl Render for ClipboardListView {
                                                                 } else if let Some(item) =
                                                                     this.items.get(idx)
                                                                 {
+                                                                    if item.id < 0
+                                                                        && item.meta_type
+                                                                            == "transfer"
+                                                                    {
+                                                                        let file_data =
+                                                                            crate::core::types::FileData::from_json(
+                                                                                &item.file_data,
+                                                                            );
+                                                                        let hash =
+                                                                            file_data.remote_hash;
+                                                                        let local_path =
+                                                                            file_data.files.first().map(
+                                                                                |file| {
+                                                                                    file.path.clone()
+                                                                                },
+                                                                            );
+                                                                        this.state.update(
+                                                                            cx,
+                                                                            |state, _cx| {
+                                                                                if let Some(path) =
+                                                                                    local_path
+                                                                                        .filter(|path| {
+                                                                                            !path.is_empty()
+                                                                                        })
+                                                                                {
+                                                                                    state.open_transfer_location(
+                                                                                        &path,
+                                                                                    );
+                                                                                } else {
+                                                                                    state.download_transfer_entry(
+                                                                                        &hash,
+                                                                                    );
+                                                                                }
+                                                                            },
+                                                                        );
+                                                                        this.sync_items_from_state(cx);
+                                                                        return;
+                                                                    }
                                                                     let item_id = item.id;
                                                                     this.state.update(
                                                                         cx,

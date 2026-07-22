@@ -227,6 +227,13 @@ pub struct FileInfo {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct FileData {
     pub files: Vec<FileInfo>,
+    /// Whether this is a transfer-station entry (uploaded to cloud).
+    #[serde(default)]
+    pub transfer: bool,
+    /// Remote blob hash reference for transfer-station entries.
+    /// Matches `ManifestEntry.hash`. Empty for non-transfer items.
+    #[serde(default)]
+    pub remote_hash: String,
 }
 
 impl FileData {
@@ -235,6 +242,9 @@ impl FileData {
     }
 
     pub fn from_json(s: &str) -> Self {
+        if s.trim().is_empty() {
+            return Self::default();
+        }
         serde_json::from_str(s).unwrap_or_else(|e| {
             log::warn!("Failed to deserialize FileData: {e}");
             Self::default()
@@ -247,6 +257,11 @@ impl FileData {
             .map(|f| f.name.clone())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Whether this is a transfer-station entry.
+    pub fn is_transfer(&self) -> bool {
+        self.transfer && !self.remote_hash.is_empty()
     }
 }
 
@@ -917,6 +932,16 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blank_file_data_json_returns_default() {
+        for json in ["", " ", "\r\n\t"] {
+            let data = FileData::from_json(json);
+            assert!(data.files.is_empty());
+            assert!(!data.transfer);
+            assert!(data.remote_hash.is_empty());
+        }
+    }
 
     #[test]
     fn test_format_relative_time_supports_months_and_years() {

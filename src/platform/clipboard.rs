@@ -200,7 +200,10 @@ fn detect_files(
                 }
 
                 // --- Multi-file, single directory, or single non-image file → File type ---
-                let file_data = FileData { files: entries };
+                let file_data = FileData {
+                    files: entries,
+                    ..Default::default()
+                };
                 let mut hasher = DefaultHasher::new();
                 for f in &file_data.files {
                     f.path.hash(&mut hasher);

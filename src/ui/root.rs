@@ -100,7 +100,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Self {
         let app_state = state.read(cx);
-        let items = app_state.items.clone();
+        let items = app_state.visible_items();
         let window_appearance = window.appearance();
         let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window_appearance));
         let list_view = cx.new(|cx| {
@@ -149,7 +149,7 @@ impl RootView {
             &window_manager,
             move |this, _wm, event: &WindowManagerEvent, cx| match event {
                 WindowManagerEvent::ClipboardChanged => {
-                    let items = this.state.read(cx).items.clone();
+                    let items = this.state.read(cx).visible_items();
                     let scroll_to_top = this.state.read(cx).settings.auto_scroll_to_top;
                     this.list_view.update(cx, |list, cx| {
                         list.refresh_settings_from_state(scroll_to_top, cx);
@@ -188,10 +188,9 @@ impl RootView {
                 WindowManagerEvent::HotkeyRecordingComplete => {
                     // --- Notify SettingsPanel so it re-renders with the updated ---
                     // --- hotkey display and recording state from AppState. ---
-                    let items = this.state.read(cx).items.clone();
                     this.list_view.update(cx, |list, cx| {
                         list.finish_hotkey_recording_ui(cx);
-                        list.set_items(items, cx);
+                        list.sync_items_from_state(cx);
                     });
                     this.settings_panel.update(cx, |panel, cx| {
                         panel.recording_paste_shortcut = None;
@@ -203,7 +202,23 @@ impl RootView {
                     this.settings_panel.update(cx, |_panel, cx| {
                         cx.notify();
                     });
+                    this.titlebar.update(cx, |_titlebar, cx| {
+                        cx.notify();
+                    });
                     cx.notify();
+                }
+                WindowManagerEvent::FileStatusChanged => {
+                    let path_type_filter_active = {
+                        let state = this.state.read(cx);
+                        state.filters.is_type_active("file") || state.filters.is_type_active("path")
+                    };
+                    if path_type_filter_active {
+                        this.state.update(cx, |state, _cx| state.reload_items());
+                        this.list_view
+                            .update(cx, |list, cx| list.sync_items_from_state(cx));
+                    } else {
+                        this.list_view.update(cx, |_list, cx| cx.notify());
+                    }
                 }
                 WindowManagerEvent::PasteShortcutRecorded { app_name, shortcut } => {
                     this.settings_panel.update(cx, |panel, cx| {
@@ -428,7 +443,7 @@ impl RootView {
                             this.state.update(cx, |state, _cx| state.cancel_edit_item());
                         }
                         EditPanelEvent::Saved => {
-                            let items = this.state.read(cx).items.clone();
+                            let items = this.state.read(cx).visible_items();
                             this.list_view.update(cx, |list, cx| {
                                 list.set_items(items, cx);
                             });
@@ -527,7 +542,7 @@ impl RootView {
                     } => {
                         if *reload_items {
                             this.state.update(cx, |state, _cx| state.reload_items());
-                            let items = this.state.read(cx).items.clone();
+                            let items = this.state.read(cx).visible_items();
                             this.list_view.update(cx, |list_view, cx| {
                                 list_view.refresh_settings_from_state(*scroll_to_top, cx);
                                 list_view.set_items(items, cx);
@@ -1167,6 +1182,7 @@ impl Render for RootView {
                 let menu_y =
                     menu_y + Self::directional_overlay_offset(menu_y, win_h, context_menu_offset);
                 let is_batch = list.read(cx).context_menu_is_batch();
+                let is_transfer_batch = list.read(cx).context_menu_is_transfer_batch();
                 let item = list.read(cx).context_menu_item().cloned();
 
                 // --- Backdrop — click / scroll to dismiss ---
@@ -1198,7 +1214,28 @@ impl Render for RootView {
                         .occlude()
                         .child({
                             let l = list_for_action.clone();
-                            if is_batch {
+                            if is_transfer_batch {
+                                ContextMenu::for_transfer_batch()
+                                    .with_position(menu_x, menu_y, win_w, win_h)
+                                    .theme(self.theme.clone())
+                                    .on_action({
+                                        let l = l.clone();
+                                        move |action, window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.handle_menu_action(action, window, cx);
+                                            });
+                                        }
+                                    })
+                                    .on_dismiss({
+                                        let l = l.clone();
+                                        move |_window, cx| {
+                                            l.update(cx, |lst, cx| {
+                                                lst.hide_context_menu(cx);
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else if is_batch {
                                 let count = l.read(cx).selected_count;
                                 let can_merge = l.read(cx).can_merge_selected_items(cx);
                                 ContextMenu::for_batch(count, can_merge)
@@ -1222,27 +1259,58 @@ impl Render for RootView {
                                     })
                                     .into_any_element()
                             } else if let Some(ref clip_item) = item {
-                                let ctx = MenuItemContext::from_item(clip_item);
-                                ContextMenu::for_item(&ctx)
-                                    .with_position(menu_x, menu_y, win_w, win_h)
-                                    .theme(self.theme.clone())
-                                    .on_action({
-                                        let l = l.clone();
-                                        move |action, window, cx| {
-                                            l.update(cx, |lst, cx| {
-                                                lst.handle_menu_action(action, window, cx);
-                                            });
-                                        }
-                                    })
-                                    .on_dismiss({
-                                        let l = l.clone();
-                                        move |_window, cx| {
-                                            l.update(cx, |lst, cx| {
-                                                lst.hide_context_menu(cx);
-                                            });
-                                        }
-                                    })
-                                    .into_any_element()
+                                // Check if this is a transfer station entry
+                                let fd =
+                                    crate::core::types::FileData::from_json(&clip_item.file_data);
+                                if self.state.read(cx).transfer_filter_active && fd.is_transfer() {
+                                    let is_local = clip_item.tags.iter().any(|t| {
+                                        t.name
+                                            == crate::core::i18n_keys::I18nKey::TransferLocal.text()
+                                    });
+                                    ContextMenu::for_transfer_entry(is_local)
+                                        .with_position(menu_x, menu_y, win_w, win_h)
+                                        .theme(self.theme.clone())
+                                        .on_action({
+                                            let l = l.clone();
+                                            move |action, window, cx| {
+                                                l.update(cx, |lst, cx| {
+                                                    lst.handle_menu_action(action, window, cx);
+                                                });
+                                            }
+                                        })
+                                        .on_dismiss({
+                                            let l = l.clone();
+                                            move |_window, cx| {
+                                                l.update(cx, |lst, cx| {
+                                                    lst.hide_context_menu(cx);
+                                                });
+                                            }
+                                        })
+                                        .into_any_element()
+                                } else {
+                                    let mut ctx = MenuItemContext::from_item(clip_item);
+                                    ctx.transfer_enabled = self.state.read(cx).transfer_available();
+                                    ContextMenu::for_item(&ctx)
+                                        .with_position(menu_x, menu_y, win_w, win_h)
+                                        .theme(self.theme.clone())
+                                        .on_action({
+                                            let l = l.clone();
+                                            move |action, window, cx| {
+                                                l.update(cx, |lst, cx| {
+                                                    lst.handle_menu_action(action, window, cx);
+                                                });
+                                            }
+                                        })
+                                        .on_dismiss({
+                                            let l = l.clone();
+                                            move |_window, cx| {
+                                                l.update(cx, |lst, cx| {
+                                                    lst.hide_context_menu(cx);
+                                                });
+                                            }
+                                        })
+                                        .into_any_element()
+                                }
                             } else {
                                 div().into_any_element()
                             }
@@ -1329,7 +1397,7 @@ impl Render for RootView {
                 // --- Read dialog state and clone what we need before closures ---
                 let dialog = list.read(cx).confirm_dialog_state().cloned();
                 let dialog_element: AnyElement = match dialog {
-                    Some(ConfirmDialogState::DeleteSingle { id }) => ConfirmDialog::delete_single()
+                    Some(ConfirmDialogState::Single { id }) => ConfirmDialog::delete_single()
                         .theme(self.theme.clone())
                         .focus_handle(dialog_focus.clone())
                         .on_confirm({
@@ -1350,29 +1418,71 @@ impl Render for RootView {
                             }
                         })
                         .render_animated(window, cx, confirm_dialog_gen),
-                    Some(ConfirmDialogState::DeleteBatch { count }) => {
-                        ConfirmDialog::delete_batch(count)
+                    Some(ConfirmDialogState::Batch { count }) => ConfirmDialog::delete_batch(count)
+                        .theme(self.theme.clone())
+                        .focus_handle(dialog_focus.clone())
+                        .on_confirm({
+                            let s = app_state.clone();
+                            let l = list.clone();
+                            move |_window, cx| {
+                                s.update(cx, |s, _cx| s.batch_delete());
+                                l.update(cx, |lst, cx| {
+                                    lst.sync_items_from_state(cx);
+                                    lst.dismiss_confirm_dialog(cx);
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let l = list.clone();
+                            move |_window, cx| {
+                                l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                            }
+                        })
+                        .render_animated(window, cx, confirm_dialog_gen),
+                    Some(ConfirmDialogState::TransferBatch { hashes }) => {
+                        ConfirmDialog::delete_batch(hashes.len())
                             .theme(self.theme.clone())
                             .focus_handle(dialog_focus.clone())
                             .on_confirm({
-                                let s = app_state.clone();
-                                let l = list.clone();
+                                let state = app_state.clone();
+                                let list = list.clone();
                                 move |_window, cx| {
-                                    s.update(cx, |s, _cx| s.batch_delete());
-                                    l.update(cx, |lst, cx| {
-                                        lst.sync_items_from_state(cx);
-                                        lst.dismiss_confirm_dialog(cx);
+                                    state.update(cx, |state, _cx| {
+                                        state.delete_transfer_entries(&hashes)
+                                    });
+                                    list.update(cx, |list, cx| {
+                                        list.dismiss_confirm_dialog(cx);
                                     });
                                 }
                             })
                             .on_cancel({
-                                let l = list.clone();
+                                let list = list.clone();
                                 move |_window, cx| {
-                                    l.update(cx, |lst, cx| lst.dismiss_confirm_dialog(cx));
+                                    list.update(cx, |list, cx| list.dismiss_confirm_dialog(cx));
                                 }
                             })
                             .render_animated(window, cx, confirm_dialog_gen)
                     }
+                    Some(ConfirmDialogState::Transfer { hash }) => ConfirmDialog::delete_single()
+                        .theme(self.theme.clone())
+                        .focus_handle(dialog_focus.clone())
+                        .on_confirm({
+                            let state = app_state.clone();
+                            let list = list.clone();
+                            move |_window, cx| {
+                                state.update(cx, |state, _cx| state.delete_transfer_entry(&hash));
+                                list.update(cx, |list, cx| {
+                                    list.dismiss_confirm_dialog(cx);
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let list = list.clone();
+                            move |_window, cx| {
+                                list.update(cx, |list, cx| list.dismiss_confirm_dialog(cx));
+                            }
+                        })
+                        .render_animated(window, cx, confirm_dialog_gen),
                     None => div().into_any_element(),
                 };
 

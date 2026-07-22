@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;
@@ -51,6 +52,13 @@ const CARD_PADDING_X: f32 = 10.0;
 const CARD_ICON_WIDTH: f32 = 36.0;
 const CARD_CONTENT_GAP: f32 = 10.0;
 const MAX_ICON_CACHE_JOBS: usize = 4;
+
+#[derive(Clone, Copy)]
+enum TransferPillKind {
+    Cloud,
+    Local,
+    Downloading,
+}
 
 static ICON_CACHE_JOBS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -987,6 +995,20 @@ impl RenderOnce for ClipboardCard {
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
         let tags = item.tags.clone();
+        let transfer_file_data = if content_type == ContentType::File || meta_type == "transfer" {
+            FileData::from_json(&item.file_data)
+        } else {
+            FileData::default()
+        };
+        let transfer_is_cloud = meta_type == "transfer"
+            && transfer_file_data.is_transfer()
+            && transfer_file_data
+                .files
+                .first()
+                .is_none_or(|file| file.path.is_empty());
+        let source_is_uploaded = content_type == ContentType::File
+            && !transfer_file_data.transfer
+            && !transfer_file_data.remote_hash.is_empty();
         let icon = type_icon(&item);
         let has_qr = has_qr_code(&item);
         let show_source = show_source_app && !item.source_app_name.is_empty();
@@ -1167,18 +1189,23 @@ impl RenderOnce for ClipboardCard {
                 ),
             DisplayKind::File => {
                 // --- Single file: prefer file system icon over source app icon ---
-                let file_icon = serde_json::from_str::<FileData>(&item.file_data)
-                    .ok()
-                    .and_then(|fd| {
-                        if fd.files.len() == 1 {
-                            fd.files
-                                .first()
-                                .and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
-                        } else {
-                            None
-                        }
-                    });
+                let file_icon = if transfer_is_cloud {
+                    None
+                } else {
+                    serde_json::from_str::<FileData>(&item.file_data)
+                        .ok()
+                        .and_then(|fd| {
+                            if fd.files.len() == 1 {
+                                fd.files
+                                    .first()
+                                    .and_then(|fi| cached_file_icon_path(&fi.path, fi.is_dir))
+                            } else {
+                                None
+                            }
+                        })
+                };
                 let effective_icon = file_icon.or(source_icon_path);
+                let fallback_icon = if transfer_is_cloud { "\u{e794}" } else { icon };
                 div()
                     .w(px(36.))
                     .flex()
@@ -1209,7 +1236,7 @@ impl RenderOnce for ClipboardCard {
                                     .text_size(px(18.))
                                     .font_family("iconfont")
                                     .text_color(tag_text)
-                                    .child(icon.to_string())
+                                    .child(fallback_icon.to_string())
                                     .into_any_element()
                             }),
                     )
@@ -1794,20 +1821,11 @@ impl RenderOnce for ClipboardCard {
                                         .border_color(surface),
                                 )
                         } else if img_missing || preview_img_path.is_none() {
-                            let (placeholder_text, placeholder_color, placeholder_icon) =
-                                if img_stale {
-                                    (
-                                        I18nKey::CardStaleFile.text().to_string(),
-                                        danger,
-                                        "\u{e607}",
-                                    )
-                                } else {
-                                    (
-                                        I18nKey::CardImageNotLoaded.text().to_string(),
-                                        text_3,
-                                        "\u{e626}",
-                                    )
-                                };
+                            let (placeholder_color, placeholder_icon) = if img_stale {
+                                (danger, "\u{e607}")
+                            } else {
+                                (text_3, "\u{e626}")
+                            };
                             div()
                                 .flex_1()
                                 .w_full()
@@ -1815,30 +1833,21 @@ impl RenderOnce for ClipboardCard {
                                 .flex()
                                 .items_center()
                                 .justify_center()
+                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
                                 .child(
                                     div()
-                                        .rounded(px(6.))
+                                        .size(px(40.))
+                                        .rounded(px(8.))
                                         .bg(subtle_row_bg)
-                                        .px(px(10.))
-                                        .py(px(6.))
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .gap(px(5.))
                                         .child(
                                             div()
-                                                .text_size(px(16.))
+                                                .text_size(px(24.))
                                                 .font_family("iconfont")
                                                 .text_color(placeholder_color)
                                                 .child(placeholder_icon),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .line_height(px(14.))
-                                                .text_color(placeholder_color)
-                                                .whitespace_nowrap()
-                                                .child(placeholder_text),
                                         ),
                                 )
                         } else {
@@ -2010,10 +2019,12 @@ impl RenderOnce for ClipboardCard {
                             serde_json::from_str(&item.file_data).unwrap_or_default();
                         let files: Vec<FileInfo> = file_data.files;
                         let multi = files.len() > 1;
-                        let file_missing = !multi
-                            && files
-                                .first()
-                                .is_some_and(|f| !std::path::Path::new(&f.path).exists());
+                        let file_missing = !transfer_is_cloud
+                            && !multi
+                            && files.first().is_some_and(|file| {
+                                crate::services::file_status::cached_file_exists(&file.path)
+                                    == Some(false)
+                            });
                         if file_missing {
                             let fi = &files[0];
                             let (stem, ext) = if fi.is_dir {
@@ -2214,11 +2225,11 @@ impl RenderOnce for ClipboardCard {
                 let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
                 let count = fd.files.len();
                 // Only check single-file items for missing sources.
-                let file_missing = count == 1
-                    && fd
-                        .files
-                        .first()
-                        .is_some_and(|f| !std::path::Path::new(&f.path).exists());
+                let file_missing = !transfer_is_cloud
+                    && count == 1
+                    && fd.files.first().is_some_and(|file| {
+                        crate::services::file_status::cached_file_exists(&file.path) == Some(false)
+                    });
                 if file_missing {
                     size_label_danger = true;
                     Some(I18nKey::CardStaleFile.text().to_string())
@@ -2233,7 +2244,32 @@ impl RenderOnce for ClipboardCard {
         };
 
         // --- Bottom info row: tags → size label → time ---
-        let tag_widths = tags
+        // Detect transfer items and filter out status tags (handled separately)
+        let is_transfer = item.meta_type == "transfer"
+            && tags.iter().any(|tag| {
+                tag.name == I18nKey::TransferLocal.text()
+                    || tag.name == I18nKey::TransferCloud.text()
+                    || tag.name == I18nKey::TransferDownloading.text()
+            });
+        let transfer_is_local =
+            is_transfer && tags.iter().any(|t| t.name == I18nKey::TransferLocal.text());
+        let transfer_is_downloading = is_transfer
+            && tags
+                .iter()
+                .any(|t| t.name == I18nKey::TransferDownloading.text());
+        let display_tags: Vec<_> = if is_transfer {
+            tags.iter()
+                .filter(|t| {
+                    t.name != I18nKey::TransferLocal.text()
+                        && t.name != I18nKey::TransferCloud.text()
+                        && t.name != I18nKey::TransferDownloading.text()
+                })
+                .cloned()
+                .collect()
+        } else {
+            tags.clone()
+        };
+        let tag_widths = display_tags
             .iter()
             .map(|tag| info_pill_width(&tag.name, INFO_PILL_PADDING_X, window))
             .collect::<Vec<_>>();
@@ -2247,6 +2283,37 @@ impl RenderOnce for ClipboardCard {
         if let Some(ref hk) = hotkey_pill {
             fixed_widths.push(hotkey_pill_width(hk, window));
         }
+        // Transfer status pill (for transfer station items)
+        let transfer_pill: Option<(String, TransferPillKind)> = if is_transfer {
+            if transfer_is_downloading {
+                Some((
+                    I18nKey::TransferDownloading.text().to_string(),
+                    TransferPillKind::Downloading,
+                ))
+            } else if transfer_is_local {
+                Some((
+                    I18nKey::TransferLocal.text().to_string(),
+                    TransferPillKind::Local,
+                ))
+            } else {
+                Some((
+                    I18nKey::TransferCloud.text().to_string(),
+                    TransferPillKind::Cloud,
+                ))
+            }
+        } else {
+            None
+        };
+        if let Some((label, _)) = transfer_pill.as_ref() {
+            fixed_widths.push(info_pill_width(
+                label,
+                INFO_PILL_PADDING_X + 16., // extra space for icon
+                window,
+            ));
+        }
+        if source_is_uploaded {
+            fixed_widths.push(18.);
+        }
         if let Some(label) = size_label.as_deref() {
             fixed_widths.push(info_pill_width(label, INFO_PILL_PADDING_X, window));
         }
@@ -2259,7 +2326,7 @@ impl RenderOnce for ClipboardCard {
                 info_pill_width(&format!("+{hidden_count}"), INFO_PILL_PADDING_X, window)
             },
         );
-        let hidden_tag_count = tags.len() - visible_tag_count;
+        let hidden_tag_count = display_tags.len() - visible_tag_count;
 
         let bottom_info = div()
             .absolute()
@@ -2327,6 +2394,77 @@ impl RenderOnce for ClipboardCard {
                                 .child("\u{e66b}"),
                         )
                         .child(div().text_size(px(9.)).text_color(accent).child(hk)),
+                )
+            })
+            .when_some(transfer_pill, |el, (label, kind)| {
+                let pill_text_color = match kind {
+                    TransferPillKind::Local => rgb(0x22C55E),
+                    TransferPillKind::Cloud | TransferPillKind::Downloading => rgb(0x3B82F6),
+                };
+                let animation_id: SharedString =
+                    format!("transfer-download-spinner-{}", item.id).into();
+                el.child(
+                    div()
+                        .h(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(pill_border)
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .child(if matches!(kind, TransferPillKind::Downloading) {
+                            div()
+                                .w(px(10.))
+                                .text_size(px(10.))
+                                .text_color(pill_text_color)
+                                .with_animation(
+                                    animation_id,
+                                    Animation::new(Duration::from_millis(800)).repeat(),
+                                    |spinner, delta| {
+                                        const FRAMES: [&str; 4] = ["◴", "◷", "◶", "◵"];
+                                        let index = ((delta * FRAMES.len() as f32) as usize)
+                                            .min(FRAMES.len() - 1);
+                                        spinner.child(FRAMES[index])
+                                    },
+                                )
+                                .into_any_element()
+                        } else {
+                            div()
+                                .font_family("iconfont")
+                                .text_size(px(9.))
+                                .text_color(pill_text_color)
+                                .child(match kind {
+                                    TransferPillKind::Cloud => "\u{e794}",
+                                    TransferPillKind::Local => "\u{e609}",
+                                    TransferPillKind::Downloading => unreachable!(),
+                                })
+                                .into_any_element()
+                        })
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(pill_text_color)
+                                .child(label),
+                        ),
+                )
+            })
+            .when(source_is_uploaded, |el| {
+                el.child(
+                    div()
+                        .size(px(18.))
+                        .rounded(px(9.))
+                        .bg(pill_bg)
+                        .border(px(1.))
+                        .border_color(pill_border)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_family("iconfont")
+                        .text_size(px(10.))
+                        .text_color(rgb(0x3B82F6))
+                        .child("\u{e794}"),
                 )
             })
             .when_some(size_label, |el, label| {
