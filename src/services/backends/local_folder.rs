@@ -11,6 +11,7 @@ use crate::core::transfer_types::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -272,9 +273,6 @@ fn validate_manifest_operation(operation: &ManifestOperation) -> Result<(), Stri
             operation.version
         ));
     }
-    if operation.logical_clock == u64::MAX {
-        return Err("manifest operation logical clock is out of range".into());
-    }
     uuid::Uuid::parse_str(&operation.id).map_err(|_| "invalid manifest operation id")?;
     let timestamp = chrono::DateTime::parse_from_rfc3339(&operation.created_at)
         .map_err(|_| "invalid manifest operation timestamp")?;
@@ -509,15 +507,11 @@ impl SyncBackend for LocalFolderBackend {
             .read_manifest_operations()
             .map_err(ManifestWriteError::Other)?;
         let has_operations = !operations.is_empty();
-        let logical_clock = operations
+        let max_logical_clock = operations
             .iter()
             .map(|operation| operation.logical_clock)
             .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| {
-                ManifestWriteError::Other("manifest operation clock exhausted".into())
-            })?;
+            .unwrap_or(0);
 
         let current_by_hash: HashMap<_, _> = current
             .files
@@ -548,6 +542,9 @@ impl SyncBackend for LocalFolderBackend {
         if changes.is_empty() {
             return manifest_revision(&current).map_err(ManifestWriteError::Other);
         }
+        let logical_clock = max_logical_clock.checked_add(1).ok_or_else(|| {
+            ManifestWriteError::Other("manifest operation clock exhausted".into())
+        })?;
 
         let operation = ManifestOperation {
             version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
@@ -567,36 +564,79 @@ impl SyncBackend for LocalFolderBackend {
 
     // --- ── Transfer station file blobs ── ---
 
-    fn upload_file_blob(&self, hash: &str, _ext: &str, data: &[u8]) -> Result<(), String> {
+    fn upload_file_blob(
+        &self,
+        blob_key: &str,
+        _ext: &str,
+        reader: &mut dyn Read,
+        content_length: u64,
+    ) -> Result<(), String> {
         let dir = PathBuf::from(&self.config.folder_path).join("files");
         std::fs::create_dir_all(&dir).map_err(|e| format!("create files dir: {e}"))?;
 
-        let file_path = dir.join(hash);
-        let tmp_path = dir.join(format!(".{hash}.tmp"));
-        std::fs::write(&tmp_path, data).map_err(|e| format!("write file blob tmp: {e}"))?;
+        let file_path = dir.join(blob_key);
+        let tmp_path = dir.join(format!(".{blob_key}.tmp"));
+        let write_result = (|| {
+            let mut temporary = std::fs::File::create(&tmp_path)
+                .map_err(|error| format!("create file blob temp: {error}"))?;
+            let copied = std::io::copy(
+                &mut reader.take(content_length.saturating_add(1)),
+                &mut temporary,
+            )
+            .map_err(|error| format!("stream file blob: {error}"))?;
+            if copied != content_length {
+                return Err(format!(
+                    "source length changed while uploading: expected {content_length}, read {copied}"
+                ));
+            }
+            temporary
+                .flush()
+                .map_err(|error| format!("flush file blob temp: {error}"))?;
+            temporary
+                .sync_all()
+                .map_err(|error| format!("sync file blob temp: {error}"))?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(error);
+        }
         crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             format!("rename file blob: {e}")
         })
     }
 
-    fn download_file_blob(&self, hash: &str, _ext: &str) -> Result<Vec<u8>, String> {
+    fn download_file_blob(
+        &self,
+        blob_key: &str,
+        _ext: &str,
+        writer: &mut dyn Write,
+        max_bytes: u64,
+    ) -> Result<u64, String> {
         let file_path = PathBuf::from(&self.config.folder_path)
             .join("files")
-            .join(hash);
+            .join(blob_key);
         let size = std::fs::metadata(&file_path)
             .map_err(|error| format!("read file blob metadata: {error}"))?
             .len();
-        if size > crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES {
+        if size > max_bytes {
             return Err("remote file exceeds the transfer size limit".into());
         }
-        std::fs::read(&file_path).map_err(|e| format!("read file blob: {e}"))
+        let source =
+            std::fs::File::open(&file_path).map_err(|error| format!("open file blob: {error}"))?;
+        let copied = std::io::copy(&mut source.take(max_bytes.saturating_add(1)), writer)
+            .map_err(|error| format!("stream file blob: {error}"))?;
+        if copied > max_bytes {
+            return Err("remote file exceeds the transfer size limit".into());
+        }
+        Ok(copied)
     }
 
-    fn delete_file_blob(&self, hash: &str, _ext: &str) -> Result<(), String> {
+    fn delete_file_blob(&self, blob_key: &str, _ext: &str) -> Result<(), String> {
         let file_path = PathBuf::from(&self.config.folder_path)
             .join("files")
-            .join(hash);
+            .join(blob_key);
         if file_path.exists() {
             std::fs::remove_file(&file_path).map_err(|e| format!("delete file blob: {e}"))
         } else {
@@ -867,12 +907,95 @@ mod transfer_tests {
     }
 
     #[test]
+    fn exhausted_logical_clock_remains_readable_and_allows_noop_writes() {
+        let (root, backend) = temp_backend("clock-exhaustion");
+        let uploaded = entry('a', "terminal.bin");
+        backend
+            .push_file_manifest(&manifest(vec![uploaded], "device"), None)
+            .unwrap();
+
+        let operation_path = std::fs::read_dir(root.join(MANIFEST_OPS_DIR))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let mut operation: ManifestOperation =
+            serde_json::from_slice(&std::fs::read(&operation_path).unwrap()).unwrap();
+        operation.logical_clock = u64::MAX - 1;
+        std::fs::write(
+            &operation_path,
+            serde_json::to_vec_pretty(&operation).unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = backend.pull_file_manifest().unwrap();
+        backend
+            .push_file_manifest(
+                &manifest(Vec::new(), "device"),
+                snapshot.revision.as_deref(),
+            )
+            .unwrap();
+
+        let terminal = backend.pull_file_manifest().unwrap();
+        assert!(terminal.manifest.files.is_empty());
+        backend
+            .push_file_manifest(&terminal.manifest, terminal.revision.as_deref())
+            .unwrap();
+
+        let error = backend
+            .push_file_manifest(
+                &manifest(vec![entry('b', "blocked.bin")], "device"),
+                terminal.revision.as_deref(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestWriteError::Other(message) if message.contains("clock exhausted")
+        ));
+        assert!(backend
+            .pull_file_manifest()
+            .unwrap()
+            .manifest
+            .files
+            .is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn transfer_blob_upload_replaces_an_existing_object() {
         let (root, backend) = temp_backend("blob-replace");
         let key = format!("{}-{}", "a".repeat(64), uuid::Uuid::new_v4());
-        backend.upload_file_blob(&key, "bin", b"old").unwrap();
-        backend.upload_file_blob(&key, "bin", b"new").unwrap();
-        assert_eq!(backend.download_file_blob(&key, "bin").unwrap(), b"new");
+        backend
+            .upload_file_blob(&key, "bin", &mut &b"old"[..], 3)
+            .unwrap();
+        backend
+            .upload_file_blob(&key, "bin", &mut &b"new"[..], 3)
+            .unwrap();
+        let mut downloaded = Vec::new();
+        assert_eq!(
+            backend
+                .download_file_blob(&key, "bin", &mut downloaded, 3)
+                .unwrap(),
+            3
+        );
+        assert_eq!(downloaded, b"new");
+
+        let mut too_long = &b"grow"[..];
+        assert!(backend
+            .upload_file_blob(&key, "bin", &mut too_long, 3)
+            .is_err());
+        let mut unchanged = Vec::new();
+        backend
+            .download_file_blob(&key, "bin", &mut unchanged, 3)
+            .unwrap();
+        assert_eq!(unchanged, b"new");
+
+        let mut oversized = Vec::new();
+        assert!(backend
+            .download_file_blob(&key, "bin", &mut oversized, 2)
+            .is_err());
+        assert!(oversized.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

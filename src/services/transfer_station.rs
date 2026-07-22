@@ -15,9 +15,11 @@ use crate::core::{migration, paths};
 use crate::services::backends::local_folder::LocalFolderBackend;
 use crate::services::backends::webdav::WebDAVBackend;
 use crate::state::app::AppState;
+use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::hash::Hasher;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -26,6 +28,103 @@ use std::time::{Duration, Instant, SystemTime};
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MANIFEST_UPDATE_RETRIES: usize = 5;
+const STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileDigest {
+    size: u64,
+    sha256: String,
+    content_hash: u64,
+}
+
+struct DigestState {
+    size: u64,
+    sha256: sha2::Sha256,
+    content_hash: std::collections::hash_map::DefaultHasher,
+}
+
+impl DigestState {
+    fn new() -> Self {
+        Self {
+            size: 0,
+            sha256: sha2::Sha256::new(),
+            content_hash: std::collections::hash_map::DefaultHasher::new(),
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.size = self.size.saturating_add(data.len() as u64);
+        self.sha256.update(data);
+        self.content_hash.write(data);
+    }
+
+    fn finish(self) -> FileDigest {
+        FileDigest {
+            size: self.size,
+            sha256: format!("{:x}", self.sha256.finalize()),
+            content_hash: self.content_hash.finish(),
+        }
+    }
+}
+
+struct DigestingReader<R> {
+    inner: R,
+    digest: DigestState,
+}
+
+impl<R> DigestingReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            digest: DigestState::new(),
+        }
+    }
+
+    fn finish(self) -> FileDigest {
+        self.digest.finish()
+    }
+}
+
+impl<R: Read> Read for DigestingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        self.digest.update(&buffer[..count]);
+        Ok(count)
+    }
+}
+
+struct DigestingWriter<W> {
+    inner: W,
+    digest: DigestState,
+}
+
+impl<W> DigestingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            digest: DigestState::new(),
+        }
+    }
+}
+
+impl<W: Write> DigestingWriter<W> {
+    fn finish(mut self) -> std::io::Result<(W, FileDigest)> {
+        self.inner.flush()?;
+        Ok((self.inner, self.digest.finish()))
+    }
+}
+
+impl<W: Write> Write for DigestingWriter<W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let count = self.inner.write(data)?;
+        self.digest.update(&data[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 #[derive(Clone)]
 struct CachedFileHash {
@@ -577,11 +676,14 @@ fn upload_file(
             MAX_TRANSFER_FILE_SIZE_BYTES / 1024 / 1024
         ));
     }
-    let data = std::fs::read(source).map_err(|error| format!("read file: {error}"))?;
-    if data.len() as u64 != source_size || data.len() as u64 > MAX_TRANSFER_FILE_SIZE_BYTES {
+    let source_modified = std::fs::metadata(source)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let digest = digest_file(source, MAX_TRANSFER_FILE_SIZE_BYTES)?;
+    if digest.size != source_size || !file_metadata_matches(source, source_size, source_modified) {
         return Err("local file changed while preparing the upload".into());
     }
-    let hash = compute_file_hash(&data);
+    let hash = digest.sha256.clone();
     let ext = Path::new(&name)
         .extension()
         .and_then(|value| value.to_str())
@@ -598,14 +700,31 @@ fn upload_file(
         blob_id: format!("{hash}-{}", uuid::Uuid::new_v4()),
         name: name.clone(),
         ext: ext.clone(),
-        size: data.len() as u64,
+        size: digest.size,
         uploaded_at: now.to_rfc3339(),
         expires_at,
         uploaded_by: device_name.to_string(),
     };
     entry.validate()?;
 
-    backend.upload_file_blob(entry.blob_key(), &ext, &data)?;
+    let source_file = File::open(source).map_err(|error| format!("open file: {error}"))?;
+    let mut upload_reader =
+        DigestingReader::new(BufReader::with_capacity(STREAM_BUFFER_BYTES, source_file));
+    let upload_result =
+        backend.upload_file_blob(entry.blob_key(), &ext, &mut upload_reader, digest.size);
+    let uploaded_digest = upload_reader.finish();
+    if let Err(error) = upload_result {
+        if let Err(cleanup_error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+            log::warn!("[transfer] failed partial upload cleanup: {cleanup_error}");
+        }
+        return Err(error);
+    }
+    if uploaded_digest != digest || !file_metadata_matches(source, source_size, source_modified) {
+        if let Err(cleanup_error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+            log::warn!("[transfer] changed upload cleanup failed: {cleanup_error}");
+        }
+        return Err("local file changed while uploading".into());
+    }
     let replaced = match mutate_manifest(backend, |manifest| {
         let replaced = manifest
             .files
@@ -632,7 +751,12 @@ fn upload_file(
     }
 
     let canonical_path = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
-    upsert_transfer_item(db, &entry, &canonical_path.to_string_lossy(), &data)?;
+    upsert_transfer_item(
+        db,
+        &entry,
+        &canonical_path.to_string_lossy(),
+        digest.content_hash,
+    )?;
     Ok(name)
 }
 
@@ -642,23 +766,34 @@ fn download_file(
     entry: &ManifestEntry,
 ) -> Result<String, String> {
     entry.validate()?;
-    let data = backend.download_file_blob(entry.blob_key(), &entry.ext)?;
-    if data.len() as u64 != entry.size || compute_file_hash(&data) != entry.hash {
-        return Err("downloaded file failed integrity verification".into());
-    }
-
     let directory = paths::transfer_cache_dir().join(&entry.hash);
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("create transfer cache: {error}"))?;
     let destination = directory.join(&entry.name);
-    remove_stale_cache_files(&directory, &destination);
-    let temporary = directory.join(format!(".{}.tmp", entry.name));
-    std::fs::write(&temporary, &data).map_err(|error| format!("write cache: {error}"))?;
+    let temporary = directory.join(format!(".download-{}.tmp", uuid::Uuid::new_v4()));
+    let download_result = stream_blob_to_file(backend, entry, &temporary);
+    let digest = match download_result {
+        Ok(digest) => digest,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
+    if let Err(error) = validate_download_digest(entry, &digest) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
     crate::services::file_ops::replace_file(&temporary, &destination).map_err(|error| {
         let _ = std::fs::remove_file(&temporary);
         format!("replace cache file: {error}")
     })?;
-    upsert_transfer_item(db, entry, &destination.to_string_lossy(), &data)?;
+    remove_stale_cache_files(&directory, &destination);
+    upsert_transfer_item(
+        db,
+        entry,
+        &destination.to_string_lossy(),
+        digest.content_hash,
+    )?;
     Ok(destination.to_string_lossy().into_owned())
 }
 
@@ -882,18 +1017,85 @@ fn remove_stale_cache_files(directory: &Path, destination: &Path) {
     }
 }
 
+fn file_metadata_matches(
+    path: &Path,
+    expected_size: u64,
+    expected_modified: Option<SystemTime>,
+) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| {
+        metadata.is_file()
+            && metadata.len() == expected_size
+            && metadata.modified().ok() == expected_modified
+    })
+}
+
+fn digest_file(path: &Path, max_bytes: u64) -> Result<FileDigest, String> {
+    let file = File::open(path).map_err(|error| format!("open file for hashing: {error}"))?;
+    let mut reader = DigestingReader::new(BufReader::with_capacity(STREAM_BUFFER_BYTES, file));
+    let copied = std::io::copy(
+        &mut reader.by_ref().take(max_bytes.saturating_add(1)),
+        &mut std::io::sink(),
+    )
+    .map_err(|error| format!("hash file: {error}"))?;
+    let digest = reader.finish();
+    if copied > max_bytes {
+        return Err(format!(
+            "file exceeds the {} MiB transfer limit",
+            MAX_TRANSFER_FILE_SIZE_BYTES / 1024 / 1024
+        ));
+    }
+    Ok(digest)
+}
+
+fn stream_blob_to_file(
+    backend: &dyn SyncBackend,
+    entry: &ManifestEntry,
+    destination: &Path,
+) -> Result<FileDigest, String> {
+    let file = File::create(destination).map_err(|error| format!("create cache temp: {error}"))?;
+    let mut writer = DigestingWriter::new(file);
+    let backend_result = backend.download_file_blob(
+        entry.blob_key(),
+        &entry.ext,
+        &mut writer,
+        MAX_TRANSFER_FILE_SIZE_BYTES,
+    );
+    let finish_result = writer
+        .finish()
+        .map_err(|error| format!("flush cache temp: {error}"));
+    let copied = backend_result?;
+    let (file, digest) = finish_result?;
+    if copied != digest.size {
+        return Err(format!(
+            "download length mismatch: backend reported {copied}, wrote {}",
+            digest.size
+        ));
+    }
+    file.sync_all()
+        .map_err(|error| format!("sync cache temp: {error}"))?;
+    Ok(digest)
+}
+
+fn validate_download_digest(entry: &ManifestEntry, digest: &FileDigest) -> Result<(), String> {
+    if digest.size != entry.size || digest.sha256 != entry.hash {
+        Err("downloaded file failed integrity verification".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn upsert_transfer_item(
     db: &Database,
     entry: &ManifestEntry,
     local_path: &str,
-    data: &[u8],
+    content_hash: u64,
 ) -> Result<(), String> {
     let now = chrono::Utc::now();
     let item = ClipboardItem {
         id: 0,
         content_type: ContentType::File,
         full_text: entry.name.clone(),
-        content_hash: default_hash(data),
+        content_hash,
         created_at: now,
         updated_at: now,
         image_path: String::new(),
@@ -989,12 +1191,14 @@ fn clean_local_transfer(db: &Database, hash: &str) {
     let _ = db.delete_transfer_by_hash(hash);
 }
 
+#[cfg(test)]
 fn compute_file_hash(data: &[u8]) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(data);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[cfg(test)]
 fn default_hash(data: &[u8]) -> u64 {
     use std::hash::Hasher;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1103,6 +1307,52 @@ mod tests {
         assert!(portable_file_name("CON.txt").is_err());
         assert!(portable_file_name("bad?.txt").is_err());
         assert!(portable_file_name("trailing. ").is_err());
+    }
+
+    #[test]
+    fn streaming_digest_matches_whole_buffer_hashes_and_enforces_limit() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-stream-digest-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("large.bin");
+        let data: Vec<u8> = (0..STREAM_BUFFER_BYTES * 2 + 137)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        std::fs::write(&path, &data).unwrap();
+
+        let digest = digest_file(&path, data.len() as u64).unwrap();
+        assert_eq!(digest.size, data.len() as u64);
+        assert_eq!(digest.sha256, compute_file_hash(&data));
+        assert_eq!(digest.content_hash, default_hash(&data));
+        assert!(digest_file(&path, data.len() as u64 - 1).is_err());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn streamed_download_digest_rejects_corrupt_content_and_wrong_length() {
+        let data = b"verified streamed download";
+        let mut entry = valid_entry('a', "download.bin");
+        entry.hash = compute_file_hash(data);
+        entry.blob_id = format!("{}-{}", entry.hash, uuid::Uuid::new_v4());
+        entry.size = data.len() as u64;
+        let digest = FileDigest {
+            size: data.len() as u64,
+            sha256: compute_file_hash(data),
+            content_hash: default_hash(data),
+        };
+        assert!(validate_download_digest(&entry, &digest).is_ok());
+
+        let mut corrupt = digest.clone();
+        corrupt.sha256 = compute_file_hash(b"different content");
+        assert!(validate_download_digest(&entry, &corrupt).is_err());
+
+        let mut truncated = digest;
+        truncated.size -= 1;
+        assert!(validate_download_digest(&entry, &truncated).is_err());
     }
 
     #[test]
@@ -1275,7 +1525,7 @@ mod tests {
         entry.hash = compute_file_hash(data);
         entry.blob_id = format!("{}-{}", entry.hash, uuid::Uuid::new_v4());
         entry.size = data.len() as u64;
-        upsert_transfer_item(&db, &entry, &source.to_string_lossy(), data).unwrap();
+        upsert_transfer_item(&db, &entry, &source.to_string_lossy(), default_hash(data)).unwrap();
 
         assert_eq!(db.get_transfer_items().unwrap().len(), 1);
         assert_eq!(reconcile_transfer_records(&db, &HashSet::new()), 1);

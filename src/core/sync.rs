@@ -71,17 +71,31 @@ pub trait SyncBackend: Send + Sync {
         ))
     }
 
-    /// Upload an immutable file blob to `{remote}/files/{blob_key}`.
-    fn upload_file_blob(&self, _blob_key: &str, _ext: &str, _data: &[u8]) -> Result<(), String> {
+    /// Stream an immutable file blob to `{remote}/files/{blob_key}`.
+    fn upload_file_blob(
+        &self,
+        _blob_key: &str,
+        _ext: &str,
+        _reader: &mut dyn std::io::Read,
+        _content_length: u64,
+    ) -> Result<(), String> {
         Err("not supported".into())
     }
 
-    /// Download a file blob from `{remote}/files/{hash}.{ext}`.
-    fn download_file_blob(&self, _blob_key: &str, _ext: &str) -> Result<Vec<u8>, String> {
+    /// Stream a file blob from `{remote}/files/{blob_key}` into `writer`.
+    /// Implementations must stop after `max_bytes + 1` so callers can reject
+    /// oversized content without buffering the response.
+    fn download_file_blob(
+        &self,
+        _blob_key: &str,
+        _ext: &str,
+        _writer: &mut dyn std::io::Write,
+        _max_bytes: u64,
+    ) -> Result<u64, String> {
         Err("not supported".into())
     }
 
-    /// Delete a file blob from `{remote}/files/{hash}.{ext}`.
+    /// Delete a file blob from `{remote}/files/{blob_key}`.
     fn delete_file_blob(&self, _blob_key: &str, _ext: &str) -> Result<(), String> {
         Err("not supported".into())
     }

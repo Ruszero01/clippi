@@ -9,7 +9,7 @@ use crate::core::settings::BackendConfig;
 use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
 use crate::core::transfer_types::{FileManifest, ManifestSnapshot, ManifestWriteError};
 use base64::Engine;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -551,10 +551,16 @@ impl SyncBackend for WebDAVBackend {
 
     // --- ── Transfer station file blobs ── ---
 
-    fn upload_file_blob(&self, hash: &str, _ext: &str, data: &[u8]) -> Result<(), String> {
+    fn upload_file_blob(
+        &self,
+        blob_key: &str,
+        _ext: &str,
+        reader: &mut dyn Read,
+        content_length: u64,
+    ) -> Result<(), String> {
         let base = self.config.webdav_url.trim_end_matches('/');
         let files_url = format!("{base}/files");
-        let blob_url = format!("{files_url}/{hash}");
+        let blob_url = format!("{files_url}/{blob_key}");
         let auth = self.auth_header();
 
         // Ensure files/ directory exists
@@ -569,38 +575,49 @@ impl SyncBackend for WebDAVBackend {
             .put(&blob_url)
             .set("Authorization", &auth)
             .set("Content-Type", "application/octet-stream")
-            .send_bytes(data)
+            .set("Content-Length", &content_length.to_string())
+            // HTTP request bodies must match Content-Length exactly, so unlike
+            // the local backend this reader must not consume a sentinel byte.
+            // The caller rechecks the streamed digest and source metadata after
+            // the request to detect replacement, truncation, or growth.
+            .send(reader.take(content_length))
         {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("file blob upload failed: {e}")),
         }
     }
 
-    fn download_file_blob(&self, hash: &str, _ext: &str) -> Result<Vec<u8>, String> {
+    fn download_file_blob(
+        &self,
+        blob_key: &str,
+        _ext: &str,
+        writer: &mut dyn Write,
+        max_bytes: u64,
+    ) -> Result<u64, String> {
         let base = self.config.webdav_url.trim_end_matches('/');
-        let blob_url = format!("{base}/files/{hash}");
+        let blob_url = format!("{base}/files/{blob_key}");
         let auth = self.auth_header();
 
         match self.agent.get(&blob_url).set("Authorization", &auth).call() {
             Ok(resp) => {
-                let mut buf = Vec::new();
-                resp.into_reader()
-                    .take(crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES + 1)
-                    .read_to_end(&mut buf)
-                    .map_err(|e| format!("blob read failed: {e}"))?;
-                if buf.len() as u64 > crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES {
+                let copied = std::io::copy(
+                    &mut resp.into_reader().take(max_bytes.saturating_add(1)),
+                    writer,
+                )
+                .map_err(|e| format!("blob read failed: {e}"))?;
+                if copied > max_bytes {
                     return Err("remote file exceeds the transfer size limit".into());
                 }
-                Ok(buf)
+                Ok(copied)
             }
             Err(ureq::Error::Status(404, _)) => Err("blob not found".into()),
             Err(e) => Err(format!("file blob download failed: {e}")),
         }
     }
 
-    fn delete_file_blob(&self, hash: &str, _ext: &str) -> Result<(), String> {
+    fn delete_file_blob(&self, blob_key: &str, _ext: &str) -> Result<(), String> {
         let base = self.config.webdav_url.trim_end_matches('/');
-        let blob_url = format!("{base}/files/{hash}");
+        let blob_url = format!("{base}/files/{blob_key}");
         let auth = self.auth_header();
 
         match self
