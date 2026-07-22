@@ -2436,8 +2436,8 @@ impl RenderOnce for ClipboardCard {
                                 .text_size(px(9.))
                                 .text_color(pill_text_color)
                                 .child(match kind {
-                                    TransferPillKind::Cloud => "\u{e794}",
-                                    TransferPillKind::Local => "\u{e609}",
+                                    TransferPillKind::Cloud => "\u{e601}",
+                                    TransferPillKind::Local => "\u{e794}",
                                     TransferPillKind::Downloading => unreachable!(),
                                 })
                                 .into_any_element()

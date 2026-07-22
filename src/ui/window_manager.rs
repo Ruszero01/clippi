@@ -285,6 +285,15 @@ fn retention_cleanup_due(retention_days: u32, last_date: &str, today: chrono::Na
     retention_days > 0 && today.format("%Y-%m-%d").to_string() != last_date
 }
 
+fn transfer_cleanup_due(
+    transfer_available: bool,
+    retention_days: u32,
+    last_date: &str,
+    today: chrono::NaiveDate,
+) -> bool {
+    transfer_available && retention_cleanup_due(retention_days, last_date, today)
+}
+
 /// Unified window manager entity.
 ///
 /// Owns the window lifecycle and all cross-service polling. Created once
@@ -622,8 +631,11 @@ impl WindowManager {
     }
 
     fn poll_transfer(&mut self, cx: &mut Context<Self>) {
+        let window_visible = self.visible;
         let service = &mut self.transfer_service;
-        let outcome = self.state.update(cx, |state, _cx| service.poll(state));
+        let outcome = self
+            .state
+            .update(cx, |state, _cx| service.poll(state, window_visible));
         if outcome.state_changed || outcome.data_changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
         }
@@ -2675,9 +2687,11 @@ impl WindowManager {
                 state.transfer_entries.clear();
                 state.pending_transfer_downloads.clear();
                 state.pending_transfer_uploads.clear();
-                state
-                    .pending_transfer_commands
-                    .push_back(crate::services::transfer_station::TransferCommand::Refresh);
+                if state.transfer_filter_active {
+                    state
+                        .pending_transfer_commands
+                        .push_back(crate::services::transfer_station::TransferCommand::Refresh);
+                }
                 state.settings.save();
             }
             state.settings.clone()
@@ -3233,71 +3247,84 @@ impl WindowManager {
         }
     }
 
-    /// Check if periodic cache cleanup is due and spawn a background thread.
+    /// Run daily maintenance for local caches, retained history, and transfer files.
     fn poll_cleanup(&mut self, cx: &mut Context<Self>) {
         let settings = self.state.read(cx).settings.clone();
+        let transfer_available = self.state.read(cx).transfer_available();
         let interval = settings.cleanup_interval.as_str();
         let retention_days = settings.retention_days;
         let today = chrono::Local::now().date_naive();
         let cache_needed = cache_cleanup_due(interval, &settings.cleanup_last_date, today);
         let retention_needed =
             retention_cleanup_due(retention_days, &settings.retention_cleanup_last_date, today);
+        let transfer_needed = transfer_cleanup_due(
+            transfer_available,
+            settings.transfer_retention_days,
+            &settings.transfer_cleanup_last_date,
+            today,
+        );
 
-        if !cache_needed && !retention_needed {
+        if !cache_needed && !retention_needed && !transfer_needed {
             return;
         }
 
-        let db_path = settings.resolve_db_path();
-        let sync_scope = crate::core::cache_cleanup::CleanupSyncScope {
-            include_images: settings.sync_include_images,
-            favorites_only: settings.sync_favorites_only,
-            device_name: crate::services::backends::local_folder::hostname(),
-        };
-        let sync_dirty = self.state.read(cx).sync_dirty.clone();
-        let pending_cleanup_refresh = self.pending_cleanup_refresh.clone();
-        let pending_cleanup_hotkey_unregister = self.pending_cleanup_hotkey_unregister.clone();
-        std::thread::spawn(move || {
-            match crate::core::db::Database::open(&db_path.to_string_lossy()) {
-                Ok(db) => {
-                    let stats = crate::core::cache_cleanup::run_cleanup(
-                        &db,
-                        retention_days,
-                        Some(&sync_scope),
-                    );
-                    if stats.sync_dirty {
-                        sync_dirty.store(true, Ordering::SeqCst);
-                    }
-                    if stats.expired_items > 0 {
-                        pending_cleanup_refresh.store(true, Ordering::Release);
-                    }
-                    if !stats.expired_hotkey_item_ids.is_empty() {
-                        if let Ok(mut ids) = pending_cleanup_hotkey_unregister.lock() {
-                            ids.extend(stats.expired_hotkey_item_ids.iter().copied());
+        if cache_needed || retention_needed {
+            let db_path = settings.resolve_db_path();
+            let sync_scope = crate::core::cache_cleanup::CleanupSyncScope {
+                include_images: settings.sync_include_images,
+                favorites_only: settings.sync_favorites_only,
+                device_name: crate::services::backends::local_folder::hostname(),
+            };
+            let sync_dirty = self.state.read(cx).sync_dirty.clone();
+            let pending_cleanup_refresh = self.pending_cleanup_refresh.clone();
+            let pending_cleanup_hotkey_unregister = self.pending_cleanup_hotkey_unregister.clone();
+            std::thread::spawn(move || {
+                match crate::core::db::Database::open(&db_path.to_string_lossy()) {
+                    Ok(db) => {
+                        let stats = crate::core::cache_cleanup::run_cleanup(
+                            &db,
+                            retention_days,
+                            Some(&sync_scope),
+                        );
+                        if stats.sync_dirty {
+                            sync_dirty.store(true, Ordering::SeqCst);
+                        }
+                        if stats.expired_items > 0 {
+                            pending_cleanup_refresh.store(true, Ordering::Release);
+                        }
+                        if !stats.expired_hotkey_item_ids.is_empty() {
+                            if let Ok(mut ids) = pending_cleanup_hotkey_unregister.lock() {
+                                ids.extend(stats.expired_hotkey_item_ids.iter().copied());
+                            }
+                        }
+                        if !stats.is_empty() {
+                            log::info!(
+                                "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items",
+                                stats.orphan_images,
+                                stats.unreferenced_icons,
+                                stats.expired_tombstones,
+                                stats.expired_items,
+                            );
                         }
                     }
-                    if !stats.is_empty() {
-                        log::info!(
-                            "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items",
-                            stats.orphan_images,
-                            stats.unreferenced_icons,
-                            stats.expired_tombstones,
-                            stats.expired_items,
-                        );
-                    }
+                    Err(e) => log::error!("periodic cleanup: failed to open DB: {e}"),
                 }
-                Err(e) => log::error!("periodic cleanup: failed to open DB: {e}"),
-            }
-        });
+            });
+        }
 
         // Update last cleanup date immediately (don't wait for thread).
         let cache_marker = cleanup_marker_for_interval(interval, today);
-        let retention_marker = today.format("%Y-%m-%d").to_string();
+        let daily_marker = today.format("%Y-%m-%d").to_string();
         self.state.update(cx, |s, _cx| {
             if cache_needed {
                 s.settings.cleanup_last_date = cache_marker;
             }
             if retention_needed {
-                s.settings.retention_cleanup_last_date = retention_marker;
+                s.settings.retention_cleanup_last_date = daily_marker.clone();
+            }
+            if transfer_needed {
+                s.queue_daily_transfer_cleanup();
+                s.settings.transfer_cleanup_last_date = daily_marker;
             }
             s.settings.save();
         });
@@ -3306,7 +3333,9 @@ impl WindowManager {
 
 #[cfg(test)]
 mod cleanup_schedule_tests {
-    use super::{cache_cleanup_due, cleanup_marker_for_interval, retention_cleanup_due};
+    use super::{
+        cache_cleanup_due, cleanup_marker_for_interval, retention_cleanup_due, transfer_cleanup_due,
+    };
     use chrono::NaiveDate;
 
     #[test]
@@ -3326,6 +3355,16 @@ mod cleanup_schedule_tests {
 
         assert!(!cache_cleanup_due("never", "", today));
         assert!(retention_cleanup_due(1, "", today));
+    }
+
+    #[test]
+    fn transfer_cleanup_runs_daily_when_the_backend_is_available() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+
+        assert!(transfer_cleanup_due(true, 3, "", today));
+        assert!(!transfer_cleanup_due(true, 3, "2026-07-20", today));
+        assert!(!transfer_cleanup_due(false, 3, "", today));
+        assert!(!transfer_cleanup_due(true, 0, "", today));
     }
 }
 

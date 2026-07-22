@@ -2152,6 +2152,26 @@ impl AppState {
             self.queue_transfer_command(
                 crate::services::transfer_station::TransferCommand::Refresh,
             );
+        } else {
+            self.pending_transfer_commands.retain(|command| {
+                !matches!(
+                    command,
+                    crate::services::transfer_station::TransferCommand::Refresh
+                )
+            });
+        }
+    }
+
+    pub fn queue_daily_transfer_cleanup(&mut self) {
+        if !self.pending_transfer_commands.iter().any(|command| {
+            matches!(
+                command,
+                crate::services::transfer_station::TransferCommand::Cleanup
+            )
+        }) {
+            self.queue_transfer_command(
+                crate::services::transfer_station::TransferCommand::Cleanup,
+            );
         }
     }
 
@@ -2707,6 +2727,54 @@ mod tests {
             .pending_transfer_uploads
             .contains(path.to_string_lossy().as_ref()));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn leaving_transfer_view_cancels_queued_automatic_reads_only() {
+        let (mut state, _dirty) = test_state();
+        state.transfer_filter_active = true;
+        state
+            .pending_transfer_commands
+            .push_back(crate::services::transfer_station::TransferCommand::Refresh);
+        state
+            .pending_transfer_commands
+            .push_back(crate::services::transfer_station::TransferCommand::Cleanup);
+        state.pending_transfer_commands.push_back(
+            crate::services::transfer_station::TransferCommand::Upload {
+                source_path: "pending.bin".into(),
+                file_name: "pending.bin".into(),
+            },
+        );
+
+        state.toggle_transfer_filter();
+
+        assert!(!state.transfer_filter_active);
+        assert_eq!(state.pending_transfer_commands.len(), 2);
+        assert!(state
+            .pending_transfer_commands
+            .iter()
+            .any(|command| matches!(
+                command,
+                crate::services::transfer_station::TransferCommand::Cleanup
+            )));
+        assert!(matches!(
+            state.pending_transfer_commands.back(),
+            Some(crate::services::transfer_station::TransferCommand::Upload { .. })
+        ));
+    }
+
+    #[test]
+    fn daily_transfer_cleanup_is_deduplicated() {
+        let (mut state, _dirty) = test_state();
+
+        state.queue_daily_transfer_cleanup();
+        state.queue_daily_transfer_cleanup();
+
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert!(matches!(
+            state.pending_transfer_commands.front(),
+            Some(crate::services::transfer_station::TransferCommand::Cleanup)
+        ));
     }
 
     #[test]

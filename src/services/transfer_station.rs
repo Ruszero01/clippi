@@ -25,8 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
-const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const ACTIVE_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const MANIFEST_UPDATE_RETRIES: usize = 5;
 const STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 
@@ -183,7 +182,6 @@ pub struct GpuiTransferService {
     running: Arc<AtomicBool>,
     pending_result: Arc<Mutex<Option<TransferJobResult>>>,
     last_refresh: Option<Instant>,
-    last_cleanup: Option<Instant>,
 }
 
 impl GpuiTransferService {
@@ -196,7 +194,6 @@ impl GpuiTransferService {
             running: Arc::new(AtomicBool::new(false)),
             pending_result: Arc::new(Mutex::new(None)),
             last_refresh: None,
-            last_cleanup: None,
         };
         service.reload_from_settings(settings);
         service
@@ -233,10 +230,9 @@ impl GpuiTransferService {
         self.backend_generation = self.backend_generation.wrapping_add(1);
         self.backend = selected.map(build_backend);
         self.last_refresh = None;
-        self.last_cleanup = None;
     }
 
-    pub fn poll(&mut self, app: &mut AppState) -> TransferPollOutcome {
+    pub fn poll(&mut self, app: &mut AppState, window_visible: bool) -> TransferPollOutcome {
         self.reload_from_settings(&app.settings);
         let mut outcome = TransferPollOutcome::default();
 
@@ -247,6 +243,11 @@ impl GpuiTransferService {
             .take()
         {
             if result.generation == self.backend_generation {
+                // Every completed command counts as a refresh attempt: successful
+                // commands resolve the latest manifest, while failed commands need
+                // a bounded retry delay. Base the next poll on completion time so
+                // slow requests do not trigger an immediate duplicate request.
+                self.last_refresh = Some(Instant::now());
                 outcome = apply_result(app, result);
             } else {
                 clear_pending_for_stale_result(app, &result);
@@ -278,15 +279,13 @@ impl GpuiTransferService {
         }
 
         let now = Instant::now();
+        let refresh_interval =
+            automatic_refresh_interval(window_visible && app.transfer_filter_active);
         let command = app.pending_transfer_commands.pop_front().or_else(|| {
-            let cleanup_due = self
-                .last_cleanup
-                .is_none_or(|last| now.duration_since(last) >= CLEANUP_INTERVAL);
-            if cleanup_due {
-                Some(TransferCommand::Cleanup)
-            } else if self
+            let refresh_interval = refresh_interval?;
+            if self
                 .last_refresh
-                .is_none_or(|last| now.duration_since(last) >= REFRESH_INTERVAL)
+                .is_none_or(|last| now.duration_since(last) >= refresh_interval)
             {
                 Some(TransferCommand::Refresh)
             } else {
@@ -295,12 +294,6 @@ impl GpuiTransferService {
         });
 
         if let Some(command) = command {
-            if matches!(command, TransferCommand::Refresh) {
-                self.last_refresh = Some(now);
-            }
-            if matches!(command, TransferCommand::Cleanup) {
-                self.last_cleanup = Some(now);
-            }
             app.transfer_busy = true;
             self.start(command, &app.settings);
             outcome.state_changed = true;
@@ -355,6 +348,10 @@ impl GpuiTransferService {
             running.store(false, Ordering::Release);
         });
     }
+}
+
+fn automatic_refresh_interval(transfer_view_visible: bool) -> Option<Duration> {
+    transfer_view_visible.then_some(ACTIVE_REFRESH_INTERVAL)
 }
 
 fn clear_pending_for_stale_result(app: &mut AppState, result: &TransferJobResult) {
@@ -1307,6 +1304,15 @@ mod tests {
         assert!(portable_file_name("CON.txt").is_err());
         assert!(portable_file_name("bad?.txt").is_err());
         assert!(portable_file_name("trailing. ").is_err());
+    }
+
+    #[test]
+    fn automatic_refresh_runs_only_for_a_visible_transfer_view() {
+        assert_eq!(
+            automatic_refresh_interval(true),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(automatic_refresh_interval(false), None);
     }
 
     #[test]
