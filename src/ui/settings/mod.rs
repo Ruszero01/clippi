@@ -271,7 +271,7 @@ impl Render for SettingsPanel {
                     .gap(px(8.))
                     .h(px(36.))
                     .px(px(8.))
-                    .mt(px(8.))
+                    .mt(px(4.))
                     // --- Back button (28x28, iconfont → ---
                     .child(
                         div()
@@ -313,7 +313,7 @@ impl Render for SettingsPanel {
                     .flex_row()
                     .h(px(36.))
                     .px(px(8.))
-                    .mt(px(8.))
+                    .mt(px(2.))
                     .border_b(px(1.))
                     .border_color(theme.divider)
                     .children(tab_names().iter().enumerate().map(|(i, name)| {

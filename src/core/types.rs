@@ -242,6 +242,9 @@ impl FileData {
     }
 
     pub fn from_json(s: &str) -> Self {
+        if s.trim().is_empty() {
+            return Self::default();
+        }
         serde_json::from_str(s).unwrap_or_else(|e| {
             log::warn!("Failed to deserialize FileData: {e}");
             Self::default()
@@ -929,6 +932,16 @@ pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blank_file_data_json_returns_default() {
+        for json in ["", " ", "\r\n\t"] {
+            let data = FileData::from_json(json);
+            assert!(data.files.is_empty());
+            assert!(!data.transfer);
+            assert!(data.remote_hash.is_empty());
+        }
+    }
 
     #[test]
     fn test_format_relative_time_supports_months_and_years() {

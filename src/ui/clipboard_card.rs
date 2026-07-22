@@ -995,7 +995,11 @@ impl RenderOnce for ClipboardCard {
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
         let tags = item.tags.clone();
-        let transfer_file_data = FileData::from_json(&item.file_data);
+        let transfer_file_data = if content_type == ContentType::File || meta_type == "transfer" {
+            FileData::from_json(&item.file_data)
+        } else {
+            FileData::default()
+        };
         let transfer_is_cloud = meta_type == "transfer"
             && transfer_file_data.is_transfer()
             && transfer_file_data
@@ -1817,20 +1821,11 @@ impl RenderOnce for ClipboardCard {
                                         .border_color(surface),
                                 )
                         } else if img_missing || preview_img_path.is_none() {
-                            let (placeholder_text, placeholder_color, placeholder_icon) =
-                                if img_stale {
-                                    (
-                                        I18nKey::CardStaleFile.text().to_string(),
-                                        danger,
-                                        "\u{e607}",
-                                    )
-                                } else {
-                                    (
-                                        I18nKey::CardImageNotLoaded.text().to_string(),
-                                        text_3,
-                                        "\u{e626}",
-                                    )
-                                };
+                            let (placeholder_color, placeholder_icon) = if img_stale {
+                                (danger, "\u{e607}")
+                            } else {
+                                (text_3, "\u{e626}")
+                            };
                             div()
                                 .flex_1()
                                 .w_full()
@@ -1838,30 +1833,21 @@ impl RenderOnce for ClipboardCard {
                                 .flex()
                                 .items_center()
                                 .justify_center()
+                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
                                 .child(
                                     div()
-                                        .rounded(px(6.))
+                                        .size(px(40.))
+                                        .rounded(px(8.))
                                         .bg(subtle_row_bg)
-                                        .px(px(10.))
-                                        .py(px(6.))
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .gap(px(5.))
                                         .child(
                                             div()
-                                                .text_size(px(16.))
+                                                .text_size(px(24.))
                                                 .font_family("iconfont")
                                                 .text_color(placeholder_color)
                                                 .child(placeholder_icon),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .line_height(px(14.))
-                                                .text_color(placeholder_color)
-                                                .whitespace_nowrap()
-                                                .child(placeholder_text),
                                         ),
                                 )
                         } else {

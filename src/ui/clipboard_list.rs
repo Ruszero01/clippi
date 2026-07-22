@@ -1161,16 +1161,6 @@ impl ClipboardListView {
                     }
                 }
             }
-            "copy_transfer_path" => {
-                if let Some(ref item) = self.context_menu_item {
-                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
-                    if let Some(file) = file_data.files.first() {
-                        let path = file.path.clone();
-                        self.state
-                            .update(cx, |state, _cx| state.copy_transfer_path(&path));
-                    }
-                }
-            }
             "paste_image_bitmap" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
@@ -1256,16 +1246,6 @@ impl ClipboardListView {
                         let path = file.path.clone();
                         self.state
                             .update(cx, |state, _cx| state.open_transfer_location(&path));
-                    }
-                }
-            }
-            "copy_transfer_path" => {
-                if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
-                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
-                    if let Some(file) = file_data.files.first() {
-                        let path = file.path.clone();
-                        self.state
-                            .update(cx, |state, _cx| state.copy_transfer_path(&path));
                     }
                 }
             }

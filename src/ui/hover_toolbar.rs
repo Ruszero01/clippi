@@ -142,11 +142,6 @@ impl RenderOnce for HoverToolbar {
                     "open_transfer_location",
                     Box::new(move |hovered| if hovered { accent } else { text_2 }),
                 ));
-                buttons.push((
-                    "\u{e60e}",
-                    "copy_transfer_path",
-                    Box::new(move |hovered| if hovered { accent } else { text_2 }),
-                ));
             } else {
                 buttons.push((
                     "\u{e7c8}",

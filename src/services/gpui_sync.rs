@@ -509,7 +509,8 @@ fn run_sync_cycle_for_backend(
         }
         Err(error) if error == "@@unchanged" => remote_unchanged = true,
         Err(error)
-            if error.contains("not found")
+            if error == sync::SYNC_PULL_NOT_FOUND
+                || error.contains("not found")
                 || error.contains("No such file")
                 || error.contains("404") => {}
         Err(error) => {
@@ -908,7 +909,7 @@ mod tests {
         }
 
         fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
-            Err("not found".into())
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
         }
 
         fn push(&self, payload: &SyncPayload) -> Result<(), String> {
@@ -949,7 +950,7 @@ mod tests {
         }
 
         fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
-            Err("not found".into())
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
         }
 
         fn push(&self, _payload: &SyncPayload) -> Result<(), String> {
@@ -976,7 +977,7 @@ mod tests {
         }
 
         fn pull(&self, _bypass_cache: bool) -> Result<SyncPayload, String> {
-            Err("not found".into())
+            Err(sync::SYNC_PULL_NOT_FOUND.into())
         }
 
         fn push(&self, _payload: &SyncPayload) -> Result<(), String> {

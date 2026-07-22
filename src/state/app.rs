@@ -191,6 +191,31 @@ fn item_matches_keywords(item: &crate::core::types::ClipboardItem, keywords: &[S
         .iter()
         .all(|keyword| item_matches_keyword(item, keyword))
 }
+fn path_text_matches_selected_types(
+    file_active: bool,
+    path_active: bool,
+    kind: Option<crate::services::file_status::CachedPathKind>,
+) -> bool {
+    if !file_active && !path_active {
+        return true;
+    }
+    let points_to_file = matches!(
+        kind,
+        Some(crate::services::file_status::CachedPathKind::File)
+    );
+    (file_active && points_to_file) || (path_active && !points_to_file)
+}
+
+fn item_matches_runtime_path_type(item: &ClipboardItem, filters: &ClipboardFilters) -> bool {
+    if item.meta_type != "path" || item.content_type == ContentType::File {
+        return true;
+    }
+    path_text_matches_selected_types(
+        filters.is_type_active("file"),
+        filters.is_type_active("path"),
+        crate::services::file_status::cached_path_kind(&item.full_text),
+    )
+}
 
 fn truncate_chars(text: &mut String, limit: usize) {
     if let Some((idx, _)) = text.char_indices().nth(limit) {
@@ -381,6 +406,7 @@ impl AppState {
                 if !keyword_filtered && !keywords.is_empty() {
                     items.retain(|item| item_matches_keywords(item, &keywords));
                 }
+                items.retain(|item| item_matches_runtime_path_type(item, &self.filters));
                 // Hide non-native platform paths when the setting is enabled.
                 if self.settings.filter_foreign_paths {
                     items.retain(|item| {
@@ -428,6 +454,9 @@ impl AppState {
             }
 
             for item in page.drain(..) {
+                if !item_matches_runtime_path_type(&item, &self.filters) {
+                    continue;
+                }
                 if self.settings.filter_foreign_paths
                     && item.meta_type == "path"
                     && !crate::core::types::path_is_native(&item.full_text)
@@ -2222,12 +2251,6 @@ impl AppState {
         std::thread::spawn(move || reveal_file_location(&path));
     }
 
-    pub fn copy_transfer_path(&mut self, path: &str) {
-        if std::path::Path::new(path).is_file() {
-            self.write_text_to_clipboard_internal(path);
-        }
-    }
-
     /// Get visible items based on current filter mode.
     /// In transfer mode, returns converted manifest entries. Otherwise returns DB items.
     pub fn visible_items(&self) -> Vec<ClipboardItem> {
@@ -2406,6 +2429,42 @@ mod tests {
         (state, dirty)
     }
 
+    #[test]
+    fn path_text_type_filter_separates_files_from_directories_and_missing_paths() {
+        use crate::services::file_status::CachedPathKind;
+
+        assert!(path_text_matches_selected_types(
+            true,
+            false,
+            Some(CachedPathKind::File)
+        ));
+        assert!(!path_text_matches_selected_types(
+            true,
+            false,
+            Some(CachedPathKind::Directory)
+        ));
+        assert!(!path_text_matches_selected_types(
+            true,
+            false,
+            Some(CachedPathKind::Missing)
+        ));
+        assert!(path_text_matches_selected_types(
+            false,
+            true,
+            Some(CachedPathKind::Directory)
+        ));
+        assert!(path_text_matches_selected_types(false, true, None));
+        assert!(path_text_matches_selected_types(
+            true,
+            true,
+            Some(CachedPathKind::File)
+        ));
+        assert!(path_text_matches_selected_types(
+            true,
+            true,
+            Some(CachedPathKind::Directory)
+        ));
+    }
     #[test]
     fn item_hotkey_update_is_local_metadata_only() {
         let (mut state, dirty) = test_state();

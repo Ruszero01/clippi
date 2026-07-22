@@ -186,6 +186,11 @@ define_i18n! {
     BackendPhPass:      ("密码", "Password"),
     BackendNameRequired:        ("请输入后端名称", "Please enter a backend name"),
     BackendDeleteConfirmMsg:    ("确定要删除此后端吗？此操作不可撤销", "Delete this backend? This cannot be undone."),
+    BackendTooltipSetTransfer:  ("设为中转后端", "Use for transfer station"),
+    BackendTooltipEnableTransfer:("请先开启文件中转站", "Enable transfer station first"),
+    BackendTooltipTransferActive:("当前中转后端", "Current transfer backend"),
+    BackendTooltipEdit:         ("编辑后端", "Edit backend"),
+    BackendTooltipDelete:       ("删除后端", "Delete backend"),
 
     // ─── Cache cleanup ───
     SettingCleanup:         ("缓存清理", "Cache cleanup"),
@@ -332,7 +337,7 @@ define_i18n! {
     TransferStation:         ("文件中转站", "Transfer Station"),
     UploadToTransfer:        ("上传到中转站", "Upload to Station"),
     RemoveFromTransfer:      ("从中转站删除", "Remove from Station"),
-    RemoveSelectedFromTransfer: ("从中转站删除所选文件", "Remove selected from Station"),
+    RemoveSelectedFromTransfer: ("从中转站删除", "Remove from Station"),
     DownloadTransfer:        ("下载文件", "Download"),
     TransferCloud:           ("云端", "Cloud"),
     TransferLocal:           ("本地", "Local"),
@@ -350,6 +355,7 @@ define_i18n! {
     TransferDeleteFailed:    ("删除失败: {0}", "Delete failed: {0}"),
     TransferSingleFileOnly:   ("中转站目前仅支持单个文件", "Transfer station currently supports one file at a time"),
     TransferRetention:        ("自动过期", "Auto expiration"),
+    TransferRetentionDays:    ("{0}天", "{0}d"),
     TransferKeepForever:      ("永久", "Forever"),
     TransferBackend:          ("中转后端", "Transfer backend"),
 

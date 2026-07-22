@@ -307,7 +307,7 @@ impl ContextMenu {
         if ctx.is_link {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenLink.text().into(),
-                action: "open_transfer_location".into(),
+                action: "open_location".into(),
                 icon: "\u{e643}".into(),
                 danger: false,
                 fav: false,
@@ -340,7 +340,7 @@ impl ContextMenu {
         if ctx.is_file {
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteFilePath.text().into(),
-                action: "copy_transfer_path".into(),
+                action: "paste_file_path".into(),
                 icon: "\u{e60e}".into(),
                 danger: false,
                 fav: false,
@@ -493,19 +493,11 @@ impl ContextMenu {
         if is_local {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
-                action: "open_location".into(),
+                action: "open_transfer_location".into(),
                 icon: "\u{e609}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
-            });
-            items.push(RawMenuItem {
-                label: I18nKey::CtxPasteFilePath.text().into(),
-                action: "paste_file_path".into(),
-                icon: "\u{e60e}".into(),
-                danger: false,
-                fav: false,
-                shortcut: None,
             });
         }
         // Separator

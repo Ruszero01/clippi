@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::tooltip::Tooltip;
 use gpui_transitions::WindowUseTransition;
 
 use crate::core::i18n_keys::I18nKey;
@@ -149,115 +150,6 @@ impl SettingsPanel {
                         )
                     }),
             )
-            .child(
-                div()
-                    .rounded(px(10.))
-                    .bg(surface)
-                    .border(px(1.))
-                    .border_color(divider)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .h(px(38.))
-                            .px(px(14.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(text_1)
-                                            .child(I18nKey::TransferStation.text()),
-                                    )
-                                    .when(enabled_backend_count == 0, |row| {
-                                        row.child(
-                                            div()
-                                                .text_size(px(10.))
-                                                .text_color(text_2)
-                                                .child(I18nKey::TransferNoBackend.text()),
-                                        )
-                                    }),
-                            )
-                            .child(render_toggle(
-                                transfer_enabled,
-                                "transfer-station-enabled",
-                                ToggleColors {
-                                    accent,
-                                    track_off: divider,
-                                },
-                                &mut self.toggle_states,
-                                window,
-                                cx,
-                                {
-                                    let wm = wm.clone();
-                                    move |_window, cx| {
-                                        wm.update(cx, |wm, cx| {
-                                            wm.toggle_transfer_station(cx);
-                                        });
-                                    }
-                                },
-                            )),
-                    )
-                    .when(transfer_enabled, |card| {
-                        card.child(div().h(px(1.)).bg(divider)).child(
-                            div()
-                                .h(px(38.))
-                                .px(px(14.))
-                                .flex()
-                                .items_center()
-                                .gap(px(4.))
-                                .child(
-                                    div()
-                                        .w(px(76.))
-                                        .text_size(px(11.))
-                                        .text_color(text_2)
-                                        .child(I18nKey::TransferRetention.text()),
-                                )
-                                .children([0_u32, 1, 3, 7, 30].into_iter().map(|days| {
-                                    let selected = transfer_retention == days;
-                                    let wm = wm.clone();
-                                    let label = if days == 0 {
-                                        I18nKey::TransferKeepForever.text().to_string()
-                                    } else {
-                                        format!("{days}d")
-                                    };
-                                    div()
-                                        .flex_1()
-                                        .h(px(22.))
-                                        .rounded(px(6.))
-                                        .bg(if selected { accent } else { rgba(0x00000000) })
-                                        .text_size(px(10.))
-                                        .text_color(if selected { rgb(0xffffff) } else { text_2 })
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(move |style| {
-                                            if selected {
-                                                style.opacity(0.88)
-                                            } else {
-                                                style.bg(accent_soft)
-                                            }
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_event, _window, cx| {
-                                                wm.update(cx, |wm, cx| {
-                                                    wm.set_transfer_retention_days(days, cx);
-                                                });
-                                            },
-                                        )
-                                        .child(label)
-                                })),
-                        )
-                    }),
-            )
             .when(sync.auto_enabled, |container| {
                 container.child(
                     div()
@@ -357,6 +249,115 @@ impl SettingsPanel {
                     .overflow_hidden()
                     .child(
                         div()
+                            .h(px(38.))
+                            .px(px(14.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::TransferStation.text()),
+                                    )
+                                    .when(enabled_backend_count == 0, |row| {
+                                        row.child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .text_color(text_2)
+                                                .child(I18nKey::TransferNoBackend.text()),
+                                        )
+                                    }),
+                            )
+                            .child(render_toggle(
+                                transfer_enabled,
+                                "transfer-station-enabled",
+                                ToggleColors {
+                                    accent,
+                                    track_off: divider,
+                                },
+                                &mut self.toggle_states,
+                                window,
+                                cx,
+                                {
+                                    let wm = wm.clone();
+                                    move |_window, cx| {
+                                        wm.update(cx, |wm, cx| {
+                                            wm.toggle_transfer_station(cx);
+                                        });
+                                    }
+                                },
+                            )),
+                    )
+                    .when(transfer_enabled, |card| {
+                        card.child(div().h(px(1.)).bg(divider)).child(
+                            div()
+                                .h(px(38.))
+                                .px(px(14.))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .w(px(76.))
+                                        .text_size(px(11.))
+                                        .text_color(text_2)
+                                        .child(I18nKey::TransferRetention.text()),
+                                )
+                                .children([0_u32, 1, 3, 7, 30].into_iter().map(|days| {
+                                    let selected = transfer_retention == days;
+                                    let wm = wm.clone();
+                                    let label = if days == 0 {
+                                        I18nKey::TransferKeepForever.text().to_string()
+                                    } else {
+                                        I18nKey::TransferRetentionDays.fmt(&[&days.to_string()])
+                                    };
+                                    div()
+                                        .flex_1()
+                                        .h(px(22.))
+                                        .rounded(px(6.))
+                                        .bg(if selected { accent } else { rgba(0x00000000) })
+                                        .text_size(px(10.))
+                                        .text_color(if selected { rgb(0xffffff) } else { text_2 })
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(move |style| {
+                                            if selected {
+                                                style.opacity(0.88)
+                                            } else {
+                                                style.bg(accent_soft)
+                                            }
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_event, _window, cx| {
+                                                wm.update(cx, |wm, cx| {
+                                                    wm.set_transfer_retention_days(days, cx);
+                                                });
+                                            },
+                                        )
+                                        .child(label)
+                                })),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .overflow_hidden()
+                    .child(
+                        div()
                             .h(px(40.))
                             .rounded(px(10.))
                             .bg(self.theme.titlebar_bg)
@@ -442,7 +443,20 @@ impl SettingsPanel {
     ) -> impl IntoElement {
         let id = backend.config.id.clone();
         let enabled = backend.config.enabled;
-        let transfer_selected = self.state.read(cx).settings.transfer_backend_id == id;
+        let (transfer_station_enabled, transfer_selected) = {
+            let settings = &self.state.read(cx).settings;
+            let selected = settings
+                .sync_backends
+                .iter()
+                .find(|config| {
+                    config.enabled
+                        && !settings.transfer_backend_id.is_empty()
+                        && config.id == settings.transfer_backend_id
+                })
+                .or_else(|| settings.sync_backends.iter().find(|config| config.enabled))
+                .is_some_and(|config| config.id == id);
+            (settings.transfer_station_enabled, selected)
+        };
         let (previous, generation, changed) = match self.backend_collapse_states.get_mut(&id) {
             Some(state) => {
                 let previous = state.enabled;
@@ -544,7 +558,7 @@ impl SettingsPanel {
             .flex_col()
             .child(
                 div()
-                    .h(px(52.))
+                    .h(px(60.))
                     .flex_shrink_0()
                     .px(px(12.))
                     .flex()
@@ -557,7 +571,7 @@ impl SettingsPanel {
                             .opacity(content_opacity)
                             .flex()
                             .flex_col()
-                            .gap(px(3.))
+                            .gap(px(8.))
                             .child(
                                 div()
                                     .flex()
@@ -573,7 +587,8 @@ impl SettingsPanel {
                                     )
                                     .child(
                                         div()
-                                            .max_w(px(110.))
+                                            .min_w(px(0.))
+                                            .flex_1()
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
@@ -581,36 +596,191 @@ impl SettingsPanel {
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(text_1)
                                             .child(backend.config.name.clone()),
-                                    )
+                                    ),
+                            )
+                            .child(
+                                div().flex().items_center().child(
+                                    div()
+                                        .h(px(16.))
+                                        .max_w(px(150.))
+                                        .px(px(5.))
+                                        .rounded(px(3.))
+                                        .bg(accent_soft)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_size(px(10.))
+                                        .text_color(accent)
+                                        .flex()
+                                        .items_center()
+                                        .child(backend.service_label.clone()),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .opacity(content_opacity)
+                            .flex()
+                            .flex_col()
+                            .items_end()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
                                     .child(
                                         div()
-                                            .h(px(16.))
-                                            .px(px(5.))
-                                            .rounded(px(3.))
-                                            .bg(accent_soft)
-                                            .text_size(px(10.))
-                                            .text_color(accent)
                                             .flex()
                                             .items_center()
-                                            .child(backend.service_label.clone()),
+                                            .gap(px(4.))
+                                            .child(
+                                                if auto_enabled
+                                                    && enabled
+                                                    && transfer_station_enabled
+                                                {
+                                                    icon_button(
+                                                        ("sync-transfer", key),
+                                                        "\u{e794}",
+                                                        if transfer_selected {
+                                                            accent
+                                                        } else {
+                                                            text_3
+                                                        },
+                                                        accent,
+                                                        if transfer_selected {
+                                                            I18nKey::BackendTooltipTransferActive
+                                                                .text()
+                                                        } else {
+                                                            I18nKey::BackendTooltipSetTransfer
+                                                                .text()
+                                                        },
+                                                        {
+                                                            let id = id.clone();
+                                                            let wm = wm.clone();
+                                                            move |_window, cx| {
+                                                                wm.update(cx, |wm, cx| {
+                                                                    wm.set_transfer_backend(
+                                                                        &id, cx,
+                                                                    );
+                                                                });
+                                                            }
+                                                        },
+                                                    )
+                                                    .into_any_element()
+                                                } else {
+                                                    disabled_icon_button(
+                                                        ("sync-transfer", key),
+                                                        "\u{e794}",
+                                                        text_3,
+                                                        if transfer_station_enabled {
+                                                            I18nKey::BackendTooltipSetTransfer
+                                                                .text()
+                                                        } else {
+                                                            I18nKey::BackendTooltipEnableTransfer
+                                                                .text()
+                                                        },
+                                                    )
+                                                    .into_any_element()
+                                                },
+                                            )
+                                            .child(if auto_enabled {
+                                                icon_button(
+                                                    ("sync-edit", key),
+                                                    "\u{e648}",
+                                                    text_3,
+                                                    accent,
+                                                    I18nKey::BackendTooltipEdit.text(),
+                                                    {
+                                                        let config = backend.config.clone();
+                                                        let backend_panel = backend_panel.clone();
+                                                        move |window, cx| {
+                                                            backend_panel.update(
+                                                                cx,
+                                                                |panel, cx| {
+                                                                    panel.open_edit(
+                                                                        &config, window, cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                        }
+                                                    },
+                                                )
+                                                .into_any_element()
+                                            } else {
+                                                disabled_icon_button(
+                                                    ("sync-edit", key),
+                                                    "\u{e648}",
+                                                    text_3,
+                                                    I18nKey::BackendTooltipEdit.text(),
+                                                )
+                                                .into_any_element()
+                                            })
+                                            .child(if auto_enabled {
+                                                icon_button(
+                                                    ("sync-delete", key),
+                                                    "\u{e8b6}",
+                                                    text_3,
+                                                    danger,
+                                                    I18nKey::BackendTooltipDelete.text(),
+                                                    {
+                                                        let id = id.clone();
+                                                        let this = cx.entity().clone();
+                                                        move |_window, cx| {
+                                                            this.update(cx, |panel, cx| {
+                                                            panel.delete_backend_confirm =
+                                                                Some(id.clone());
+                                                            panel.delete_backend_confirm_gen =
+                                                                panel
+                                                                    .delete_backend_confirm_gen
+                                                                    .wrapping_add(1);
+                                                            panel.delete_backend_confirm_started =
+                                                                Some(std::time::Instant::now());
+                                                            cx.notify();
+                                                        });
+                                                        }
+                                                    },
+                                                )
+                                                .into_any_element()
+                                            } else {
+                                                disabled_icon_button(
+                                                    ("sync-delete", key),
+                                                    "\u{e8b6}",
+                                                    text_3,
+                                                    I18nKey::BackendTooltipDelete.text(),
+                                                )
+                                                .into_any_element()
+                                            }),
                                     )
-                                    .when(transfer_selected, |el| {
-                                        el.child(
-                                            div()
-                                                .h(px(16.))
-                                                .px(px(5.))
-                                                .rounded(px(3.))
-                                                .bg(accent_soft)
-                                                .text_size(px(10.))
-                                                .text_color(accent)
-                                                .flex()
-                                                .items_center()
-                                                .child(I18nKey::TransferBackend.text()),
+                                    .child(if auto_enabled {
+                                        render_toggle(
+                                            enabled,
+                                            &format!("sync-backend-{id}"),
+                                            ToggleColors {
+                                                accent,
+                                                track_off: divider,
+                                            },
+                                            &mut self.toggle_states,
+                                            window,
+                                            cx,
+                                            {
+                                                let id = id.clone();
+                                                let wm = wm.clone();
+                                                move |_window, cx| {
+                                                    wm.update(cx, |wm, cx| {
+                                                        wm.toggle_sync_backend(&id, cx);
+                                                    });
+                                                }
+                                            },
                                         )
+                                        .into_any_element()
+                                    } else {
+                                        disabled_toggle(enabled, divider).into_any_element()
                                     }),
                             )
                             .child(
                                 div()
+                                    .max_w(px(210.))
                                     .text_size(px(10.))
                                     .text_color(text_3)
                                     .overflow_hidden()
@@ -618,97 +788,6 @@ impl SettingsPanel {
                                     .whitespace_nowrap()
                                     .child(stats),
                             ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .opacity(content_opacity)
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .child(if auto_enabled && enabled {
-                                        icon_button(
-                                            "\u{e794}",
-                                            if transfer_selected { accent } else { text_3 },
-                                            accent,
-                                            {
-                                                let id = id.clone();
-                                                let wm = wm.clone();
-                                                move |_window, cx| {
-                                                    wm.update(cx, |wm, cx| {
-                                                        wm.set_transfer_backend(&id, cx);
-                                                    });
-                                                }
-                                            },
-                                        )
-                                        .into_any_element()
-                                    } else {
-                                        disabled_icon_button("\u{e794}", text_3).into_any_element()
-                                    })
-                                    .child(if auto_enabled {
-                                        icon_button("\u{e648}", text_3, accent, {
-                                            let config = backend.config.clone();
-                                            let backend_panel = backend_panel.clone();
-                                            move |window, cx| {
-                                                backend_panel.update(cx, |panel, cx| {
-                                                    panel.open_edit(&config, window, cx);
-                                                });
-                                            }
-                                        })
-                                        .into_any_element()
-                                    } else {
-                                        disabled_icon_button("\u{e648}", text_3).into_any_element()
-                                    })
-                                    .child(if auto_enabled {
-                                        icon_button("\u{e8b6}", text_3, danger, {
-                                            let id = id.clone();
-                                            let this = cx.entity().clone();
-                                            move |_window, cx| {
-                                                this.update(cx, |panel, cx| {
-                                                    panel.delete_backend_confirm = Some(id.clone());
-                                                    panel.delete_backend_confirm_gen = panel
-                                                        .delete_backend_confirm_gen
-                                                        .wrapping_add(1);
-                                                    panel.delete_backend_confirm_started =
-                                                        Some(std::time::Instant::now());
-                                                    cx.notify();
-                                                });
-                                            }
-                                        })
-                                        .into_any_element()
-                                    } else {
-                                        disabled_icon_button("\u{e8b6}", text_3).into_any_element()
-                                    }),
-                            )
-                            .child(if auto_enabled {
-                                render_toggle(
-                                    enabled,
-                                    &format!("sync-backend-{id}"),
-                                    ToggleColors {
-                                        accent,
-                                        track_off: divider,
-                                    },
-                                    &mut self.toggle_states,
-                                    window,
-                                    cx,
-                                    {
-                                        let id = id.clone();
-                                        let wm = wm.clone();
-                                        move |_window, cx| {
-                                            wm.update(cx, |wm, cx| {
-                                                wm.toggle_sync_backend(&id, cx);
-                                            });
-                                        }
-                                    },
-                                )
-                                .into_any_element()
-                            } else {
-                                disabled_toggle(enabled, divider).into_any_element()
-                            }),
                     ),
             )
             .child(
@@ -795,12 +874,15 @@ impl SettingsPanel {
 }
 
 fn icon_button(
+    button_id: (&'static str, u64),
     icon: &'static str,
     color: Rgba,
     hover_color: Rgba,
+    tooltip: &'static str,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
+        .id(button_id)
         .w(px(24.))
         .h(px(24.))
         .rounded(px(5.))
@@ -812,14 +894,24 @@ fn icon_button(
         .justify_center()
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.text_color(hover_color).bg(rgba(0xffffff0d)))
+        .tooltip(move |window, cx| {
+            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tooltip))
+                .build(window, cx)
+        })
         .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
             on_click(window, cx);
         })
         .child(icon)
 }
 
-fn disabled_icon_button(icon: &'static str, color: Rgba) -> impl IntoElement {
+fn disabled_icon_button(
+    button_id: (&'static str, u64),
+    icon: &'static str,
+    color: Rgba,
+    tooltip: &'static str,
+) -> impl IntoElement {
     div()
+        .id(button_id)
         .w(px(24.))
         .h(px(24.))
         .rounded(px(5.))
@@ -831,6 +923,10 @@ fn disabled_icon_button(icon: &'static str, color: Rgba) -> impl IntoElement {
         .items_center()
         .justify_center()
         .cursor(CursorStyle::Arrow)
+        .tooltip(move |window, cx| {
+            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tooltip))
+                .build(window, cx)
+        })
         .child(icon)
 }
 
@@ -881,9 +977,9 @@ fn hash_key(value: &str) -> u64 {
 
 fn card_height(enabled: bool) -> f32 {
     if enabled {
-        83.0
+        91.0
     } else {
-        52.0
+        60.0
     }
 }
 

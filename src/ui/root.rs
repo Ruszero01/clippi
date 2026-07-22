@@ -208,7 +208,17 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::FileStatusChanged => {
-                    this.list_view.update(cx, |_list, cx| cx.notify());
+                    let path_type_filter_active = {
+                        let state = this.state.read(cx);
+                        state.filters.is_type_active("file") || state.filters.is_type_active("path")
+                    };
+                    if path_type_filter_active {
+                        this.state.update(cx, |state, _cx| state.reload_items());
+                        this.list_view
+                            .update(cx, |list, cx| list.sync_items_from_state(cx));
+                    } else {
+                        this.list_view.update(cx, |_list, cx| cx.notify());
+                    }
                 }
                 WindowManagerEvent::PasteShortcutRecorded { app_name, shortcut } => {
                     this.settings_panel.update(cx, |panel, cx| {

@@ -291,7 +291,7 @@ impl SyncBackend for WebDAVBackend {
                     return Err("@@unchanged".into());
                 }
                 Err(ureq::Error::Status(404, _)) => {
-                    return Err(I18nKey::SyncErrNotFound.text().into());
+                    return Err(crate::core::sync::SYNC_PULL_NOT_FOUND.into());
                 }
                 Err(ureq::Error::Status(code, response))
                     if use_cached_etag && !is_auth_status(code) =>

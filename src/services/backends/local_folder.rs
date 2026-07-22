@@ -101,7 +101,7 @@ impl SyncBackend for LocalFolderBackend {
     fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String> {
         let path = self.file_path();
         if !path.exists() {
-            return Err(I18nKey::SyncErrNotFound.text().into());
+            return Err(sync::SYNC_PULL_NOT_FOUND.into());
         }
 
         // Check if remote file has changed since last pull.

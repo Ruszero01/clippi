@@ -188,13 +188,17 @@ impl ClipboardFilters {
                         type_conditions.push("content_type = 'image'".to_string());
                     }
                     "file" => {
-                        type_conditions.push("content_type = 'file'".to_string());
+                        // Path-text entries are classified by current local
+                        // availability in AppState after this candidate query.
+                        type_conditions
+                            .push("(content_type = 'file' OR meta_type = 'path')".to_string());
                     }
                     "link" => {
                         type_conditions.push("meta_type = 'link'".to_string());
                     }
                     "path" => {
-                        type_conditions.push("meta_type = 'path'".to_string());
+                        type_conditions
+                            .push("meta_type = 'path' AND content_type != 'file'".to_string());
                     }
                     "color" => {
                         type_conditions.push("meta_type = 'color'".to_string());
@@ -251,5 +255,15 @@ mod tests {
         assert!(where_sql.contains("custom_hotkey <> ''"));
         assert!(params.is_empty());
         assert!(filters.is_hotkeys_active());
+    }
+
+    #[test]
+    fn file_filter_loads_path_text_candidates_for_runtime_classification() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("file");
+
+        let (where_sql, params) = filters.db_where();
+        assert!(where_sql.contains("content_type = 'file' OR meta_type = 'path'"));
+        assert!(params.is_empty());
     }
 }

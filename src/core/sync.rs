@@ -87,6 +87,10 @@ pub trait SyncBackend: Send + Sync {
     }
 }
 
+/// Internal backend signal indicating that no remote sync snapshot exists yet.
+/// The sync service treats this as an empty remote and creates the file on push.
+pub const SYNC_PULL_NOT_FOUND: &str = "@@not_found";
+
 /// Top-level sync payload stored as JSON on the cloud folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPayload {
