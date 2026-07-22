@@ -340,7 +340,9 @@ impl GpuiTransferService {
 
         if let Some(command) = command {
             app.transfer_busy = true;
-            app.transfer_refreshing = matches!(command, TransferCommand::Refresh);
+            // toggle_transfer_filter arms this flag for the entry refresh. An
+            // automatic Refresh must not turn it back on every two seconds.
+            app.transfer_refreshing = refresh_indicator_visible(&command, app.transfer_refreshing);
             self.start(command, &app.settings);
             outcome.state_changed = true;
         } else {
@@ -455,6 +457,10 @@ impl GpuiTransferService {
 
 fn automatic_refresh_interval(transfer_view_visible: bool) -> Option<Duration> {
     transfer_view_visible.then_some(ACTIVE_REFRESH_INTERVAL)
+}
+
+fn refresh_indicator_visible(command: &TransferCommand, armed_on_entry: bool) -> bool {
+    armed_on_entry && matches!(command, TransferCommand::Refresh)
 }
 
 fn clear_pending_for_stale_result(app: &mut AppState, result: &TransferJobResult) {
@@ -1493,6 +1499,13 @@ mod tests {
             Some(Duration::from_secs(2))
         );
         assert_eq!(automatic_refresh_interval(false), None);
+    }
+
+    #[test]
+    fn refresh_indicator_is_only_visible_for_the_entry_refresh() {
+        assert!(refresh_indicator_visible(&TransferCommand::Refresh, true));
+        assert!(!refresh_indicator_visible(&TransferCommand::Refresh, false));
+        assert!(!refresh_indicator_visible(&TransferCommand::Cleanup, true));
     }
 
     #[test]

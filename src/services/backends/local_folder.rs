@@ -14,11 +14,12 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 const SYNC_FILENAME: &str = "clippi_sync.json";
 const MANIFEST_FILENAME: &str = "clippi_files.json";
 const MANIFEST_OPS_DIR: &str = "file_ops";
+const CONFLICT_STABLE_AGE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ManifestOperation {
@@ -46,6 +47,48 @@ fn manifest_revision(manifest: &FileManifest) -> Result<String, String> {
         serde_json::to_vec(manifest).map_err(|error| format!("serialize manifest: {error}"))?;
     let digest = sha2::Sha256::digest(data);
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn timestamp_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    match (
+        chrono::DateTime::parse_from_rfc3339(left),
+        chrono::DateTime::parse_from_rfc3339(right),
+    ) {
+        (Ok(left), Ok(right)) => left.cmp(&right),
+        _ => left.cmp(right),
+    }
+}
+
+/// Conflict snapshots cannot represent deletions, so merge them by union and
+/// let the immutable operation log apply authoritative upserts/deletes later.
+fn merge_manifest_snapshots(mut left: FileManifest, right: FileManifest) -> FileManifest {
+    let mut files: HashMap<String, ManifestEntry> = left
+        .files
+        .drain(..)
+        .map(|entry| (entry.hash.clone(), entry))
+        .collect();
+    for candidate in right.files {
+        match files.get_mut(&candidate.hash) {
+            Some(current)
+                if timestamp_cmp(&candidate.uploaded_at, &current.uploaded_at).is_gt()
+                    || (candidate.uploaded_at == current.uploaded_at
+                        && candidate.blob_id > current.blob_id) =>
+            {
+                *current = candidate;
+            }
+            None => {
+                files.insert(candidate.hash.clone(), candidate);
+            }
+            _ => {}
+        }
+    }
+    if timestamp_cmp(&right.updated_at, &left.updated_at).is_gt() {
+        left.updated_at = right.updated_at;
+        left.device_name = right.device_name;
+    }
+    left.files = files.into_values().collect();
+    left.files.sort_by(|a, b| a.hash.cmp(&b.hash));
+    left
 }
 
 pub struct LocalFolderBackend {
@@ -108,12 +151,8 @@ impl LocalFolderBackend {
         PathBuf::from(&self.config.folder_path).join(MANIFEST_OPS_DIR)
     }
 
-    fn read_legacy_manifest(&self) -> Result<Option<FileManifest>, String> {
-        let path = self.manifest_path();
-        if !path.exists() {
-            return Ok(None);
-        }
-        let data = std::fs::read(&path).map_err(|error| format!("read manifest: {error}"))?;
+    fn read_manifest_snapshot(path: &std::path::Path) -> Result<FileManifest, String> {
+        let data = std::fs::read(path).map_err(|error| format!("read manifest: {error}"))?;
         let mut manifest: FileManifest =
             serde_json::from_slice(&data).map_err(|error| format!("parse manifest: {error}"))?;
         if manifest.version > crate::core::migration::TRANSFER_PROTOCOL_VERSION {
@@ -123,7 +162,92 @@ impl LocalFolderBackend {
             ));
         }
         crate::core::migration::migrate_file_manifest(&mut manifest);
-        Ok(Some(manifest))
+        for entry in &manifest.files {
+            entry.validate()?;
+        }
+        Ok(manifest)
+    }
+
+    fn find_manifest_conflict_candidates(&self) -> Vec<PathBuf> {
+        let root = PathBuf::from(&self.config.folder_path);
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                let name = path.file_name()?.to_str()?;
+                let is_conflict = name != MANIFEST_FILENAME
+                    && !name.starts_with('.')
+                    && name.starts_with("clippi_files")
+                    && name.ends_with(".json");
+                if !is_conflict || !path.is_file() {
+                    return None;
+                }
+                Some(path)
+            })
+            .collect()
+    }
+
+    fn find_manifest_conflicts_at(&self, now: SystemTime) -> Vec<PathBuf> {
+        self.find_manifest_conflict_candidates()
+            .into_iter()
+            .filter(|path| {
+                path.metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age >= CONFLICT_STABLE_AGE)
+            })
+            .collect()
+    }
+
+    fn find_manifest_conflicts(&self) -> Vec<PathBuf> {
+        self.find_manifest_conflicts_at(SystemTime::now())
+    }
+
+    fn read_legacy_manifest(&self) -> Result<Option<FileManifest>, String> {
+        let path = self.manifest_path();
+        let mut baseline = if path.exists() {
+            Some(Self::read_manifest_snapshot(&path)?)
+        } else {
+            None
+        };
+        // Pull every complete conflict snapshot immediately. The stability delay
+        // is only for deletion; a partially synced JSON file is skipped here and
+        // retried by the next lightweight poll.
+        for conflict_path in self.find_manifest_conflict_candidates() {
+            match Self::read_manifest_snapshot(&conflict_path) {
+                Ok(conflict) => {
+                    baseline = Some(match baseline {
+                        Some(current) => merge_manifest_snapshots(current, conflict),
+                        None => conflict,
+                    });
+                }
+                Err(error) => log::warn!(
+                    "[transfer] skip invalid manifest conflict {}: {error}",
+                    conflict_path.display()
+                ),
+            }
+        }
+        Ok(baseline)
+    }
+
+    fn cleanup_manifest_conflicts(&self) {
+        for path in self.find_manifest_conflicts() {
+            // Keep malformed or newer-protocol files for manual recovery. Only
+            // remove snapshots that passed the same validation used for merging.
+            if Self::read_manifest_snapshot(&path).is_err() {
+                continue;
+            }
+            if let Err(error) = std::fs::remove_file(&path) {
+                log::warn!(
+                    "[transfer] failed to clean manifest conflict {}: {error}",
+                    path.display()
+                );
+            }
+        }
     }
 
     fn read_manifest_operations(&self) -> Result<Vec<ManifestOperation>, String> {
@@ -170,21 +294,17 @@ impl LocalFolderBackend {
         let legacy = self.read_legacy_manifest()?;
         let operations = self.read_manifest_operations()?;
         let has_state = legacy.is_some() || !operations.is_empty();
-        let mut files: HashMap<String, ManifestEntry> = if operations.is_empty() {
-            legacy
-                .as_ref()
-                .map(|manifest| {
-                    manifest
-                        .files
-                        .iter()
-                        .cloned()
-                        .map(|entry| (entry.hash.clone(), entry))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
+        let mut files: HashMap<String, ManifestEntry> = legacy
+            .as_ref()
+            .map(|manifest| {
+                manifest
+                    .files
+                    .iter()
+                    .cloned()
+                    .map(|entry| (entry.hash.clone(), entry))
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut updated_at = legacy
             .as_ref()
             .map(|manifest| manifest.updated_at.clone())
@@ -245,7 +365,7 @@ impl LocalFolderBackend {
         })
     }
 
-    fn write_protocol_marker(&self, manifest: &FileManifest) {
+    fn write_protocol_marker(&self, manifest: &FileManifest) -> bool {
         let root = PathBuf::from(&self.config.folder_path);
         let destination = self.manifest_path();
         let temporary = root.join(format!(".{MANIFEST_FILENAME}.v2.tmp"));
@@ -262,6 +382,9 @@ impl LocalFolderBackend {
         if let Err(error) = result {
             let _ = std::fs::remove_file(temporary);
             log::warn!("[transfer] {error}");
+            false
+        } else {
+            true
         }
     }
 }
@@ -540,6 +663,9 @@ impl SyncBackend for LocalFolderBackend {
             }
         }
         if changes.is_empty() {
+            if self.write_protocol_marker(&current) {
+                self.cleanup_manifest_conflicts();
+            }
             return manifest_revision(&current).map_err(ManifestWriteError::Other);
         }
         let logical_clock = max_logical_clock.checked_add(1).ok_or_else(|| {
@@ -558,7 +684,9 @@ impl SyncBackend for LocalFolderBackend {
         let (updated, _) = self
             .materialize_file_manifest()
             .map_err(ManifestWriteError::Other)?;
-        self.write_protocol_marker(&updated);
+        if self.write_protocol_marker(&updated) {
+            self.cleanup_manifest_conflicts();
+        }
         manifest_revision(&updated).map_err(ManifestWriteError::Other)
     }
 
@@ -833,6 +961,63 @@ mod transfer_tests {
             updated_at: chrono::Utc::now().to_rfc3339(),
             files,
         }
+    }
+
+    #[test]
+    fn onedrive_manifest_conflicts_are_merged_as_a_stable_baseline() {
+        let (root, backend) = temp_backend("manifest-conflict");
+        let main_entry = entry('a', "mac.bin");
+        let conflict_entry = entry('b', "windows.bin");
+        std::fs::write(
+            root.join(MANIFEST_FILENAME),
+            serde_json::to_vec_pretty(&manifest(vec![main_entry.clone()], "Mac")).unwrap(),
+        )
+        .unwrap();
+        let conflict_path = root.join("clippi_files-DESKTOP-TEST.json");
+        std::fs::write(
+            &conflict_path,
+            serde_json::to_vec_pretty(&manifest(vec![conflict_entry.clone()], "Windows")).unwrap(),
+        )
+        .unwrap();
+
+        // Pull reads complete conflict JSON immediately, while cleanup waits for
+        // the cloud provider's write to settle.
+        assert!(backend.find_manifest_conflicts().is_empty());
+        let pulled = backend.pull_file_manifest().unwrap();
+        assert_eq!(pulled.manifest.files.len(), 2);
+        assert!(pulled.manifest.files.contains(&main_entry));
+        assert!(pulled.manifest.files.contains(&conflict_entry));
+
+        let future = SystemTime::now() + CONFLICT_STABLE_AGE + Duration::from_secs(1);
+        assert_eq!(
+            backend.find_manifest_conflicts_at(future),
+            vec![conflict_path]
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_log_is_applied_on_top_of_the_migration_baseline() {
+        let (root, backend) = temp_backend("operation-baseline");
+        let operated_entry = entry('a', "operated.bin");
+        backend
+            .push_file_manifest(&manifest(vec![operated_entry.clone()], "device"), None)
+            .unwrap();
+
+        let legacy_entry = entry('b', "legacy.bin");
+        std::fs::write(
+            root.join(MANIFEST_FILENAME),
+            serde_json::to_vec_pretty(&manifest(vec![legacy_entry.clone()], "legacy")).unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = backend.pull_file_manifest().unwrap();
+        assert_eq!(snapshot.manifest.files.len(), 2);
+        assert!(snapshot.manifest.files.contains(&operated_entry));
+        assert!(snapshot.manifest.files.contains(&legacy_entry));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -2222,10 +2222,14 @@ impl AppState {
         }
         self.transfer_filter_active = !self.transfer_filter_active;
         if self.transfer_filter_active {
+            // Only the explicit refresh triggered by entering the transfer view
+            // shows the global loading indicator. Periodic polling stays silent.
+            self.transfer_refreshing = true;
             self.queue_transfer_command(
                 crate::services::transfer_station::TransferCommand::Refresh,
             );
         } else {
+            self.transfer_refreshing = false;
             self.pending_transfer_commands.retain(|command| {
                 !matches!(
                     command,
@@ -2892,6 +2896,7 @@ mod tests {
         state.toggle_transfer_filter();
 
         assert!(!state.transfer_filter_active);
+        assert!(!state.transfer_refreshing);
         assert_eq!(state.pending_transfer_commands.len(), 2);
         assert!(state
             .pending_transfer_commands
