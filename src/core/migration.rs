@@ -29,7 +29,7 @@ pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 pub const SYNC_VERSION: u32 = 5;
 
 /// Current transfer station protocol version — written into every `FileManifest`.
-pub const TRANSFER_PROTOCOL_VERSION: u32 = 1;
+pub const TRANSFER_PROTOCOL_VERSION: u32 = 2;
 
 /// A registered database migration.
 struct DbMigration {
@@ -294,11 +294,12 @@ pub fn migrate_file_manifest(manifest: &mut crate::core::transfer_types::FileMan
         manifest.version = TRANSFER_PROTOCOL_VERSION;
         manifest.files.clear();
     }
-    // Future upgrades:
-    // if manifest.version < 2 {
-    //     // v1 → v2: ...
-    //     manifest.version = 2;
-    // }
+    if manifest.version < 2 {
+        // v1 -> v2 moves local-folder mutations to an append-only operation
+        // log. The materialized fields are unchanged, so no data transform is
+        // required for WebDAV or for the legacy local-folder baseline.
+        manifest.version = 2;
+    }
 }
 
 #[cfg(test)]

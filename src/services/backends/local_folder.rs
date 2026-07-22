@@ -6,27 +6,45 @@
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
 use crate::core::sync::{self, BackendStatus, SyncBackend, SyncPayload};
-use crate::core::transfer_types::{FileManifest, ManifestSnapshot, ManifestWriteError};
+use crate::core::transfer_types::{
+    FileManifest, ManifestEntry, ManifestSnapshot, ManifestWriteError,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
 const SYNC_FILENAME: &str = "clippi_sync.json";
 const MANIFEST_FILENAME: &str = "clippi_files.json";
-const MANIFEST_LOCK_FILENAME: &str = ".clippi_files.lock";
+const MANIFEST_OPS_DIR: &str = "file_ops";
 
-struct ManifestLock(PathBuf);
-
-impl Drop for ManifestLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ManifestOperation {
+    version: u32,
+    id: String,
+    /// Lamport clock. Unlike wall-clock timestamps, this preserves causal
+    /// ordering when Windows and macOS devices have skewed system clocks.
+    #[serde(default)]
+    logical_clock: u64,
+    created_at: String,
+    device_name: String,
+    changes: Vec<ManifestChange>,
 }
 
-fn manifest_revision(data: &[u8]) -> String {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ManifestChange {
+    Upsert { entry: ManifestEntry },
+    Delete { hash: String },
+}
+
+fn manifest_revision(manifest: &FileManifest) -> Result<String, String> {
     use sha2::Digest;
+    let data =
+        serde_json::to_vec(manifest).map_err(|error| format!("serialize manifest: {error}"))?;
     let digest = sha2::Sha256::digest(data);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub struct LocalFolderBackend {
@@ -61,7 +79,11 @@ impl LocalFolderBackend {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with("clippi_sync-") && name.ends_with(".json") {
+                if name != SYNC_FILENAME
+                    && !name.starts_with('.')
+                    && name.starts_with("clippi_sync")
+                    && name.ends_with(".json")
+                {
                     // --- Skip files modified within the last 5 seconds ---
                     if let Ok(meta) = path.metadata() {
                         if let Ok(mtime) = meta.modified() {
@@ -79,6 +101,207 @@ impl LocalFolderBackend {
             }
         }
         conflicts
+    }
+
+    fn manifest_ops_dir(&self) -> PathBuf {
+        PathBuf::from(&self.config.folder_path).join(MANIFEST_OPS_DIR)
+    }
+
+    fn read_legacy_manifest(&self) -> Result<Option<FileManifest>, String> {
+        let path = self.manifest_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = std::fs::read(&path).map_err(|error| format!("read manifest: {error}"))?;
+        let mut manifest: FileManifest =
+            serde_json::from_slice(&data).map_err(|error| format!("parse manifest: {error}"))?;
+        if manifest.version > crate::core::migration::TRANSFER_PROTOCOL_VERSION {
+            return Err(format!(
+                "unsupported transfer manifest version {}",
+                manifest.version
+            ));
+        }
+        crate::core::migration::migrate_file_manifest(&mut manifest);
+        Ok(Some(manifest))
+    }
+
+    fn read_manifest_operations(&self) -> Result<Vec<ManifestOperation>, String> {
+        let directory = self.manifest_ops_dir();
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut operations_by_id = HashMap::new();
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| format!("read manifest operation directory: {error}"))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("read manifest operation: {error}"))?;
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if !path.is_file() || !name.ends_with(".json") || name.starts_with('.') {
+                continue;
+            }
+            let data = std::fs::read(&path)
+                .map_err(|error| format!("read manifest operation {name}: {error}"))?;
+            let operation: ManifestOperation = serde_json::from_slice(&data)
+                .map_err(|error| format!("parse manifest operation {name}: {error}"))?;
+            validate_manifest_operation(&operation)?;
+            if let Some(existing) = operations_by_id.insert(operation.id.clone(), operation.clone())
+            {
+                if existing != operation {
+                    return Err(format!(
+                        "conflicting manifest operations share id {}",
+                        operation.id
+                    ));
+                }
+            }
+        }
+        let mut operations: Vec<_> = operations_by_id.into_values().collect();
+        operations.sort_by(|left, right| {
+            (left.logical_clock, &left.id).cmp(&(right.logical_clock, &right.id))
+        });
+        Ok(operations)
+    }
+
+    fn materialize_file_manifest(&self) -> Result<(FileManifest, bool), String> {
+        let legacy = self.read_legacy_manifest()?;
+        let operations = self.read_manifest_operations()?;
+        let has_state = legacy.is_some() || !operations.is_empty();
+        let mut files: HashMap<String, ManifestEntry> = if operations.is_empty() {
+            legacy
+                .as_ref()
+                .map(|manifest| {
+                    manifest
+                        .files
+                        .iter()
+                        .cloned()
+                        .map(|entry| (entry.hash.clone(), entry))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        let mut updated_at = legacy
+            .as_ref()
+            .map(|manifest| manifest.updated_at.clone())
+            .unwrap_or_default();
+        let mut device_name = legacy
+            .as_ref()
+            .map(|manifest| manifest.device_name.clone())
+            .unwrap_or_default();
+
+        for operation in operations {
+            updated_at = operation.created_at;
+            device_name = operation.device_name;
+            for change in operation.changes {
+                match change {
+                    ManifestChange::Upsert { entry } => {
+                        files.insert(entry.hash.clone(), entry);
+                    }
+                    ManifestChange::Delete { hash } => {
+                        files.remove(&hash);
+                    }
+                }
+            }
+        }
+
+        let mut files: Vec<_> = files.into_values().collect();
+        files.sort_by(|left, right| left.hash.cmp(&right.hash));
+        Ok((
+            FileManifest {
+                version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+                device_name,
+                updated_at,
+                files,
+            },
+            has_state,
+        ))
+    }
+
+    fn write_manifest_operation(
+        &self,
+        operation: &ManifestOperation,
+    ) -> Result<(), ManifestWriteError> {
+        let directory = self.manifest_ops_dir();
+        std::fs::create_dir_all(&directory).map_err(|error| {
+            ManifestWriteError::Other(format!("create manifest operation directory: {error}"))
+        })?;
+        let json = serde_json::to_vec_pretty(operation).map_err(|error| {
+            ManifestWriteError::Other(format!("serialize manifest operation: {error}"))
+        })?;
+        let filename = format!("{}.json", operation.id);
+        let destination = directory.join(&filename);
+        let temporary = directory.join(format!(".{filename}.tmp"));
+        std::fs::write(&temporary, json).map_err(|error| {
+            ManifestWriteError::Other(format!("write manifest operation: {error}"))
+        })?;
+        std::fs::rename(&temporary, &destination).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+            ManifestWriteError::Other(format!("commit manifest operation: {error}"))
+        })
+    }
+
+    fn write_protocol_marker(&self, manifest: &FileManifest) {
+        let root = PathBuf::from(&self.config.folder_path);
+        let destination = self.manifest_path();
+        let temporary = root.join(format!(".{MANIFEST_FILENAME}.v2.tmp"));
+        let result = serde_json::to_vec_pretty(manifest)
+            .map_err(|error| format!("serialize protocol marker: {error}"))
+            .and_then(|data| {
+                std::fs::write(&temporary, data)
+                    .map_err(|error| format!("write protocol marker: {error}"))
+            })
+            .and_then(|()| {
+                crate::services::file_ops::replace_file(&temporary, &destination)
+                    .map_err(|error| format!("commit protocol marker: {error}"))
+            });
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(temporary);
+            log::warn!("[transfer] {error}");
+        }
+    }
+}
+
+fn validate_manifest_operation(operation: &ManifestOperation) -> Result<(), String> {
+    if operation.version != crate::core::migration::TRANSFER_PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported manifest operation version {}",
+            operation.version
+        ));
+    }
+    if operation.logical_clock == u64::MAX {
+        return Err("manifest operation logical clock is out of range".into());
+    }
+    uuid::Uuid::parse_str(&operation.id).map_err(|_| "invalid manifest operation id")?;
+    let timestamp = chrono::DateTime::parse_from_rfc3339(&operation.created_at)
+        .map_err(|_| "invalid manifest operation timestamp")?;
+    if timestamp.offset().local_minus_utc() != 0 {
+        return Err("manifest operation timestamp must use UTC".into());
+    }
+    if operation.changes.is_empty() {
+        return Err("manifest operation must contain changes".into());
+    }
+    for change in &operation.changes {
+        match change {
+            ManifestChange::Upsert { entry } => entry.validate()?,
+            ManifestChange::Delete { hash } => validate_transfer_hash(hash)?,
+        }
+    }
+    Ok(())
+}
+
+fn validate_transfer_hash(hash: &str) -> Result<(), String> {
+    if hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err("invalid transfer hash".into())
     }
 }
 
@@ -189,7 +412,7 @@ impl SyncBackend for LocalFolderBackend {
         let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
         std::fs::write(&tmp_path, &json)
             .map_err(|e| format!("{}: {e}", I18nKey::SyncErrWriteTemp.text()))?;
-        std::fs::rename(&tmp_path, &file_path).map_err(|e| {
+        crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             format!("{}: {e}", I18nKey::SyncErrReplace.text())
         })?;
@@ -223,7 +446,7 @@ impl SyncBackend for LocalFolderBackend {
         // Atomic write: temp file + rename
         let tmp_path = dir.join(format!(".{hash_hex}.{ext}.tmp"));
         std::fs::write(&tmp_path, data).map_err(|e| format!("write blob temp: {e}"))?;
-        std::fs::rename(&tmp_path, &file_path).map_err(|e| {
+        crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             format!("rename blob: {e}")
         })
@@ -259,24 +482,11 @@ impl SyncBackend for LocalFolderBackend {
     // --- ── Transfer station file manifest ── ---
 
     fn pull_file_manifest(&self) -> Result<ManifestSnapshot, String> {
-        let path = self.manifest_path();
-        if !path.exists() {
-            return Ok(ManifestSnapshot {
-                manifest: FileManifest {
-                    version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
-                    device_name: String::new(),
-                    updated_at: String::new(),
-                    files: Vec::new(),
-                },
-                revision: None,
-            });
-        }
-        let data = std::fs::read(&path).map_err(|e| format!("read manifest: {e}"))?;
-        let manifest = serde_json::from_slice(&data).map_err(|e| format!("parse manifest: {e}"))?;
-        Ok(ManifestSnapshot {
-            manifest,
-            revision: Some(manifest_revision(&data)),
-        })
+        let (manifest, has_state) = self.materialize_file_manifest()?;
+        let revision = has_state
+            .then(|| manifest_revision(&manifest))
+            .transpose()?;
+        Ok(ManifestSnapshot { manifest, revision })
     }
 
     fn push_file_manifest(
@@ -284,69 +494,75 @@ impl SyncBackend for LocalFolderBackend {
         manifest: &FileManifest,
         expected_revision: Option<&str>,
     ) -> Result<String, ManifestWriteError> {
-        let dir = PathBuf::from(&self.config.folder_path);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| ManifestWriteError::Other(format!("create dir: {e}")))?;
-
-        let lock_path = dir.join(MANIFEST_LOCK_FILENAME);
-        let mut acquired = false;
-        for _ in 0..40 {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-            {
-                Ok(_) => {
-                    acquired = true;
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(&lock_path)
-                        .and_then(|metadata| metadata.modified())
-                        .ok()
-                        .and_then(|modified| modified.elapsed().ok())
-                        .is_some_and(|age| age >= std::time::Duration::from_secs(120));
-                    if stale {
-                        let _ = std::fs::remove_file(&lock_path);
-                        continue;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                Err(error) => {
-                    return Err(ManifestWriteError::Other(format!(
-                        "create manifest lock: {error}"
-                    )));
-                }
-            }
-        }
-        if !acquired {
-            return Err(ManifestWriteError::Conflict);
-        }
-        let _lock = ManifestLock(lock_path);
-
-        let file_path = self.manifest_path();
-        let current_revision = if file_path.exists() {
-            let data = std::fs::read(&file_path)
-                .map_err(|e| ManifestWriteError::Other(format!("read manifest: {e}")))?;
-            Some(manifest_revision(&data))
-        } else {
-            None
-        };
+        let (current, has_state) = self
+            .materialize_file_manifest()
+            .map_err(ManifestWriteError::Other)?;
+        let current_revision = has_state
+            .then(|| manifest_revision(&current))
+            .transpose()
+            .map_err(ManifestWriteError::Other)?;
         if current_revision.as_deref() != expected_revision {
             return Err(ManifestWriteError::Conflict);
         }
 
-        let json = serde_json::to_string_pretty(manifest)
-            .map_err(|e| ManifestWriteError::Other(format!("serialize manifest: {e}")))?;
+        let operations = self
+            .read_manifest_operations()
+            .map_err(ManifestWriteError::Other)?;
+        let has_operations = !operations.is_empty();
+        let logical_clock = operations
+            .iter()
+            .map(|operation| operation.logical_clock)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| {
+                ManifestWriteError::Other("manifest operation clock exhausted".into())
+            })?;
 
-        let tmp_path = dir.join(format!(".{MANIFEST_FILENAME}.tmp"));
-        std::fs::write(&tmp_path, &json)
-            .map_err(|e| ManifestWriteError::Other(format!("write manifest tmp: {e}")))?;
-        crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            ManifestWriteError::Other(format!("rename manifest: {e}"))
-        })?;
-        Ok(manifest_revision(json.as_bytes()))
+        let current_by_hash: HashMap<_, _> = current
+            .files
+            .iter()
+            .map(|entry| (entry.hash.as_str(), entry))
+            .collect();
+        let requested_by_hash: HashMap<_, _> = manifest
+            .files
+            .iter()
+            .map(|entry| (entry.hash.as_str(), entry))
+            .collect();
+        let mut changes = Vec::new();
+        for entry in &manifest.files {
+            entry.validate().map_err(ManifestWriteError::Other)?;
+            if !has_operations || current_by_hash.get(entry.hash.as_str()).copied() != Some(entry) {
+                changes.push(ManifestChange::Upsert {
+                    entry: entry.clone(),
+                });
+            }
+        }
+        for entry in &current.files {
+            if !requested_by_hash.contains_key(entry.hash.as_str()) {
+                changes.push(ManifestChange::Delete {
+                    hash: entry.hash.clone(),
+                });
+            }
+        }
+        if changes.is_empty() {
+            return manifest_revision(&current).map_err(ManifestWriteError::Other);
+        }
+
+        let operation = ManifestOperation {
+            version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+            id: uuid::Uuid::new_v4().to_string(),
+            logical_clock,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            device_name: manifest.device_name.clone(),
+            changes,
+        };
+        self.write_manifest_operation(&operation)?;
+        let (updated, _) = self
+            .materialize_file_manifest()
+            .map_err(ManifestWriteError::Other)?;
+        self.write_protocol_marker(&updated);
+        manifest_revision(&updated).map_err(ManifestWriteError::Other)
     }
 
     // --- ── Transfer station file blobs ── ---
@@ -358,7 +574,7 @@ impl SyncBackend for LocalFolderBackend {
         let file_path = dir.join(hash);
         let tmp_path = dir.join(format!(".{hash}.tmp"));
         std::fs::write(&tmp_path, data).map_err(|e| format!("write file blob tmp: {e}"))?;
-        std::fs::rename(&tmp_path, &file_path).map_err(|e| {
+        crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             format!("rename file blob: {e}")
         })
@@ -368,6 +584,12 @@ impl SyncBackend for LocalFolderBackend {
         let file_path = PathBuf::from(&self.config.folder_path)
             .join("files")
             .join(hash);
+        let size = std::fs::metadata(&file_path)
+            .map_err(|error| format!("read file blob metadata: {error}"))?
+            .len();
+        if size > crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES {
+            return Err("remote file exceeds the transfer size limit".into());
+        }
         std::fs::read(&file_path).map_err(|e| format!("read file blob: {e}"))
     }
 
@@ -517,4 +739,140 @@ pub fn detect_presets() -> Vec<(&'static str, String)> {
     }
 
     presets
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    fn temp_backend(label: &str) -> (PathBuf, LocalFolderBackend) {
+        let root = std::env::temp_dir().join(format!(
+            "clippi-local-transfer-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let backend = LocalFolderBackend::new(BackendConfig {
+            id: label.into(),
+            enabled: true,
+            backend_type: "local_folder".into(),
+            name: label.into(),
+            folder_path: root.to_string_lossy().into_owned(),
+            device_name: label.into(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: String::new(),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        });
+        (root, backend)
+    }
+
+    fn entry(hash_byte: char, name: &str) -> ManifestEntry {
+        let hash = hash_byte.to_string().repeat(64);
+        ManifestEntry {
+            blob_id: format!("{hash}-{}", uuid::Uuid::new_v4()),
+            hash,
+            name: name.into(),
+            ext: "bin".into(),
+            size: 4,
+            uploaded_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: String::new(),
+            uploaded_by: "test".into(),
+        }
+    }
+
+    fn manifest(files: Vec<ManifestEntry>, device: &str) -> FileManifest {
+        FileManifest {
+            version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+            device_name: device.into(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            files,
+        }
+    }
+
+    #[test]
+    fn independent_cloud_replicas_merge_unique_manifest_operations() {
+        let (left_root, left) = temp_backend("left");
+        let (right_root, right) = temp_backend("right");
+        let left_entry = entry('a', "left.bin");
+        let right_entry = entry('b', "right.bin");
+
+        left.push_file_manifest(&manifest(vec![left_entry.clone()], "left"), None)
+            .unwrap();
+        right
+            .push_file_manifest(&manifest(vec![right_entry.clone()], "right"), None)
+            .unwrap();
+
+        for item in std::fs::read_dir(right_root.join(MANIFEST_OPS_DIR)).unwrap() {
+            let item = item.unwrap();
+            std::fs::copy(
+                item.path(),
+                left_root.join(MANIFEST_OPS_DIR).join(item.file_name()),
+            )
+            .unwrap();
+        }
+
+        let snapshot = left.pull_file_manifest().unwrap();
+        assert_eq!(snapshot.manifest.files.len(), 2);
+        assert!(snapshot.manifest.files.contains(&left_entry));
+        assert!(snapshot.manifest.files.contains(&right_entry));
+
+        std::fs::remove_dir_all(left_root).unwrap();
+        std::fs::remove_dir_all(right_root).unwrap();
+    }
+
+    #[test]
+    fn logical_clock_preserves_delete_order_across_clock_skew() {
+        let (root, backend) = temp_backend("clock-skew");
+        let uploaded = entry('a', "future.bin");
+        backend
+            .push_file_manifest(&manifest(vec![uploaded], "future-device"), None)
+            .unwrap();
+
+        let operation_path = std::fs::read_dir(root.join(MANIFEST_OPS_DIR))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let mut operation: ManifestOperation =
+            serde_json::from_slice(&std::fs::read(&operation_path).unwrap()).unwrap();
+        operation.created_at = "2099-01-01T00:00:00Z".into();
+        std::fs::write(
+            &operation_path,
+            serde_json::to_vec_pretty(&operation).unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = backend.pull_file_manifest().unwrap();
+        backend
+            .push_file_manifest(
+                &manifest(Vec::new(), "present-device"),
+                snapshot.revision.as_deref(),
+            )
+            .unwrap();
+
+        assert!(backend
+            .pull_file_manifest()
+            .unwrap()
+            .manifest
+            .files
+            .is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn transfer_blob_upload_replaces_an_existing_object() {
+        let (root, backend) = temp_backend("blob-replace");
+        let key = format!("{}-{}", "a".repeat(64), uuid::Uuid::new_v4());
+        backend.upload_file_blob(&key, "bin", b"old").unwrap();
+        backend.upload_file_blob(&key, "bin", b"new").unwrap();
+        assert_eq!(backend.download_file_blob(&key, "bin").unwrap(), b"new");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

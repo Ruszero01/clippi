@@ -63,6 +63,8 @@ pub struct AppState {
     /// Hashes of cloud entries queued for or currently being downloaded.
     /// Used to render per-entry progress feedback and suppress duplicate jobs.
     pub pending_transfer_downloads: HashSet<String>,
+    /// Source paths queued for or currently being uploaded.
+    pub pending_transfer_uploads: HashSet<String>,
     /// Whether a transfer worker is currently running.
     pub transfer_busy: bool,
     /// Currently selected item IDs (for batch operations)
@@ -339,6 +341,7 @@ impl AppState {
             transfer_entries: Vec::new(),
             pending_transfer_commands: VecDeque::new(),
             pending_transfer_downloads: HashSet::new(),
+            pending_transfer_uploads: HashSet::new(),
             transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
@@ -2132,11 +2135,11 @@ fn item_texts_for_merge(items: &[&ClipboardItem]) -> String {
 impl AppState {
     pub fn transfer_available(&self) -> bool {
         self.settings.transfer_station_enabled
-            && self
-                .settings
-                .sync_backends
-                .iter()
-                .any(|backend| backend.enabled)
+            && self.settings.sync_backends.iter().any(|backend| {
+                backend.enabled
+                    && (self.settings.transfer_backend_id.is_empty()
+                        || backend.id == self.settings.transfer_backend_id)
+            })
     }
 
     pub fn toggle_transfer_filter(&mut self) {
@@ -2184,6 +2187,9 @@ impl AppState {
         let file = &file_data.files[0];
         if file.is_dir || !std::path::Path::new(&file.path).is_file() {
             self.toast_message = Some(I18nKey::TransferInvalidPath.text().into());
+            return;
+        }
+        if !self.pending_transfer_uploads.insert(file.path.clone()) {
             return;
         }
         self.queue_transfer_command(crate::services::transfer_station::TransferCommand::Upload {
@@ -2403,6 +2409,7 @@ mod tests {
             transfer_entries: Vec::new(),
             pending_transfer_commands: VecDeque::new(),
             pending_transfer_downloads: HashSet::new(),
+            pending_transfer_uploads: HashSet::new(),
             transfer_busy: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
@@ -2593,6 +2600,7 @@ mod tests {
         state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
             entry: crate::core::transfer_types::ManifestEntry {
                 hash: "a".repeat(64),
+                blob_id: String::new(),
                 name: "report.pdf".into(),
                 ext: "pdf".into(),
                 size: 42,
@@ -2623,6 +2631,7 @@ mod tests {
         state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
             entry: crate::core::transfer_types::ManifestEntry {
                 hash: hash.clone(),
+                blob_id: String::new(),
                 name: "archive.zip".into(),
                 ext: "zip".into(),
                 size: 42,
@@ -2645,6 +2654,62 @@ mod tests {
     }
 
     #[test]
+    fn transfer_upload_is_deduplicated_while_the_source_is_pending() {
+        let (mut state, _dirty) = test_state();
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-pending-upload-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("file.bin");
+        std::fs::write(&path, b"test").unwrap();
+        let mut item = make_item(0, ContentType::File, false, "file.bin");
+        item.content_hash = 0xabcdef;
+        item.file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "file.bin".into(),
+                path: path.to_string_lossy().into_owned(),
+                is_dir: false,
+            }],
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+        let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
+        state.settings.transfer_station_enabled = true;
+        state
+            .settings
+            .sync_backends
+            .push(crate::core::settings::BackendConfig {
+                id: "local".into(),
+                enabled: true,
+                backend_type: "local_folder".into(),
+                name: "local".into(),
+                folder_path: directory.to_string_lossy().into_owned(),
+                device_name: "test".into(),
+                last_sync_at: String::new(),
+                last_item_count: 0,
+                last_tag_count: 0,
+                sync_interval_secs: None,
+                webdav_url: String::new(),
+                webdav_root_url: String::new(),
+                webdav_path: String::new(),
+                webdav_username: String::new(),
+                webdav_password: String::new(),
+            });
+
+        state.upload_to_transfer_station(item_id);
+        state.upload_to_transfer_station(item_id);
+
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert!(state
+            .pending_transfer_uploads
+            .contains(path.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn transfer_batch_delete_queues_only_existing_entries() {
         let (mut state, _dirty) = test_state();
         let first_hash = "c".repeat(64);
@@ -2654,6 +2719,7 @@ mod tests {
             .map(|hash| crate::core::transfer_types::ResolvedEntry {
                 entry: crate::core::transfer_types::ManifestEntry {
                     hash,
+                    blob_id: String::new(),
                     name: "file.bin".into(),
                     ext: "bin".into(),
                     size: 42,

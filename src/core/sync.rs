@@ -71,18 +71,18 @@ pub trait SyncBackend: Send + Sync {
         ))
     }
 
-    /// Upload a file blob to `{remote}/files/{hash}.{ext}`.
-    fn upload_file_blob(&self, _hash: &str, _ext: &str, _data: &[u8]) -> Result<(), String> {
+    /// Upload an immutable file blob to `{remote}/files/{blob_key}`.
+    fn upload_file_blob(&self, _blob_key: &str, _ext: &str, _data: &[u8]) -> Result<(), String> {
         Err("not supported".into())
     }
 
     /// Download a file blob from `{remote}/files/{hash}.{ext}`.
-    fn download_file_blob(&self, _hash: &str, _ext: &str) -> Result<Vec<u8>, String> {
+    fn download_file_blob(&self, _blob_key: &str, _ext: &str) -> Result<Vec<u8>, String> {
         Err("not supported".into())
     }
 
     /// Delete a file blob from `{remote}/files/{hash}.{ext}`.
-    fn delete_file_blob(&self, _hash: &str, _ext: &str) -> Result<(), String> {
+    fn delete_file_blob(&self, _blob_key: &str, _ext: &str) -> Result<(), String> {
         Err("not supported".into())
     }
 }
@@ -90,6 +90,8 @@ pub trait SyncBackend: Send + Sync {
 /// Internal backend signal indicating that no remote sync snapshot exists yet.
 /// The sync service treats this as an empty remote and creates the file on push.
 pub const SYNC_PULL_NOT_FOUND: &str = "@@not_found";
+/// Internal signal that a conditional push lost a race with another client.
+pub const SYNC_PUSH_CONFLICT: &str = "@@push_conflict";
 
 /// Top-level sync payload stored as JSON on the cloud folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]

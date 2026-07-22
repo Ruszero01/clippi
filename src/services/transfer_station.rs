@@ -8,6 +8,7 @@ use crate::core::db::Database;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::{AppSettings, BackendConfig};
 use crate::core::sync::SyncBackend;
+use crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES;
 use crate::core::transfer_types::{FileManifest, ManifestEntry, ManifestWriteError, ResolvedEntry};
 use crate::core::types::{ClipboardItem, ContentType, FileData, FileInfo};
 use crate::core::{migration, paths};
@@ -55,7 +56,7 @@ pub enum TransferCommand {
 #[derive(Debug, Clone)]
 enum TransferAction {
     Refresh,
-    Upload(String),
+    Upload { source_path: String, name: String },
     Download(ManifestEntry, String),
     Delete(String),
     Cleanup(u32),
@@ -63,6 +64,7 @@ enum TransferAction {
 
 #[derive(Debug, Clone)]
 struct TransferJobResult {
+    generation: u64,
     action: Result<TransferAction, (TransferCommand, String)>,
     entries: Option<Vec<ResolvedEntry>>,
     markers_changed: bool,
@@ -77,6 +79,7 @@ pub struct TransferPollOutcome {
 pub struct GpuiTransferService {
     backend_key: String,
     backend: Option<Arc<dyn SyncBackend>>,
+    backend_generation: u64,
     db_path: PathBuf,
     running: Arc<AtomicBool>,
     pending_result: Arc<Mutex<Option<TransferJobResult>>>,
@@ -89,6 +92,7 @@ impl GpuiTransferService {
         let mut service = Self {
             backend_key: String::new(),
             backend: None,
+            backend_generation: 0,
             db_path: settings.resolve_db_path(),
             running: Arc::new(AtomicBool::new(false)),
             pending_result: Arc::new(Mutex::new(None)),
@@ -100,15 +104,34 @@ impl GpuiTransferService {
     }
 
     pub fn reload_from_settings(&mut self, settings: &AppSettings) {
-        self.db_path = settings.resolve_db_path();
+        let next_db_path = settings.resolve_db_path();
+        let db_key = next_db_path.to_string_lossy().into_owned();
         let selected = selected_backend(settings);
         let next_key = selected
-            .and_then(|config| serde_json::to_string(config).ok())
+            .and_then(|config| {
+                serde_json::to_string(&(
+                    settings.transfer_station_enabled,
+                    &config.id,
+                    &config.backend_type,
+                    &config.folder_path,
+                    &config.device_name,
+                    &config.webdav_url,
+                    &config.webdav_root_url,
+                    &config.webdav_path,
+                    &config.webdav_username,
+                    &config.webdav_password,
+                    &db_key,
+                ))
+                .ok()
+            })
             .unwrap_or_default();
         if next_key == self.backend_key {
+            self.db_path = next_db_path;
             return;
         }
+        self.db_path = next_db_path;
         self.backend_key = next_key;
+        self.backend_generation = self.backend_generation.wrapping_add(1);
         self.backend = selected.map(build_backend);
         self.last_refresh = None;
         self.last_cleanup = None;
@@ -121,16 +144,32 @@ impl GpuiTransferService {
         if let Some(result) = self
             .pending_result
             .lock()
-            .expect("transfer result lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
         {
-            outcome = apply_result(app, result);
+            if result.generation == self.backend_generation {
+                outcome = apply_result(app, result);
+            } else {
+                clear_pending_for_stale_result(app, &result);
+                app.transfer_busy = false;
+                outcome.state_changed = true;
+            }
         }
 
         if !app.settings.transfer_station_enabled || self.backend.is_none() {
+            if app.transfer_filter_active
+                || app.has_transfer_files
+                || !app.transfer_entries.is_empty()
+            {
+                outcome.state_changed = true;
+            }
             app.transfer_busy = false;
+            app.transfer_filter_active = false;
+            app.has_transfer_files = false;
+            app.transfer_entries.clear();
             app.pending_transfer_commands.clear();
             app.pending_transfer_downloads.clear();
+            app.pending_transfer_uploads.clear();
             return outcome;
         }
 
@@ -181,26 +220,34 @@ impl GpuiTransferService {
         let pending = Arc::clone(&self.pending_result);
         let running = Arc::clone(&self.running);
         let retention_days = settings.transfer_retention_days;
+        let generation = self.backend_generation;
         let device_name = selected_backend(settings)
             .map(|config| config.device_name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(crate::services::backends::local_folder::hostname);
 
         std::thread::spawn(move || {
-            let result = run_command(
-                backend.as_ref(),
-                &db_path,
-                command.clone(),
-                &device_name,
-                retention_days,
-            );
-            *pending.lock().expect("transfer result lock poisoned") = Some(match result {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_command(
+                    backend.as_ref(),
+                    &db_path,
+                    command.clone(),
+                    &device_name,
+                    retention_days,
+                )
+            }))
+            .unwrap_or_else(|_| Err("transfer worker terminated unexpectedly".into()));
+            *pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(match result {
                 Ok((action, entries, markers_changed)) => TransferJobResult {
+                    generation,
                     action: Ok(action),
                     entries: Some(entries),
                     markers_changed,
                 },
                 Err(error) => TransferJobResult {
+                    generation,
                     action: Err((command, error)),
                     entries: None,
                     markers_changed: false,
@@ -211,16 +258,33 @@ impl GpuiTransferService {
     }
 }
 
+fn clear_pending_for_stale_result(app: &mut AppState, result: &TransferJobResult) {
+    match &result.action {
+        Ok(TransferAction::Upload { source_path, .. }) => {
+            app.pending_transfer_uploads.remove(source_path);
+        }
+        Ok(TransferAction::Download(entry, _)) => {
+            app.pending_transfer_downloads.remove(&entry.hash);
+        }
+        Err((TransferCommand::Upload { source_path, .. }, _)) => {
+            app.pending_transfer_uploads.remove(source_path);
+        }
+        Err((TransferCommand::Download { entry }, _)) => {
+            app.pending_transfer_downloads.remove(&entry.hash);
+        }
+        _ => {}
+    }
+}
+
 fn selected_backend(settings: &AppSettings) -> Option<&BackendConfig> {
-    settings
-        .sync_backends
-        .iter()
-        .find(|config| {
-            config.enabled
-                && !settings.transfer_backend_id.is_empty()
-                && config.id == settings.transfer_backend_id
-        })
-        .or_else(|| settings.sync_backends.iter().find(|config| config.enabled))
+    if settings.transfer_backend_id.is_empty() {
+        settings.sync_backends.iter().find(|config| config.enabled)
+    } else {
+        settings
+            .sync_backends
+            .iter()
+            .find(|config| config.enabled && config.id == settings.transfer_backend_id)
+    }
 }
 
 fn build_backend(config: &BackendConfig) -> Arc<dyn SyncBackend> {
@@ -253,7 +317,7 @@ fn run_command(
                 device_name,
                 retention_days,
             )?;
-            TransferAction::Upload(name)
+            TransferAction::Upload { source_path, name }
         }
         TransferCommand::Download { entry } => {
             let path = download_file(backend, &db, &entry)?;
@@ -286,7 +350,8 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
     }
     match result.action {
         Ok(TransferAction::Refresh) => {}
-        Ok(TransferAction::Upload(name)) => {
+        Ok(TransferAction::Upload { source_path, name }) => {
+            app.pending_transfer_uploads.remove(&source_path);
             app.reload_items();
             app.toast_message = Some(I18nKey::TransferUploaded.text().replace("{0}", &name));
             data_changed = true;
@@ -319,6 +384,12 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
             if let TransferCommand::Download { ref entry } = command {
                 app.pending_transfer_downloads.remove(&entry.hash);
             }
+            if let TransferCommand::Upload {
+                ref source_path, ..
+            } = command
+            {
+                app.pending_transfer_uploads.remove(source_path);
+            }
             let key = match command {
                 TransferCommand::Upload { .. } => I18nKey::TransferUploadFailed,
                 TransferCommand::Download { .. } => I18nKey::TransferDownloadFailed,
@@ -348,10 +419,7 @@ pub fn fetch_and_resolve(
         ));
     }
     migration::migrate_file_manifest(&mut snapshot.manifest);
-    let local_paths = get_local_transfer_paths(db);
-    for entry in &snapshot.manifest.files {
-        entry.validate()?;
-    }
+    validate_manifest(&snapshot.manifest)?;
     let active_hashes: HashSet<String> = snapshot
         .manifest
         .files
@@ -364,7 +432,10 @@ pub fn fetch_and_resolve(
         .iter()
         .map(|entry| entry.size)
         .collect();
-    let changed_markers = reconcile_original_file_markers(db, &active_hashes, &active_sizes)?;
+    let removed_stale_records = reconcile_transfer_records(db, &active_hashes);
+    let local_paths = get_local_transfer_paths(db);
+    let changed_markers =
+        reconcile_original_file_markers(db, &active_hashes, &active_sizes)? + removed_stale_records;
 
     let entries = snapshot
         .manifest
@@ -497,7 +568,19 @@ fn upload_file(
         return Err(I18nKey::TransferInvalidPath.text().into());
     }
     let name = portable_file_name(file_name)?;
+    let source_size = std::fs::metadata(source)
+        .map_err(|error| format!("read file metadata: {error}"))?
+        .len();
+    if source_size > MAX_TRANSFER_FILE_SIZE_BYTES {
+        return Err(format!(
+            "file exceeds the {} MiB transfer limit",
+            MAX_TRANSFER_FILE_SIZE_BYTES / 1024 / 1024
+        ));
+    }
     let data = std::fs::read(source).map_err(|error| format!("read file: {error}"))?;
+    if data.len() as u64 != source_size || data.len() as u64 > MAX_TRANSFER_FILE_SIZE_BYTES {
+        return Err("local file changed while preparing the upload".into());
+    }
     let hash = compute_file_hash(&data);
     let ext = Path::new(&name)
         .extension()
@@ -512,6 +595,7 @@ fn upload_file(
     };
     let entry = ManifestEntry {
         hash: hash.clone(),
+        blob_id: format!("{hash}-{}", uuid::Uuid::new_v4()),
         name: name.clone(),
         ext: ext.clone(),
         size: data.len() as u64,
@@ -521,12 +605,31 @@ fn upload_file(
     };
     entry.validate()?;
 
-    backend.upload_file_blob(&hash, &ext, &data)?;
-    mutate_manifest(backend, |manifest| {
+    backend.upload_file_blob(entry.blob_key(), &ext, &data)?;
+    let replaced = match mutate_manifest(backend, |manifest| {
+        let replaced = manifest
+            .files
+            .iter()
+            .find(|existing| existing.hash == hash)
+            .cloned();
         manifest.files.retain(|existing| existing.hash != hash);
         manifest.files.push(entry.clone());
         manifest.device_name = device_name.to_string();
-    })?;
+        replaced
+    }) {
+        Ok(replaced) => replaced,
+        Err(error) => {
+            if let Err(cleanup_error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
+                log::warn!("[transfer] failed upload rollback cleanup: {cleanup_error}");
+            }
+            return Err(error);
+        }
+    };
+    if let Some(replaced) = replaced.filter(|old| old.blob_key() != entry.blob_key()) {
+        if let Err(error) = backend.delete_file_blob(replaced.blob_key(), &replaced.ext) {
+            log::warn!("[transfer] replaced blob cleanup failed: {error}");
+        }
+    }
 
     let canonical_path = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
     upsert_transfer_item(db, &entry, &canonical_path.to_string_lossy(), &data)?;
@@ -539,7 +642,7 @@ fn download_file(
     entry: &ManifestEntry,
 ) -> Result<String, String> {
     entry.validate()?;
-    let data = backend.download_file_blob(&entry.hash, &entry.ext)?;
+    let data = backend.download_file_blob(entry.blob_key(), &entry.ext)?;
     if data.len() as u64 != entry.size || compute_file_hash(&data) != entry.hash {
         return Err("downloaded file failed integrity verification".into());
     }
@@ -548,6 +651,7 @@ fn download_file(
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("create transfer cache: {error}"))?;
     let destination = directory.join(&entry.name);
+    remove_stale_cache_files(&directory, &destination);
     let temporary = directory.join(format!(".{}.tmp", entry.name));
     std::fs::write(&temporary, &data).map_err(|error| format!("write cache: {error}"))?;
     crate::services::file_ops::replace_file(&temporary, &destination).map_err(|error| {
@@ -564,11 +668,18 @@ fn delete_file(
     entry: &ManifestEntry,
 ) -> Result<(), String> {
     entry.validate()?;
-    let hash = entry.hash.clone();
-    mutate_manifest(backend, |manifest| {
-        manifest.files.retain(|existing| existing.hash != hash);
+    let blob_key = entry.blob_key().to_string();
+    let removed = mutate_manifest(backend, |manifest| {
+        let before = manifest.files.len();
+        manifest.files.retain(|existing| {
+            existing.hash != entry.hash || existing.blob_key() != entry.blob_key()
+        });
+        before != manifest.files.len()
     })?;
-    if let Err(error) = backend.delete_file_blob(&entry.hash, &entry.ext) {
+    if !removed {
+        return Err(I18nKey::TransferEntryExpired.text().into());
+    }
+    if let Err(error) = backend.delete_file_blob(&blob_key, &entry.ext) {
         log::warn!("[transfer] orphaned blob cleanup failed after manifest deletion: {error}");
     }
     clean_local_transfer(db, &entry.hash);
@@ -594,19 +705,30 @@ fn cleanup_expired(
     if expired.is_empty() {
         return Ok(0);
     }
-    let hashes: Vec<String> = expired.iter().map(|entry| entry.hash.clone()).collect();
-    mutate_manifest(backend, |manifest| {
-        manifest
-            .files
-            .retain(|entry| !hashes.iter().any(|hash| hash == &entry.hash));
+    let expired_keys: HashSet<String> = expired
+        .iter()
+        .map(|entry| entry.blob_key().to_string())
+        .collect();
+    let removed = mutate_manifest(backend, |manifest| {
+        let mut removed = Vec::new();
+        manifest.files.retain(|entry| {
+            if expired_keys.contains(entry.blob_key()) && entry_expired(entry, now, retention_days)
+            {
+                removed.push(entry.clone());
+                false
+            } else {
+                true
+            }
+        });
+        removed
     })?;
-    for entry in &expired {
-        if let Err(error) = backend.delete_file_blob(&entry.hash, &entry.ext) {
+    for entry in &removed {
+        if let Err(error) = backend.delete_file_blob(entry.blob_key(), &entry.ext) {
             log::warn!("[transfer] expired blob cleanup failed: {error}");
         }
         clean_local_transfer(db, &entry.hash);
     }
-    Ok(expired.len() as u32)
+    Ok(removed.len() as u32)
 }
 
 fn entry_expired(
@@ -624,10 +746,10 @@ fn entry_expired(
     expires_at.is_ok_and(|value| value <= now)
 }
 
-fn mutate_manifest(
+fn mutate_manifest<T>(
     backend: &dyn SyncBackend,
-    mutate: impl Fn(&mut FileManifest),
-) -> Result<(), String> {
+    mutate: impl Fn(&mut FileManifest) -> T,
+) -> Result<T, String> {
     for _ in 0..MANIFEST_UPDATE_RETRIES {
         let mut snapshot = backend.pull_file_manifest()?;
         if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
@@ -637,14 +759,13 @@ fn mutate_manifest(
             ));
         }
         migration::migrate_file_manifest(&mut snapshot.manifest);
-        for entry in &snapshot.manifest.files {
-            entry.validate()?;
-        }
-        mutate(&mut snapshot.manifest);
+        validate_manifest(&snapshot.manifest)?;
+        let value = mutate(&mut snapshot.manifest);
+        validate_manifest(&snapshot.manifest)?;
         snapshot.manifest.version = migration::TRANSFER_PROTOCOL_VERSION;
         snapshot.manifest.updated_at = chrono::Utc::now().to_rfc3339();
         match backend.push_file_manifest(&snapshot.manifest, snapshot.revision.as_deref()) {
-            Ok(_) => return Ok(()),
+            Ok(_) => return Ok(value),
             Err(ManifestWriteError::Conflict) => continue,
             Err(ManifestWriteError::Other(error)) => return Err(error),
         }
@@ -659,6 +780,8 @@ fn portable_file_name(value: &str) -> Result<String, String> {
         .ok_or_else(|| I18nKey::TransferInvalidPath.text().to_string())?;
     if name != value
         || name.is_empty()
+        || name.len() > 255
+        || name.encode_utf16().count() > 255
         || name == "."
         || name == ".."
         || name.chars().any(|character| {
@@ -718,6 +841,45 @@ fn get_local_transfer_paths(db: &Database) -> HashMap<String, String> {
                 .then_some((file_data.remote_hash, path))
         })
         .collect()
+}
+
+fn validate_manifest(manifest: &FileManifest) -> Result<(), String> {
+    let mut hashes = HashSet::new();
+    for entry in &manifest.files {
+        entry.validate()?;
+        if !hashes.insert(entry.hash.as_str()) {
+            return Err(format!("duplicate transfer hash {}", entry.hash));
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_transfer_records(db: &Database, active_hashes: &HashSet<String>) -> usize {
+    let stale_hashes: HashSet<String> = db
+        .get_transfer_items()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let hash = FileData::from_json(&item.file_data).remote_hash;
+            (!hash.is_empty() && !active_hashes.contains(&hash)).then_some(hash)
+        })
+        .collect();
+    for hash in &stale_hashes {
+        clean_local_transfer(db, hash);
+    }
+    stale_hashes.len()
+}
+
+fn remove_stale_cache_files(directory: &Path, destination: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path != destination && path.is_file() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn upsert_transfer_item(
@@ -799,6 +961,11 @@ fn transfer_clipboard_item(entry: &ManifestEntry, local_path: &str) -> Clipboard
 
 fn clean_local_transfer(db: &Database, hash: &str) {
     let cache_root = paths::transfer_cache_dir();
+    let safe_hash = hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    let hash_dir = safe_hash.then(|| cache_root.join(hash));
     if let Ok(items) = db.get_transfer_items() {
         for item in items {
             let file_data = FileData::from_json(&item.file_data);
@@ -807,15 +974,17 @@ fn clean_local_transfer(db: &Database, hash: &str) {
             }
             for file in file_data.files {
                 let path = PathBuf::from(file.path);
-                if path.starts_with(&cache_root) {
+                if hash_dir
+                    .as_ref()
+                    .is_some_and(|directory| path.parent() == Some(directory.as_path()))
+                {
                     let _ = std::fs::remove_file(path);
                 }
             }
         }
     }
-    let hash_dir = cache_root.join(hash);
-    if hash_dir.is_dir() {
-        let _ = std::fs::remove_dir(&hash_dir);
+    if let Some(hash_dir) = hash_dir.filter(|directory| directory.is_dir()) {
+        let _ = std::fs::remove_dir(hash_dir);
     }
     let _ = db.delete_transfer_by_hash(hash);
 }
@@ -836,6 +1005,93 @@ fn default_hash(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::sync::BackendStatus;
+    use std::sync::atomic::AtomicUsize;
+
+    struct ConflictManifestBackend {
+        manifest: Mutex<FileManifest>,
+        conflicts_remaining: AtomicUsize,
+        pushes: AtomicUsize,
+    }
+
+    impl ConflictManifestBackend {
+        fn new(conflicts: usize) -> Self {
+            Self {
+                manifest: Mutex::new(FileManifest {
+                    version: migration::TRANSFER_PROTOCOL_VERSION,
+                    device_name: String::new(),
+                    updated_at: String::new(),
+                    files: Vec::new(),
+                }),
+                conflicts_remaining: AtomicUsize::new(conflicts),
+                pushes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl SyncBackend for ConflictManifestBackend {
+        fn check_status(&self) -> BackendStatus {
+            BackendStatus::Online
+        }
+
+        fn pull(&self, _bypass_cache: bool) -> Result<crate::core::sync::SyncPayload, String> {
+            Err("unused".into())
+        }
+
+        fn push(&self, _payload: &crate::core::sync::SyncPayload) -> Result<(), String> {
+            Err("unused".into())
+        }
+
+        fn sync_interval(&self) -> u64 {
+            60
+        }
+
+        fn pull_file_manifest(
+            &self,
+        ) -> Result<crate::core::transfer_types::ManifestSnapshot, String> {
+            Ok(crate::core::transfer_types::ManifestSnapshot {
+                manifest: self.manifest.lock().expect("manifest lock").clone(),
+                revision: Some(format!("r{}", self.pushes.load(Ordering::SeqCst))),
+            })
+        }
+
+        fn push_file_manifest(
+            &self,
+            manifest: &FileManifest,
+            _expected_revision: Option<&str>,
+        ) -> Result<String, ManifestWriteError> {
+            if self
+                .conflicts_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    if remaining > 0 {
+                        Some(remaining - 1)
+                    } else {
+                        None
+                    }
+                })
+                .is_ok()
+            {
+                return Err(ManifestWriteError::Conflict);
+            }
+            *self.manifest.lock().expect("manifest lock") = manifest.clone();
+            let push = self.pushes.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(format!("r{push}"))
+        }
+    }
+
+    fn valid_entry(hash_byte: char, name: &str) -> ManifestEntry {
+        let hash = hash_byte.to_string().repeat(64);
+        ManifestEntry {
+            blob_id: format!("{hash}-{}", uuid::Uuid::new_v4()),
+            hash,
+            name: name.into(),
+            ext: "bin".into(),
+            size: 4,
+            uploaded_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: String::new(),
+            uploaded_by: "test".into(),
+        }
+    }
 
     #[test]
     fn portable_file_names_reject_paths_and_windows_reserved_names() {
@@ -853,6 +1109,7 @@ mod tests {
     fn manifest_entry_rejects_path_traversal() {
         let entry = ManifestEntry {
             hash: "a".repeat(64),
+            blob_id: String::new(),
             name: "../file.txt".into(),
             ext: "txt".into(),
             size: 1,
@@ -864,10 +1121,54 @@ mod tests {
     }
 
     #[test]
+    fn manifest_validation_rejects_noncanonical_hashes_timestamps_and_duplicates() {
+        let mut entry = valid_entry('a', "file.bin");
+        entry.hash = "A".repeat(64);
+        assert!(entry.validate().is_err());
+
+        let mut entry = valid_entry('a', "file.bin");
+        entry.uploaded_at = "not-a-time".into();
+        assert!(entry.validate().is_err());
+
+        let mut entry = valid_entry('a', "file.bin");
+        entry.size = MAX_TRANSFER_FILE_SIZE_BYTES + 1;
+        assert!(entry.validate().is_err());
+
+        let entry = valid_entry('a', "file.bin");
+        let manifest = FileManifest {
+            version: migration::TRANSFER_PROTOCOL_VERSION,
+            device_name: "test".into(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            files: vec![entry.clone(), entry],
+        };
+        assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn manifest_mutation_retries_conflicts_and_stops_at_the_limit() {
+        let backend = ConflictManifestBackend::new(2);
+        mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![valid_entry('a', "file.bin")];
+        })
+        .unwrap();
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.manifest.lock().unwrap().files.len(), 1);
+
+        let backend = ConflictManifestBackend::new(MANIFEST_UPDATE_RETRIES);
+        let error = mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![valid_entry('b', "other.bin")];
+        })
+        .unwrap_err();
+        assert!(error.contains("changed repeatedly"));
+        assert_eq!(backend.pushes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn expiry_prefers_explicit_timestamp_and_supports_legacy_entries() {
         let now = chrono::Utc::now();
         let mut entry = ManifestEntry {
             hash: "a".repeat(64),
+            blob_id: String::new(),
             name: "file.txt".into(),
             ext: "txt".into(),
             size: 1,
@@ -952,6 +1253,34 @@ mod tests {
         );
         let item = db.get_by_hash(content_hash).unwrap().unwrap();
         assert!(FileData::from_json(&item.file_data).remote_hash.is_empty());
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn refresh_removes_backing_records_for_remote_entries_that_disappeared() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-stale-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.bin");
+        let data = b"kept user source";
+        std::fs::write(&source, data).unwrap();
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let mut entry = valid_entry('a', "source.bin");
+        entry.hash = compute_file_hash(data);
+        entry.blob_id = format!("{}-{}", entry.hash, uuid::Uuid::new_v4());
+        entry.size = data.len() as u64;
+        upsert_transfer_item(&db, &entry, &source.to_string_lossy(), data).unwrap();
+
+        assert_eq!(db.get_transfer_items().unwrap().len(), 1);
+        assert_eq!(reconcile_transfer_records(&db, &HashSet::new()), 1);
+        assert!(db.get_transfer_items().unwrap().is_empty());
+        assert!(source.is_file());
 
         drop(db);
         std::fs::remove_dir_all(directory).unwrap();

@@ -112,7 +112,7 @@ mod tests {
 
         assert_eq!(cached_file_exists(&path), None);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !take_status_changed() && Instant::now() < deadline {
+        while cached_file_exists(&path).is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(cached_file_exists(&path), Some(true));
@@ -136,7 +136,7 @@ mod tests {
 
         assert_eq!(cached_path_kind(&path), None);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !take_status_changed() && Instant::now() < deadline {
+        while cached_path_kind(&path).is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(cached_path_kind(&path), Some(CachedPathKind::Directory));

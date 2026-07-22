@@ -344,6 +344,7 @@ define_i18n! {
     TransferDownloading:     ("下载中", "Downloading"),
     TransferAlreadyUploaded: ("已在中转站中", "Already in station"),
     TransferNoBackend:       ("请先配置并启用后端", "Configure and enable a backend first"),
+    TransferBusy:            ("中转任务进行中，请稍后重试", "Transfer operation in progress; try again shortly"),
     TransferNotFile:         ("不是文件条目", "Not a file item"),
     TransferInvalidPath:     ("文件路径无效", "Invalid file path"),
     TransferEntryExpired:    ("条目已失效", "Entry expired"),

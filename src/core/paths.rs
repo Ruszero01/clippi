@@ -175,16 +175,19 @@ pub fn app_icon_path(app_name: &str) -> PathBuf {
 }
 
 static RESOLVED_IMAGES_DIR: OnceLock<PathBuf> = OnceLock::new();
+static RESOLVED_TRANSFER_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Initialize the resolved images directory based on db_path.
 /// Must be called once at startup before any clipboard capture.
 pub fn init_images_dir(db_path: &str) {
-    let dir = resolve_data_dir(db_path).join("images");
+    let data_dir = resolve_data_dir(db_path);
+    let dir = data_dir.join("images");
     // Pre-create icon and file-icon cache directories at startup
     // so the render path never needs filesystem writes.
     let _ = std::fs::create_dir_all(dir.join("icons"));
     let _ = std::fs::create_dir_all(dir.join("file_icons"));
     let _ = RESOLVED_IMAGES_DIR.set(dir);
+    let _ = RESOLVED_TRANSFER_CACHE_DIR.set(data_dir.join("file_cache"));
 }
 
 pub fn images_dir() -> PathBuf {
@@ -200,10 +203,13 @@ pub fn images_dir() -> PathBuf {
 
 /// Directory for transfer station cached files.
 ///
-/// Files are stored as `{hash}.{ext}` and are only used for local access —
+/// Files are stored as `{hash}/{portable_name}` and are only used for local access —
 /// status determination ("cloud" vs "local") is done via DB comparison.
 pub fn transfer_cache_dir() -> PathBuf {
-    resolve_data_dir("").join("file_cache")
+    RESOLVED_TRANSFER_CACHE_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| resolve_data_dir("").join("file_cache"))
 }
 
 fn ensure_app_data_dir() -> std::io::Result<()> {

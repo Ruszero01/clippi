@@ -32,23 +32,26 @@
 ~~~
 <backend root>/
 ├── clippi_sync.json        # 原有剪贴板同步协议
-├── clippi_files.json       # 中转站清单
+├── clippi_files.json       # WebDAV 清单 / 本地文件夹 v1 只读迁移基线
+├── file_ops/               # 本地文件夹 v2 不可覆盖操作日志
+│   └── <uuid>.json         # 含 Lamport 逻辑时钟
 └── files/
-    └── <sha256>            # blob 对象，名称只使用 64 位十六进制 SHA-256
+    └── <blob_id>           # 每次上传独立的不可变 blob
 ~~~
 
-blob 路径不包含原始文件名、扩展名或本地目录。原始文件名只存在于清单元数据中。
+blob 路径不包含原始文件名、扩展名或本地目录。`blob_id` 由内容 SHA-256 和随机 UUID 组成，避免删除旧上传与并发重传争用同一对象。原始文件名只存在于清单元数据中。
 
 ## 4. 清单协议
 
 ~~~json
 {
-  "version": 1,
+  "version": 2,
   "device_name": "Home-PC",
   "updated_at": "2026-07-20T02:30:00Z",
   "files": [
     {
       "hash": "64-character-lowercase-sha256",
+      "blob_id": "<sha256>-<uuid>",
       "name": "report.pdf",
       "ext": "pdf",
       "size": 1048576,
@@ -63,6 +66,7 @@ blob 路径不包含原始文件名、扩展名或本地目录。原始文件名
 字段约束：
 
 - hash：恰好 64 个十六进制字符，是 blob 内容的 SHA-256。
+- blob_id：本次上传的不可变远端对象键；v1 条目缺失时兼容回退到 hash。
 - name：单个文件名，不得包含目录分隔符、控制字符或 Windows 非法字符；不得以空格或点结尾；拒绝 CON、NUL、COM1 等 Windows 保留名。
 - ext：仅作显示和兼容元数据，不参与远端 blob 定位。
 - size：原始文件字节数，下载时必须复核。
@@ -87,7 +91,7 @@ blob 路径不包含原始文件名、扩展名或本地目录。原始文件名
 
 ## 6. 清单并发控制
 
-clippi_files.json 是共享状态，不能使用无条件的“拉取—修改—覆盖”。
+WebDAV 的 `clippi_files.json` 是共享状态，不能使用无条件的“拉取—修改—覆盖”；本地文件夹后端则以不可变操作日志作为共享状态。
 
 每次变更遵循：
 
@@ -99,8 +103,8 @@ clippi_files.json 是共享状态，不能使用无条件的“拉取—修改�
 
 后端实现：
 
-- WebDAV：优先使用 ETag + If-Match；首次创建使用 If-None-Match: *；没有 ETag 时使用 Last-Modified + If-Unmodified-Since。若已存在清单但服务端两者都不提供，允许只读展示，但拒绝不安全的覆盖写入并提示后端不兼容。
-- 本地文件夹：revision 是清单内容 SHA-256；写入时持有 .clippi_files.lock，锁内再次比较 revision，然后通过临时文件替换正式清单。超过 120 秒的遗留锁视为进程异常退出并可恢复。
+- WebDAV：使用 ETag + If-Match；首次创建使用 If-None-Match: *。服务端不提供 ETag 时允许只读展示，但拒绝不安全的覆盖写入。
+- 本地文件夹：每次清单变更写入 `file_ops/<uuid>.json` 原子操作文件。各设备只创建唯一文件，拉取时按 `(Lamport 逻辑时钟, uuid)` 确定性折叠全部操作，因此不依赖 Windows 与 Mac 系统时钟一致；OneDrive/iCloud/Dropbox 也无需提供跨设备文件锁，不会因同名清单覆盖而丢更新。旧 `clippi_files.json` 仅作为 v1 迁移基线读取。
 
 临时文件替换必须具有跨平台覆盖语义：Unix 使用同卷 rename，Windows 使用 MoveFileExW + MOVEFILE_REPLACE_EXISTING，避免第二次写入因目标已存在而失败。
 
@@ -124,6 +128,7 @@ AppState 只保存：
 ### 上传
 
 1. 验证单个普通文件和便携文件名。
+   当前版本单文件上限为 512 MiB，超过限制在读取或下载前拒绝。
 2. 后台读取文件并计算 SHA-256。
 3. 上传 blob。
 4. 通过条件写入把条目合并进最新清单。

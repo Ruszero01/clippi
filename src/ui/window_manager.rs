@@ -2610,6 +2610,10 @@ impl WindowManager {
 
     pub fn toggle_transfer_station(&mut self, cx: &mut Context<Self>) {
         let settings = self.state.update(cx, |state, _cx| {
+            if state.settings.transfer_station_enabled && state.transfer_busy {
+                state.toast_message = Some(I18nKey::TransferBusy.text().into());
+                return state.settings.clone();
+            }
             let has_backend = state
                 .settings
                 .sync_backends
@@ -2636,6 +2640,8 @@ impl WindowManager {
             if !state.settings.transfer_station_enabled {
                 state.transfer_filter_active = false;
                 state.pending_transfer_commands.clear();
+                state.pending_transfer_downloads.clear();
+                state.pending_transfer_uploads.clear();
             }
             state.settings.save();
             state.settings.clone()
@@ -2655,6 +2661,10 @@ impl WindowManager {
 
     pub fn set_transfer_backend(&mut self, id: &str, cx: &mut Context<Self>) {
         let settings = self.state.update(cx, |state, _cx| {
+            if state.transfer_busy && state.settings.transfer_backend_id != id {
+                state.toast_message = Some(I18nKey::TransferBusy.text().into());
+                return state.settings.clone();
+            }
             if state
                 .settings
                 .sync_backends
@@ -2663,6 +2673,8 @@ impl WindowManager {
             {
                 state.settings.transfer_backend_id = id.to_string();
                 state.transfer_entries.clear();
+                state.pending_transfer_downloads.clear();
+                state.pending_transfer_uploads.clear();
                 state
                     .pending_transfer_commands
                     .push_back(crate::services::transfer_station::TransferCommand::Refresh);
