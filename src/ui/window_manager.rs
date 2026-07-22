@@ -227,6 +227,8 @@ unsafe extern "system" fn clippi_subclass_proc(
 pub enum WindowManagerEvent {
     /// Clipboard data changed; RootView should refresh its list.
     ClipboardChanged,
+    /// Transfer activity changed without changing list contents.
+    TransferStateChanged,
     /// Pin state changed (unpinned on hotkey show, or toggled by titlebar).
     PinnedChanged(bool),
     /// Tray menu "Settings" clicked — switch to settings view.
@@ -636,8 +638,10 @@ impl WindowManager {
         let outcome = self
             .state
             .update(cx, |state, _cx| service.poll(state, window_visible));
-        if outcome.state_changed || outcome.data_changed {
+        if outcome.data_changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
+        } else if outcome.state_changed {
+            cx.emit(WindowManagerEvent::TransferStateChanged);
         }
     }
 

@@ -13,7 +13,7 @@ use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
 
 use crate::core::i18n_keys::I18nKey;
-use crate::core::types::{ClipboardItem, ContentType, HotkeyPasteFormat};
+use crate::core::types::{ClipboardItem, ContentType, FileData, HotkeyPasteFormat};
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
@@ -1670,6 +1670,7 @@ impl Render for ClipboardListView {
                                     show_original_on_hover,
                                     show_page_title,
                                     search_terms,
+                                    pending_transfer_uploads,
                                 ) = {
                                     let state = this.state.read(cx);
                                     (
@@ -1677,6 +1678,7 @@ impl Render for ClipboardListView {
                                         state.settings.show_original_on_hover,
                                         state.settings.auto_fetch_url_title,
                                         state.filters.keyword_terms(),
+                                        state.pending_transfer_uploads.clone(),
                                     )
                                 };
                                 range
@@ -1692,6 +1694,14 @@ impl Render for ClipboardListView {
                                         let list_view = list_entity.clone();
                                         let focus_handle = this.focus_handle.clone();
                                         let item_clone = item.clone();
+                                        let source_is_uploading = item_clone.content_type
+                                            == ContentType::File
+                                            && FileData::from_json(&item_clone.file_data)
+                                                .files
+                                                .iter()
+                                                .any(|file| {
+                                                    pending_transfer_uploads.contains(&file.path)
+                                                });
                                         let hotkey_format = if recording_hotkey_id == item_id {
                                             recording_hotkey_format.clone()
                                         } else {
@@ -1863,6 +1873,7 @@ impl Render for ClipboardListView {
                                                     .show_source_app(show_source_app)
                                                     .show_original_on_hover(show_original_on_hover)
                                                     .show_page_title(show_page_title)
+                                                    .source_is_uploading(source_is_uploading)
                                                     .image_cache(image_cache.clone())
                                                     .search_terms(search_terms.clone())
                                                     .selected_count(selected_count)

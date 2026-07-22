@@ -18,7 +18,7 @@ use crate::state::app::AppState;
 use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -163,9 +163,24 @@ enum TransferAction {
 #[derive(Debug, Clone)]
 struct TransferJobResult {
     generation: u64,
+    job_id: u64,
     action: Result<TransferAction, (TransferCommand, String)>,
     entries: Option<Vec<ResolvedEntry>>,
     markers_changed: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TransferMarkerResult {
+    generation: u64,
+    job_id: u64,
+    changed: bool,
+}
+
+struct ResolvedManifest {
+    entries: Vec<ResolvedEntry>,
+    active_hashes: HashSet<String>,
+    active_sizes: HashSet<u64>,
+    records_changed: bool,
 }
 
 #[derive(Default)]
@@ -178,9 +193,13 @@ pub struct GpuiTransferService {
     backend_key: String,
     backend: Option<Arc<dyn SyncBackend>>,
     backend_generation: u64,
+    next_job_id: u64,
+    applied_job_id: u64,
     db_path: PathBuf,
     running: Arc<AtomicBool>,
     pending_result: Arc<Mutex<Option<TransferJobResult>>>,
+    marker_scan_running: Arc<AtomicBool>,
+    pending_marker_result: Arc<Mutex<Option<TransferMarkerResult>>>,
     last_refresh: Option<Instant>,
 }
 
@@ -190,9 +209,13 @@ impl GpuiTransferService {
             backend_key: String::new(),
             backend: None,
             backend_generation: 0,
+            next_job_id: 0,
+            applied_job_id: 0,
             db_path: settings.resolve_db_path(),
             running: Arc::new(AtomicBool::new(false)),
             pending_result: Arc::new(Mutex::new(None)),
+            marker_scan_running: Arc::new(AtomicBool::new(false)),
+            pending_marker_result: Arc::new(Mutex::new(None)),
             last_refresh: None,
         };
         service.reload_from_settings(settings);
@@ -242,13 +265,17 @@ impl GpuiTransferService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
         {
+            app.transfer_refreshing = false;
             if result.generation == self.backend_generation {
+                self.applied_job_id = result.job_id;
                 // Every completed command counts as a refresh attempt: successful
                 // commands resolve the latest manifest, while failed commands need
                 // a bounded retry delay. Base the next poll on completion time so
                 // slow requests do not trigger an immediate duplicate request.
                 self.last_refresh = Some(Instant::now());
-                outcome = apply_result(app, result);
+                let result_outcome = apply_result(app, result);
+                outcome.state_changed |= result_outcome.state_changed;
+                outcome.data_changed |= result_outcome.data_changed;
             } else {
                 clear_pending_for_stale_result(app, &result);
                 app.transfer_busy = false;
@@ -256,14 +283,32 @@ impl GpuiTransferService {
             }
         }
 
-        if !app.settings.transfer_station_enabled || self.backend.is_none() {
-            if app.transfer_filter_active
-                || app.has_transfer_files
-                || !app.transfer_entries.is_empty()
+        if let Some(marker_result) = self
+            .pending_marker_result
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            if marker_result.generation == self.backend_generation
+                && marker_result.job_id == self.applied_job_id
+                && marker_result.changed
             {
+                app.reload_items();
                 outcome.state_changed = true;
+                outcome.data_changed = true;
+            }
+        }
+
+        if !app.settings.transfer_station_enabled || self.backend.is_none() {
+            let data_changed = app.transfer_filter_active
+                || app.has_transfer_files
+                || !app.transfer_entries.is_empty();
+            if data_changed {
+                outcome.state_changed = true;
+                outcome.data_changed = true;
             }
             app.transfer_busy = false;
+            app.transfer_refreshing = false;
             app.transfer_filter_active = false;
             app.has_transfer_files = false;
             app.transfer_entries.clear();
@@ -295,10 +340,12 @@ impl GpuiTransferService {
 
         if let Some(command) = command {
             app.transfer_busy = true;
+            app.transfer_refreshing = matches!(command, TransferCommand::Refresh);
             self.start(command, &app.settings);
             outcome.state_changed = true;
         } else {
             app.transfer_busy = false;
+            app.transfer_refreshing = false;
         }
         outcome
     }
@@ -311,8 +358,12 @@ impl GpuiTransferService {
         let db_path = self.db_path.clone();
         let pending = Arc::clone(&self.pending_result);
         let running = Arc::clone(&self.running);
+        let marker_scan_running = Arc::clone(&self.marker_scan_running);
+        let pending_marker_result = Arc::clone(&self.pending_marker_result);
         let retention_days = settings.transfer_retention_days;
         let generation = self.backend_generation;
+        self.next_job_id = self.next_job_id.wrapping_add(1);
+        let job_id = self.next_job_id;
         let device_name = selected_backend(settings)
             .map(|config| config.device_name.clone())
             .filter(|name| !name.is_empty())
@@ -329,23 +380,75 @@ impl GpuiTransferService {
                 )
             }))
             .unwrap_or_else(|_| Err("transfer worker terminated unexpectedly".into()));
-            *pending
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(match result {
-                Ok((action, entries, markers_changed)) => TransferJobResult {
-                    generation,
-                    action: Ok(action),
-                    entries: Some(entries),
-                    markers_changed,
-                },
-                Err(error) => TransferJobResult {
-                    generation,
-                    action: Err((command, error)),
-                    entries: None,
-                    markers_changed: false,
-                },
-            });
+            let marker_scan = match result {
+                Ok((action, resolved)) => {
+                    let marker_scan = Some((resolved.active_hashes, resolved.active_sizes));
+                    *pending
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Some(TransferJobResult {
+                            generation,
+                            job_id,
+                            action: Ok(action),
+                            entries: Some(resolved.entries),
+                            markers_changed: resolved.records_changed,
+                        });
+                    marker_scan
+                }
+                Err(error) => {
+                    *pending
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Some(TransferJobResult {
+                            generation,
+                            job_id,
+                            action: Err((command, error)),
+                            entries: None,
+                            markers_changed: false,
+                        });
+                    None
+                }
+            };
             running.store(false, Ordering::Release);
+
+            // Local content matching can touch slow or offline paths and hash large
+            // files. Publish the manifest first, then fill ordinary-file markers
+            // independently so first paint and subsequent commands are not blocked.
+            if let Some((active_hashes, active_sizes)) = marker_scan {
+                if !marker_scan_running.swap(true, Ordering::AcqRel) {
+                    let changed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let db = Database::open(&db_path.to_string_lossy()).ok()?;
+                        reconcile_original_file_markers(&db, &active_hashes, &active_sizes).ok()
+                    }))
+                    .ok()
+                    .flatten()
+                    .is_some_and(|changed| changed > 0);
+                    let mut marker_result = pending_marker_result
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    match marker_result.as_mut() {
+                        Some(existing) if existing.generation == generation => {
+                            if existing.job_id == job_id {
+                                existing.changed |= changed;
+                            } else {
+                                *existing = TransferMarkerResult {
+                                    generation,
+                                    job_id,
+                                    changed,
+                                };
+                            }
+                        }
+                        _ => {
+                            *marker_result = Some(TransferMarkerResult {
+                                generation,
+                                job_id,
+                                changed,
+                            });
+                        }
+                    }
+                    marker_scan_running.store(false, Ordering::Release);
+                }
+            }
         });
     }
 }
@@ -396,7 +499,7 @@ fn run_command(
     command: TransferCommand,
     device_name: &str,
     retention_days: u32,
-) -> Result<(TransferAction, Vec<ResolvedEntry>, bool), String> {
+) -> Result<(TransferAction, ResolvedManifest), String> {
     let db = Database::open(&db_path.to_string_lossy())
         .map_err(|error| format!("open transfer database: {error}"))?;
     let action = match command {
@@ -429,18 +532,21 @@ fn run_command(
             TransferAction::Cleanup(count)
         }
     };
-    let (entries, changed_markers) = fetch_and_resolve(backend, &db)?;
-    Ok((action, entries, changed_markers > 0))
+    let resolved = fetch_and_resolve_manifest(backend, &db)?;
+    Ok((action, resolved))
 }
 
 fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOutcome {
     app.transfer_busy = false;
+    let mut data_changed = result.markers_changed;
     if let Some(entries) = result.entries {
-        app.has_transfer_files = !entries.is_empty();
-        app.transfer_entries = entries;
+        data_changed |= update_resolved_entries(
+            &mut app.transfer_entries,
+            &mut app.has_transfer_files,
+            entries,
+        );
     }
 
-    let mut data_changed = result.markers_changed;
     if result.markers_changed {
         app.reload_items();
     }
@@ -503,10 +609,27 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
     }
 }
 
-pub fn fetch_and_resolve(
+fn update_resolved_entries(
+    current: &mut Vec<ResolvedEntry>,
+    has_transfer_files: &mut bool,
+    entries: Vec<ResolvedEntry>,
+) -> bool {
+    let entries_changed = *current != entries;
+    let availability = !entries.is_empty();
+    let availability_changed = *has_transfer_files != availability;
+    if entries_changed {
+        *current = entries;
+    }
+    if availability_changed {
+        *has_transfer_files = availability;
+    }
+    entries_changed || availability_changed
+}
+
+fn fetch_and_resolve_manifest(
     backend: &dyn SyncBackend,
     db: &Database,
-) -> Result<(Vec<ResolvedEntry>, usize), String> {
+) -> Result<ResolvedManifest, String> {
     let mut snapshot = backend.pull_file_manifest()?;
     if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
         return Err(format!(
@@ -528,10 +651,8 @@ pub fn fetch_and_resolve(
         .iter()
         .map(|entry| entry.size)
         .collect();
-    let removed_stale_records = reconcile_transfer_records(db, &active_hashes);
+    let records_changed = reconcile_transfer_records(db, &active_hashes) > 0;
     let local_paths = get_local_transfer_paths(db);
-    let changed_markers =
-        reconcile_original_file_markers(db, &active_hashes, &active_sizes)? + removed_stale_records;
 
     let entries = snapshot
         .manifest
@@ -546,7 +667,12 @@ pub fn fetch_and_resolve(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok((entries, changed_markers))
+    Ok(ResolvedManifest {
+        entries,
+        active_hashes,
+        active_sizes,
+        records_changed,
+    })
 }
 
 fn reconcile_original_file_markers(
@@ -814,7 +940,7 @@ fn delete_file(
     if let Err(error) = backend.delete_file_blob(&blob_key, &entry.ext) {
         log::warn!("[transfer] orphaned blob cleanup failed after manifest deletion: {error}");
     }
-    clean_local_transfer(db, &entry.hash);
+    detach_local_transfer(db, &entry.hash);
     Ok(())
 }
 
@@ -969,8 +1095,10 @@ fn get_local_transfer_paths(db: &Database) -> HashMap<String, String> {
         .filter_map(|item| {
             let file_data = FileData::from_json(&item.file_data);
             let path = file_data.files.first()?.path.clone();
-            (!file_data.remote_hash.is_empty() && Path::new(&path).is_file())
-                .then_some((file_data.remote_hash, path))
+            // The database owns local-item validity. Avoid touching the path here:
+            // cloud placeholders, offline volumes, and network shares can make a
+            // simple existence check block manifest refresh for seconds.
+            (!file_data.remote_hash.is_empty()).then_some((file_data.remote_hash, path))
         })
         .collect()
 }
@@ -987,6 +1115,14 @@ fn validate_manifest(manifest: &FileManifest) -> Result<(), String> {
 }
 
 fn reconcile_transfer_records(db: &Database, active_hashes: &HashSet<String>) -> usize {
+    reconcile_transfer_records_in(db, active_hashes, &paths::transfer_cache_dir())
+}
+
+fn reconcile_transfer_records_in(
+    db: &Database,
+    active_hashes: &HashSet<String>,
+    cache_root: &Path,
+) -> usize {
     let stale_hashes: HashSet<String> = db
         .get_transfer_items()
         .unwrap_or_default()
@@ -997,7 +1133,7 @@ fn reconcile_transfer_records(db: &Database, active_hashes: &HashSet<String>) ->
         })
         .collect();
     for hash in &stale_hashes {
-        clean_local_transfer(db, hash);
+        detach_local_transfer_in(db, hash, cache_root);
     }
     stale_hashes.len()
 }
@@ -1158,13 +1294,57 @@ fn transfer_clipboard_item(entry: &ManifestEntry, local_path: &str) -> Clipboard
     }
 }
 
-fn clean_local_transfer(db: &Database, hash: &str) {
-    let cache_root = paths::transfer_cache_dir();
+fn transfer_hash_directory_in(cache_root: &Path, hash: &str) -> Option<PathBuf> {
     let safe_hash = hash.len() == 64
         && hash
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-    let hash_dir = safe_hash.then(|| cache_root.join(hash));
+    safe_hash.then(|| cache_root.join(hash))
+}
+
+fn transfer_hash_directory(hash: &str) -> Option<PathBuf> {
+    transfer_hash_directory_in(&paths::transfer_cache_dir(), hash)
+}
+
+/// Remove the remote association while preserving a downloaded local file.
+/// Upload backing rows point at the user's original file and are simply
+/// discarded because the ordinary clipboard row already owns that path.
+fn detach_local_transfer(db: &Database, hash: &str) {
+    detach_local_transfer_in(db, hash, &paths::transfer_cache_dir());
+}
+
+fn detach_local_transfer_in(db: &Database, hash: &str, cache_root: &Path) {
+    let hash_dir = transfer_hash_directory_in(cache_root, hash);
+    if let Ok(items) = db.get_transfer_items() {
+        for item in items {
+            let mut file_data = FileData::from_json(&item.file_data);
+            if file_data.remote_hash != hash || file_data.files.len() != 1 {
+                continue;
+            }
+            let local_path = PathBuf::from(&file_data.files[0].path);
+            let downloaded_cache_exists = hash_dir.as_ref().is_some_and(|directory| {
+                local_path.parent() == Some(directory.as_path()) && local_path.is_file()
+            });
+            if !downloaded_cache_exists {
+                continue;
+            }
+
+            let mut content_hasher = std::collections::hash_map::DefaultHasher::new();
+            file_data.files[0].path.hash(&mut content_hasher);
+            file_data.transfer = false;
+            file_data.remote_hash.clear();
+            if let Err(error) =
+                db.detach_transfer_item(item.id, content_hasher.finish(), &file_data.to_json())
+            {
+                log::warn!("[transfer] failed to preserve downloaded file record: {error}");
+            }
+        }
+    }
+    let _ = db.delete_transfer_by_hash(hash);
+}
+
+fn clean_local_transfer(db: &Database, hash: &str) {
+    let hash_dir = transfer_hash_directory(hash);
     if let Ok(items) = db.get_transfer_items() {
         for item in items {
             let file_data = FileData::from_json(&item.file_data);
@@ -1313,6 +1493,25 @@ mod tests {
             Some(Duration::from_secs(2))
         );
         assert_eq!(automatic_refresh_interval(false), None);
+    }
+
+    #[test]
+    fn unchanged_refresh_keeps_the_existing_resolved_list() {
+        let resolved = ResolvedEntry {
+            entry: valid_entry('a', "same.bin"),
+            is_local: false,
+            local_path: None,
+        };
+        let mut current = vec![resolved.clone()];
+        let mut has_transfer_files = true;
+
+        assert!(!update_resolved_entries(
+            &mut current,
+            &mut has_transfer_files,
+            vec![resolved.clone()],
+        ));
+        assert_eq!(current, vec![resolved]);
+        assert!(has_transfer_files);
     }
 
     #[test]
@@ -1537,6 +1736,78 @@ mod tests {
         assert_eq!(reconcile_transfer_records(&db, &HashSet::new()), 1);
         assert!(db.get_transfer_items().unwrap().is_empty());
         assert!(source.is_file());
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn local_transfer_resolution_trusts_the_database_without_touching_the_path() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-db-resolution-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let missing_path = directory.join("offline-volume").join("file.bin");
+        let entry = valid_entry('a', "file.bin");
+        upsert_transfer_item(&db, &entry, &missing_path.to_string_lossy(), 123).unwrap();
+
+        let paths = get_local_transfer_paths(&db);
+        assert_eq!(
+            paths.get(&entry.hash).map(String::as_str),
+            Some(missing_path.to_string_lossy().as_ref())
+        );
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn remote_deletion_preserves_downloaded_cache_as_an_ordinary_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-detach-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let data = uuid::Uuid::new_v4().to_string().into_bytes();
+        let hash = compute_file_hash(&data);
+        let cache_root = directory.join("file_cache");
+        let hash_dir = cache_root.join(&hash);
+        std::fs::create_dir_all(&hash_dir).unwrap();
+        let cached_file = hash_dir.join("download.bin");
+        std::fs::write(&cached_file, &data).unwrap();
+
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let mut entry = valid_entry('a', "download.bin");
+        entry.hash = hash.clone();
+        entry.blob_id = format!("{}-{}", entry.hash, uuid::Uuid::new_v4());
+        entry.size = data.len() as u64;
+        upsert_transfer_item(
+            &db,
+            &entry,
+            &cached_file.to_string_lossy(),
+            default_hash(&data),
+        )
+        .unwrap();
+        let item_id = db.get_transfer_items().unwrap()[0].id;
+
+        assert_eq!(
+            reconcile_transfer_records_in(&db, &HashSet::new(), &cache_root),
+            1
+        );
+        assert!(cached_file.is_file());
+        assert!(db.get_transfer_items().unwrap().is_empty());
+        let local_item = db.get_by_id(item_id).unwrap().unwrap();
+        let local_file_data = FileData::from_json(&local_item.file_data);
+        assert!(local_item.meta_type.is_empty());
+        assert!(!local_file_data.transfer);
+        assert!(local_file_data.remote_hash.is_empty());
+        assert_eq!(local_file_data.files[0].path, cached_file.to_string_lossy());
 
         drop(db);
         std::fs::remove_dir_all(directory).unwrap();

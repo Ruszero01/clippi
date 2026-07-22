@@ -27,6 +27,7 @@ const OVERLAY_ANIM_DURATION: Duration = Duration::from_millis(150);
 
 use super::clipboard_list::{ClipboardListEvent, ClipboardListView, ConfirmDialogState};
 use super::components::confirm_dialog::ConfirmDialog;
+use super::components::spinner::activity_spinner;
 use super::components::toast::Toast;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::edit_panel::{EditPanel, EditPanelEvent};
@@ -155,6 +156,9 @@ impl RootView {
                         list.refresh_settings_from_state(scroll_to_top, cx);
                         list.set_items(items, cx);
                     });
+                    cx.notify();
+                }
+                WindowManagerEvent::TransferStateChanged => {
                     cx.notify();
                 }
                 WindowManagerEvent::PinnedChanged(pinned) => {
@@ -757,6 +761,10 @@ impl Render for RootView {
         let hotkey_confirm_visible = is_settings && hotkey_confirm_open;
         let backend_panel_visible = is_settings && backend_panel_open;
         let latest_hotkeys_popup_visible = is_settings && latest_hotkeys_popup_open;
+        let transfer_refreshing = is_clipboard && {
+            let state = self.state.read(cx);
+            state.transfer_filter_active && state.transfer_refreshing
+        };
 
         let view_animating =
             Self::animation_running(self.view_transition_started, VIEW_ANIM_DURATION);
@@ -1056,7 +1064,36 @@ impl Render for RootView {
                             .opacity(view_opacity)
                             .mt(px(view_offset))
                             .when(is_clipboard, |view| {
-                                view.child(search_bar.clone()).child(list_view.clone())
+                                view.child(search_bar.clone()).child(
+                                    div()
+                                        .relative()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .overflow_hidden()
+                                        .child(list_view.clone())
+                                        .when(transfer_refreshing, |list| {
+                                            list.child(
+                                                div()
+                                                    .absolute()
+                                                    .right(px(12.))
+                                                    .bottom(px(12.))
+                                                    .size(px(22.))
+                                                    .rounded(px(11.))
+                                                    .bg(theme.toast_bg)
+                                                    .border(px(1.))
+                                                    .border_color(theme.divider)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(activity_spinner(
+                                                        "transfer-refresh-spinner",
+                                                        theme.accent,
+                                                        17.,
+                                                    )),
+                                            )
+                                        }),
+                                )
                             })
                             .when(is_settings, |view| view.child(settings_panel))
                             .when(is_edit, |view| view.child(edit_panel)),

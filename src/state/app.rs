@@ -67,6 +67,8 @@ pub struct AppState {
     pub pending_transfer_uploads: HashSet<String>,
     /// Whether a transfer worker is currently running.
     pub transfer_busy: bool,
+    /// Whether the active transfer worker is pulling the remote manifest.
+    pub transfer_refreshing: bool,
     /// Currently selected item IDs (for batch operations)
     pub selected_ids: Vec<i64>,
     /// Tag editing state for TagFilterPanel overlay
@@ -343,6 +345,7 @@ impl AppState {
             pending_transfer_downloads: HashSet::new(),
             pending_transfer_uploads: HashSet::new(),
             transfer_busy: false,
+            transfer_refreshing: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -1901,6 +1904,7 @@ impl AppState {
                 log::error!("delete_item({id}): {e}");
                 return;
             }
+            self.clear_deleted_file_transfer_association(&item);
 
             // Record deletion tombstone only for items in sync scope.
             // Image/file items are never synced; unfavorited items in
@@ -1991,7 +1995,8 @@ impl AppState {
         // --- Collect hashes only for items in sync scope. ---
         let mut hashes: Vec<u64> = Vec::with_capacity(self.selected_ids.len());
         let mut has_sync_item = false;
-        for &id in &self.selected_ids {
+        let selected_ids = self.selected_ids.clone();
+        for id in selected_ids {
             if let Ok(Some(item)) = self.db.get_by_id(id) {
                 let in_sync = self.should_mark_sync_dirty(&item);
                 if in_sync {
@@ -1999,6 +2004,7 @@ impl AppState {
                 }
                 match self.db.delete_item(id) {
                     Ok(_) => {
+                        self.clear_deleted_file_transfer_association(&item);
                         if in_sync {
                             hashes.push(item.content_hash);
                         }
@@ -2027,6 +2033,73 @@ impl AppState {
         self.items.retain(|it| !ids.contains(&it.id));
         self.refresh_titlebar_filter_availability();
     }
+
+    /// A transfer entry is considered local only while a local clipboard row
+    /// owns its path. Removing that row must not delete the file or the remote
+    /// object, but it does remove the hidden transfer backing association.
+    fn clear_deleted_file_transfer_association(&mut self, deleted_item: &ClipboardItem) {
+        if deleted_item.content_type != ContentType::File {
+            return;
+        }
+        let deleted_paths = FileData::from_json(&deleted_item.file_data)
+            .files
+            .into_iter()
+            .map(|file| transfer_path_key(&file.path))
+            .collect::<HashSet<_>>();
+        if deleted_paths.is_empty() {
+            return;
+        }
+
+        let remaining_paths = self
+            .db
+            .get_original_file_items()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|item| FileData::from_json(&item.file_data).files)
+            .map(|file| transfer_path_key(&file.path))
+            .collect::<HashSet<_>>();
+        let unreferenced_paths = deleted_paths
+            .difference(&remaining_paths)
+            .cloned()
+            .collect::<HashSet<_>>();
+        if unreferenced_paths.is_empty() {
+            return;
+        }
+
+        let hashes = self
+            .db
+            .get_transfer_items()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| {
+                let file_data = FileData::from_json(&item.file_data);
+                file_data
+                    .files
+                    .iter()
+                    .any(|file| unreferenced_paths.contains(&transfer_path_key(&file.path)))
+                    .then_some(file_data.remote_hash)
+            })
+            .filter(|hash| !hash.is_empty())
+            .collect::<HashSet<_>>();
+        for hash in hashes {
+            if let Err(error) = self.db.delete_transfer_by_hash(&hash) {
+                log::warn!("delete local transfer association {hash}: {error}");
+                continue;
+            }
+            if let Some(entry) = self
+                .transfer_entries
+                .iter_mut()
+                .find(|entry| entry.entry.hash == hash)
+            {
+                entry.is_local = false;
+                entry.local_path = None;
+            }
+        }
+    }
+}
+
+fn transfer_path_key(path: &str) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path))
 }
 
 fn open_system_target(target: &str) {
@@ -2431,6 +2504,7 @@ mod tests {
             pending_transfer_downloads: HashSet::new(),
             pending_transfer_uploads: HashSet::new(),
             transfer_busy: false,
+            transfer_refreshing: false,
             selected_ids: Vec::new(),
             editing_tag_id: -1,
             editing_tag_name: String::new(),
@@ -2726,6 +2800,75 @@ mod tests {
         assert!(state
             .pending_transfer_uploads
             .contains(path.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn deleting_local_db_file_changes_transfer_entry_to_cloud_only() {
+        let (mut state, _dirty) = test_state();
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-delete-local-transfer-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("download.bin");
+        std::fs::write(&path, b"downloaded").unwrap();
+        let path_text = path.to_string_lossy().into_owned();
+        let remote_hash = "f".repeat(64);
+
+        let mut local_item = make_item(0, ContentType::File, false, "download.bin");
+        local_item.content_hash = 0x1010;
+        local_item.file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "download.bin".into(),
+                path: path_text.clone(),
+                is_dir: false,
+            }],
+            transfer: false,
+            remote_hash: remote_hash.clone(),
+        }
+        .to_json();
+        state.db.upsert(&local_item).unwrap();
+        let local_item = state.db.get_by_hash(0x1010).unwrap().unwrap();
+
+        let mut backing_item = local_item.clone();
+        backing_item.id = 0;
+        backing_item.content_hash = 0x2020;
+        backing_item.meta_type = "transfer".into();
+        backing_item.file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "download.bin".into(),
+                path: path_text.clone(),
+                is_dir: false,
+            }],
+            transfer: true,
+            remote_hash: remote_hash.clone(),
+        }
+        .to_json();
+        state.db.upsert(&backing_item).unwrap();
+        state.items.push(local_item.clone());
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: remote_hash,
+                blob_id: String::new(),
+                name: "download.bin".into(),
+                ext: "bin".into(),
+                size: 10,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+            },
+            is_local: true,
+            local_path: Some(path_text),
+        }];
+
+        state.delete_item(local_item.id);
+
+        assert!(path.is_file());
+        assert!(state.db.get_transfer_items().unwrap().is_empty());
+        assert!(!state.transfer_entries[0].is_local);
+        assert!(state.transfer_entries[0].local_path.is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

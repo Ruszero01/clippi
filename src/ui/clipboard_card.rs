@@ -10,7 +10,6 @@
 
 use std::rc::Rc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;
@@ -28,6 +27,7 @@ use crate::core::types::{
     RichData,
 };
 
+use super::components::spinner::activity_spinner;
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
 use super::rich_preview::{self, StyledHtmlSpan};
 use super::search_highlight;
@@ -765,6 +765,8 @@ pub struct ClipboardCard {
     /// When true and a link item has a cached page title, show the title
     /// instead of the URL path in the card content area.
     show_page_title: bool,
+    /// Whether the source file is queued for or currently being uploaded.
+    source_is_uploading: bool,
     image_cache: Option<Entity<RetainAllImageCache>>,
     search_terms: Vec<String>,
 }
@@ -794,6 +796,7 @@ impl ClipboardCard {
             show_source_app: false,
             show_original_on_hover: false,
             show_page_title: false,
+            source_is_uploading: false,
             image_cache: None,
             search_terms: Vec::new(),
         }
@@ -905,6 +908,11 @@ impl ClipboardCard {
         self
     }
 
+    pub fn source_is_uploading(mut self, value: bool) -> Self {
+        self.source_is_uploading = value;
+        self
+    }
+
     pub fn image_cache(mut self, cache: Entity<RetainAllImageCache>) -> Self {
         self.image_cache = Some(cache);
         self
@@ -936,6 +944,7 @@ impl RenderOnce for ClipboardCard {
             show_source_app,
             show_original_on_hover,
             show_page_title,
+            source_is_uploading,
             image_cache,
             search_terms,
             recording_hotkey,
@@ -2311,7 +2320,7 @@ impl RenderOnce for ClipboardCard {
                 window,
             ));
         }
-        if source_is_uploaded {
+        if source_is_uploading || source_is_uploaded {
             fixed_widths.push(18.);
         }
         if let Some(label) = size_label.as_deref() {
@@ -2415,21 +2424,7 @@ impl RenderOnce for ClipboardCard {
                         .items_center()
                         .gap(px(2.))
                         .child(if matches!(kind, TransferPillKind::Downloading) {
-                            div()
-                                .w(px(10.))
-                                .text_size(px(10.))
-                                .text_color(pill_text_color)
-                                .with_animation(
-                                    animation_id,
-                                    Animation::new(Duration::from_millis(800)).repeat(),
-                                    |spinner, delta| {
-                                        const FRAMES: [&str; 4] = ["◴", "◷", "◶", "◵"];
-                                        let index = ((delta * FRAMES.len() as f32) as usize)
-                                            .min(FRAMES.len() - 1);
-                                        spinner.child(FRAMES[index])
-                                    },
-                                )
-                                .into_any_element()
+                            activity_spinner(animation_id, pill_text_color, 12.)
                         } else {
                             div()
                                 .font_family("iconfont")
@@ -2450,7 +2445,9 @@ impl RenderOnce for ClipboardCard {
                         ),
                 )
             })
-            .when(source_is_uploaded, |el| {
+            .when(source_is_uploading || source_is_uploaded, |el| {
+                let uploading_spinner_id: SharedString =
+                    format!("transfer-upload-spinner-{}", item.id).into();
                 el.child(
                     div()
                         .size(px(18.))
@@ -2461,10 +2458,16 @@ impl RenderOnce for ClipboardCard {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .font_family("iconfont")
-                        .text_size(px(10.))
                         .text_color(rgb(0x3B82F6))
-                        .child("\u{e794}"),
+                        .child(if source_is_uploading {
+                            activity_spinner(uploading_spinner_id, rgb(0x3B82F6), 14.)
+                        } else {
+                            div()
+                                .font_family("iconfont")
+                                .text_size(px(10.))
+                                .child("\u{e794}")
+                                .into_any_element()
+                        }),
                 )
             })
             .when_some(size_label, |el, label| {

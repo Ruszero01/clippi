@@ -69,7 +69,7 @@ pub struct ManifestEntry {
 ///
 /// Used for rendering in the transfer station view. `is_local` is determined
 /// by checking whether a DB record exists with a matching `remote_hash`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedEntry {
     pub entry: ManifestEntry,
     /// `true` if this file has a corresponding DB record (already downloaded

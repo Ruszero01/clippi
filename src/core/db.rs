@@ -976,6 +976,43 @@ impl Database {
         Ok(deleted > 0)
     }
 
+    /// Convert a downloaded transfer backing row into an ordinary local file row.
+    pub fn detach_transfer_item(
+        &self,
+        item_id: i64,
+        content_hash: u64,
+        file_data: &str,
+    ) -> SqlResult<bool> {
+        let ordinary_row_exists: bool = self.conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM clipboard_items
+                 WHERE id != ?1 AND content_type = 'file' AND meta_type != 'transfer'
+                   AND content_hash = ?2
+             )",
+            params![item_id, content_hash as i64],
+            |row| row.get(0),
+        )?;
+        if ordinary_row_exists {
+            let deleted = self.conn.execute(
+                "DELETE FROM clipboard_items WHERE id = ?1 AND meta_type = 'transfer'",
+                params![item_id],
+            )?;
+            return Ok(deleted > 0);
+        }
+        let changed = self.conn.execute(
+            "UPDATE clipboard_items
+             SET content_hash = ?1, file_data = ?2, meta_type = '', updated_at = ?3
+             WHERE id = ?4 AND content_type = 'file' AND meta_type = 'transfer'",
+            params![
+                content_hash as i64,
+                file_data,
+                chrono::Utc::now().to_rfc3339(),
+                item_id
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
     // --- ── Tombstone operations ── ---
 
     /// Record a deleted item tombstone for sync propagation.
