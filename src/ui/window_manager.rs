@@ -421,7 +421,7 @@ impl WindowManager {
 
         let foreground_app_name = Arc::new(Mutex::new(String::new()));
 
-        let clipboard_service = GpuiClipboardService::new();
+        let clipboard_service = GpuiClipboardService::new(settings.clipboard_app_blacklist.clone());
         let sync_service = GpuiSyncService::new(&settings, state.read(cx).sync_dirty.clone());
         let transfer_service = GpuiTransferService::new(&settings);
 
@@ -1252,13 +1252,22 @@ impl WindowManager {
         }
 
         if let Some(info) = get_foreground_app_info() {
-            if let Ok(mut fg) = self.foreground_app_name.lock() {
-                *fg = info.app_name.clone();
-            }
+            let app_changed = self
+                .foreground_app_name
+                .lock()
+                .map(|mut foreground| {
+                    let changed = *foreground != info.app_name;
+                    *foreground = info.app_name.clone();
+                    changed
+                })
+                .unwrap_or(false);
             // Push foreground app info to AppState for the settings UI.
             let app_name = info.app_name.clone();
             let window_title = info.window_title.clone();
             let icon_base64 = info.icon_base64.clone();
+            if app_changed {
+                let _ = crate::core::paths::cache_app_icon(&app_name, &icon_base64);
+            }
             self.state.update(cx, |state, _cx| {
                 state.foreground_app_name = app_name;
                 state.foreground_window_title = window_title;
@@ -2998,6 +3007,12 @@ impl WindowManager {
     /// Replace the internal blacklist with the given list (used for sync from settings).
     pub fn set_blacklist(&mut self, blacklist: Vec<String>) {
         self.blacklist = blacklist;
+    }
+
+    /// Push the clipboard-app blacklist snapshot to the listener thread.
+    /// Call after every add / remove so the next poll picks up the change.
+    pub fn set_clipboard_app_blacklist(&self, blacklist: Vec<String>) {
+        self.clipboard_service.set_app_blacklist(blacklist);
     }
 
     // ─── Update ──────────────────────────────────────────────────────────────

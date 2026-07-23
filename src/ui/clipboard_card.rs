@@ -281,52 +281,7 @@ fn swatch_color(text: &str, fallback: Rgba) -> Rgba {
 }
 
 fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
-    if item.source_app_name.is_empty() {
-        return None;
-    }
-    let safe_name: String = item
-        .source_app_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if safe_name.is_empty() {
-        return None;
-    }
-    // Icon directory is pre-created at startup.
-    let path = crate::core::paths::images_dir()
-        .join("icons")
-        .join(format!("{safe_name}.png"));
-    if path.exists() {
-        return Some(path);
-    }
-    if item.source_app_icon.is_empty() {
-        return None;
-    }
-    // Cache miss: decode and write synchronously.
-    // A 32×32 PNG is ~2–5 KB — the decode + write completes in microseconds.
-    match base64::engine::general_purpose::STANDARD.decode(&item.source_app_icon) {
-        Ok(decoded) => {
-            if let Err(e) = std::fs::write(&path, &decoded) {
-                log::warn!("source_icon_path: failed to write {}: {e}", path.display());
-                return None;
-            }
-            return Some(path);
-        }
-        Err(e) => {
-            log::warn!(
-                "source_icon_path: base64 decode failed for '{}' (len={}): {e}",
-                item.source_app_name,
-                item.source_app_icon.len(),
-            );
-        }
-    }
-    None
+    crate::core::paths::cache_app_icon(&item.source_app_name, &item.source_app_icon)
 }
 
 fn image_preview_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {

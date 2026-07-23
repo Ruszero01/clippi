@@ -1,5 +1,6 @@
 //! Platform-aware path resolution for config and data files
 
+use base64::Engine as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -172,6 +173,37 @@ pub fn app_icon_path(app_name: &str) -> PathBuf {
         })
         .collect();
     app_icon_dir().join(format!("{sanitized}.png"))
+}
+
+/// Return the standard cached application-icon path, writing the supplied PNG
+/// payload only when the cache file does not already exist.
+pub fn cache_app_icon(app_name: &str, icon_base64: &str) -> Option<PathBuf> {
+    if app_name.trim().is_empty() {
+        return None;
+    }
+    let path = app_icon_path(app_name);
+    if path.exists() {
+        return Some(path);
+    }
+    if icon_base64.is_empty() {
+        return None;
+    }
+    match base64::engine::general_purpose::STANDARD.decode(icon_base64) {
+        Ok(png) => match fs::write(&path, png) {
+            Ok(()) => Some(path),
+            Err(error) => {
+                log::warn!(
+                    "cache_app_icon: failed to write {}: {error}",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(error) => {
+            log::warn!("cache_app_icon: invalid icon for '{app_name}': {error}");
+            None
+        }
+    }
 }
 
 static RESOLVED_IMAGES_DIR: OnceLock<PathBuf> = OnceLock::new();

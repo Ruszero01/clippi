@@ -151,6 +151,29 @@ define_i18n! {
     // ─── Hotkey settings ───
     HotkeyBlacklist:    ("快捷键黑名单", "Hotkey blacklist"),
 
+    // ─── Clipboard app blacklist ───
+    ClipboardAppBlacklistTitle: ("应用黑名单", "App Blacklist"),
+    ClipboardAppBlacklistEmpty: ("未添加应用", "No apps added"),
+    ClipboardAppBlacklistEmptyHint: ("添加应用后，其剪贴板内容将不被记录", "Clipboard from these apps won't be recorded"),
+    ClipboardAppBlacklistCount: ("已设置 {0} 项", "{0} apps"),
+    ClipboardAppBlacklistAddLabel: ("添加当前应用：{0}", "Add current app: {0}"),
+
+    // ─── Bottom status bar ───
+    BottomBarClipboardBlacklist: ("添加到应用黑名单", "Add to App Blacklist"),
+    BottomBarHotkeyBlacklist:    ("添加到快捷键黑名单", "Add to Hotkey Blacklist"),
+    BottomBarPasteShortcut:      ("设置快速粘贴快捷键", "Set Quick Paste Shortcut"),
+    BottomBarRecording:          ("按下快捷键进行录制", "Press keys to record"),
+    BottomBarNoApp:              ("无前台应用", "No foreground app"),
+    BottomBarAlreadyInList:      ("已在列表中", "Already in list"),
+
+    // ─── Clipboard blacklist confirm ───
+    ConfirmAddClipboardBlacklistTitle:  ("添加到应用黑名单", "Add to App Blacklist"),
+    ConfirmAddClipboardBlacklistMsg:    ("将 \"{0}\" 加入剪贴板黑名单？\n该应用的剪贴板内容将不再被记录。",
+                                         "Add \"{0}\" to clipboard blacklist?\nClipboard content from this app will not be recorded."),
+    ConfirmRemoveClipboardBlacklistTitle: ("从应用黑名单移除", "Remove from App Blacklist"),
+    ConfirmRemoveClipboardBlacklistMsg:   ("将 \"{0}\" 从剪贴板黑名单移除？",
+                                           "Remove \"{0}\" from clipboard blacklist?"),
+
     // ─── Sync settings ───
     SyncFavoritesOnly:  ("仅同步收藏", "Favorites only"),
     SyncIncludeImages:  ("包含图片", "Include images"),
@@ -389,9 +412,9 @@ define_i18n! {
     HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
     HotkeyConfirmRemoveTitle:("确认移除黑名单", "Confirm Remove from Blacklist"),
     HotkeyConfirmRemoveMsg: ("将 {0} 从快捷键黑名单中移除？", "Remove {0} from hotkey blacklist?"),
-    HotkeyPasteShortcut:      ("粘贴快捷键", "Paste shortcut"),
+    HotkeyPasteShortcut:      ("快速粘贴快捷键", "Quick paste shortcut"),
     HotkeyPasteShortcutEmpty:       ("未添加粘贴快捷键", "No paste shortcuts configured"),
-    HotkeyPasteShortcutEmptyHint:   ("为当前应用配置独立的快速粘贴快捷键", "Configure custom paste shortcut for current app"),
+    HotkeyPasteShortcutEmptyHint:   ("为当前应用配置独立的快速粘贴快捷键", "Configure a custom quick paste shortcut for the current app"),
     HotkeyPasteShortcutRecording:   ("按下快捷键进行录制", "Press shortcut to record"),
     HotkeyPasteShortcutConfirmAddTitle: ("确认添加粘贴快捷键", "Confirm Add Paste Shortcut"),
     HotkeyPasteShortcutConfirmAddMsg:   ("为 {0} 设置粘贴快捷键 {1}？", "Set paste shortcut {1} for {0}?"),

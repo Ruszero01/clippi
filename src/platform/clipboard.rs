@@ -5,6 +5,7 @@
 
 use crate::core::color::detect_color;
 use crate::core::paths::images_dir;
+use crate::core::settings::capture_gate;
 use crate::core::types::{
     is_email, is_image_extension, is_markdown_like, is_path, is_phone, is_url, ClipboardItem,
     ContentType, FileData, FileInfo, RichData, SourceAppInfo,
@@ -18,7 +19,7 @@ use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -100,6 +101,9 @@ pub struct ClipboardShared {
     pub batch_pasting: Arc<AtomicBool>,
     pub clear_selection_requested: Arc<AtomicBool>,
     pub skip_next: Arc<AtomicBool>,
+    /// App-level clipboard blacklist snapshot.
+    /// Listener thread reads; main thread writes via `GpuiClipboardService::set_app_blacklist`.
+    pub clipboard_app_blacklist: Arc<RwLock<Vec<String>>>,
 }
 
 impl ClipboardShared {
@@ -109,6 +113,7 @@ impl ClipboardShared {
             batch_pasting: Arc::new(AtomicBool::new(false)),
             clear_selection_requested: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
+            clipboard_app_blacklist: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -116,6 +121,30 @@ impl ClipboardShared {
 impl Default for ClipboardShared {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Shared gate: combines startup grace-period + app-blacklist checks with an
+/// injectable content detector.  Returns `Some(item)` when capture is allowed,
+/// `None` when the source should be skipped.
+///
+/// `detector` is only called when the gate passes — this guarantees that
+/// blacklisted sources and the startup grace period never trigger expensive
+/// clipboard-content extraction (image encoding / thumbnail writes / disk I/O).
+pub(crate) fn detect_if_allowed(
+    source_info: &Option<SourceAppInfo>,
+    blacklist: &[String],
+    startup_done: bool,
+    detector: impl FnOnce() -> Option<ClipboardItem>,
+) -> Option<ClipboardItem> {
+    let source_app_name = source_info
+        .as_ref()
+        .map(|s| s.app_name.as_str())
+        .unwrap_or("");
+    if capture_gate(source_app_name, blacklist, startup_done) {
+        detector()
+    } else {
+        None
     }
 }
 
@@ -128,11 +157,11 @@ pub trait ClipboardListener: Send {
 
 /// Shared clipboard content detection (platform-agnostic).
 /// Priority: Files > Image (Image+RichText coexistence -> Text) > Link > Path > Color > Email/Phone > RichText > Markdown > PlainText
-fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
-    // --- Capture source app info at detection time (only once, not on re-copy) ---
-    let source_info = source::get_clipboard_owner_info();
-
-    detect_files(ctx, &source_info)
+fn detect_clipboard_content(
+    ctx: &ClipboardContext,
+    source_info: &Option<SourceAppInfo>,
+) -> Option<ClipboardItem> {
+    detect_files(ctx, source_info)
         .or_else(|| {
             // When both image and rich text (HTML/RTF) coexist on the clipboard,
             // prefer the text. Apps like OneNote and Excel put both a rendered
@@ -141,12 +170,12 @@ fn detect_clipboard_content(ctx: &ClipboardContext) -> Option<ClipboardItem> {
             if ctx.has(ContentFormat::Image)
                 && (ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf))
             {
-                detect_text_content(ctx, &source_info).or_else(|| detect_image(ctx, &source_info))
+                detect_text_content(ctx, source_info).or_else(|| detect_image(ctx, source_info))
             } else {
-                detect_image(ctx, &source_info)
+                detect_image(ctx, source_info)
             }
         })
-        .or_else(|| detect_text_content(ctx, &source_info))
+        .or_else(|| detect_text_content(ctx, source_info))
 }
 
 /// --- File list detection (CF_HDROP on Windows, NSFilenames on macOS) ---
@@ -568,10 +597,15 @@ impl PollingClipboardListener {
     }
 
     fn capture_baseline(&self) -> u64 {
+        // Do NOT read clipboard content at startup.
+        // - Windows: record the sequence number; the grace-period gate handles the
+        //   first real detection after startup.
+        // - macOS: frontmostApplication() returns Clippi itself at startup, so the
+        //   original clipboard source is unknowable.  If we called content detection
+        //   here, images from a blacklisted app would be written to disk before any
+        //   filtering could run.
         *self.startup_end.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
-        with_clipboard_context(detect_clipboard_content)
-            .flatten()
-            .map_or(0, |item| item.content_hash)
+        0
     }
 }
 
@@ -638,6 +672,7 @@ impl ClipboardListener for PollingClipboardListener {
         let pending = shared.pending.clone();
         let batch_pasting = shared.batch_pasting.clone();
         let skip_next = shared.skip_next.clone();
+        let app_blacklist = shared.clipboard_app_blacklist.clone(); // Arc<RwLock<_>>
 
         // Windows: use cheap sequence-number check to avoid opening the clipboard
         // --- and encoding large bitmaps to PNG every 50ms when nothing changed. ---
@@ -716,26 +751,42 @@ impl ClipboardListener for PollingClipboardListener {
                     *last = cc;
                 }
 
+                // ── Startup grace-period gate ──
+                // Skip content detection entirely during the first 500ms so that
+                // clipboard content present at startup (from a potentially
+                // blacklisted app) is never written to disk.
                 let startup_done = startup_end
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .is_none_or(|end| end.elapsed().as_millis() > 500);
+                if !startup_done {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
 
-                if let Some(item) = with_clipboard_context(detect_clipboard_content).flatten() {
+                // ── Capture source identity once (before opening clipboard) ──
+                let source_info = source::get_clipboard_owner_info();
+
+                // ── Clone blacklist snapshot and release the read-lock ──
+                // The guard is dropped at the end of this statement so the
+                // RwLock is never held during expensive content detection
+                // (image encoding / thumbnail generation / disk writes).
+                let blacklist_snapshot = app_blacklist
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+
+                // ── Unified gate + content detection ──
+                if let Some(item) = detect_if_allowed(
+                    &source_info,
+                    &blacklist_snapshot,
+                    true, // startup_done already checked above
+                    || {
+                        with_clipboard_context(|ctx| detect_clipboard_content(ctx, &source_info))
+                            .flatten()
+                    },
+                ) {
                     // ── Duplicate suppression ──────────────────────────
-                    // Three independent signals that together distinguish
-                    // system-triggered delayed rendering from user re-copies:
-                    //
-                    // 1. `delayed_fill`  – seq delta ≤ 2 means only a few
-                    //    `SetClipboardData` calls happened without a preceding
-                    //    `EmptyClipboard` (which would add ≥ 1 extra increment).
-                    // 2. `owner_destroyed` – the clipboard owner window was
-                    //    destroyed (HWND → NULL). `WM_RENDERALLFORMATS` fires
-                    //    before the window goes away.
-                    // 3. `rapid_same`     – same hash, same owner, within a
-                    //    short window (2 s). Catches bursts of format writes
-                    //    that happen right after the initial copy.
-                    // ────────────────────────────────────────────────────
                     let now = Instant::now();
                     let owner = current_clipboard_owner();
                     let seq = current_clipboard_seq();
@@ -748,15 +799,12 @@ impl ClipboardListener for PollingClipboardListener {
                         let owner_destroyed = same_hash && owner == 0 && guard.owner != 0;
                         let rapid_same = same_hash
                             && owner == guard.owner
-                            && seq.wrapping_sub(guard.seq) > 2 // small deltas already caught by delayed_fill
+                            && seq.wrapping_sub(guard.seq) > 2
                             && now.duration_since(guard.time).as_millis() < 2_000;
                         delayed_fill || owner_destroyed || rapid_same
                     };
                     #[cfg(not(target_os = "windows"))]
                     let suppress_duplicate = {
-                        // Non-Windows platforms do not have Windows delayed
-                        // rendering, but still keep the state updated below so
-                        // the shared listener bookkeeping stays uniform.
                         let _ = (&guard.hash, &guard.owner, &guard.time, &guard.seq);
                         false
                     };
@@ -774,9 +822,7 @@ impl ClipboardListener for PollingClipboardListener {
                         seq,
                     };
                     drop(guard);
-                    if startup_done {
-                        pending.lock().unwrap_or_else(|e| e.into_inner()).push(item);
-                    }
+                    pending.lock().unwrap_or_else(|e| e.into_inner()).push(item);
                 }
 
                 thread::sleep(Duration::from_millis(50));
@@ -879,5 +925,94 @@ mod access_tests {
 
         first.join().unwrap();
         second.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+    use crate::core::types::ClipboardItem;
+
+    fn dummy_item() -> ClipboardItem {
+        ClipboardItem::new_text(
+            0,
+            "test",
+            crate::core::types::ContentType::PlainText,
+            None,
+            None,
+        )
+    }
+
+    fn dummy_source(app_name: &str) -> Option<SourceAppInfo> {
+        Some(SourceAppInfo {
+            app_name: app_name.into(),
+            icon_base64: String::new(),
+        })
+    }
+
+    #[test]
+    fn detector_not_called_during_grace_period() {
+        let mut calls = 0u32;
+        let result = detect_if_allowed(&None, &[], false, || {
+            calls += 1;
+            None
+        });
+        assert!(result.is_none());
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn detector_not_called_for_blacklisted() {
+        let info = dummy_source("KeePass");
+        let mut calls = 0u32;
+        let result = detect_if_allowed(&info, &["KeePass".into()], true, || {
+            calls += 1;
+            None
+        });
+        assert!(result.is_none());
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn detector_called_for_normal() {
+        let info = dummy_source("Notepad");
+        let mut calls = 0u32;
+        let result = detect_if_allowed(&info, &[], true, || {
+            calls += 1;
+            Some(dummy_item())
+        });
+        assert!(result.is_some());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn detector_called_for_unknown_source() {
+        let mut calls = 0u32;
+        let result = detect_if_allowed(&None, &[], true, || {
+            calls += 1;
+            Some(dummy_item())
+        });
+        assert!(result.is_some());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn gate_uses_latest_blacklist_argument() {
+        let info = dummy_source("Notepad");
+        let mut calls = 0u32;
+        // Empty blacklist → allowed
+        let r1 = detect_if_allowed(&info, &[], true, || {
+            calls += 1;
+            Some(dummy_item())
+        });
+        assert!(r1.is_some());
+        assert_eq!(calls, 1);
+        // Now blacklisted → blocked, detector not called again
+        let r2 = detect_if_allowed(&info, &["Notepad".into()], true, || {
+            calls += 1;
+            None
+        });
+        assert!(r2.is_none());
+        assert_eq!(calls, 1);
     }
 }

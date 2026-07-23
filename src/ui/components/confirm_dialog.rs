@@ -154,6 +154,24 @@ impl ConfirmDialog {
             .confirm_label(I18nKey::ConfirmRemoveLabel.text())
             .danger(false)
     }
+
+    /// Confirmation before adding an app to the clipboard app blacklist.
+    pub fn add_clipboard_blacklist(app_name: &str) -> Self {
+        Self::new()
+            .title(I18nKey::ConfirmAddClipboardBlacklistTitle.text())
+            .message(I18nKey::ConfirmAddClipboardBlacklistMsg.fmt(&[app_name]))
+            .confirm_label(I18nKey::ConfirmAddLabel.text())
+            .danger(false)
+    }
+
+    /// Confirmation before removing an app from the clipboard app blacklist.
+    pub fn remove_clipboard_blacklist(app_name: &str) -> Self {
+        Self::new()
+            .title(I18nKey::ConfirmRemoveClipboardBlacklistTitle.text())
+            .message(I18nKey::ConfirmRemoveClipboardBlacklistMsg.fmt(&[app_name]))
+            .confirm_label(I18nKey::ConfirmRemoveLabel.text())
+            .danger(false)
+    }
 }
 
 impl ConfirmDialog {

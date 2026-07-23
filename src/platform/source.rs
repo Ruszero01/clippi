@@ -57,7 +57,7 @@ mod windows_impl {
     /// Build `SourceAppInfo` from an executable path.
     fn source_info_from_exe(exe_path: &str) -> Option<SourceAppInfo> {
         let app_name = extract_app_name(exe_path);
-        let icon_base64 = extract_icon_base64(exe_path)?;
+        let icon_base64 = extract_icon_base64(exe_path).unwrap_or_default();
         Some(SourceAppInfo {
             app_name,
             icon_base64,

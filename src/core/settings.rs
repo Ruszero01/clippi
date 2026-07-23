@@ -141,6 +141,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub hotkey_blacklist: Vec<String>, // hotkey blacklist app name list
     #[serde(default)]
+    pub clipboard_app_blacklist: Vec<String>, // apps whose clipboard content is not recorded
+    #[serde(default)]
     pub language: String, // "zh_CN" or "en", empty = follow system
     #[serde(default)]
     pub pinned_tag_ids: Vec<i64>, // tag IDs pinned to sidebar
@@ -280,6 +282,7 @@ impl Default for AppSettings {
             max_items: 0,
             retention_days: 0,
             hotkey_blacklist: Vec::new(),
+            clipboard_app_blacklist: Vec::new(),
             language: String::new(),
             pinned_tag_ids: Vec::new(),
             ocr_enabled: false,
@@ -716,6 +719,15 @@ pub fn merge_configs(source: &AppSettings, target: &AppSettings, new_db_path: &s
     }
     merged.hotkey_blacklist = blacklist;
 
+    // ── clipboard_app_blacklist: set union with case-insensitive dedup ──
+    let mut cb_blacklist = source.clipboard_app_blacklist.clone();
+    for app in &target.clipboard_app_blacklist {
+        if !is_app_in_list(&cb_blacklist, app) {
+            cb_blacklist.push(app.clone());
+        }
+    }
+    merged.clipboard_app_blacklist = cb_blacklist;
+
     // ── pinned_tag_ids: set union (ids may differ across DBs, but config merge
     //    is best-effort — stale IDs are silently ignored on load) ──
     let mut pinned = source.pinned_tag_ids.clone();
@@ -739,6 +751,42 @@ pub fn merge_configs(source: &AppSettings, target: &AppSettings, new_db_path: &s
     }
 
     merged
+}
+
+// ── App name normalization & matching helpers ──
+
+/// Normalize an app name for case-insensitive comparison.
+/// Does NOT affect storage — only used when comparing.
+pub fn normalize_app_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Check whether `app_name` is present in `list`, ignoring ASCII case.
+/// Empty / whitespace-only names never match.
+pub fn is_app_in_list(list: &[String], app_name: &str) -> bool {
+    let n = normalize_app_name(app_name);
+    if n.is_empty() {
+        return false;
+    }
+    list.iter().any(|a| normalize_app_name(a) == n)
+}
+
+/// Should clipboard content from this source app be captured?
+/// Unknown sources → `true` (fail open).
+pub fn should_capture_source(source_app_name: &str, blacklist: &[String]) -> bool {
+    if source_app_name.trim().is_empty() {
+        return true;
+    }
+    !is_app_in_list(blacklist, source_app_name)
+}
+
+/// Full capture gate: combines startup grace-period and app-blacklist checks.
+/// Returns `true` when content detection should proceed.
+pub fn capture_gate(source_app_name: &str, blacklist: &[String], startup_done: bool) -> bool {
+    if !startup_done {
+        return false;
+    }
+    should_capture_source(source_app_name, blacklist)
 }
 
 #[cfg(test)]
@@ -975,5 +1023,153 @@ mod tests {
         assert_eq!(merged.paste_shortcuts[0].shortcut, "Shift+Insert");
         // Target's Notepad appended (new app_name).
         assert_eq!(merged.paste_shortcuts[1].app_name, "Notepad");
+    }
+
+    // ── normalize_app_name ──
+
+    #[test]
+    fn normalize_app_name_lowercase() {
+        assert_eq!(normalize_app_name("KeePass"), "keepass");
+    }
+
+    #[test]
+    fn normalize_app_name_trim() {
+        assert_eq!(normalize_app_name(" KeePass "), "keepass");
+    }
+
+    // ── is_app_in_list ──
+
+    #[test]
+    fn is_app_in_list_hit() {
+        let list = vec!["Notepad".into(), "KeePass".into()];
+        assert!(is_app_in_list(&list, "KeePass"));
+    }
+
+    #[test]
+    fn is_app_in_list_case_variant() {
+        let list = vec!["KeePass".into()];
+        assert!(is_app_in_list(&list, "keepass"));
+        assert!(is_app_in_list(&list, "KEEPASS"));
+    }
+
+    #[test]
+    fn is_app_in_list_empty_name() {
+        let list = vec!["KeePass".into()];
+        assert!(!is_app_in_list(&list, ""));
+    }
+
+    #[test]
+    fn is_app_in_list_whitespace() {
+        let list = vec!["KeePass".into()];
+        assert!(!is_app_in_list(&list, "  "));
+    }
+
+    #[test]
+    fn is_app_in_list_empty_list() {
+        let list: Vec<String> = vec![];
+        assert!(!is_app_in_list(&list, "KeePass"));
+    }
+
+    // ── should_capture_source ──
+
+    #[test]
+    fn should_capture_source_normal() {
+        let blacklist: Vec<String> = vec![];
+        assert!(should_capture_source("Notepad", &blacklist));
+    }
+
+    #[test]
+    fn should_capture_source_blacklisted() {
+        let blacklist = vec!["KeePass".into()];
+        assert!(!should_capture_source("KeePass", &blacklist));
+    }
+
+    #[test]
+    fn should_capture_source_case_variant() {
+        let blacklist = vec!["KeePass".into()];
+        assert!(!should_capture_source("keepass", &blacklist));
+    }
+
+    #[test]
+    fn should_capture_source_empty() {
+        let blacklist = vec!["KeePass".into()];
+        assert!(should_capture_source("", &blacklist)); // fail open
+    }
+
+    #[test]
+    fn should_capture_source_whitespace() {
+        let blacklist = vec!["KeePass".into()];
+        assert!(should_capture_source("  ", &blacklist)); // fail open
+    }
+
+    // ── capture_gate ──
+
+    #[test]
+    fn capture_gate_grace_period_blocks() {
+        let blacklist: Vec<String> = vec![];
+        assert!(!capture_gate("Notepad", &blacklist, false));
+    }
+
+    #[test]
+    fn capture_gate_blacklisted_blocks() {
+        let blacklist = vec!["KeePass".into()];
+        assert!(!capture_gate("KeePass", &blacklist, true));
+    }
+
+    #[test]
+    fn capture_gate_normal_allows() {
+        let blacklist: Vec<String> = vec![];
+        assert!(capture_gate("Notepad", &blacklist, true));
+    }
+
+    #[test]
+    fn capture_gate_unknown_allows() {
+        let blacklist = vec!["KeePass".into()];
+        assert!(capture_gate("", &blacklist, true)); // fail open
+    }
+
+    // ── merge clipboard_app_blacklist ──
+
+    #[test]
+    fn merge_configs_union_clipboard_blacklist() {
+        let source = AppSettings {
+            clipboard_app_blacklist: vec!["KeePass".into(), "Terminal".into()],
+            ..Default::default()
+        };
+        let target = AppSettings {
+            clipboard_app_blacklist: vec!["Terminal".into(), "Notepad".into()],
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "");
+        assert_eq!(merged.clipboard_app_blacklist.len(), 3);
+        assert!(merged
+            .clipboard_app_blacklist
+            .iter()
+            .any(|a| a == "KeePass"));
+        assert!(merged
+            .clipboard_app_blacklist
+            .iter()
+            .any(|a| a == "Terminal"));
+        assert!(merged
+            .clipboard_app_blacklist
+            .iter()
+            .any(|a| a == "Notepad"));
+    }
+
+    #[test]
+    fn merge_clipboard_blacklist_case_dedup() {
+        let source = AppSettings {
+            clipboard_app_blacklist: vec!["KeePass".into()],
+            ..Default::default()
+        };
+        let target = AppSettings {
+            clipboard_app_blacklist: vec!["keepass".into(), "Notepad".into()],
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "");
+        // "KeePass" and "keepass" → one entry (source's original casing wins)
+        assert_eq!(merged.clipboard_app_blacklist.len(), 2);
     }
 }
