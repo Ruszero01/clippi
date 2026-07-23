@@ -9,6 +9,9 @@ use crate::core::filters::ClipboardFilters;
 use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::AppSettings;
+use crate::core::transfer_types::{
+    TRANSFER_STATUS_CLOUD_UID, TRANSFER_STATUS_DOWNLOADING_UID, TRANSFER_STATUS_LOCAL_UID,
+};
 use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
 use crate::core::types::ContentType;
@@ -2369,7 +2372,7 @@ impl AppState {
                     let status_tags = if self.pending_transfer_downloads.contains(&re.entry.hash) {
                         vec![TagInfo {
                             id: -3,
-                            uid: String::new(),
+                            uid: TRANSFER_STATUS_DOWNLOADING_UID.into(),
                             name: I18nKey::TransferDownloading.text().to_string(),
                             color: "#3B82F6".to_string(),
                             updated_at: String::new(),
@@ -2377,7 +2380,7 @@ impl AppState {
                     } else if re.is_local {
                         vec![TagInfo {
                             id: -1,
-                            uid: String::new(),
+                            uid: TRANSFER_STATUS_LOCAL_UID.into(),
                             name: I18nKey::TransferLocal.text().to_string(),
                             color: "#22C55E".to_string(),
                             updated_at: String::new(),
@@ -2385,7 +2388,7 @@ impl AppState {
                     } else {
                         vec![TagInfo {
                             id: -2,
-                            uid: String::new(),
+                            uid: TRANSFER_STATUS_CLOUD_UID.into(),
                             name: I18nKey::TransferCloud.text().to_string(),
                             color: "#3B82F6".to_string(),
                             updated_at: String::new(),
@@ -2749,6 +2752,10 @@ mod tests {
         let visible = state.visible_items();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].tags[0].name, I18nKey::TransferDownloading.text());
+        assert_eq!(
+            visible[0].tags[0].uid,
+            crate::core::transfer_types::TRANSFER_STATUS_DOWNLOADING_UID
+        );
     }
 
     #[test]

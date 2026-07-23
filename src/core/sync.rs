@@ -8,11 +8,13 @@ use crate::core::db::Database;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::TagInfo;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 const SYNC_PAYLOAD_MAX_ATTEMPTS: usize = 5;
-const SYNC_PAYLOAD_RETRY_DELAY: Duration = Duration::from_millis(200);
+const SYNC_PAYLOAD_BASE_RETRY_DELAY: Duration = Duration::from_millis(100);
+static SYNC_RETRY_JITTER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Connection / health status of a backend.
 #[derive(Debug, Clone)]
@@ -145,7 +147,11 @@ pub fn pull_payload_with_retry<T, F>(fetch: F) -> Result<(SyncPayload, T), Strin
 where
     F: FnMut() -> Result<(Vec<u8>, T), SyncPayloadFetchError>,
 {
-    pull_payload_with_retry_config(fetch, SYNC_PAYLOAD_MAX_ATTEMPTS, SYNC_PAYLOAD_RETRY_DELAY)
+    pull_payload_with_retry_config(
+        fetch,
+        SYNC_PAYLOAD_MAX_ATTEMPTS,
+        SYNC_PAYLOAD_BASE_RETRY_DELAY,
+    )
 }
 
 fn pull_payload_with_retry_config<T, F>(
@@ -182,10 +188,29 @@ where
             | Err(SyncPayloadFetchError::Fatal(error)) => return Err(error),
         }
 
-        std::thread::sleep(retry_delay);
+        std::thread::sleep(sync_retry_delay(retry_delay, attempt));
     }
 
-    unreachable!("sync payload pull loop always returns on its final attempt")
+    Err("sync payload pull exhausted without a result".into())
+}
+
+fn sync_retry_delay(base: Duration, attempt: usize) -> Duration {
+    if base.is_zero() {
+        return Duration::ZERO;
+    }
+    let multiplier = 1_u32 << attempt.min(4);
+    let backoff = base.saturating_mul(multiplier);
+    let jitter_limit_ms = (backoff.as_millis() / 4).min(u64::MAX as u128) as u64;
+    if jitter_limit_ms == 0 {
+        return backoff;
+    }
+    let time_seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| u64::from(duration.subsec_nanos()))
+        .unwrap_or_default();
+    let sequence = SYNC_RETRY_JITTER_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let jitter_ms = (time_seed ^ sequence) % (jitter_limit_ms + 1);
+    backoff.saturating_add(Duration::from_millis(jitter_ms))
 }
 
 /// Encode a sync payload once, independently of its transport backend.
@@ -515,17 +540,25 @@ fn tag_has_more_stable_refs(a: &SyncItem, b: &SyncItem) -> bool {
 }
 
 fn sync_tag_preferred(candidate: &SyncTag, existing: &SyncTag) -> bool {
-    rfc3339_newer(&candidate.updated_at, &existing.updated_at)
-        || (candidate.updated_at == existing.updated_at
-            && existing.uid.is_empty()
-            && !candidate.uid.is_empty())
+    match rfc3339_cmp(&candidate.updated_at, &existing.updated_at) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => {
+            (&candidate.uid, &candidate.name, &candidate.color)
+                > (&existing.uid, &existing.name, &existing.color)
+        }
+        std::cmp::Ordering::Less => false,
+    }
 }
 
 fn deleted_tag_preferred(candidate: &SyncDeletedTag, existing: &SyncDeletedTag) -> bool {
-    rfc3339_newer(&candidate.deleted_at, &existing.deleted_at)
-        || (candidate.deleted_at == existing.deleted_at
-            && existing.uid.is_empty()
-            && !candidate.uid.is_empty())
+    match rfc3339_cmp(&candidate.deleted_at, &existing.deleted_at) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => {
+            (&candidate.uid, &candidate.name, &candidate.device_name)
+                > (&existing.uid, &existing.name, &existing.device_name)
+        }
+        std::cmp::Ordering::Less => false,
+    }
 }
 
 // --- ── Merge logic ── ---
@@ -1384,29 +1417,24 @@ fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 /// Returns true if `a` is strictly newer than `b`.
 /// Falls back to lexical comparison when either string is unparseable.
 fn rfc3339_newer(a: &str, b: &str) -> bool {
+    rfc3339_cmp(a, b).is_gt()
+}
+
+fn rfc3339_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     match (parse_rfc3339(a), parse_rfc3339(b)) {
-        (Some(ta), Some(tb)) => ta > tb,
+        (Some(ta), Some(tb)) => ta.cmp(&tb),
         _ => {
             log::warn!(
                 "[sync] unparseable RFC3339 timestamp in LWW comparison — \
                  falling back to lexical: a={a:?}, b={b:?}"
             );
-            a > b
+            a.cmp(b)
         }
     }
 }
 
 fn rfc3339_newer_or_equal(a: &str, b: &str) -> bool {
-    match (parse_rfc3339(a), parse_rfc3339(b)) {
-        (Some(ta), Some(tb)) => ta >= tb,
-        _ => {
-            log::warn!(
-                "[sync] unparseable RFC3339 timestamp in LWW comparison — \
-                 falling back to lexical: a={a:?}, b={b:?}"
-            );
-            a >= b
-        }
-    }
+    !rfc3339_cmp(a, b).is_lt()
 }
 
 #[cfg(test)]
@@ -1524,6 +1552,17 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn payload_retry_delay_uses_bounded_exponential_backoff() {
+        for (attempt, minimum_ms, maximum_ms) in
+            [(0, 100, 125), (1, 200, 250), (2, 400, 500), (3, 800, 1_000)]
+        {
+            let delay = sync_retry_delay(Duration::from_millis(100), attempt);
+            assert!(delay >= Duration::from_millis(minimum_ms));
+            assert!(delay <= Duration::from_millis(maximum_ms));
+        }
     }
 
     #[test]
@@ -1767,6 +1806,51 @@ mod tests {
         assert_eq!(merged.tags.len(), 1);
         assert_eq!(merged.tags[0].color, "#00FF00");
         assert_eq!(merged.tags[0].updated_at, "2026-05-14T10:00:00Z");
+    }
+
+    #[test]
+    fn same_name_tag_uid_conflicts_converge_independently_of_input_order() {
+        let timestamp = "2026-05-14T10:00:00Z";
+        let tag_a = make_tag_with_uid("tag-a", "work", "#FF0000", timestamp);
+        let tag_b = make_tag_with_uid("tag-b", "work", "#00FF00", timestamp);
+
+        let merged_ab = merge_payloads(
+            make_payload(vec![], vec![tag_a.clone()]),
+            make_payload(vec![], vec![tag_b.clone()]),
+        );
+        let merged_ba = merge_payloads(
+            make_payload(vec![], vec![tag_b]),
+            make_payload(vec![], vec![tag_a]),
+        );
+
+        assert_eq!(merged_ab.tags.len(), 1);
+        assert_eq!(merged_ba.tags.len(), 1);
+        assert_eq!(merged_ab.tags[0].uid, "tag-b");
+        assert_eq!(merged_ba.tags[0].uid, "tag-b");
+        assert_eq!(merged_ab.tags[0].color, merged_ba.tags[0].color);
+    }
+
+    #[test]
+    fn same_name_tombstone_uid_conflicts_use_a_stable_winner() {
+        let timestamp = "2026-05-14T10:00:00Z";
+        let tombstone = |uid: &str| SyncDeletedTag {
+            uid: uid.into(),
+            name: "work".into(),
+            deleted_at: timestamp.into(),
+            device_name: "device".into(),
+        };
+        let mut base = make_payload(vec![], vec![]);
+        base.deleted_tags = vec![tombstone("tag-a")];
+        let mut other = make_payload(vec![], vec![]);
+        other.deleted_tags = vec![tombstone("tag-b")];
+
+        let merged_ab = merge_payloads(base.clone(), other.clone());
+        let merged_ba = merge_payloads(other, base);
+
+        assert_eq!(merged_ab.deleted_tags.len(), 1);
+        assert_eq!(merged_ba.deleted_tags.len(), 1);
+        assert_eq!(merged_ab.deleted_tags[0].uid, "tag-b");
+        assert_eq!(merged_ba.deleted_tags[0].uid, "tag-b");
     }
 
     #[test]

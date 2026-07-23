@@ -8,8 +8,10 @@ use crate::core::db::Database;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::{AppSettings, BackendConfig};
 use crate::core::sync::SyncBackend;
-use crate::core::transfer_types::MAX_TRANSFER_FILE_SIZE_BYTES;
-use crate::core::transfer_types::{FileManifest, ManifestEntry, ManifestWriteError, ResolvedEntry};
+use crate::core::transfer_types::{
+    validate_portable_file_name, FileManifest, ManifestEntry, ManifestWriteError, ResolvedEntry,
+    MAX_TRANSFER_FILE_SIZE_BYTES,
+};
 use crate::core::types::{ClipboardItem, ContentType, FileData, FileInfo};
 use crate::core::{migration, paths};
 use crate::services::backends::local_folder::LocalFolderBackend;
@@ -1042,55 +1044,10 @@ fn portable_file_name(value: &str) -> Result<String, String> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| I18nKey::TransferInvalidPath.text().to_string())?;
-    if name != value
-        || name.is_empty()
-        || name.len() > 255
-        || name.encode_utf16().count() > 255
-        || name == "."
-        || name == ".."
-        || name.chars().any(|character| {
-            character.is_control()
-                || matches!(
-                    character,
-                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
-                )
-        })
-        || name.ends_with([' ', '.'])
-    {
+    if name != value {
         return Err("file name is not portable across supported platforms".into());
     }
-    let stem = name
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if matches!(
-        stem.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    ) {
-        return Err("reserved file name is not portable".into());
-    }
+    validate_portable_file_name(name)?;
     Ok(name.to_string())
 }
 

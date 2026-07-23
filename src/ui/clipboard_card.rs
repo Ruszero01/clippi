@@ -21,6 +21,9 @@ use crate::core::color::detect_color;
 use crate::core::frontend::PANEL_OFFSET_X;
 use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
+use crate::core::transfer_types::{
+    TRANSFER_STATUS_CLOUD_UID, TRANSFER_STATUS_DOWNLOADING_UID, TRANSFER_STATUS_LOCAL_UID,
+};
 use crate::core::types::{
     format_relative_time, mask_sensitive_preview, parse_hex_color, url_domain, url_path,
     url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, HotkeyPasteFormat,
@@ -2254,25 +2257,25 @@ impl RenderOnce for ClipboardCard {
 
         // --- Bottom info row: tags → size label → time ---
         // Detect transfer items and filter out status tags (handled separately)
-        let is_transfer = item.meta_type == "transfer"
-            && tags.iter().any(|tag| {
-                tag.name == I18nKey::TransferLocal.text()
-                    || tag.name == I18nKey::TransferCloud.text()
-                    || tag.name == I18nKey::TransferDownloading.text()
-            });
+        let is_transfer_status = |uid: &str| {
+            matches!(
+                uid,
+                TRANSFER_STATUS_LOCAL_UID
+                    | TRANSFER_STATUS_CLOUD_UID
+                    | TRANSFER_STATUS_DOWNLOADING_UID
+            )
+        };
+        let is_transfer =
+            item.meta_type == "transfer" && tags.iter().any(|tag| is_transfer_status(&tag.uid));
         let transfer_is_local =
-            is_transfer && tags.iter().any(|t| t.name == I18nKey::TransferLocal.text());
+            is_transfer && tags.iter().any(|tag| tag.uid == TRANSFER_STATUS_LOCAL_UID);
         let transfer_is_downloading = is_transfer
             && tags
                 .iter()
-                .any(|t| t.name == I18nKey::TransferDownloading.text());
+                .any(|tag| tag.uid == TRANSFER_STATUS_DOWNLOADING_UID);
         let display_tags: Vec<_> = if is_transfer {
             tags.iter()
-                .filter(|t| {
-                    t.name != I18nKey::TransferLocal.text()
-                        && t.name != I18nKey::TransferCloud.text()
-                        && t.name != I18nKey::TransferDownloading.text()
-                })
+                .filter(|tag| !is_transfer_status(&tag.uid))
                 .cloned()
                 .collect()
         } else {

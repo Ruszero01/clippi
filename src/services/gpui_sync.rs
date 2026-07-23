@@ -729,21 +729,21 @@ fn download_missing_images(
 
         match backend.download_blob(&hash_hex, &ext) {
             Ok(data) => {
-                let tmp = images_dir.join(format!(".{blob}.tmp"));
-                if std::fs::write(&tmp, &data).is_ok() && std::fs::rename(&tmp, &dest).is_ok() {
-                    if let Ok(db) = db.lock() {
-                        let _ = db.set_item_image_path(*content_hash, &dest_text);
-                    }
-
-                    crate::platform::clipboard::ensure_thumbnail_for_image(
-                        &dest_text,
-                        *content_hash,
-                    );
-
-                    count += 1;
-                } else {
+                let tmp = images_dir.join(format!(".{blob}.{}.tmp", uuid::Uuid::new_v4()));
+                let commit = std::fs::write(&tmp, &data)
+                    .and_then(|()| crate::services::file_ops::replace_file(&tmp, &dest));
+                if let Err(error) = commit {
                     let _ = std::fs::remove_file(&tmp);
+                    log::warn!("sync: commit downloaded image {blob} failed: {error}");
+                    continue;
                 }
+                if let Ok(db) = db.lock() {
+                    let _ = db.set_item_image_path(*content_hash, &dest_text);
+                }
+
+                crate::platform::clipboard::ensure_thumbnail_for_image(&dest_text, *content_hash);
+
+                count += 1;
             }
             Err(e) => {
                 // Not found or network error; retry next cycle.

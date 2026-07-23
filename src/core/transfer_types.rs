@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 /// payload in memory, so accepting an unbounded remote size can exhaust the
 /// process before integrity verification runs.
 pub const MAX_TRANSFER_FILE_SIZE_BYTES: u64 = 512 * 1024 * 1024;
+pub const TRANSFER_STATUS_LOCAL_UID: &str = "clippi:transfer:local";
+pub const TRANSFER_STATUS_CLOUD_UID: &str = "clippi:transfer:cloud";
+pub const TRANSFER_STATUS_DOWNLOADING_UID: &str = "clippi:transfer:downloading";
 
 /// A manifest together with the backend revision used for optimistic locking.
 #[derive(Debug, Clone)]
@@ -79,6 +82,58 @@ pub struct ResolvedEntry {
     pub local_path: Option<String>,
 }
 
+pub fn validate_portable_file_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.len() > 255
+        || name.encode_utf16().count() > 255
+        || name == "."
+        || name == ".."
+        || name.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+        })
+        || name.ends_with([' ', '.'])
+    {
+        return Err("invalid file name".into());
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        return Err("reserved file name".into());
+    }
+    Ok(())
+}
+
 impl ManifestEntry {
     /// Validate all remotely supplied fields before they are used in a URL or path.
     pub fn validate(&self) -> Result<(), String> {
@@ -99,22 +154,7 @@ impl ManifestEntry {
                 return Err("invalid transfer blob id".into());
             }
         }
-        if self.name.is_empty()
-            || self.name.len() > 255
-            || self.name.encode_utf16().count() > 255
-            || self.name == "."
-            || self.name == ".."
-            || self.name.chars().any(|character| {
-                character.is_control()
-                    || matches!(
-                        character,
-                        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
-                    )
-            })
-            || self.name.ends_with([' ', '.'])
-        {
-            return Err("invalid file name".into());
-        }
+        validate_portable_file_name(&self.name)?;
         if self.ext.len() > 32
             || self.ext.chars().any(|character| {
                 character.is_control()
@@ -134,39 +174,6 @@ impl ManifestEntry {
         }
         validate_utc_timestamp(&self.uploaded_at, false, "upload timestamp")?;
         validate_utc_timestamp(&self.expires_at, true, "expiration timestamp")?;
-        let stem = self
-            .name
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_uppercase();
-        if matches!(
-            stem.as_str(),
-            "CON"
-                | "PRN"
-                | "AUX"
-                | "NUL"
-                | "COM1"
-                | "COM2"
-                | "COM3"
-                | "COM4"
-                | "COM5"
-                | "COM6"
-                | "COM7"
-                | "COM8"
-                | "COM9"
-                | "LPT1"
-                | "LPT2"
-                | "LPT3"
-                | "LPT4"
-                | "LPT5"
-                | "LPT6"
-                | "LPT7"
-                | "LPT8"
-                | "LPT9"
-        ) {
-            return Err("reserved file name".into());
-        }
         Ok(())
     }
 

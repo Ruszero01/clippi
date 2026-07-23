@@ -36,6 +36,16 @@ fn strong_etag(value: &str) -> Option<String> {
     (!value.is_empty() && !value.starts_with("W/")).then(|| value.to_string())
 }
 
+fn require_committed_write(status: u16, operation: &str) -> Result<(), String> {
+    if status == 202 {
+        Err(format!(
+            "{operation} was accepted asynchronously; waiting for a later retry"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub fn check_webdav_connection(
     agent: &ureq::Agent,
     url: &str,
@@ -211,6 +221,7 @@ pub struct WebDAVBackend {
 #[derive(Debug, Clone)]
 enum SyncRevision {
     Unknown,
+    NeedsRefresh,
     Missing,
     ETag(String),
     Unsupported,
@@ -376,13 +387,21 @@ impl SyncBackend for WebDAVBackend {
                     "WebDAV server does not expose ETag; refusing an unsafe sync overwrite".into(),
                 );
             }
-            SyncRevision::Unknown => {
+            SyncRevision::Unknown | SyncRevision::NeedsRefresh => {
                 return Err("sync push attempted without first reading the remote revision".into());
             }
         };
 
         match request.send_bytes(&json) {
             Ok(resp) => {
+                if let Err(error) = require_committed_write(resp.status(), "sync payload upload") {
+                    *self
+                        .sync_revision
+                        .lock()
+                        .unwrap_or_else(|lock_error| lock_error.into_inner()) =
+                        SyncRevision::NeedsRefresh;
+                    return Err(format!("{}: {error}", I18nKey::SyncErrPush.text()));
+                }
                 *self
                     .sync_revision
                     .lock()
@@ -390,7 +409,7 @@ impl SyncBackend for WebDAVBackend {
                     .header("ETag")
                     .and_then(strong_etag)
                     .map(SyncRevision::ETag)
-                    .unwrap_or(SyncRevision::Unsupported);
+                    .unwrap_or(SyncRevision::NeedsRefresh);
                 Ok(())
             }
             Err(ureq::Error::Status(409 | 412, _)) => {
@@ -425,7 +444,8 @@ impl SyncBackend for WebDAVBackend {
             .set("Content-Type", content_type)
             .send_bytes(data)
         {
-            Ok(_) => Ok(()),
+            Ok(response) => require_committed_write(response.status(), "image blob upload")
+                .map_err(|error| format!("blob upload failed: {error}")),
             Err(e) => Err(format!("blob upload failed: {e}")),
         }
     }
@@ -553,11 +573,15 @@ impl SyncBackend for WebDAVBackend {
         };
 
         match request.send_bytes(json.as_bytes()) {
-            Ok(resp) => Ok(resp
-                .header("ETag")
-                .and_then(strong_etag)
-                .map(|value| format!("etag:{value}"))
-                .unwrap_or_else(|| "unsupported".into())),
+            Ok(resp) => {
+                require_committed_write(resp.status(), "manifest upload")
+                    .map_err(ManifestWriteError::Other)?;
+                Ok(resp
+                    .header("ETag")
+                    .and_then(strong_etag)
+                    .map(|value| format!("etag:{value}"))
+                    .unwrap_or_else(|| "unsupported".into()))
+            }
             Err(ureq::Error::Status(409 | 412, _)) => Err(ManifestWriteError::Conflict),
             Err(e) => Err(ManifestWriteError::Other(format!("push manifest: {e}"))),
         }
@@ -596,7 +620,8 @@ impl SyncBackend for WebDAVBackend {
             // the request to detect replacement, truncation, or growth.
             .send(reader.take(content_length))
         {
-            Ok(_) => Ok(()),
+            Ok(response) => require_committed_write(response.status(), "file blob upload")
+                .map_err(|error| format!("file blob upload failed: {error}")),
             Err(e) => Err(format!("file blob upload failed: {e}")),
         }
     }
@@ -702,5 +727,13 @@ mod tests {
     fn optimistic_writes_require_a_strong_etag() {
         assert_eq!(strong_etag("\"revision-1\""), Some("\"revision-1\"".into()));
         assert_eq!(strong_etag("W/\"revision-1\""), None);
+    }
+
+    #[test]
+    fn asynchronous_webdav_writes_are_not_reported_as_committed() {
+        assert!(require_committed_write(200, "payload").is_ok());
+        assert!(require_committed_write(201, "payload").is_ok());
+        assert!(require_committed_write(204, "payload").is_ok());
+        assert!(require_committed_write(202, "payload").is_err());
     }
 }
