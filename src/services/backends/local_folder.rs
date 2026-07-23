@@ -12,7 +12,7 @@ use crate::core::transfer_types::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
@@ -111,6 +111,30 @@ impl LocalFolderBackend {
 
     fn file_path(&self) -> PathBuf {
         PathBuf::from(&self.config.folder_path).join(SYNC_FILENAME)
+    }
+
+    fn fetch_sync_bytes(
+        path: &Path,
+    ) -> Result<(Vec<u8>, Option<SystemTime>), sync::SyncPayloadFetchError> {
+        let mtime = std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        std::fs::read(path)
+            .map(|content| (content, mtime))
+            .map_err(|error| {
+                let message = format!("{}: {error}", I18nKey::SyncErrRead.text());
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::PermissionDenied
+                        | std::io::ErrorKind::WouldBlock
+                ) {
+                    sync::SyncPayloadFetchError::Retryable(message)
+                } else {
+                    sync::SyncPayloadFetchError::Fatal(message)
+                }
+            })
     }
 
     /// Find conflict files matching `clippi_sync-*.json` older than 5 seconds
@@ -452,40 +476,20 @@ impl SyncBackend for LocalFolderBackend {
         // --- Only applies to the main file; conflict files always need processing. ---
         // --- When bypass_cache is true (local dirty, need to compare hashes), ---
         // --- force mtime_changed so we always read the file. ---
-        let mut mtime_changed = bypass_cache;
-        if !bypass_cache {
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if let Ok(mtime) = meta.modified() {
-                    let mut last = self
-                        .last_remote_mtime
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if *last == Some(mtime) {
-                        mtime_changed = false;
-                    } else {
-                        *last = Some(mtime);
-                        mtime_changed = true;
-                    }
-                }
-            }
-        } else {
-            // Still update the mtime cache so the next poll cycle can use it
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if let Ok(mtime) = meta.modified() {
-                    *self
-                        .last_remote_mtime
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()) = Some(mtime);
-                }
-            }
-        }
+        let observed_mtime = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let mtime_changed = bypass_cache
+            || observed_mtime.is_none()
+            || *self
+                .last_remote_mtime
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                != observed_mtime;
 
         // --- Read main payload ---
-        let mut payload = if mtime_changed {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrRead.text()))?;
-            serde_json::from_str::<SyncPayload>(&content)
-                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))?
+        let (mut payload, parsed_mtime) = if mtime_changed {
+            sync::pull_payload_with_retry(|| Self::fetch_sync_bytes(&path))?
         } else {
             // Main file unchanged — return early only if no conflicts either
             let conflicts = self.find_conflicts();
@@ -493,11 +497,17 @@ impl SyncBackend for LocalFolderBackend {
                 return Err("@@unchanged".into());
             }
             // --- Re-read main payload to merge with conflicts ---
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrRead.text()))?;
-            serde_json::from_str::<SyncPayload>(&content)
-                .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))?
+            sync::pull_payload_with_retry(|| Self::fetch_sync_bytes(&path))?
         };
+
+        // Cache only the revision that produced a successfully parsed payload.
+        // If the file changes after this read, the next pull sees a new mtime.
+        if let Some(mtime) = parsed_mtime {
+            *self
+                .last_remote_mtime
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(mtime);
+        }
 
         // --- Merge conflict files ---
         let conflicts = self.find_conflicts();
@@ -526,11 +536,10 @@ impl SyncBackend for LocalFolderBackend {
             .map_err(|e| format!("{}: {e}", I18nKey::ErrCreateDir.text()))?;
 
         let file_path = self.file_path();
-        let json = serde_json::to_string_pretty(payload)
-            .map_err(|e| format!("{}: {e}", I18nKey::SyncErrSerialize.text()))?;
+        let json = sync::serialize_payload(payload)?;
 
         // --- Atomic write: temp file + rename ---
-        let tmp_path = dir.join(format!(".{SYNC_FILENAME}.tmp"));
+        let tmp_path = dir.join(format!(".{SYNC_FILENAME}.{}.tmp", uuid::Uuid::new_v4()));
         std::fs::write(&tmp_path, &json)
             .map_err(|e| format!("{}: {e}", I18nKey::SyncErrWriteTemp.text()))?;
         crate::services::file_ops::replace_file(&tmp_path, &file_path).map_err(|e| {

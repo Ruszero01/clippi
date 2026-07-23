@@ -5,9 +5,14 @@
 //! can later be used with a WebDAV backend by swapping the transport layer.
 
 use crate::core::db::Database;
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::TagInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::time::Duration;
+
+const SYNC_PAYLOAD_MAX_ATTEMPTS: usize = 5;
+const SYNC_PAYLOAD_RETRY_DELAY: Duration = Duration::from_millis(200);
 
 /// Connection / health status of a backend.
 #[derive(Debug, Clone)]
@@ -19,9 +24,9 @@ pub enum BackendStatus {
 
 /// Transport-agnostic backend trait.
 ///
-/// Implementors handle reading/writing `SyncPayload` to a specific medium
-/// (local folder, WebDAV, etc.). The merge logic lives outside the trait
-/// and is shared across all backends.
+/// Implementors transport `SyncPayload` through a specific medium (local
+/// folder, WebDAV, etc.). Shared JSON encoding, decoding, and retry policy
+/// live in this module; merge logic also remains backend-independent.
 pub trait SyncBackend: Send + Sync {
     fn check_status(&self) -> BackendStatus;
     /// Pull the remote payload. When `bypass_cache` is true, the backend
@@ -124,6 +129,69 @@ pub struct SyncPayload {
     /// Unfavorite markers.
     #[serde(default)]
     pub unfavorited_items: Vec<SyncUnfavoritedItem>,
+}
+
+/// A transport failure encountered while fetching serialized sync data.
+pub enum SyncPayloadFetchError {
+    /// A short-lived transport condition that is safe to retry.
+    Retryable(String),
+    /// A terminal condition or backend control signal.
+    Fatal(String),
+}
+
+/// Fetch and decode a sync payload with a bounded retry for incomplete JSON
+/// and transport failures explicitly classified as retryable by the backend.
+pub fn pull_payload_with_retry<T, F>(fetch: F) -> Result<(SyncPayload, T), String>
+where
+    F: FnMut() -> Result<(Vec<u8>, T), SyncPayloadFetchError>,
+{
+    pull_payload_with_retry_config(fetch, SYNC_PAYLOAD_MAX_ATTEMPTS, SYNC_PAYLOAD_RETRY_DELAY)
+}
+
+fn pull_payload_with_retry_config<T, F>(
+    mut fetch: F,
+    max_attempts: usize,
+    retry_delay: Duration,
+) -> Result<(SyncPayload, T), String>
+where
+    F: FnMut() -> Result<(Vec<u8>, T), SyncPayloadFetchError>,
+{
+    assert!(max_attempts > 0, "sync payload reads require an attempt");
+
+    for attempt in 0..max_attempts {
+        match fetch() {
+            Ok((content, revision)) => match serde_json::from_slice::<SyncPayload>(&content) {
+                Ok(payload) => return Ok((payload, revision)),
+                Err(error) if error.is_eof() && attempt + 1 < max_attempts => {
+                    log::debug!(
+                        "[sync] sync payload is incomplete; retrying pull ({}/{max_attempts})",
+                        attempt + 1
+                    );
+                }
+                Err(error) => {
+                    return Err(format!("{}: {error}", I18nKey::SyncErrParse.text()));
+                }
+            },
+            Err(SyncPayloadFetchError::Retryable(error)) if attempt + 1 < max_attempts => {
+                log::debug!(
+                    "[sync] sync payload is temporarily unavailable; retrying pull ({}/{max_attempts}): {error}",
+                    attempt + 1
+                );
+            }
+            Err(SyncPayloadFetchError::Retryable(error))
+            | Err(SyncPayloadFetchError::Fatal(error)) => return Err(error),
+        }
+
+        std::thread::sleep(retry_delay);
+    }
+
+    unreachable!("sync payload pull loop always returns on its final attempt")
+}
+
+/// Encode a sync payload once, independently of its transport backend.
+pub fn serialize_payload(payload: &SyncPayload) -> Result<Vec<u8>, String> {
+    serde_json::to_vec_pretty(payload)
+        .map_err(|error| format!("{}: {error}", I18nKey::SyncErrSerialize.text()))
 }
 
 /// A single clipboard item in the sync payload.
@@ -1382,14 +1450,80 @@ mod tests {
             unfavorited_items: vec![],
         };
 
-        let json = serde_json::to_string_pretty(&payload).unwrap();
-        let parsed: SyncPayload = serde_json::from_str(&json).unwrap();
+        let json = serialize_payload(&payload).unwrap();
+        let parsed: SyncPayload = serde_json::from_slice(&json).unwrap();
         assert_eq!(parsed.version, crate::core::migration::SYNC_VERSION);
         assert_eq!(parsed.items.len(), 1);
         assert_eq!(parsed.items[0].tags[0].name, "work");
         assert!(parsed.deleted_items.is_empty());
         assert!(parsed.deleted_tags.is_empty());
         assert!(parsed.unfavorited_items.is_empty());
+    }
+
+    #[test]
+    fn payload_pull_retries_eof_and_returns_successful_revision() {
+        let expected = make_payload(Vec::new(), Vec::new());
+        let complete = serialize_payload(&expected).unwrap();
+        let attempts = std::cell::Cell::new(0);
+
+        let (actual, revision) = pull_payload_with_retry_config(
+            || {
+                let attempt = attempts.get();
+                attempts.set(attempt + 1);
+                if attempt == 0 {
+                    Ok((Vec::new(), 1_u64))
+                } else {
+                    Ok((complete.clone(), 2_u64))
+                }
+            },
+            3,
+            Duration::ZERO,
+        )
+        .unwrap();
+
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(actual.device_name, expected.device_name);
+        assert_eq!(revision, 2);
+    }
+
+    #[test]
+    fn payload_pull_retries_transport_errors_marked_retryable() {
+        let expected = make_payload(Vec::new(), Vec::new());
+        let complete = serialize_payload(&expected).unwrap();
+        let attempts = std::cell::Cell::new(0);
+
+        let result = pull_payload_with_retry_config(
+            || {
+                let attempt = attempts.get();
+                attempts.set(attempt + 1);
+                if attempt == 0 {
+                    Err(SyncPayloadFetchError::Retryable("locked".into()))
+                } else {
+                    Ok((complete.clone(), ()))
+                }
+            },
+            3,
+            Duration::ZERO,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn payload_pull_does_not_retry_invalid_json() {
+        let attempts = std::cell::Cell::new(0);
+        let result = pull_payload_with_retry_config(
+            || {
+                attempts.set(attempts.get() + 1);
+                Ok((b"not-json".to_vec(), ()))
+            },
+            3,
+            Duration::ZERO,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(attempts.get(), 1);
     }
 
     #[test]

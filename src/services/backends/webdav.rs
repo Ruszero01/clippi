@@ -6,7 +6,7 @@
 
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::BackendConfig;
-use crate::core::sync::{BackendStatus, SyncBackend, SyncPayload};
+use crate::core::sync::{self, BackendStatus, SyncBackend, SyncPayload};
 use crate::core::transfer_types::{FileManifest, ManifestSnapshot, ManifestWriteError};
 use base64::Engine;
 use std::io::{Read, Write};
@@ -245,6 +245,85 @@ impl WebDAVBackend {
             base64::engine::general_purpose::STANDARD.encode(&raw)
         )
     }
+
+    fn fetch_sync_bytes(
+        &self,
+        bypass_cache: bool,
+    ) -> Result<(Vec<u8>, SyncRevision), sync::SyncPayloadFetchError> {
+        let url = self.file_url();
+        let auth = self.auth_header();
+        let cached_etag = if bypass_cache {
+            None
+        } else {
+            match self
+                .sync_revision
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+            {
+                SyncRevision::ETag(etag) => Some(etag),
+                _ => None,
+            }
+        };
+        let attempts = if cached_etag.is_some() { 2 } else { 1 };
+
+        for attempt in 0..attempts {
+            let use_cached_etag = attempt == 0;
+            let mut request = self.agent.get(&url).set("Authorization", &auth);
+            if use_cached_etag {
+                if let Some(etag) = cached_etag.as_deref() {
+                    request = request.set("If-None-Match", etag);
+                }
+            }
+
+            match request.call() {
+                Ok(response) => {
+                    let revision = response
+                        .header("ETag")
+                        .and_then(strong_etag)
+                        .map(SyncRevision::ETag)
+                        .unwrap_or(SyncRevision::Unsupported);
+                    let body = response.into_string().map_err(|error| {
+                        sync::SyncPayloadFetchError::Retryable(format!(
+                            "{}: {error}",
+                            I18nKey::SyncErrReadResp.text()
+                        ))
+                    })?;
+                    return Ok((body.into_bytes(), revision));
+                }
+                Err(ureq::Error::Status(304, _)) => {
+                    return Err(sync::SyncPayloadFetchError::Fatal("@@unchanged".into()));
+                }
+                Err(ureq::Error::Status(404, _)) => {
+                    *self
+                        .sync_revision
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = SyncRevision::Missing;
+                    return Err(sync::SyncPayloadFetchError::Fatal(
+                        sync::SYNC_PULL_NOT_FOUND.into(),
+                    ));
+                }
+                Err(ureq::Error::Status(code, response))
+                    if use_cached_etag && !is_auth_status(code) =>
+                {
+                    log::warn!(
+                        "[sync] WebDAV conditional GET failed with status {}; retrying without ETag",
+                        response.status()
+                    );
+                }
+                Err(error) => {
+                    return Err(sync::SyncPayloadFetchError::Fatal(format!(
+                        "{}: {error}",
+                        I18nKey::SyncErrPull.text()
+                    )));
+                }
+            }
+        }
+
+        Err(sync::SyncPayloadFetchError::Fatal(
+            I18nKey::SyncErrPull.text().into(),
+        ))
+    }
 }
 
 impl SyncBackend for WebDAVBackend {
@@ -264,85 +343,20 @@ impl SyncBackend for WebDAVBackend {
     }
 
     fn pull(&self, bypass_cache: bool) -> Result<SyncPayload, String> {
-        let url = self.file_url();
-        let auth = self.auth_header();
-
-        let cached_etag = if bypass_cache {
-            None
-        } else {
-            match self
-                .sync_revision
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone()
-            {
-                SyncRevision::ETag(etag) => Some(etag),
-                _ => None,
-            }
-        };
-        let attempts = if cached_etag.is_some() { 2 } else { 1 };
-
-        for attempt in 0..attempts {
-            let use_cached_etag = attempt == 0;
-            let mut req = self.agent.get(&url).set("Authorization", &auth);
-            if use_cached_etag {
-                if let Some(etag) = cached_etag.as_deref() {
-                    req = req.set("If-None-Match", etag);
-                }
-            }
-
-            match req.call() {
-                Ok(resp) => {
-                    let revision = resp
-                        .header("ETag")
-                        .and_then(strong_etag)
-                        .map(SyncRevision::ETag)
-                        .unwrap_or(SyncRevision::Unsupported);
-                    let body = resp
-                        .into_string()
-                        .map_err(|e| format!("{}: {e}", I18nKey::SyncErrReadResp.text()))?;
-                    let payload = serde_json::from_str::<SyncPayload>(&body)
-                        .map_err(|e| format!("{}: {e}", I18nKey::SyncErrParse.text()))?;
-                    // Only cache a revision after its payload has been read and
-                    // parsed. Otherwise the next 304 could hide corrupt data.
-                    *self
-                        .sync_revision
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = revision;
-                    return Ok(payload);
-                }
-                Err(ureq::Error::Status(304, _)) => {
-                    // --- Not Modified — no changes ---
-                    return Err("@@unchanged".into());
-                }
-                Err(ureq::Error::Status(404, _)) => {
-                    *self
-                        .sync_revision
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = SyncRevision::Missing;
-                    return Err(crate::core::sync::SYNC_PULL_NOT_FOUND.into());
-                }
-                Err(ureq::Error::Status(code, response))
-                    if use_cached_etag && !is_auth_status(code) =>
-                {
-                    log::warn!(
-                        "[sync] WebDAV conditional GET failed with status {}; retrying without ETag",
-                        response.status()
-                    );
-                    continue;
-                }
-                Err(e) => return Err(format!("{}: {e}", I18nKey::SyncErrPull.text())),
-            }
-        }
-
-        Err(I18nKey::SyncErrPull.text().into())
+        let (payload, revision) =
+            sync::pull_payload_with_retry(|| self.fetch_sync_bytes(bypass_cache))?;
+        // Cache only a revision whose response body parsed successfully.
+        *self
+            .sync_revision
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = revision;
+        Ok(payload)
     }
 
     fn push(&self, payload: &SyncPayload) -> Result<(), String> {
         let url = self.file_url();
         let auth = self.auth_header();
-        let json = serde_json::to_string_pretty(payload)
-            .map_err(|e| format!("{}: {e}", I18nKey::SyncErrSerialize.text()))?;
+        let json = sync::serialize_payload(payload)?;
 
         let revision = self
             .sync_revision
@@ -367,7 +381,7 @@ impl SyncBackend for WebDAVBackend {
             }
         };
 
-        match request.send_bytes(json.as_bytes()) {
+        match request.send_bytes(&json) {
             Ok(resp) => {
                 *self
                     .sync_revision
