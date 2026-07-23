@@ -31,6 +31,10 @@ fn is_auth_status(status: u16) -> bool {
     status == 401 || status == 403
 }
 
+fn is_not_modified_status(status: u16) -> bool {
+    status == 304
+}
+
 fn strong_etag(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty() && !value.starts_with("W/")).then(|| value.to_string())
@@ -288,6 +292,9 @@ impl WebDAVBackend {
             }
 
             match request.call() {
+                Ok(response) if is_not_modified_status(response.status()) => {
+                    return Err(sync::SyncPayloadFetchError::Fatal("@@unchanged".into()));
+                }
                 Ok(response) => {
                     let revision = response
                         .header("ETag")
@@ -302,7 +309,7 @@ impl WebDAVBackend {
                     })?;
                     return Ok((body.into_bytes(), revision));
                 }
-                Err(ureq::Error::Status(304, _)) => {
+                Err(ureq::Error::Status(code, _)) if is_not_modified_status(code) => {
                     return Err(sync::SyncPayloadFetchError::Fatal("@@unchanged".into()));
                 }
                 Err(ureq::Error::Status(404, _)) => {
@@ -721,6 +728,63 @@ mod tests {
             join_url("https://dav.jianguoyun.com", &segments),
             "https://dav.jianguoyun.com/dav/我的坚果云"
         );
+    }
+
+    #[test]
+    fn conditional_get_304_is_reported_as_unchanged() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let read = std::io::Read::read(&mut stream, &mut request).unwrap();
+            let request_text = String::from_utf8_lossy(&request[..read]);
+            assert!(request_text
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"revision-1\""));
+            std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 304 Not Modified\r\n\
+                  ETag: \"revision-1\"\r\n\
+                  Content-Length: 0\r\n\
+                  Connection: close\r\n\r\n",
+            )
+            .unwrap();
+        });
+
+        let config = BackendConfig {
+            id: "test".into(),
+            enabled: true,
+            backend_type: "webdav".into(),
+            name: "test".into(),
+            folder_path: String::new(),
+            device_name: String::new(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: format!("http://{address}"),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        };
+        let backend = WebDAVBackend::new(config);
+        *backend
+            .sync_revision
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            SyncRevision::ETag("\"revision-1\"".into());
+
+        let result = backend.fetch_sync_bytes(false);
+        server.join().unwrap();
+
+        match result {
+            Err(sync::SyncPayloadFetchError::Fatal(signal)) => {
+                assert_eq!(signal, "@@unchanged")
+            }
+            _ => panic!("304 response should be reported as unchanged"),
+        }
     }
 
     #[test]
