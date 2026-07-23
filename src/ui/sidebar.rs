@@ -20,8 +20,9 @@ use crate::state::app::AppState;
 use super::clipboard_list::ClipboardListView;
 use super::theme::ClippiTheme;
 
-/// Sidebar top offset (must match `top(px(84.))` in root.rs).
-const SIDEBAR_TOP_OFFSET: f32 = 84.0;
+/// Sidebar top offset (must match `top(px(65.))` in root.rs).
+/// Aligned with type filter bar top: titlebar(30) + pt(1) + search(28) + mb(6) = 65.
+const SIDEBAR_TOP_OFFSET: f32 = 65.0;
 /// Height of a single sidebar row (22px row + 2px gap).
 const ROW_HEIGHT: f32 = 24.0;
 /// Bottom padding to keep the last row from touching the window edge.

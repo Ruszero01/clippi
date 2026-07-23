@@ -159,6 +159,10 @@ impl RootView {
                     cx.notify();
                 }
                 WindowManagerEvent::TransferStateChanged => {
+                    // Sync list items in-place (like tag ops) — preserves scroll position.
+                    this.list_view.update(cx, |list, cx| {
+                        list.sync_items_from_state(cx);
+                    });
                     cx.notify();
                 }
                 WindowManagerEvent::PinnedChanged(pinned) => {
@@ -1038,7 +1042,7 @@ impl Render for RootView {
                     cx.stop_propagation();
                 }
             })
-            .child(div().absolute().left(px(0.)).top(px(84.)).child(sidebar))
+            .child(div().absolute().left(px(0.)).top(px(65.)).child(sidebar))
             .child(
                 div()
                     .absolute()

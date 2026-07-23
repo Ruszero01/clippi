@@ -639,7 +639,9 @@ impl WindowManager {
             .state
             .update(cx, |state, _cx| service.poll(state, window_visible));
         if outcome.data_changed {
-            cx.emit(WindowManagerEvent::ClipboardChanged);
+            // Use TransferStateChanged to avoid scroll reset — the list items
+            // are synced in-place via sync_items_from_state, matching tag ops.
+            cx.emit(WindowManagerEvent::TransferStateChanged);
         } else if outcome.state_changed {
             cx.emit(WindowManagerEvent::TransferStateChanged);
         }
