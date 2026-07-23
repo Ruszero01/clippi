@@ -13,7 +13,11 @@ use crate::core::i18n_keys::I18nKey;
 use crate::ui::theme::ClippiTheme;
 
 const DIALOG_WIDTH: f32 = 304.;
+const MIN_DIALOG_HEIGHT: f32 = 196.;
+const MAX_DIALOG_HEIGHT: f32 = 400.;
 const ENTRY_HEIGHT: f32 = 32.;
+const EMPTY_LIST_HEIGHT: f32 = 64.;
+const ADD_BUTTON_HEIGHT: f32 = 34.;
 const MAX_VISIBLE_ENTRIES: usize = 8;
 pub type AppListAction = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type AppListNameAction = Rc<dyn Fn(String, &mut Window, &mut App)>;
@@ -65,10 +69,15 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
     let popup_width = DIALOG_WIDTH * scale;
     let entry_count = params.entries.len();
     let visible_entries = entry_count.min(MAX_VISIBLE_ENTRIES);
-    let list_height = visible_entries.max(1) as f32 * ENTRY_HEIGHT * scale;
     let has_add = params.add_button_label.is_some() && params.on_add.is_some();
-    let add_btn_height: f32 = if has_add { 36. * scale } else { 0. };
-    let popup_height = (60. + list_height + add_btn_height).min(400. * scale);
+    let list_content_height = if entry_count == 0 {
+        EMPTY_LIST_HEIGHT
+    } else {
+        visible_entries as f32 * ENTRY_HEIGHT
+    };
+    let add_section_height = if has_add { ADD_BUTTON_HEIGHT + 10. } else { 0. };
+    let popup_height = ((72. + list_content_height + add_section_height) * scale)
+        .clamp(MIN_DIALOG_HEIGHT * scale, MAX_DIALOG_HEIGHT * scale);
     let main_width = (viewport_width - 36.).max(popup_width);
     let popup_left = ((main_width - popup_width) * 0.5).max(8.);
     let popup_top = ((viewport_height - popup_height) * 0.5).max(8.) + offset;
@@ -77,6 +86,8 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
     let surface = theme.surface;
     let divider = theme.divider;
     let accent = theme.accent;
+    let accent_soft = theme.accent_soft;
+    let accent_hover = theme.accent_overlay();
     let text_3 = theme.text_3;
 
     div()
@@ -99,6 +110,7 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                 .left(px(popup_left))
                 .top(px(popup_top))
                 .w(px(popup_width))
+                .h(px(popup_height))
                 .max_w(px(popup_width))
                 .rounded(px(8.))
                 .bg(surface)
@@ -128,12 +140,14 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                     div()
                         .flex()
                         .flex_col()
-                        .max_h(px(list_height))
+                        .flex_1()
+                        .min_h(px(0.))
                         .overflow_y_scrollbar()
                         .when(entry_count == 0, |list| {
                             list.child(
                                 div()
-                                    .h(px(40.))
+                                    .flex_1()
+                                    .min_h(px(EMPTY_LIST_HEIGHT * scale))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -163,16 +177,20 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                     let btn_text = params.add_button_label.clone().unwrap();
                     card.child(div().h(px(1.)).bg(divider)).child(
                         div()
-                            .h(px(30.))
-                            .rounded(px(6.))
+                            .h(px(ADD_BUTTON_HEIGHT * scale))
+                            .rounded(px(7.))
+                            .bg(accent_soft)
+                            .border(px(1.))
+                            .border_color(accent)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .gap(px(4.))
+                            .gap(px(6.))
                             .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(accent)
                             .cursor(CursorStyle::PointingHand)
-                            .hover(|style| style.bg(rgba(0xffffff0d)))
+                            .hover(move |style| style.bg(accent_hover))
                             .on_mouse_down(MouseButton::Left, {
                                 let on_add = on_add.clone();
                                 move |_ev, window, cx| {

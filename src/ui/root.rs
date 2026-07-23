@@ -1231,186 +1231,210 @@ impl Render for RootView {
                             })
                             .when(is_settings, |view| view.child(settings_panel))
                             .when(is_edit, |view| view.child(edit_panel)),
-                    ),
-            )
-            // ── Bottom foreground-app status bar (clipboard + settings views) ──
-            .when(!is_edit, |root| {
-                let app_state = self.state.clone();
-                let settings = self.settings_panel.clone();
-                let wm = self.window_manager.clone();
-                let fg_name = app_state.read(cx).foreground_app_name.clone();
-                let fg_title = app_state.read(cx).foreground_window_title.clone();
-                let has_fg = !fg_name.is_empty();
-                let recording = settings.read(cx).recording_paste_shortcut.is_some();
-                let show_hotkey_actions = is_settings && active_settings_tab == 2;
-                let icon_path = crate::core::paths::app_icon_path(&fg_name);
-                let bar_height = if recording { 48. } else { 36. };
-                let border_color = if recording { theme.accent } else { theme.divider };
-                root.child(
-                    div()
-                        .h(px(bar_height))
-                        .w_full()
-                        .px(px(12.))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .border_t(px(1.))
-                        .border_color(border_color)
-                        .child(
+                    )
+                    // ── Bottom foreground-app status bar (clipboard + settings views) ──
+                    .when(!is_edit, |panel| {
+                        let app_state = self.state.clone();
+                        let settings = self.settings_panel.clone();
+                        let wm = self.window_manager.clone();
+                        let (fg_name, fg_title) = {
+                            let state = app_state.read(cx);
+                            (
+                                state.foreground_app_name.clone(),
+                                state.foreground_window_title.clone(),
+                            )
+                        };
+                        let has_fg = !fg_name.is_empty();
+                        let recording = settings.read(cx).recording_paste_shortcut.is_some();
+                        let foreground_icon = has_fg
+                            .then(|| crate::core::paths::app_icon_path(&fg_name))
+                            .filter(|path| path.exists());
+                        let bar_height = 30.;
+                        panel.child(
                             div()
+                                .h(px(bar_height))
+                                .w_full()
+                                .px(px(10.))
                                 .flex()
                                 .items_center()
-                                .gap(px(6.))
-                                .overflow_hidden()
-                                .flex_1()
-                                .when(has_fg, |row| {
-                                    row.child(
-                                        gpui::img(std::path::Path::new(&icon_path))
-                                            .w(px(16.))
-                                            .h(px(16.)),
-                                    )
-                                })
+                                .justify_between()
+                                .border_t(px(1.))
+                                .border_color(theme.divider)
                                 .child(
                                     div()
                                         .flex()
-                                        .flex_col()
+                                        .items_center()
+                                        .gap(px(7.))
+                                        .min_w(px(0.))
                                         .overflow_hidden()
                                         .flex_1()
-                                        .child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .text_color(theme.text_2)
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .child(if has_fg {
-                                                    if fg_title.is_empty() {
-                                                        fg_name.clone()
-                                                    } else {
-                                                        format!("{} — {}", fg_name, fg_title)
-                                                    }
-                                                } else {
-                                                    I18nKey::BottomBarNoApp.text().to_string()
-                                                }),
-                                        )
-                                        .when(recording, |column| {
-                                            column.child(
+                                        .when_some(foreground_icon, |row, image| {
+                                            row.child(
+                                                gpui::img(image)
+                                                    .w(px(18.))
+                                                    .h(px(18.))
+                                                    .flex_shrink_0(),
+                                            )
+                                        })
+                                        .when(has_fg, |row| {
+                                            row.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .min_w(px(0.))
+                                                    .overflow_hidden()
+                                                    .flex_1()
+                                                    .child(
+                                                        div()
+                                                            .flex_shrink_0()
+                                                            .text_size(px(11.))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(theme.text_2)
+                                                            .child(fg_name.clone()),
+                                                    )
+                                                    .when(!fg_title.is_empty(), |text| {
+                                                        text.child(
+                                                            div()
+                                                                .min_w(px(0.))
+                                                                .overflow_hidden()
+                                                                .text_ellipsis()
+                                                                .flex_1()
+                                                                .text_size(px(10.))
+                                                                .text_color(theme.text_3)
+                                                                .child(format!(
+                                                                    " \u{2014} {}",
+                                                                    fg_title
+                                                                )),
+                                                        )
+                                                    }),
+                                            )
+                                        })
+                                        .when(!has_fg, |row| {
+                                            row.child(
                                                 div()
                                                     .text_size(px(10.))
+                                                    .text_color(theme.text_3)
+                                                    .child(I18nKey::BottomBarNoApp.text()),
+                                            )
+                                        })
+                                        .when(recording, |row| {
+                                            row.child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .text_size(px(9.))
                                                     .text_color(theme.accent)
                                                     .child(I18nKey::BottomBarRecording.text()),
                                             )
                                         }),
-                                ),
-                        )
-                        .when(has_fg, |bar| {
-                            bar.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(2.))
-                                    .child({
-                                        let fg = fg_name.clone();
-                                        let app_state = app_state.clone();
-                                        let settings = settings.clone();
+                                )
+                                .when(has_fg, |bar| {
+                                    bar.child(
                                         div()
-                                            .id("bottom-clipboard-blacklist")
-                                            .w(px(26.))
-                                            .h(px(26.))
-                                            .rounded(px(6.))
-                                            .font_family("iconfont")
-                                            .text_size(px(13.))
-                                            .text_color(theme.text_3)
                                             .flex()
                                             .items_center()
-                                            .justify_center()
-                                            .cursor(CursorStyle::PointingHand)
-                                            .hover(|style| style.text_color(theme.accent))
-                                            .tooltip(|window, cx| {
-                                                let label = I18nKey::BottomBarClipboardBlacklist.text();
-                                                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
+                                            .gap(px(2.))
+                                            .child({
+                                                let fg = fg_name.clone();
+                                                let app_state = app_state.clone();
+                                                let settings = settings.clone();
+                                                div()
+                                                    .id("bottom-clipboard-blacklist")
+                                                    .w(px(22.))
+                                                    .h(px(22.))
+                                                    .rounded(px(4.))
+                                                    .font_family("iconfont")
+                                                    .text_size(px(12.))
+                                                    .text_color(theme.text_3)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .cursor(CursorStyle::PointingHand)
+                                                    .hover(|style| style.text_color(theme.accent))
+                                                    .tooltip(|window, cx| {
+                                                        let label = I18nKey::BottomBarClipboardBlacklist.text();
+                                                        Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
+                                                    })
+                                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                                        cx.stop_propagation();
+                                                        if crate::core::settings::is_app_in_list(&app_state.read(cx).settings.clipboard_app_blacklist, &fg) {
+                                                            app_state.update(cx, |state, cx| { state.show_toast(I18nKey::BottomBarAlreadyInList.text()); cx.notify(); });
+                                                        } else {
+                                                            settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddClipboardBlacklist { app_name: fg.clone() })));
+                                                        }
+                                                    })
+                                                    .child("\u{e6a7}")
                                             })
-                                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                                cx.stop_propagation();
-                                                if crate::core::settings::is_app_in_list(&app_state.read(cx).settings.clipboard_app_blacklist, &fg) {
-                                                    app_state.update(cx, |state, cx| { state.show_toast(I18nKey::BottomBarAlreadyInList.text()); cx.notify(); });
-                                                } else {
-                                                    settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddClipboardBlacklist { app_name: fg.clone() })));
-                                                }
+                                            .child({
+                                                let fg = fg_name.clone();
+                                                let app_state = app_state.clone();
+                                                let settings = settings.clone();
+                                                div()
+                                                        .id("bottom-hotkey-blacklist")
+                                                        .w(px(22.))
+                                                        .h(px(22.))
+                                                        .rounded(px(4.))
+                                                        .font_family("iconfont")
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.text_3)
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .hover(|style| style.text_color(theme.accent))
+                                                        .tooltip(|window, cx| {
+                                                            let label = I18nKey::BottomBarHotkeyBlacklist.text();
+                                                            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
+                                                        })
+                                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            if crate::core::settings::is_app_in_list(&app_state.read(cx).settings.hotkey_blacklist, &fg) {
+                                                                app_state.update(cx, |state, cx| { state.show_toast(I18nKey::BottomBarAlreadyInList.text()); cx.notify(); });
+                                                            } else {
+                                                                settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddBlacklist { app_name: fg.clone() })));
+                                                            }
+                                                        })
+                                                        .child("\u{e66b}")
                                             })
-                                            .child("\u{e6a7}")
-                                    })
-                                    .when(show_hotkey_actions, |buttons| {
-                                        let fg = fg_name.clone();
-                                        let app_state = app_state.clone();
-                                        let settings = settings.clone();
-                                        buttons.child(
-                                            div()
-                                                .id("bottom-hotkey-blacklist")
-                                                .w(px(26.))
-                                                .h(px(26.))
-                                                .rounded(px(6.))
-                                                .font_family("iconfont")
-                                                .text_size(px(13.))
-                                                .text_color(theme.text_3)
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .hover(|style| style.text_color(theme.accent))
-                                                .tooltip(|window, cx| {
-                                                    let label = I18nKey::BottomBarHotkeyBlacklist.text();
-                                                    Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
-                                                })
-                                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                                    cx.stop_propagation();
-                                                    if crate::core::settings::is_app_in_list(&app_state.read(cx).settings.hotkey_blacklist, &fg) {
-                                                        app_state.update(cx, |state, cx| { state.show_toast(I18nKey::BottomBarAlreadyInList.text()); cx.notify(); });
-                                                    } else {
-                                                        settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddBlacklist { app_name: fg.clone() })));
-                                                    }
-                                                })
-                                                .child("\u{e66b}"),
-                                        )
-                                    })
-                                    .when(cfg!(target_os = "windows") && show_hotkey_actions, |buttons| {
-                                        let fg = fg_name.clone();
-                                        let settings = settings.clone();
-                                        let wm = wm.clone();
-                                        buttons.child(
-                                            div()
-                                                .id("bottom-paste-shortcut")
-                                                .w(px(26.))
-                                                .h(px(26.))
-                                                .rounded(px(6.))
-                                                .font_family("iconfont")
-                                                .text_size(px(13.))
-                                                .text_color(if recording { theme.danger } else { theme.text_3 })
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .hover(|style| style.text_color(if recording { theme.danger } else { theme.accent }))
-                                                .tooltip(|window, cx| {
-                                                    let label = I18nKey::BottomBarPasteShortcut.text();
-                                                    Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
-                                                })
-                                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                                    cx.stop_propagation();
-                                                    if recording {
-                                                        wm.update(cx, |wm, _cx| wm.cancel_paste_shortcut_recording());
-                                                        settings.update(cx, |panel, cx| panel.clear_paste_shortcut_state(cx));
-                                                    } else {
-                                                        settings.update(cx, |panel, cx| { panel.recording_paste_shortcut = Some(fg.clone()); cx.notify(); });
-                                                        wm.update(cx, |wm, cx| wm.start_paste_shortcut_recording(fg.clone(), cx));
-                                                    }
-                                                })
-                                                .child(if recording { "\u{e7b7}" } else { "\u{e66b}" }),
-                                        )
-                                    }),
-                            )
-                        }),
-                )
-            })
+                                            .when(cfg!(target_os = "windows"), |buttons| {
+                                                let fg = fg_name.clone();
+                                                let settings = settings.clone();
+                                                let wm = wm.clone();
+                                                buttons.child(
+                                                    div()
+                                                        .id("bottom-paste-shortcut")
+                                                        .w(px(22.))
+                                                        .h(px(22.))
+                                                        .rounded(px(4.))
+                                                        .font_family("iconfont")
+                                                        .text_size(px(12.))
+                                                        .text_color(if recording { theme.danger } else { theme.text_3 })
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .hover(|style| style.text_color(if recording { theme.danger } else { theme.accent }))
+                                                        .tooltip(|window, cx| {
+                                                            let label = I18nKey::BottomBarPasteShortcut.text();
+                                                            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
+                                                        })
+                                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            if recording {
+                                                                wm.update(cx, |wm, _cx| wm.cancel_paste_shortcut_recording());
+                                                                settings.update(cx, |panel, cx| panel.clear_paste_shortcut_state(cx));
+                                                            } else {
+                                                                settings.update(cx, |panel, cx| { panel.recording_paste_shortcut = Some(fg.clone()); cx.notify(); });
+                                                                wm.update(cx, |wm, cx| wm.start_paste_shortcut_recording(fg.clone(), cx));
+                                                            }
+                                                        })
+                                                        .child(if recording { "\u{e7b7}" } else { "\u{e63f}" }),
+                                                )
+                                            }),
+                                    )
+                                }),
+                        )
+                    })
+            )
             // --- Tag filter panel — ConfirmDialog pattern: ---
             // --- full-screen backdrop that closes on click outside, ---
             // --- panel positioned top-right, occlude prevents click-through. ---

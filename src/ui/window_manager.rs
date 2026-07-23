@@ -1252,13 +1252,22 @@ impl WindowManager {
         }
 
         if let Some(info) = get_foreground_app_info() {
-            if let Ok(mut fg) = self.foreground_app_name.lock() {
-                *fg = info.app_name.clone();
-            }
+            let app_changed = self
+                .foreground_app_name
+                .lock()
+                .map(|mut foreground| {
+                    let changed = *foreground != info.app_name;
+                    *foreground = info.app_name.clone();
+                    changed
+                })
+                .unwrap_or(false);
             // Push foreground app info to AppState for the settings UI.
             let app_name = info.app_name.clone();
             let window_title = info.window_title.clone();
             let icon_base64 = info.icon_base64.clone();
+            if app_changed {
+                let _ = crate::core::paths::cache_app_icon(&app_name, &icon_base64);
+            }
             self.state.update(cx, |state, _cx| {
                 state.foreground_app_name = app_name;
                 state.foreground_window_title = window_title;
