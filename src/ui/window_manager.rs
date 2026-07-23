@@ -421,7 +421,7 @@ impl WindowManager {
 
         let foreground_app_name = Arc::new(Mutex::new(String::new()));
 
-        let clipboard_service = GpuiClipboardService::new();
+        let clipboard_service = GpuiClipboardService::new(settings.clipboard_app_blacklist.clone());
         let sync_service = GpuiSyncService::new(&settings, state.read(cx).sync_dirty.clone());
         let transfer_service = GpuiTransferService::new(&settings);
 
@@ -2998,6 +2998,12 @@ impl WindowManager {
     /// Replace the internal blacklist with the given list (used for sync from settings).
     pub fn set_blacklist(&mut self, blacklist: Vec<String>) {
         self.blacklist = blacklist;
+    }
+
+    /// Push the clipboard-app blacklist snapshot to the listener thread.
+    /// Call after every add / remove so the next poll picks up the change.
+    pub fn set_clipboard_app_blacklist(&self, blacklist: Vec<String>) {
+        self.clipboard_service.set_app_blacklist(blacklist);
     }
 
     // ─── Update ──────────────────────────────────────────────────────────────

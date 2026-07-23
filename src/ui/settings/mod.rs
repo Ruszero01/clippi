@@ -77,6 +77,10 @@ pub struct SettingsPanel {
     backend_panel: Entity<AddBackendPanel>,
     /// Whether the latest hotkeys popup is open.
     pub latest_hotkeys_popup_open: bool,
+    /// Application list popup visibility (hotkey blacklist / paste shortcuts / clipboard blacklist).
+    pub hotkey_blacklist_popup_open: bool,
+    pub paste_shortcuts_popup_open: bool,
+    pub app_blacklist_popup_open: bool,
     /// Pending hotkey blacklist confirmation (consumed by RootView).
     pub hotkey_confirm: Option<HotkeyConfirmAction>,
     /// Whether we are currently recording a paste shortcut for an app (Some(app_name)).
@@ -189,6 +193,9 @@ impl SettingsPanel {
             focus_handle: cx.focus_handle(),
             backend_panel,
             latest_hotkeys_popup_open: false,
+            hotkey_blacklist_popup_open: false,
+            paste_shortcuts_popup_open: false,
+            app_blacklist_popup_open: false,
             hotkey_confirm: None,
             recording_paste_shortcut: None,
             pending_paste_shortcut: None,
@@ -226,6 +233,33 @@ impl SettingsPanel {
 
     pub fn active_tab(&self) -> usize {
         self.active_tab
+    }
+
+    pub fn close_app_list_popups(&mut self) {
+        self.hotkey_blacklist_popup_open = false;
+        self.paste_shortcuts_popup_open = false;
+        self.app_blacklist_popup_open = false;
+    }
+
+    pub fn toggle_hotkey_blacklist_popup(&mut self) {
+        let open = !self.hotkey_blacklist_popup_open;
+        self.close_app_list_popups();
+        self.latest_hotkeys_popup_open = false;
+        self.hotkey_blacklist_popup_open = open;
+    }
+
+    pub fn toggle_paste_shortcuts_popup(&mut self) {
+        let open = !self.paste_shortcuts_popup_open;
+        self.close_app_list_popups();
+        self.latest_hotkeys_popup_open = false;
+        self.paste_shortcuts_popup_open = open;
+    }
+
+    pub fn toggle_app_blacklist_popup(&mut self) {
+        let open = !self.app_blacklist_popup_open;
+        self.close_app_list_popups();
+        self.latest_hotkeys_popup_open = false;
+        self.app_blacklist_popup_open = open;
     }
 
     pub fn backend_panel(&self) -> Entity<AddBackendPanel> {
@@ -342,6 +376,8 @@ impl Render for SettingsPanel {
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 this.update(cx, |panel, cx| {
                                     panel.set_active_tab(i);
+                                    panel.close_app_list_popups();
+                                    panel.latest_hotkeys_popup_open = false;
                                     cx.emit(SettingsEvent::TabChanged(i));
                                     cx.notify();
                                 });

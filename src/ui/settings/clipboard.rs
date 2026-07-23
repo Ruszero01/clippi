@@ -457,5 +457,60 @@ impl SettingsPanel {
                     });
                 },
             ))
+            // --- App blacklist entry card ---
+            .child({
+                let this = this.clone();
+                let count = self.state.read(cx).settings.clipboard_app_blacklist.len();
+                let desc = I18nKey::ClipboardAppBlacklistCount.fmt(&[&count.to_string()]);
+                let theme_clone = theme.clone();
+                div()
+                    .h(px(66.))
+                    .rounded(px(10.))
+                    .bg(theme.surface)
+                    .border(px(1.))
+                    .border_color(theme.divider)
+                    .px(px(14.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |style| style.bg(theme_clone.titlebar_bg))
+                    .on_mouse_down(MouseButton::Left, {
+                        let this_click = this.clone();
+                        move |_ev, _window, cx| {
+                            this_click.update(cx, |panel, cx| {
+                                panel.toggle_app_blacklist_popup();
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.text_1)
+                                    .child(I18nKey::ClipboardAppBlacklistTitle.text()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.text_3)
+                                    .child(desc),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .font_family("iconfont")
+                            .text_size(px(14.))
+                            .text_color(theme.text_2)
+                            .child("\u{e620}"),
+                    )
+            })
     }
 }

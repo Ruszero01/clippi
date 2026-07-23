@@ -118,8 +118,11 @@ pub struct GpuiClipboardService {
 }
 
 impl GpuiClipboardService {
-    pub fn new() -> Self {
+    pub fn new(initial_app_blacklist: Vec<String>) -> Self {
         let shared = ClipboardShared::new();
+        // Populate the blacklist snapshot BEFORE starting the listener so
+        // capture_baseline and the first poll find the correct value.
+        *shared.clipboard_app_blacklist.write().unwrap() = initial_app_blacklist;
         let mut listener = create_listener();
         if let Err(err) = listener.start(&shared) {
             log::error!("Failed to start clipboard listener: {err}");
@@ -133,6 +136,12 @@ impl GpuiClipboardService {
             needs_refresh,
             image_analysis,
         }
+    }
+
+    /// Update the app-blacklist snapshot used by the listener thread.
+    /// Call after every add / remove so the next poll picks up the change.
+    pub fn set_app_blacklist(&self, blacklist: Vec<String>) {
+        *self.shared.clipboard_app_blacklist.write().unwrap() = blacklist;
     }
 
     /// Access the `batch_pasting` flag shared with the clipboard listener.
