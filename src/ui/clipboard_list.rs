@@ -1409,9 +1409,11 @@ impl Render for ClipboardListView {
         // --- avoiding the virtual list subtree so GPUI releases its element cache. ---
         if empty_state {
             return div()
+                .flex()
+                .flex_col()
                 .flex_1()
-                .h_full()
-                .w_full()
+                .size_full()
+                .min_h(px(0.))
                 .overflow_hidden()
                 .flex()
                 .flex_col()
@@ -1441,8 +1443,17 @@ impl Render for ClipboardListView {
         let list_entity = view.clone();
         let image_cache = self.image_cache.clone();
 
+        // Fill flex host with size_full + flex_1 so absolute-fill scroll
+        // gets a definite height every frame; min_h(0) keeps it shrinkable.
         div()
+            .id("clipboard-list-root")
+            .relative()
+            .flex()
+            .flex_col()
             .flex_1()
+            .size_full()
+            .min_h(px(0.))
+            .w_full()
             .overflow_hidden()
             .track_focus(&focus_handle)
             .on_key_down(
@@ -1645,16 +1656,28 @@ impl Render for ClipboardListView {
                 )
             })
             .when(!empty_state, |el| {
+                // Absolute-fill viewport: avoid size_full/% height flakiness so
+                // VirtualListScrollHandle + scrollbar stay consistently active.
                 el.relative()
                     .flex_1()
+                    .min_h(px(0.))
                     .w_full()
                     .overflow_hidden()
                     .child(
-                        v_virtual_list(
-                            view.clone(),
-                            "clippi-clipboard-list",
-                            item_sizes,
-                            move |this, range, _window, cx| {
+                        div()
+                            .id("clipboard-scroll-area")
+                            .absolute()
+                            .top(px(0.))
+                            .left(px(0.))
+                            .right(px(0.))
+                            .bottom(px(0.))
+                            .overflow_hidden()
+                            .child(
+                                v_virtual_list(
+                                    view.clone(),
+                                    "clippi-clipboard-list",
+                                    item_sizes,
+                                    move |this, range, _window, cx| {
                                 let selected_count = this.selected_count;
                                 let can_merge_selection =
                                     this.state.read(cx).can_merge_selected_items();
@@ -2019,10 +2042,12 @@ impl Render for ClipboardListView {
                                         )
                                     })
                                     .collect::<Vec<_>>()
-                            },
-                        )
-                        .track_scroll(&self.scroll_handle)
-                        .overflow_x_hidden(),
+                                    },
+                                )
+                                .track_scroll(&self.scroll_handle)
+                                .size_full()
+                                .overflow_x_hidden(),
+                            )
                     )
                     .child(
                         div()
@@ -2034,7 +2059,7 @@ impl Render for ClipboardListView {
                             .when(self.inline_locked_item_id().is_none(), |el| {
                                 el.child(
                                     Scrollbar::vertical(&self.scroll_handle)
-                                        .scrollbar_show(ScrollbarShow::Scrolling),
+                                        .scrollbar_show(ScrollbarShow::Hover),
                                 )
                             }),
                     )

@@ -1194,16 +1194,22 @@ impl Render for RootView {
                             .flex()
                             .flex_col()
                             .flex_1()
+                            .min_h(px(0.))
                             .overflow_hidden()
                             .opacity(view_opacity)
                             .mt(px(view_offset))
                             .when(is_clipboard, |view| {
+                                // Homepage list host: single flex_1+min_h(0)
+                                // viewport; list owns absolute-fill scroll.
                                 view.child(search_bar.clone()).child(
                                     div()
+                                        .id("clipboard-home")
                                         .relative()
-                                        .flex_1()
                                         .flex()
                                         .flex_col()
+                                        .flex_1()
+                                        .min_h(px(0.))
+                                        .w_full()
                                         .overflow_hidden()
                                         .child(list_view.clone())
                                         .when(transfer_refreshing, |list| {
@@ -1229,7 +1235,19 @@ impl Render for RootView {
                                         }),
                                 )
                             })
-                            .when(is_settings, |view| view.child(settings_panel))
+                            .when(is_settings, |view| {
+                                view.child(
+                                    div()
+                                        .id("settings-home")
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_h(px(0.))
+                                        .w_full()
+                                        .overflow_hidden()
+                                        .child(settings_panel),
+                                )
+                            })
                             .when(is_edit, |view| view.child(edit_panel)),
                     )
                     // ── Bottom foreground-app status bar (clipboard + settings views) ──

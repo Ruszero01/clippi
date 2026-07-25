@@ -228,6 +228,8 @@ impl SettingsPanel {
             self.active_tab = index;
             self.tab_transition_generation = self.tab_transition_generation.wrapping_add(1);
             self.tab_transition_started = Some(Instant::now());
+            // Keep tab switches starting from the top of the new content.
+            self.scroll_handle.set_offset(point(px(0.), px(0.)));
         }
     }
 
@@ -291,6 +293,8 @@ impl Render for SettingsPanel {
             .flex()
             .flex_col()
             .flex_1()
+            .min_h(px(0.))
+            .size_full()
             .w_full()
             .overflow_hidden()
             .rounded_b(px(12.))
@@ -399,71 +403,71 @@ impl Render for SettingsPanel {
                     })),
             )
             // --- Tab content (fills remaining space, scrollable) ---
+            // Absolute-fill scroll area: size_full/% height is flaky under nested
+            // flex (viewport sometimes equals content → scroll/scrollbar vanish).
+            // top/left/right/bottom=0 pins a definite viewport every frame.
             .child(
                 div()
+                    .id("settings-tab-viewport")
+                    .relative()
                     .flex_1()
+                    .min_h(px(0.))
                     .w_full()
-                    .flex()
-                    .flex_col()
                     .overflow_hidden()
                     .rounded_b(px(12.))
                     .bg(theme.bg)
-                    .pt(px(8.))
                     .child(
                         div()
-                            .relative()
-                            .flex_1()
-                            .w_full()
-                            .overflow_hidden()
+                            .id("settings-scroll-area")
+                            .absolute()
+                            .top(px(8.))
+                            .left(px(0.))
+                            .right(px(0.))
+                            .bottom(px(0.))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll_handle)
                             .child(
                                 div()
-                                    .id("settings-scroll-area")
-                                    .size_full()
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.scroll_handle)
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .flex()
-                                            .flex_col()
-                                            .px(px(8.))
-                                            .opacity(tab_opacity)
-                                            .mt(px(tab_offset))
-                                            .when(active != 5, |el| el.pb(px(56.)))
-                                            .child(match active {
-                                                0 => self
-                                                    .render_general_tab(window, cx)
-                                                    .into_any_element(),
-                                                1 => self
-                                                    .render_clipboard_tab(window, cx)
-                                                    .into_any_element(),
-                                                2 => self
-                                                    .render_hotkey_tab(window, cx)
-                                                    .into_any_element(),
-                                                3 => self
-                                                    .render_data_tab(window, cx)
-                                                    .into_any_element(),
-                                                4 => self
-                                                    .render_sync_tab(window, cx)
-                                                    .into_any_element(),
-                                                5 => self
-                                                    .render_version_tab(window, cx)
-                                                    .into_any_element(),
-                                                _ => div().into_any_element(),
-                                            }),
-                                    ),
-                            )
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .px(px(8.))
+                                    .opacity(tab_opacity)
+                                    .mt(px(tab_offset))
+                                    .when(active != 5, |el| el.pb(px(56.)))
+                                    .child(match active {
+                                        0 => self
+                                            .render_general_tab(window, cx)
+                                            .into_any_element(),
+                                        1 => self
+                                            .render_clipboard_tab(window, cx)
+                                            .into_any_element(),
+                                        2 => self
+                                            .render_hotkey_tab(window, cx)
+                                            .into_any_element(),
+                                        3 => self
+                                            .render_data_tab(window, cx)
+                                            .into_any_element(),
+                                        4 => self
+                                            .render_sync_tab(window, cx)
+                                            .into_any_element(),
+                                        5 => self
+                                            .render_version_tab(window, cx)
+                                            .into_any_element(),
+                                        _ => div().into_any_element(),
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(12.))
+                            .right(px(0.))
+                            .bottom(px(10.))
+                            .w(px(16.))
                             .child(
-                                div()
-                                    .absolute()
-                                    .top(px(4.))
-                                    .right(px(0.))
-                                    .bottom(px(10.))
-                                    .w(px(16.))
-                                    .child(
-                                        Scrollbar::vertical(&self.scroll_handle)
-                                            .scrollbar_show(ScrollbarShow::Scrolling),
-                                    ),
+                                Scrollbar::vertical(&self.scroll_handle)
+                                    .scrollbar_show(ScrollbarShow::Hover),
                             ),
                     )
                     // --- Reset data directory dialog (overlay) ---
