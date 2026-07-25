@@ -11,7 +11,9 @@ use std::rc::Rc;
 type ToolbarActionHandler = Rc<dyn Fn(&str, &mut gpui::Window, &mut gpui::App)>;
 
 use gpui::*;
+use gpui_component::tooltip::Tooltip;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{ContentType, RichData};
 
 use super::theme::ClippiTheme;
@@ -130,28 +132,31 @@ impl RenderOnce for HoverToolbar {
         let is_single = props.selected_count <= 1;
         let is_batch = props.selected_count > 1 && props.is_selected;
 
-        // --- Build button list: (icon_glyph, action_name, hover_color) ---
+        // --- Build button list: (icon_glyph, action_name, tooltip, hover_color) ---
         // Using type alias for the color function
         type ColorFn = Box<dyn Fn(bool) -> Rgba>;
-        let mut buttons: Vec<(&str, &str, ColorFn)> = Vec::new();
+        let mut buttons: Vec<(&str, &str, SharedString, ColorFn)> = Vec::new();
 
         if is_single && props.is_transfer {
             if props.transfer_is_local {
                 buttons.push((
                     "\u{e609}",
                     "open_transfer_location",
+                    I18nKey::CtxOpenFolder.text().into(),
                     Box::new(move |hovered| if hovered { accent } else { text_2 }),
                 ));
             } else {
                 buttons.push((
                     "\u{e7c8}",
                     "download_transfer",
+                    I18nKey::DownloadTransfer.text().into(),
                     Box::new(move |hovered| if hovered { accent } else { text_2 }),
                 ));
             }
             buttons.push((
                 "\u{e8b6}",
                 "delete_transfer",
+                I18nKey::RemoveFromTransfer.text().into(),
                 Box::new(move |hovered| if hovered { danger } else { text_2 }),
             ));
         } else if is_single {
@@ -159,6 +164,7 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e7e1}",
                 "copy",
+                I18nKey::CtxCopy.text().into(),
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
@@ -167,6 +173,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e60e}",
                     "paste_plain",
+                    I18nKey::CtxPastePlain.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -176,6 +183,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e626}",
                     "open_image",
+                    I18nKey::CtxOpenImage.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -185,6 +193,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e605}",
                     "qr_action",
+                    I18nKey::CtxDetectQr.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -194,6 +203,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e643}",
                     "open_location",
+                    I18nKey::CtxOpenLink.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -205,6 +215,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e609}",
                     "open_location",
+                    I18nKey::CtxOpenFolder.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -213,6 +224,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e609}",
                     "open_location",
+                    I18nKey::CtxOpenFolder.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -222,6 +234,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e648}",
                     "edit",
+                    I18nKey::CtxEdit.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -230,6 +243,7 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e606}",
                 "edit_note",
+                I18nKey::EditNote.text().into(),
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
@@ -237,6 +251,7 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{ec07}",
                 "show_tag_picker",
+                I18nKey::CtxTag.text().into(),
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
@@ -246,9 +261,15 @@ impl RenderOnce for HoverToolbar {
             } else {
                 "\u{e68d}"
             };
+            let fav_tooltip: SharedString = if props.is_favorite {
+                I18nKey::CtxUnfav.text().into()
+            } else {
+                I18nKey::CtxFav.text().into()
+            };
             buttons.push((
                 fav_icon,
                 "toggle_favorite",
+                fav_tooltip,
                 Box::new(move |_hovered: bool| fav_color),
             ));
 
@@ -256,19 +277,24 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e8b6}",
                 "delete",
+                I18nKey::CtxDelete.text().into(),
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
         } else if is_batch && props.is_transfer {
             buttons.push((
                 "\u{e8b6}",
                 "batch_delete_transfer",
+                I18nKey::RemoveSelectedFromTransfer.text().into(),
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
         } else if is_batch {
             // --- Batch paste ---
+            let batch_paste_tip: SharedString =
+                I18nKey::CtxBatchPasteN.fmt(&[&props.selected_count.to_string()]).into();
             buttons.push((
                 "\u{e63f}",
                 "batch_paste",
+                batch_paste_tip,
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
             if props.can_merge_selection {
@@ -276,6 +302,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e68a}",
                     "merge_selected",
+                    I18nKey::CtxMergeSelected.text().into(),
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -283,18 +310,21 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{ec07}",
                 "batch_tag",
+                I18nKey::CtxBatchTag.text().into(),
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
             // --- Batch favorite ---
             buttons.push((
                 "\u{e630}",
                 "batch_favorite",
+                I18nKey::CtxBatchFav.text().into(),
                 Box::new(move |_hovered: bool| fav_color),
             ));
             // --- Batch delete ---
             buttons.push((
                 "\u{e8b6}",
                 "batch_delete",
+                I18nKey::CtxBatchDelete.text().into(),
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
         }
@@ -320,12 +350,15 @@ impl RenderOnce for HoverToolbar {
             .px(px(5.))
             .items_center()
             .gap(px(2.))
-            .children(buttons.into_iter().map(move |(icon, action, color_fn)| {
+            .children(buttons.into_iter().map(move |(icon, action, tooltip, color_fn)| {
                 let on_action = on_action.clone();
                 let action = action.to_string();
                 let icon = icon.to_string();
+                let tooltip_text = tooltip.clone();
+                let button_id = SharedString::from(format!("hover-toolbar-{action}"));
 
                 div()
+                    .id(button_id)
                     .w(px(18.))
                     .h(px(18.))
                     .flex()
@@ -334,6 +367,13 @@ impl RenderOnce for HoverToolbar {
                     .rounded(px(3.))
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |style| style.bg(hover_bg))
+                    .tooltip(move |window, cx| {
+                        let tooltip_text = tooltip_text.clone();
+                        Tooltip::element(move |_window, _cx| {
+                            div().text_size(px(10.)).child(tooltip_text.clone())
+                        })
+                        .build(window, cx)
+                    })
                     .child({
                         let icon = icon.clone();
                         let color_normal = color_fn(false);
