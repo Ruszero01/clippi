@@ -61,6 +61,8 @@ meta_type    = "secret"
 
 不新增数据库列，现有 `meta_type` 字符串列和同步模型可以承载 `secret`，因此不需要
 结构迁移。需要同步更新源码注释、白名单和测试中列出的合法 `meta_type` 值。
+其中 `ClipboardItem.meta_type` 的注释应同时补齐已在使用但尚未列出的 `transfer`，
+避免文档继续落后于实际协议。
 
 自动识别结果只保存统一的 `secret` 类型。`Password`、`ApiKey`、`AccessToken`、
 `PrivateKey` 等细分类仅用于检测策略、测试和调试统计，不持久化，避免扩大数据协议。
@@ -83,6 +85,16 @@ AND meta_type NOT IN ('email', 'phone', 'secret', 'link', 'path', 'color')
 
 这样可以满足“在信息类型下新增密钥类型”，并保持用户已有的类型筛选顺序和可见性配置
 不变。编辑面板和卡片类型标签则单独显示“密钥”。
+
+`contact` 只是已持久化到 `type_filter_config` 的内部兼容键，界面文案已经是更宽泛的
+“信息 / Info”。本期明确保留该内部键，不迁移为 `sensitive`，否则需要处理用户已有的
+顺序、显隐设置和多设备配置合并。源码注释需要说明它是“信息聚合筛选”而不是严格意义的
+“联系方式”。若以后全面整理筛选协议，再通过带兼容映射的独立迁移重命名。
+
+纯文本条件本期仍保留 `NOT IN` 兼容策略，而不直接改成 `meta_type = ''`。原因是旧版本
+遇到未来新增或未知 `meta_type` 时仍可把它安全回退为普通文本；白名单式空值判断会让这些
+条目从所有类型筛选中消失。为减少排除列表继续散落，实施时应把语义子类型集合集中为常量
+或统一的 SQL 构造方法，并补充“新增子类型必须同步更新纯文本排除规则”的注释和测试。
 
 ### 4.3 显示与实际操作分离
 
@@ -119,6 +131,8 @@ pub struct SecretMatch {
     pub value_ranges: Vec<std::ops::Range<usize>>,
 }
 
+pub const SECRET_DETECTION_RULE_VERSION: u16 = 1;
+
 pub fn detect_secret(text: &str) -> Option<SecretMatch>;
 ```
 
@@ -129,15 +143,31 @@ pub fn detect_secret(text: &str) -> Option<SecretMatch>;
 范围使用 UTF-8 字节边界存储，但必须由 `char_indices()` 生成并验证边界，禁止直接按
 任意字节截断。
 
+`detect_secret` 必须是无 IO、无时间状态、无随机数、无全局可变配置的纯函数。同一版本
+内，相同输入必须得到完全相同的类型、置信度和范围顺序；范围在返回前按起点排序、去重并
+合并重叠区间。
+
+规则变化时递增 `SECRET_DETECTION_RULE_VERSION`，用于：
+
+- 使按内容哈希缓存的检测结果失效。
+- 标记历史回填所使用的规则版本。
+- 驱动固定测试向量的兼容回归。
+
+规则版本不会持久化到每条剪贴板记录，因此它不能保证跨版本的范围永远相同。安全约束是：
+已标记为 `secret` 的条目在新规则无法重建范围时，必须退化为整段脱敏，绝不能回退显示
+原文；已有高置信度规则不得在无迁移和回归测试的情况下删除或放宽。若未来需要逐条冻结
+历史范围，再单独设计持久化的检测元数据，首期不扩大数据协议。
+
 ### 5.2 识别优先级
 
-剪贴板文本检测顺序建议调整为：
+剪贴板文本检测顺序调整为：
 
 ```text
 Files
 → Image
-→ Secret
 → Link
+  └─ URL userinfo / 敏感查询参数：保留 link 类型，只局部脱敏
+→ Secret
 → Path
 → Color
 → Email / Phone
@@ -146,9 +176,19 @@ Files
 → PlainText
 ```
 
-密钥检测放在链接、路径和颜色之前，是为了正确处理带认证信息的 URL、Bearer Token、
-`.env` 配置和以特殊前缀开头的令牌。密钥规则必须足够保守，避免普通链接或路径被抢先
-分类。
+这里明确采用“链接语义优先”：
+
+- 只要整段文本是合法 URL，就继续保存为 `meta_type = "link"`，保留域名、favicon、
+  页面标题、打开链接等能力。
+- URL 中的 `scheme://user:password@host`、`token=`、`api_key=` 等敏感部分只影响
+  预览脱敏，不把整条记录改成 `secret`，因此它归入“链接”筛选而不是“信息”筛选。
+- 域名提取和 favicon 请求必须使用清洗后的 host，禁止把 userinfo、密码或敏感查询参数
+  传入 favicon 服务。
+- URL 路径和查询参数预览通过结构化敏感片段渲染，不能继续直接展示原始 query。
+
+非 URL 文本再执行 Secret 检测，并放在 Path、Color、Email/Phone 之前，以正确处理
+Bearer Token、`.env` 配置和特殊前缀令牌。密钥规则仍需足够保守，避免普通路径和颜色被
+抢先分类。
 
 ### 5.3 高置信度规则
 
@@ -201,8 +241,14 @@ Files
 
 5. **URL 内嵌凭据**
 
-   对形如 `scheme://user:password@host` 的文本，仅脱敏密码部分。普通不含凭据的 URL
-   仍分类为链接。
+   对形如 `scheme://user:password@host` 的文本仅脱敏密码部分；用户名是否显示沿用
+   URL 预览策略，但不得传给 favicon 服务。对 query 中字段名命中
+   `token`、`api_key`、`access_token`、`password` 等规则的值也做局部脱敏。
+
+   这条规则只生成敏感显示范围，不改变条目的 `meta_type = "link"`。URL 必须使用
+   结构化解析器提取 scheme、userinfo、host、path 和 query；禁止用简单字符串切分处理
+   百分号编码、IPv6、端口或 `@` 转义等边界。若引入 `url` crate，应作为直接依赖锁定
+   版本并补充解析失败的安全降级测试。
 
 ### 5.4 疑似独立密码规则
 
@@ -236,7 +282,10 @@ REGION=ap-east-1
 检测器应返回全部敏感值范围。预览保留非敏感字段和换行，对每个敏感值分别脱敏；不能只
 处理第一个值，也不能因为整条记录是 `secret` 就把 `REGION` 等非敏感内容全部替换。
 
-若文本命中私钥块等无法安全局部展示的格式，可以退化为整段密钥摘要预览。
+私钥块首期直接使用整段摘要预览，例如 `PRIVATE KEY · ****`，不显示正文的前 3、后 4
+字符。PEM 正文过长且尾部通常不具备辨识价值，部分展示收益低于误泄露风险；私钥类型标签
+从 `BEGIN ... PRIVATE KEY` 标题派生，不读取或展示正文。此规则是“前 3 + 后 4”的明确
+安全例外。
 
 ### 5.6 误识别纠正
 
@@ -285,6 +334,19 @@ pub fn sensitive_preview_parts(
 - 密钥检测器：只判断类型和敏感范围，不依赖 GPUI。
 - UI 组件：只渲染 `SensitivePreviewPart`，不再识别内容或解析星号。
 
+`sensitive_preview_parts` 采用“内部重新检测”的实现，不给 `ClipboardItem` 增加范围
+缓存字段：
+
+- `secret`：重新调用纯函数 `detect_secret()`；检测失败时整段输出为一个
+  `Masked`，禁止返回 `Plain` 原文。
+- `link`：调用 URL 敏感范围提取器，只对 userinfo 密码和敏感 query 值输出
+  `Masked`，其余 URL 片段保持链接展示。
+- `email`、`phone`：使用各自已有的结构规则定位范围。
+
+为避免同一帧重复解析，可以使用
+`(content_hash, meta_type, SECRET_DETECTION_RULE_VERSION)` 作为短生命周期缓存键；缓存
+属于 UI/预览服务层，不进入持久化模型。
+
 ### 6.2 脱敏规则
 
 | 类型 | 显示规则 | 示例 |
@@ -303,6 +365,10 @@ pub fn sensitive_preview_parts(
 
 所有长度都按 Unicode 字符而不是 UTF-8 字节计算。即使密码中包含中文或 emoji，也不能
 发生切片 panic 或半字符泄露。
+
+这会有意改变手动标记、导入或旧数据中不大于 7 个字符的 `phone` 显示行为：从原文改为
+`****`。虽然自动电话识别当前不会产生这么短的号码，这仍属于用户可见的安全修正，必须
+写入 CHANGELOG/发布说明，并回归验证复制和粘贴仍使用完整原文。
 
 ### 6.3 邮箱兼容
 
@@ -338,6 +404,8 @@ SensitiveText::new(parts)
    `find("****")` 和 prefix/suffix 拼装。
 2. `quick_paste.rs`：`preview_parts` 不再返回已拼好的脱敏字符串；敏感类型走
    `SensitiveText`。普通 URL、路径、图片和文件预览保持原逻辑。
+3. URL 预览：域名仍按链接样式展示，路径/query 字幕可使用 `SensitiveText`；favicon
+   只接收结构化解析得到的 host。
 
 如果快速粘贴当前结构难以直接复用完整组件，至少必须复用
 `sensitive_preview_parts`，并在后续重构为同一组件；不应复制检测或掩码算法。
@@ -346,9 +414,11 @@ SensitiveText::new(parts)
 
 | 文件 | 主要改动 |
 | --- | --- |
-| `src/core/types.rs` | 新增 `DisplayKind::Secret`、密钥检测模型、`detect_secret`、通用脱敏结构和字符安全算法 |
-| `src/platform/clipboard.rs` | 在文本检测链中加入密钥识别，写入 `meta_type = "secret"` |
-| `src/core/filters.rs` | “信息”包含 `secret`，纯文本排除 `secret`，补充 SQL 测试 |
+| `src/core/types.rs` | 新增 `DisplayKind::Secret` 和映射；更新 `meta_type` 注释，补齐 `secret`、`transfer` |
+| `src/core/secret.rs` | 新增检测模型、规则版本、`detect_secret`、URL 敏感范围、结构化脱敏和字符安全算法 |
+| `src/core/mod.rs` | 导出 `secret` 模块 |
+| `src/platform/clipboard.rs` | 保持 URL 优先；非 URL 文本加入密钥识别并写入 `meta_type = "secret"` |
+| `src/core/filters.rs` | “信息”包含 `secret`，纯文本排除 `secret`，集中子类型条件并补充 SQL 测试 |
 | `src/core/i18n_keys.rs` | 新增“密钥 / Secret”的编辑类型和卡片类型文案 |
 | `src/ui/edit_panel.rs` | 类型选项、类型映射、纯文本编辑类型集合加入 `secret` |
 | `src/state/app.rs` | 编辑保存映射加入 `("plain_text", "secret")` |
@@ -356,8 +426,11 @@ SensitiveText::new(parts)
 | `src/ui/components/mod.rs` | 导出通用组件 |
 | `src/ui/clipboard_card.rs` | 接入 `DisplayKind::Secret` 和统一组件，删除手工掩码拆分 |
 | `src/ui/quick_paste.rs` | 接入密钥图标、类型和统一敏感预览 |
+| `src/services/favicon.rs` / URL helper | favicon 只使用清洗后的 host；URL userinfo 和敏感 query 进入结构化脱敏 |
 | `src/core/sync.rs` | 更新 `meta_type` 协议注释和兼容性测试；确认 `secret` 原样透传 |
 | `src/core/migration.rs` / DB 层 | 可选的一次性历史数据回填 |
+| `Cargo.toml` / `Cargo.lock` | 若采用 `regex`、`url`，声明直接依赖；静态规则使用标准库 `LazyLock` 预编译 |
+| `CHANGELOG.md` | 说明新增密钥脱敏，以及短电话从显示原文改为 `****` 的安全修正 |
 
 密钥图标优先从现有内嵌 icon font 中选择“钥匙”或“锁”，主列表、快速粘贴和编辑类型保持
 一致。若字体暂时没有合适字形，首期可复用纯文本图标，不能引入平台不一致的系统 emoji。
@@ -370,6 +443,8 @@ SensitiveText::new(parts)
   `display_kind()` 会回退为普通文本，因此不会崩溃，但不会脱敏。
 - 同步协议应继续透传未知 `meta_type` 字符串，不能用枚举反序列化拒绝新值。
 - 新版本收到旧设备同步的空 `meta_type` 内容时，可执行同一检测器重新分类。
+- 检测缓存和一次性回填记录必须包含 `SECRET_DETECTION_RULE_VERSION`；升级规则后旧缓存
+  自动失效，是否再次回填由迁移策略显式决定。
 
 这意味着混用旧版本时，旧设备仍可能显示原文。发布说明应明确：所有需要脱敏显示的设备
 都必须升级。
@@ -384,7 +459,8 @@ SensitiveText::new(parts)
 4. 不覆盖用户已手动选择的任何非空类型。
 5. 不记录原文、前后缀或匹配值日志，只记录扫描数量、命中数量和错误数量。
 6. 通过迁移版本标记保证只执行一次。
-7. 更新后刷新列表和筛选状态；是否更新 `updated_at`、生成同步脏标记需与现有同步冲突
+7. 回填标记同时记录 `SECRET_DETECTION_RULE_VERSION`，规则升级不会静默重复扫描。
+8. 更新后刷新列表和筛选状态；是否更新 `updated_at`、生成同步脏标记需与现有同步冲突
    规则保持一致。
 
 如果版本排期不允许做安全的后台回填，首期可以只处理新复制和手动标记的内容，但必须在
@@ -396,6 +472,9 @@ SensitiveText::new(parts)
   重复编译正则。
 - 为待检测文本设置合理上限；超大文本只执行明确字段和私钥块等线性规则，跳过熵检测。
 - 不进行网络请求，不验证密钥是否真实有效。
+- 使用标准库 `std::sync::LazyLock` 初始化静态 `Regex`/`RegexSet`。`RegexSet` 只用于
+  快速判断候选规则，实际 `value_ranges` 仍由带捕获组的 `Regex` 或结构化解析器生成；
+  不能把 `RegexSet` 当作范围提取器。
 - 任何错误日志只能包含规则名称、文本长度和错误类别，禁止打印原文或脱敏前后缀。
 - 固定四个星号，避免通过掩码长度推断真实长度。
 - UI、数据库和同步继续保存原文的事实必须在隐私说明中明确。
@@ -419,6 +498,7 @@ SensitiveText::new(parts)
    - `password=...`、JSON、YAML、带引号字段。
    - Bearer、Basic、JWT。
    - URL 内嵌密码。
+   - URL 敏感 query 参数；条目仍为 `DisplayKind::Link`。
    - PEM 私钥块。
    - 多行配置中的多个敏感值。
    - 满足严格条件的独立疑似密码。
@@ -426,6 +506,7 @@ SensitiveText::new(parts)
 3. **识别负例**
 
    - 普通 URL、邮箱、电话、文件路径、颜色值、UUID。
+   - 不含凭据的 URL 仍生成原有 host/path 预览和 favicon host。
    - Git commit SHA、常见内容哈希、订单号、版本号。
    - Stripe 公开 `pk_` Key。
    - 自然语言句子、Markdown、代码片段中仅出现 `password` 说明文字。
@@ -438,13 +519,17 @@ SensitiveText::new(parts)
    - 纯文本 SQL 排除 secret。
    - 编辑保存能正确往返 `secret`。
    - 未知 `meta_type` 仍安全回退为普通文本。
+   - 已标记 `secret` 但当前规则无法重建范围时整段脱敏，不显示原文。
+   - 相同输入在同一规则版本内始终返回相同、已排序且不重叠的范围。
 
 5. **兼容与同步**
 
    - `secret` 经序列化、同步、反序列化后保持不变。
    - 历史回填只更新空类型、高置信度记录，且幂等。
 
-测试数据只使用无效示例密钥，禁止把真实凭据提交到仓库。
+测试数据只使用无效示例密钥，禁止把真实凭据提交到仓库。建议在
+`src/core/secret.rs` 的独立 `test_vectors` 测试模块或
+`tests/secret_test_vectors.rs` 中集中维护正例、负例和预期范围，避免厂商规则散落。
 
 ### 11.2 UI 验证
 
@@ -453,6 +538,8 @@ SensitiveText::new(parts)
 - 密钥卡片显示“密钥”标签和统一图标。
 - “信息”筛选能同时筛出邮箱、电话和密钥。
 - 搜索命中隐藏部分时不显示原始字符。
+- 带凭据或敏感 query 的 URL 仍显示为链接、保留 favicon/打开能力，但预览不出现凭据
+  原文，favicon 请求也不包含 userinfo 或 query。
 - 多行、多密钥、超长文本、窄窗口和不同卡片高度下不溢出。
 - 明暗主题下掩码、选中态和搜索高亮均清晰。
 - 复制、双击粘贴、快捷键粘贴仍输出完整原文。
@@ -469,19 +556,26 @@ SensitiveText::new(parts)
 6. 用户可以在编辑面板手动选择或取消“密钥”类型。
 7. 检测和错误日志中没有敏感原文。
 8. 单元测试覆盖主要正例、负例、Unicode、短值、筛选和同步兼容。
-9. `cargo test` 与 `cargo clippy --all-targets --all-features -- -D warnings`
+9. URL 内嵌凭据仍分类为 `link`，链接预览和 favicon 仅使用清洗后的 host/局部脱敏内容。
+10. 检测器在同一规则版本内确定；无法重建已标记密钥的范围时整段脱敏。
+11. `cargo test` 与 `cargo clippy --all-targets --all-features -- -D warnings`
    通过。
 
 ## 13. 实施顺序
 
-1. 先实现 `DisplayKind::Secret`、检测器、结构化脱敏 API 和单元测试。
-2. 接入剪贴板分类、编辑类型、国际化和“信息”筛选。
-3. 实现 `SensitiveText`，替换主列表与快速粘贴的现有脱敏分支。
-4. 补充同步兼容测试和源码协议注释。
-5. 根据版本范围决定是否启用一次性历史回填。
-6. 完成自动测试后，由用户运行现有应用实例进行人工 UI 验收。
+1. 先建立 `core::secret`，实现规则版本、纯检测器、URL 安全解析、结构化脱敏 API 和
+   集中测试向量。
+2. 修正 URL host/favicon 清洗，确保 URL 始终保留 `link` 语义且预览不泄露凭据。
+3. 接入 `DisplayKind::Secret`、非 URL 剪贴板分类、编辑类型、国际化和“信息”筛选。
+4. 实现 `SensitiveText`，替换主列表与快速粘贴的现有脱敏分支。
+5. 补充同步兼容测试、源码协议注释和 CHANGELOG。
+6. 根据版本范围决定是否启用一次性历史回填。
+7. 完成自动测试后，由用户运行现有应用实例进行人工 UI 验收。
 
 ## 14. 待产品确认
+
+URL 与 Secret 的冲突已在本方案中确定：合法 URL 保持 `link`，只对 userinfo 密码和
+敏感 query 局部脱敏，favicon 只使用 host，不再作为待确认项。
 
 实施前建议只确认两个产品选择，其余可按本方案默认值执行：
 

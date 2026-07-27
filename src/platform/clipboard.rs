@@ -320,8 +320,9 @@ fn detect_text_content(
 
         if is_url(&text) {
             // --- Prefetch favicon in background thread (non-critical) ---
-            let domain = crate::core::types::url_to_domain(&text);
-            let _ = favicon::ensure_favicon_cached(&domain);
+            if let Some(host) = crate::core::secret::url_clean_host(&text) {
+                let _ = favicon::ensure_favicon_cached(&host);
+            }
             let mut item = ClipboardItem::new_text(
                 0,
                 &text,
@@ -330,6 +331,19 @@ fn detect_text_content(
                 rich_data.as_ref(),
             );
             item.meta_type = "link".to_string();
+            return Some(item);
+        }
+
+        // --- Secret detection (password, API key, token, private key) ---
+        if crate::core::secret::detect_secret(&text).is_some() {
+            let mut item = ClipboardItem::new_text(
+                0,
+                &text,
+                ContentType::PlainText,
+                source_info.as_ref(),
+                rich_data.as_ref(),
+            );
+            item.meta_type = "secret".to_string();
             return Some(item);
         }
 

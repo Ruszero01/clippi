@@ -61,6 +61,7 @@ pub enum DisplayKind {
     Link,
     Path,
     Color,
+    Secret,
     File,
     Image,
     PlainText,
@@ -174,7 +175,7 @@ pub struct ClipboardItem {
     pub source_app_icon: String, // base64-encoded PNG icon
     pub size: i64,               // byte count for files, char count for text
     pub tags: Vec<TagInfo>,
-    pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html" | "link" | "path" | "color"
+    pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html" | "link" | "path" | "color" | "secret" | "transfer"
     pub custom_hotkey: String,
     pub custom_hotkey_format: String,
 }
@@ -404,6 +405,7 @@ impl ClipboardItem {
             "link" => return DisplayKind::Link,
             "path" => return DisplayKind::Path,
             "color" => return DisplayKind::Color,
+            "secret" => return DisplayKind::Secret,
             _ => {}
         }
         // ── Fall back to content_type + rich_data inspection ──
@@ -703,17 +705,8 @@ fn looks_like_ipv4_path(text: &str) -> bool {
 /// Extract the domain portion from a URL for display.
 /// "https://www.github.com/user/repo" -> "www.github.com"
 pub fn url_domain(text: &str) -> String {
-    let s = text.trim();
-    let no_scheme = s
-        .strip_prefix("https://")
-        .or_else(|| s.strip_prefix("http://"))
-        .unwrap_or(s);
-    match no_scheme.find(['/', '?', '#']) {
-        Some(pos) => no_scheme[..pos].to_string(),
-        None => no_scheme.to_string(),
-    }
+    crate::core::secret::url_clean_host(text).unwrap_or_default()
 }
-
 /// Extract a human-readable site name from a URL.
 ///
 /// Strips `www.`, takes the second-level domain (the segment before the
@@ -895,8 +888,10 @@ pub fn path_exists(text: &str) -> bool {
 }
 
 /// Mask sensitive content for preview display.
+/// DEPRECATED: use `crate::core::secret::sensitive_preview_parts` instead.
 /// Email: show first 3 chars of local part + "****" + domain (e.g. "abc****@gmail.com")
 /// Phone: show first 3 chars + "****" + last 4 chars (e.g. "138****5678")
+#[allow(dead_code)]
 pub fn mask_sensitive_preview(text: &str, meta_type: &str) -> String {
     match meta_type {
         "email" => {

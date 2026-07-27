@@ -8,9 +8,10 @@ use gpui::{InteractiveElement, StatefulInteractiveElement};
 
 use super::rich_preview;
 use crate::core::color::detect_color;
+use crate::core::secret::sensitive_preview_to_text;
 use crate::core::types::{
-    format_relative_time, mask_sensitive_preview, path_is_native, url_domain, url_path,
-    url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, RichData,
+    format_relative_time, path_is_native, url_domain, url_path, url_site_name, ClipboardItem,
+    ContentType, DisplayKind, FileData, RichData,
 };
 use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
@@ -1292,6 +1293,7 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
         DisplayKind::Color => "\u{e610}",
         DisplayKind::Email => "\u{e604}",
         DisplayKind::Phone => "\u{e966}",
+        DisplayKind::Secret => "\u{e60e}",
     }
 }
 
@@ -1337,8 +1339,9 @@ fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Optio
         _ => {
             // ── URL: site name + page title (or domain + path fallback) ──
             if item.meta_type == "link" {
+                let masked_url = sensitive_preview_to_text(&item.full_text, "link");
                 let domain = url_domain(&item.full_text);
-                let path = url_path(&item.full_text);
+                let path = url_path(&masked_url);
                 if auto_fetch_title {
                     let rd = RichData::from_json(&item.rich_data);
                     if let Some(title) = rd.page_title {
@@ -1350,7 +1353,7 @@ fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Optio
                 if !domain.is_empty() && !path.is_empty() && path != "/" {
                     return (domain, Some(path));
                 }
-                return (item.full_text.clone(), None);
+                return (masked_url, None);
             }
             // ── Path: leaf name (label) + full path (subtitle) ──
             if item.meta_type == "path" {
@@ -1381,8 +1384,8 @@ fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Optio
         }
         s
     };
-    // Mask sensitive content (email / phone) in preview
-    let masked = mask_sensitive_preview(&raw, &item.meta_type);
+    // Mask sensitive content (email / phone / secret) in preview
+    let masked = sensitive_preview_to_text(&raw, &item.meta_type);
     (masked, None)
 }
 

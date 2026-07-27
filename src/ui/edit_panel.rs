@@ -17,7 +17,7 @@ use crate::state::app::AppState;
 use super::rich_preview;
 use super::theme::ClippiTheme;
 
-const TYPE_OPTIONS: [(&str, I18nKey); 8] = [
+const TYPE_OPTIONS: [(&str, I18nKey); 9] = [
     ("plain_text", I18nKey::EditTypeText),
     ("markdown", I18nKey::EditTypeMarkdown),
     ("html", I18nKey::EditTypeHtml),
@@ -26,6 +26,7 @@ const TYPE_OPTIONS: [(&str, I18nKey); 8] = [
     ("color", I18nKey::EditTypeColor),
     ("email", I18nKey::EditTypeEmail),
     ("phone", I18nKey::EditTypePhone),
+    ("secret", I18nKey::EditTypeSecret),
 ];
 
 pub struct EditPanel {
@@ -766,6 +767,7 @@ fn editor_type_from_item(item: &ClipboardItem) -> &'static str {
         DisplayKind::Link => "link",
         DisplayKind::Path => "path",
         DisplayKind::Color => "color",
+        DisplayKind::Secret => "secret",
         _ => "plain_text",
     }
 }
@@ -838,7 +840,7 @@ fn is_rich_editor_type(t: &str) -> bool {
 fn is_plain_editor_type(t: &str) -> bool {
     matches!(
         t,
-        "plain_text" | "link" | "path" | "color" | "email" | "phone"
+        "plain_text" | "link" | "path" | "color" | "email" | "phone" | "secret"
     )
 }
 

@@ -755,6 +755,7 @@ impl AppState {
             "color" => ("plain_text", "color", String::new()),
             "email" => ("plain_text", "email", String::new()),
             "phone" => ("plain_text", "phone", String::new()),
+            "secret" => ("plain_text", "secret", String::new()),
             _ => ("plain_text", "", String::new()),
         }
     }

@@ -17,6 +17,13 @@ pub const BUILTIN_TYPE_KEYS: &[&str] = &[
     "contact",
 ];
 
+/// Semantic meta_type values that are excluded from the plain_text filter
+/// because they are shown under specialised type filters (contact, link,
+/// path, color) instead.  When adding a new subtype, update this list AND
+/// the `"contact"` branch in `db_where()`.
+const SUBTYPE_EXCLUDE_FROM_PLAIN_TEXT: &[&str] =
+    &["email", "phone", "secret", "link", "path", "color"];
+
 /// Split user-entered search text into normalized keyword terms.
 ///
 /// Whitespace separates terms. All returned terms are non-empty and unique,
@@ -176,10 +183,15 @@ impl ClipboardFilters {
             for t in &self.type_filters {
                 match t.as_str() {
                     "plain_text" => {
-                        type_conditions.push(
-                            "content_type = 'plain_text' AND meta_type NOT IN ('email','phone','link','path','color')"
-                                .to_string(),
-                        );
+                        let excluded = SUBTYPE_EXCLUDE_FROM_PLAIN_TEXT
+                            .iter()
+                            .map(|s| format!("'{}'", s))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        type_conditions.push(format!(
+                            "content_type = 'plain_text' AND meta_type NOT IN ({})",
+                            excluded
+                        ));
                     }
                     "rich_text" => {
                         type_conditions.push("content_type = 'rich_text'".to_string());
@@ -204,7 +216,7 @@ impl ClipboardFilters {
                         type_conditions.push("meta_type = 'color'".to_string());
                     }
                     "contact" => {
-                        type_conditions.push("meta_type IN ('email','phone')".to_string());
+                        type_conditions.push("meta_type IN ('email','phone','secret')".to_string());
                     }
                     _ => {} // ignore unknown keys (e.g. from older configs)
                 }
@@ -258,6 +270,26 @@ mod tests {
     }
 
     #[test]
+    fn contact_filter_includes_secret_items() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("contact");
+
+        let (where_sql, params) = filters.db_where();
+        assert!(where_sql.contains("meta_type IN ('email','phone','secret')"));
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn plain_text_filter_excludes_secret_items() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("plain_text");
+
+        let (where_sql, params) = filters.db_where();
+        assert!(where_sql.contains("'secret'"));
+        assert!(params.is_empty());
+    }
+    #[test]
+
     fn file_filter_loads_path_text_candidates_for_runtime_classification() {
         let mut filters = ClipboardFilters::default();
         filters.toggle_type("file");

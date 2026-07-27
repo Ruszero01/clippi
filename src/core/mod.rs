@@ -12,6 +12,7 @@ pub mod migration;
 pub mod ocr;
 pub mod paths;
 pub mod qr;
+pub mod secret;
 pub mod settings;
 pub mod sync;
 pub mod sync_scope;

@@ -50,6 +50,8 @@ rodio = "0.20"
 uuid = { version = "1", features = ["v4", "v5"] }
 oxipng = { version = "10", default-features = false, features = ["parallel"] }
 mozjpeg-rs = "0.9"
+regex = "1"
+url = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui = { version = "0.2.2", features = ["windows-manifest"] }

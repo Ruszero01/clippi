@@ -3,6 +3,7 @@
 
 pub mod app_list_dialog;
 pub mod confirm_dialog;
+pub mod sensitive_text;
 pub mod spinner;
 pub mod toast;
 pub mod toggle;

@@ -25,11 +25,11 @@ use crate::core::transfer_types::{
     TRANSFER_STATUS_CLOUD_UID, TRANSFER_STATUS_DOWNLOADING_UID, TRANSFER_STATUS_LOCAL_UID,
 };
 use crate::core::types::{
-    format_relative_time, mask_sensitive_preview, parse_hex_color, url_domain, url_path,
-    url_site_name, ClipboardItem, ContentType, DisplayKind, FileData, FileInfo, HotkeyPasteFormat,
-    RichData,
+    format_relative_time, parse_hex_color, url_domain, url_path, url_site_name, ClipboardItem,
+    ContentType, DisplayKind, FileData, FileInfo, HotkeyPasteFormat, RichData,
 };
 
+use super::components::sensitive_text::SensitiveText;
 use super::components::spinner::activity_spinner;
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
 use super::rich_preview::{self, StyledHtmlSpan};
@@ -196,6 +196,7 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
         DisplayKind::Color => "\u{e610}",
         DisplayKind::Email => "\u{e604}",
         DisplayKind::Phone => "\u{e966}",
+        DisplayKind::Secret => "\u{e60e}",
     }
 }
 
@@ -217,6 +218,7 @@ fn type_label(item: &ClipboardItem) -> String {
         DisplayKind::Link => I18nKey::CardTypeUrl.text().into(),
         DisplayKind::Path => I18nKey::CardTypePath.text().into(),
         DisplayKind::Color => I18nKey::CardTypeColor.text().into(),
+        DisplayKind::Secret => I18nKey::CardTypeSecret.text().into(),
         DisplayKind::File => {
             let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
             let is_dir = fd.files.first().is_some_and(|f| f.is_dir);
@@ -673,7 +675,11 @@ pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32
             // Semantic single-value text cards are compact; check via display_kind.
             if matches!(
                 item.display_kind(),
-                DisplayKind::Email | DisplayKind::Phone | DisplayKind::Link | DisplayKind::Path
+                DisplayKind::Email
+                    | DisplayKind::Phone
+                    | DisplayKind::Secret
+                    | DisplayKind::Link
+                    | DisplayKind::Path
             ) {
                 return 68.0;
             }
@@ -1529,7 +1535,9 @@ impl RenderOnce for ClipboardCard {
             if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
                 if matches!(content_kind, DisplayKind::Link) {
                     let domain = url_domain(full_text);
-                    let path = url_path(full_text);
+                    let masked_url =
+                        crate::core::secret::sensitive_preview_to_text(full_text, "link");
+                    let path = url_path(&masked_url);
 
                     // When page-title fetching is enabled and a title is cached,
                     // simplify the domain to just the site name and show the
@@ -1670,54 +1678,20 @@ impl RenderOnce for ClipboardCard {
                         )
                     }
                 }
-            } else if matches!(content_kind, DisplayKind::Email | DisplayKind::Phone) {
-                let masked = mask_sensitive_preview(full_text, &meta_type);
-                let mask_text = "****";
-                let (prefix, suffix) = match masked.find(mask_text) {
-                    Some(pos) => (
-                        masked[..pos].to_string(),
-                        masked[pos + mask_text.len()..].to_string(),
-                    ),
-                    None => (masked.clone(), String::new()),
-                };
+            } else if matches!(
+                content_kind,
+                DisplayKind::Email | DisplayKind::Phone | DisplayKind::Secret,
+            ) {
+                let parts = crate::core::secret::sensitive_preview_parts(full_text, &meta_type);
                 div().flex_1().flex().items_center().child(
-                    div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::BOLD)
+                    SensitiveText::new(parts)
+                        .search_terms(search_terms.clone())
                         .text_color(text_1)
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .overflow_hidden()
-                        .child(search_highlight::render_highlighted_inline(
-                            prefix,
-                            &search_terms,
-                            text_1,
-                            highlight_bg,
-                            highlight_text,
-                            13.0,
-                            Some(FontWeight::BOLD),
-                        ))
-                        .when(masked.contains(mask_text), |this| {
-                            this.child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(text_3)
-                                    .child(mask_text),
-                            )
-                        })
-                        .when(!suffix.is_empty(), |this| {
-                            this.child(search_highlight::render_highlighted_inline(
-                                suffix,
-                                &search_terms,
-                                text_1,
-                                highlight_bg,
-                                highlight_text,
-                                13.0,
-                                Some(FontWeight::BOLD),
-                            ))
-                        }),
+                        .mask_color(text_3)
+                        .highlight_bg(highlight_bg)
+                        .highlight_text(highlight_text)
+                        .font_size(13.0)
+                        .font_weight(FontWeight::BOLD),
                 )
             } else if matches!(content_kind, DisplayKind::Color) {
                 div().flex_1().flex().items_center().child(
