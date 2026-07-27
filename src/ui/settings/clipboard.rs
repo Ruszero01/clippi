@@ -301,7 +301,7 @@ impl SettingsPanel {
                             .font_family("iconfont")
                             .text_size(px(14.))
                             .text_color(theme.text_2)
-                            .child("\u{e620}"),
+                            .child("\u{e602}"),
                     )
             })
             // --- Sort by created ---

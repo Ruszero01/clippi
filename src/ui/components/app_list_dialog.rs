@@ -8,6 +8,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::ui::theme::ClippiTheme;
@@ -47,8 +48,13 @@ pub struct AppListDialogParams {
     pub recording_app: Option<String>,
     /// Show the shortcut column (paste-shortcut mode).
     pub show_shortcut_column: bool,
-    /// Label for the bottom "add current app" button.  Omit to hide.
+    /// Optional help text shown from the title-bar question mark.
+    pub help_text: Option<String>,
+    /// Label for the bottom action button. Omit to hide.
     pub add_button_label: Option<String>,
+
+    /// Highlight the bottom action button while shortcut recording is active.
+    pub add_button_recording: bool,
     pub theme: ClippiTheme,
     /// (opacity, scale, offset, viewport_w, viewport_h)
     pub layout: (f32, f32, f32, f32, f32),
@@ -88,7 +94,25 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
     let accent = theme.accent;
     let accent_soft = theme.accent_soft;
     let accent_hover = theme.accent_overlay();
+    let text_2 = theme.text_2;
     let text_3 = theme.text_3;
+    let add_button_recording = params.add_button_recording;
+    let add_button_bg = if add_button_recording {
+        accent_soft
+    } else {
+        theme.btn_hover
+    };
+    let add_button_border = if add_button_recording {
+        accent
+    } else {
+        divider
+    };
+    let add_button_text = if add_button_recording { accent } else { text_2 };
+    let add_button_hover = if add_button_recording {
+        accent_hover
+    } else {
+        theme.surface_press
+    };
 
     div()
         .absolute()
@@ -132,6 +156,7 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                     entry_count,
                     &theme,
                     scale,
+                    params.help_text.clone(),
                     close.clone(),
                 ))
                 .child(div().h(px(1.)).bg(divider))
@@ -179,18 +204,18 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                         div()
                             .h(px(ADD_BUTTON_HEIGHT * scale))
                             .rounded(px(7.))
-                            .bg(accent_soft)
+                            .bg(add_button_bg)
                             .border(px(1.))
-                            .border_color(accent)
+                            .border_color(add_button_border)
                             .flex()
                             .items_center()
                             .justify_center()
                             .gap(px(6.))
                             .text_size(px(11.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(accent)
+                            .text_color(add_button_text)
                             .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.bg(accent_hover))
+                            .hover(move |style| style.bg(add_button_hover))
                             .on_mouse_down(MouseButton::Left, {
                                 let on_add = on_add.clone();
                                 move |_ev, window, cx| {
@@ -198,12 +223,6 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                                     on_add(window, cx)
                                 }
                             })
-                            .child(
-                                div()
-                                    .font_family("iconfont")
-                                    .text_size(px(12.))
-                                    .child("\u{e618}"),
-                            )
                             .child(btn_text.clone()),
                     )
                 }),
@@ -215,11 +234,15 @@ fn render_title_bar(
     count: usize,
     theme: &ClippiTheme,
     scale: f32,
+    help_text: Option<String>,
     on_close: AppListAction,
 ) -> impl IntoElement {
     let accent = theme.accent;
+    let divider = theme.divider;
+    let btn_hover = theme.btn_hover;
     let text_1 = theme.text_1;
     let text_2 = theme.text_2;
+    let help_lines = help_text.map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>());
 
     div()
         .h(px(28.))
@@ -256,26 +279,70 @@ fn render_title_bar(
                         .child(I18nKey::ClipboardAppBlacklistCount.fmt(&[&count.to_string()])),
                 ),
         )
-        .child({
-            let close = on_close;
+        .child(
             div()
-                .w(px(26.))
-                .h(px(26.))
-                .rounded(px(6.))
-                .font_family("iconfont")
-                .text_size(px(13.))
-                .text_color(text_2)
                 .flex()
                 .items_center()
-                .justify_center()
-                .cursor(CursorStyle::PointingHand)
-                .hover(|style| style.bg(rgba(0xffffff0d)))
-                .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                    cx.stop_propagation();
-                    close(window, cx);
+                .gap(px(2.))
+                .when_some(help_lines, |actions, lines| {
+                    let tooltip_lines = lines.clone();
+                    actions.child(
+                        div()
+                            .id("app-list-help")
+                            .w(px(20.))
+                            .h(px(20.))
+                            .rounded(px(10.))
+                            .border(px(1.))
+                            .border_color(divider)
+                            .font_family("iconfont")
+                            .text_size(px(13.))
+                            .text_color(text_2)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.bg(btn_hover).text_color(accent))
+                            .tooltip(move |window, cx| {
+                                let tooltip_lines = tooltip_lines.clone();
+                                Tooltip::element(move |_window, _cx| {
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(3.))
+                                        .text_size(px(10.))
+                                        .children(
+                                            tooltip_lines
+                                                .clone()
+                                                .into_iter()
+                                                .map(|line| div().whitespace_nowrap().child(line)),
+                                        )
+                                })
+                                .build(window, cx)
+                            })
+                            .child("\u{e60a}"),
+                    )
                 })
-                .child("\u{e7b7}")
-        })
+                .child({
+                    let close = on_close;
+                    div()
+                        .w(px(26.))
+                        .h(px(26.))
+                        .rounded(px(6.))
+                        .font_family("iconfont")
+                        .text_size(px(13.))
+                        .text_color(text_2)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(|style| style.bg(rgba(0xffffff0d)))
+                        .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                            cx.stop_propagation();
+                            close(window, cx);
+                        })
+                        .child("\u{e7b7}")
+                }),
+        )
 }
 
 fn render_entry(
@@ -340,7 +407,7 @@ fn render_entry(
                                 .text_color(accent)
                                 .flex()
                                 .items_center()
-                                .child(I18nKey::BottomBarRecording.text()),
+                                .child(I18nKey::HotkeyPasteShortcutRecording.text()),
                         )
                     } else {
                         let label = entry.shortcut.clone().unwrap_or_default();

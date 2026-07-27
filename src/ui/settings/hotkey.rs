@@ -622,7 +622,7 @@ impl SettingsPanel {
                             .font_family("iconfont")
                             .text_size(px(14.))
                             .text_color(theme.text_2)
-                            .child("\u{e620}"), // arrow icon
+                            .child("\u{e602}"), // arrow icon
                     )
             })
             // 3. Hotkey blacklist entry card
@@ -677,7 +677,7 @@ impl SettingsPanel {
                             .font_family("iconfont")
                             .text_size(px(14.))
                             .text_color(theme.text_2)
-                            .child("\u{e620}"),
+                            .child("\u{e602}"),
                     )
             })
             // 4. Paste shortcut entry card (Windows only)
@@ -733,7 +733,7 @@ impl SettingsPanel {
                                 .font_family("iconfont")
                                 .text_size(px(14.))
                                 .text_color(theme.text_2)
-                                .child("\u{e620}"),
+                                .child("\u{e602}"),
                         ),
                 )
             })

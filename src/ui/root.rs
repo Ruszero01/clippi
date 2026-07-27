@@ -256,7 +256,11 @@ impl RootView {
                     this.search_bar.update(cx, |bar, cx| {
                         bar.close_tag_panel(cx);
                     });
+                    _wm.update(cx, |wm, _cx| {
+                        wm.cancel_paste_shortcut_recording();
+                    });
                     this.settings_panel.update(cx, |panel, cx| {
+                        panel.clear_paste_shortcut_state(cx);
                         panel.close_app_list_popups();
                         panel.latest_hotkeys_popup_open = false;
                         panel.hotkey_confirm = None;
@@ -1236,7 +1240,6 @@ impl Render for RootView {
                     .when(!is_edit, |panel| {
                         let app_state = self.state.clone();
                         let settings = self.settings_panel.clone();
-                        let wm = self.window_manager.clone();
                         let (fg_name, fg_title) = {
                             let state = app_state.read(cx);
                             (
@@ -1245,11 +1248,10 @@ impl Render for RootView {
                             )
                         };
                         let has_fg = !fg_name.is_empty();
-                        let recording = settings.read(cx).recording_paste_shortcut.is_some();
                         let foreground_icon = has_fg
                             .then(|| crate::core::paths::app_icon_path(&fg_name))
                             .filter(|path| path.exists());
-                        let bar_height = 30.;
+                        let bar_height = 26.;
                         panel.child(
                             div()
                                 .h(px(bar_height))
@@ -1271,8 +1273,9 @@ impl Render for RootView {
                                         .when_some(foreground_icon, |row, image| {
                                             row.child(
                                                 gpui::img(image)
-                                                    .w(px(18.))
-                                                    .h(px(18.))
+                                                    .w(px(16.))
+                                                    .h(px(16.))
+                                                    .rounded(px(3.))
                                                     .flex_shrink_0(),
                                             )
                                         })
@@ -1316,15 +1319,6 @@ impl Render for RootView {
                                                     .text_color(theme.text_3)
                                                     .child(I18nKey::BottomBarNoApp.text()),
                                             )
-                                        })
-                                        .when(recording, |row| {
-                                            row.child(
-                                                div()
-                                                    .flex_shrink_0()
-                                                    .text_size(px(9.))
-                                                    .text_color(theme.accent)
-                                                    .child(I18nKey::BottomBarRecording.text()),
-                                            )
                                         }),
                                 )
                                 .when(has_fg, |bar| {
@@ -1337,32 +1331,43 @@ impl Render for RootView {
                                                 let fg = fg_name.clone();
                                                 let app_state = app_state.clone();
                                                 let settings = settings.clone();
+                                                let is_blacklisted = crate::core::settings::is_app_in_list(
+                                                    &app_state.read(cx).settings.clipboard_app_blacklist,
+                                                    &fg,
+                                                );
+
+                                                let base_color = if is_blacklisted { theme.fav_color } else { theme.text_3 };
+                                                let tooltip_label = if is_blacklisted {
+                                                    I18nKey::ConfirmRemoveClipboardBlacklistTitle.text()
+                                                } else {
+                                                    I18nKey::BottomBarClipboardBlacklist.text()
+                                                };
                                                 div()
                                                     .id("bottom-clipboard-blacklist")
-                                                    .w(px(22.))
-                                                    .h(px(22.))
+                                                    .w(px(20.))
+                                                    .h(px(20.))
                                                     .rounded(px(4.))
                                                     .font_family("iconfont")
                                                     .text_size(px(12.))
-                                                    .text_color(theme.text_3)
+                                                    .text_color(base_color)
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
                                                     .cursor(CursorStyle::PointingHand)
                                                     .hover(|style| style.text_color(theme.accent))
-                                                    .tooltip(|window, cx| {
-                                                        let label = I18nKey::BottomBarClipboardBlacklist.text();
+                                                    .tooltip(move |window, cx| {
+                                                        let label = tooltip_label;
                                                         Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
                                                     })
                                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                                         cx.stop_propagation();
-                                                        if crate::core::settings::is_app_in_list(&app_state.read(cx).settings.clipboard_app_blacklist, &fg) {
-                                                            app_state.update(cx, |state, cx| { state.show_toast(I18nKey::BottomBarAlreadyInList.text()); cx.notify(); });
+                                                        if is_blacklisted {
+                                                            settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::RemoveClipboardBlacklist { app_name: fg.clone() })));
                                                         } else {
                                                             settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddClipboardBlacklist { app_name: fg.clone() })));
                                                         }
                                                     })
-                                                    .child("\u{e6a7}")
+                                                    .child("\u{e638}")
                                             })
                                             .child({
                                                 let fg = fg_name.clone();
@@ -1370,8 +1375,8 @@ impl Render for RootView {
                                                 let settings = settings.clone();
                                                 div()
                                                         .id("bottom-hotkey-blacklist")
-                                                        .w(px(22.))
-                                                        .h(px(22.))
+                                                        .w(px(20.))
+                                                        .h(px(20.))
                                                         .rounded(px(4.))
                                                         .font_family("iconfont")
                                                         .text_size(px(12.))
@@ -1393,43 +1398,8 @@ impl Render for RootView {
                                                                 settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddBlacklist { app_name: fg.clone() })));
                                                             }
                                                         })
-                                                        .child("\u{e66b}")
+                                                        .child("\u{e600}")
                                             })
-                                            .when(cfg!(target_os = "windows"), |buttons| {
-                                                let fg = fg_name.clone();
-                                                let settings = settings.clone();
-                                                let wm = wm.clone();
-                                                buttons.child(
-                                                    div()
-                                                        .id("bottom-paste-shortcut")
-                                                        .w(px(22.))
-                                                        .h(px(22.))
-                                                        .rounded(px(4.))
-                                                        .font_family("iconfont")
-                                                        .text_size(px(12.))
-                                                        .text_color(if recording { theme.danger } else { theme.text_3 })
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .cursor(CursorStyle::PointingHand)
-                                                        .hover(|style| style.text_color(if recording { theme.danger } else { theme.accent }))
-                                                        .tooltip(|window, cx| {
-                                                            let label = I18nKey::BottomBarPasteShortcut.text();
-                                                            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
-                                                        })
-                                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                                            cx.stop_propagation();
-                                                            if recording {
-                                                                wm.update(cx, |wm, _cx| wm.cancel_paste_shortcut_recording());
-                                                                settings.update(cx, |panel, cx| panel.clear_paste_shortcut_state(cx));
-                                                            } else {
-                                                                settings.update(cx, |panel, cx| { panel.recording_paste_shortcut = Some(fg.clone()); cx.notify(); });
-                                                                wm.update(cx, |wm, cx| wm.start_paste_shortcut_recording(fg.clone(), cx));
-                                                            }
-                                                        })
-                                                        .child(if recording { "\u{e7b7}" } else { "\u{e63f}" }),
-                                                )
-                                            }),
                                     )
                                 }),
                         )
@@ -1915,7 +1885,9 @@ impl Render for RootView {
                     entries,
                     recording_app: None,
                     show_shortcut_column: false,
+                    help_text: None,
                     add_button_label,
+                    add_button_recording: false,
                     theme: self.theme.clone(),
                     layout: (
                         hotkey_blacklist_popup_opacity,
@@ -1979,6 +1951,7 @@ impl Render for RootView {
                 let wm = self.window_manager.clone();
                 let foreground_app = state.read(cx).foreground_app_name.clone();
                 let recording_app = settings.read(cx).recording_paste_shortcut.clone();
+                let recording_active = recording_app.is_some();
                 let entries = state
                     .read(cx)
                     .settings
@@ -1993,16 +1966,22 @@ impl Render for RootView {
                             .unwrap_or(false),
                     })
                     .collect();
-                let add_button_label = (!foreground_app.is_empty()).then(|| {
-                    I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app])
-                });
+                let add_button_label = if recording_active {
+                    Some(I18nKey::HotkeyPasteShortcutRecording.text().to_string())
+                } else {
+                    (!foreground_app.is_empty()).then(|| {
+                        I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app])
+                    })
+                };
                 root.child(render_app_list_dialog(AppListDialogParams {
                     title: I18nKey::HotkeyPasteShortcut.text().to_string(),
                     empty_hint: I18nKey::HotkeyPasteShortcutEmptyHint.text().to_string(),
                     entries,
                     recording_app,
                     show_shortcut_column: true,
+                    help_text: Some(I18nKey::HotkeyPasteShortcutHelp.text().to_string()),
                     add_button_label,
+                    add_button_recording: recording_active,
                     theme: self.theme.clone(),
                     layout: (
                         paste_shortcuts_popup_opacity,
@@ -2013,10 +1992,14 @@ impl Render for RootView {
                     ),
                     on_close: Rc::new({
                         let settings = settings.clone();
+                        let wm = wm.clone();
                         move |_window, cx| {
+                            wm.update(cx, |wm, _cx| {
+                                wm.cancel_paste_shortcut_recording();
+                            });
                             settings.update(cx, |panel, cx| {
+                                panel.clear_paste_shortcut_state(cx);
                                 panel.close_app_list_popups();
-                                cx.notify();
                             });
                         }
                     }),
@@ -2053,19 +2036,32 @@ impl Render for RootView {
                             });
                         }
                     })),
-                    on_add: (!foreground_app.is_empty()).then(|| {
+                    on_add: (recording_active || !foreground_app.is_empty()).then(|| {
                         Rc::new({
                             let settings = settings.clone();
                             let wm = wm.clone();
                             let foreground_app = foreground_app.clone();
                             move |_window: &mut Window, cx: &mut App| {
-                                settings.update(cx, |panel, cx| {
-                                    panel.recording_paste_shortcut = Some(foreground_app.clone());
-                                    cx.notify();
-                                });
-                                wm.update(cx, |wm, cx| {
-                                    wm.start_paste_shortcut_recording(foreground_app.clone(), cx);
-                                });
+                                if recording_active {
+                                    wm.update(cx, |wm, _cx| {
+                                        wm.cancel_paste_shortcut_recording();
+                                    });
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_paste_shortcut_state(cx);
+                                    });
+                                } else {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.recording_paste_shortcut =
+                                            Some(foreground_app.clone());
+                                        cx.notify();
+                                    });
+                                    wm.update(cx, |wm, cx| {
+                                        wm.start_paste_shortcut_recording(
+                                            foreground_app.clone(),
+                                            cx,
+                                        );
+                                    });
+                                }
                             }
                         }) as Rc<dyn Fn(&mut Window, &mut App)>
                     }),
@@ -2087,7 +2083,9 @@ impl Render for RootView {
                     entries,
                     recording_app: None,
                     show_shortcut_column: false,
+                    help_text: None,
                     add_button_label,
+                    add_button_recording: false,
                     theme: self.theme.clone(),
                     layout: (app_blacklist_popup_opacity, app_blacklist_popup_scale, app_blacklist_popup_offset, win_w, win_h),
                     on_close: Rc::new({ let settings = settings.clone(); move |_window, cx| settings.update(cx, |panel, cx| { panel.close_app_list_popups(); cx.notify(); }) }),
