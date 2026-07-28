@@ -398,6 +398,7 @@ fn detect_standalone_password(text: &str) -> Option<SecretMatch> {
         || looks_like_hash(t)
         || looks_like_uuid(t)
         || is_repeating(t)
+        || looks_like_file_path(t)
     {
         return None;
     }
@@ -471,6 +472,40 @@ fn is_repeating(s: &str) -> bool {
         if chars.len().is_multiple_of(period) {
             let pattern = &chars[..period];
             if chars.chunks(period).all(|chunk| chunk == pattern) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Detect strings that look like file paths (Windows / Unix / UNC).
+/// Presence of directory separators (`\` or `/`) plus a file extension
+/// is a strong signal that this is not a password.
+fn looks_like_file_path(s: &str) -> bool {
+    // Windows absolute path: C:\... or D:/...
+    if s.len() >= 3
+        && s.as_bytes()[0].is_ascii_alphabetic()
+        && s.as_bytes()[1] == b':'
+        && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/')
+    {
+        return true;
+    }
+    // UNC path: \\server\share\...
+    if s.starts_with("\\\\") {
+        return true;
+    }
+    // Unix absolute path: /abs/path (must contain another /)
+    if s.starts_with('/') && s.len() >= 3 && s[1..].contains('/') {
+        return true;
+    }
+    // Any string with directory separators and a file extension is likely a path.
+    // File extension: a period followed by 1-10 alphanumeric chars near the end.
+    if s.contains('\\') || s.contains('/') {
+        if let Some(dot) = s.rfind('.') {
+            let ext = &s[dot + 1..];
+            if !ext.is_empty() && ext.len() <= 10 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+            {
                 return true;
             }
         }
@@ -1294,5 +1329,78 @@ mod tests {
     fn empty_text_no_match() {
         assert!(detect_secret("").is_none());
         assert!(detect_secret("   ").is_none());
+    }
+
+    // ── File path rejection ────────────────────────────────────────────────
+
+    #[test]
+    fn reject_windows_file_path_as_secret() {
+        // Drive letter + backslash path with file extension
+        assert!(
+            detect_secret("G:\\Develop\\github\\clippi\\RELEASES.md").is_none(),
+            "Windows file path should not be detected as secret"
+        );
+        assert!(
+            detect_secret("C:\\Users\\name\\Documents\\file.txt").is_none(),
+            "Windows file path should not be detected as secret"
+        );
+        assert!(
+            detect_secret("D:/Projects/code/src/main.rs").is_none(),
+            "Windows forward-slash path should not be detected as secret"
+        );
+    }
+
+    #[test]
+    fn reject_unc_path_as_secret() {
+        assert!(
+            detect_secret("\\\\server\\share\\folder\\file.txt").is_none(),
+            "UNC path should not be detected as secret"
+        );
+    }
+
+    #[test]
+    fn reject_unix_absolute_path_as_secret() {
+        assert!(
+            detect_secret("/usr/local/bin/tool.sh").is_none(),
+            "Unix absolute path should not be detected as secret"
+        );
+        assert!(
+            detect_secret("/home/user/projects/my-app/src/main.rs").is_none(),
+            "Unix absolute path should not be detected as secret"
+        );
+    }
+
+    #[test]
+    fn looks_like_file_path_detects_windows_paths() {
+        assert!(looks_like_file_path(
+            "G:\\Develop\\github\\clippi\\RELEASES.md"
+        ));
+        assert!(looks_like_file_path("C:\\Windows\\System32\\cmd.exe"));
+        assert!(looks_like_file_path("D:/data/images/photo.png"));
+    }
+
+    #[test]
+    fn looks_like_file_path_detects_unc() {
+        assert!(looks_like_file_path("\\\\server\\share\\folder"));
+        assert!(looks_like_file_path("\\\\192.168.1.1\\data\\file.bin"));
+    }
+
+    #[test]
+    fn looks_like_file_path_detects_unix_paths() {
+        assert!(looks_like_file_path("/usr/bin/gcc"));
+        assert!(looks_like_file_path("/home/user/.config/app/config.toml"));
+    }
+
+    #[test]
+    fn looks_like_file_path_rejects_non_paths() {
+        assert!(!looks_like_file_path("C0rrect-H0rse-Battery-Staple!"));
+        assert!(!looks_like_file_path(
+            "sk-proj-test-abcdefghijklmnopqrstuvwxyz1234567890AB"
+        ));
+        assert!(!looks_like_file_path(
+            "ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD"
+        ));
+        // Forward slash but no file extension — may be ambiguous
+        assert!(!looks_like_file_path("usr/local/bin"));
     }
 }

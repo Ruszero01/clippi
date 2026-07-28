@@ -215,7 +215,7 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
         DisplayKind::Color => "\u{e610}",
         DisplayKind::Email => "\u{e604}",
         DisplayKind::Phone => "\u{e966}",
-        DisplayKind::Secret => "\u{e60e}",
+        DisplayKind::Secret => "\u{e612}",
     }
 }
 
