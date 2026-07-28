@@ -717,6 +717,10 @@ fn current_clipboard_seq() -> u32 {
     0
 }
 
+fn should_process_clipboard_sequence<T: Eq>(startup_done: bool, current: &T, previous: &T) -> bool {
+    startup_done && current != previous
+}
+
 impl ClipboardListener for PollingClipboardListener {
     fn start(&mut self, shared: &ClipboardShared) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.running.store(true, Ordering::SeqCst);
@@ -780,6 +784,13 @@ impl ClipboardListener for PollingClipboardListener {
                     continue;
                 }
 
+                // Do not consume a real clipboard change during startup. The
+                // platform sequence baseline remains unchanged, so a copy made
+                // during the grace period is processed on the first later poll.
+                let startup_done = startup_end
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_none_or(|end| end.elapsed().as_millis() > 500);
                 // Fast-path: if the clipboard sequence number hasn't changed,
                 // --- skip the expensive clipboard open + image encoding entirely. ---
                 #[cfg(target_os = "windows")]
@@ -788,7 +799,7 @@ impl ClipboardListener for PollingClipboardListener {
                         windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
                     };
                     let mut last = last_seq.lock().unwrap_or_else(|e| e.into_inner());
-                    if seq == *last {
+                    if !should_process_clipboard_sequence(startup_done, &seq, &*last) {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
                         continue;
@@ -803,7 +814,7 @@ impl ClipboardListener for PollingClipboardListener {
                     let cc =
                         with_clipboard_access(|| NSPasteboard::generalPasteboard().changeCount());
                     let mut last = last_cc.lock().unwrap_or_else(|e| e.into_inner());
-                    if cc == *last {
+                    if !should_process_clipboard_sequence(startup_done, &cc, &*last) {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
                         continue;
@@ -811,14 +822,7 @@ impl ClipboardListener for PollingClipboardListener {
                     *last = cc;
                 }
 
-                // ── Startup grace-period gate ──
-                // Skip content detection entirely during the first 500ms so that
-                // clipboard content present at startup (from a potentially
-                // blacklisted app) is never written to disk.
-                let startup_done = startup_end
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_none_or(|end| end.elapsed().as_millis() > 500);
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                 if !startup_done {
                     thread::sleep(Duration::from_millis(50));
                     continue;
@@ -1074,5 +1078,25 @@ mod gate_tests {
         });
         assert!(r2.is_none());
         assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn startup_grace_defers_sequence_without_consuming_it() {
+        let previous = 10_u32;
+        let copied_during_startup = 11_u32;
+
+        assert!(!should_process_clipboard_sequence(
+            false,
+            &copied_during_startup,
+            &previous
+        ));
+        assert!(should_process_clipboard_sequence(
+            true,
+            &copied_during_startup,
+            &previous
+        ));
+        assert!(!should_process_clipboard_sequence(
+            true, &previous, &previous
+        ));
     }
 }

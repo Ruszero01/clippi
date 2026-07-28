@@ -1995,6 +1995,16 @@ impl WindowManager {
         self.win_v_takeover_status
     }
 
+    #[cfg(not(target_os = "windows"))]
+    pub fn enable_win_v_takeover(&mut self, _cx: &mut Context<Self>) -> Result<(), String> {
+        Err("Win+V takeover is only available on Windows".into())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn disable_win_v_takeover(&mut self, _cx: &mut Context<Self>) -> Result<(), String> {
+        Err("Win+V takeover is only available on Windows".into())
+    }
+
     /// Re-check the registry and try to register Win+V (user-triggered).
     #[cfg(target_os = "windows")]
     pub fn recheck_win_v_takeover(&mut self, cx: &mut Context<Self>) {
@@ -2027,6 +2037,9 @@ impl WindowManager {
         }
         cx.notify();
     }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn recheck_win_v_takeover(&mut self, _cx: &mut Context<Self>) {}
 
     /// Periodic registry re-check (called from 200 ms poll loop, throttled to 30 s).
     ///

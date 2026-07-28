@@ -525,10 +525,9 @@ impl SettingsPanel {
         let _replace_system_win_v = app.settings.replace_system_win_v;
         // borrow released
 
-        #[cfg(target_os = "windows")]
         let takeover_status = wm.read(cx).win_v_takeover_status();
-        #[cfg(target_os = "windows")]
-        let takeover_active = takeover_status != WinVTakeoverStatus::Disabled;
+        let takeover_active =
+            cfg!(target_os = "windows") && takeover_status != WinVTakeoverStatus::Disabled;
 
         let theme = &self.theme;
 
