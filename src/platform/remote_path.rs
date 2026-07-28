@@ -143,6 +143,7 @@ fn macos_mount_host_label(_path: &str) -> Option<String> {
     None
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn remote_mount_source_host_label(source: &str) -> Option<String> {
     let source = source.trim();
     if source.is_empty() {
