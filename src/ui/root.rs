@@ -2313,6 +2313,111 @@ impl Render for RootView {
                             .focus_handle(dialog_focus.clone())
                             .render_animated(window, cx, hotkey_confirm_gen)
                     }
+                    // ── Win+V takeover ──
+                    Some(hotkey::HotkeyConfirmAction::WinVTakeoverEnable) => {
+                        let fallback_hotkey = app_state.read(cx).settings.hotkey.clone();
+                        ConfirmDialog::new()
+                            .title(I18nKey::WinVTakeoverConfirmTitle.text())
+                            .message(
+                                I18nKey::WinVTakeoverConfirmMsg
+                                    .fmt(&[&fallback_hotkey]),
+                            )
+                            .confirm_label(I18nKey::DialogConfirm.text())
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let wm = wm.clone();
+                                let settings = settings.clone();
+                                let app_state = app_state.clone();
+                                move |_window, cx| {
+                                    let result = wm.update(cx, |wm, cx| {
+                                        wm.enable_win_v_takeover(cx)
+                                    });
+                                    if let Err(e) = result {
+                                        log::error!("Win+V takeover enable failed: {e}");
+                                        app_state.update(cx, |state, _cx| {
+                                            state.toast_message = Some(e);
+                                            state.toast_is_warning = true;
+                                        });
+                                    }
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .render_animated(window, cx, hotkey_confirm_gen)
+                    }
+                    Some(hotkey::HotkeyConfirmAction::WinVTakeoverDisable) => {
+                        ConfirmDialog::new()
+                            .title(I18nKey::WinVTakeoverRestoreTitle.text())
+                            .message(I18nKey::WinVTakeoverRestoreMsg.text())
+                            .confirm_label(I18nKey::DialogConfirm.text())
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let wm = wm.clone();
+                                let settings = settings.clone();
+                                let app_state = app_state.clone();
+                                move |_window, cx| {
+                                    let result = wm.update(cx, |wm, cx| {
+                                        wm.disable_win_v_takeover(cx)
+                                    });
+                                    if let Err(e) = result {
+                                        log::error!("Win+V takeover disable failed: {e}");
+                                        app_state.update(cx, |state, _cx| {
+                                            state.toast_message = Some(e);
+                                            state.toast_is_warning = true;
+                                        });
+                                    }
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .render_animated(window, cx, hotkey_confirm_gen)
+                    }
+                    // ── Win+V manual setup instructions ──
+                    Some(hotkey::HotkeyConfirmAction::WinVManualSetup) => {
+                        ConfirmDialog::new()
+                            .title(I18nKey::WinVManualSetupHint.text())
+                            .message(I18nKey::WinVManualSetupContent.text())
+                            .confirm_label(I18nKey::DialogConfirm.text())
+                            .theme(self.theme.clone())
+                            .on_confirm({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let settings = settings.clone();
+                                move |_window, cx| {
+                                    settings.update(cx, |panel, cx| {
+                                        panel.clear_hotkey_confirm(cx);
+                                    });
+                                }
+                            })
+                            .focus_handle(dialog_focus.clone())
+                            .render_animated(window, cx, hotkey_confirm_gen)
+                    }
                     None => div().into_any_element(),
                 };
 

@@ -439,6 +439,26 @@ define_i18n! {
     HotkeyFormatHex:        ("HEX", "HEX"),
     HotkeyConflictCustom:   ("快捷键冲突", "Hotkey conflict"),
 
+    // ─── Win+V takeover ───
+    WinVTakeoverLabel:      ("接管系统剪贴板快捷键", "Take over system clipboard shortcut"),
+    WinVTakeoverDesc:       ("让 Win+V 打开 Clippi。需注销重启后生效。", "Let Win+V open Clippi. Requires logoff/restart."),
+    WinVTakeoverConfirmTitle:("接管系统 Win+V？", "Take over system Win+V?"),
+    WinVTakeoverConfirmMsg: ("Clippi 将修改 Windows 快捷键设置释放 Win+V。不需要管理员权限。注意：将同时禁用 Win+Ctrl/Shift/Alt+V。需要注销或重启后生效，在此之前仍可用 {0}。", "Clippi will modify Windows settings to release Win+V. No admin needed. Note: also disables Win+Ctrl/Shift/Alt+V. Requires logoff/restart; until then use {0}."),
+    WinVTakeoverRestoreTitle:("恢复 Windows 原生 Win+V？", "Restore system Win+V?"),
+    WinVTakeoverRestoreMsg: ("Clippi 将恢复备用快捷键并撤销系统设置。Win+V 需注销重启后恢复。", "Clippi will restore its fallback shortcut. System Win+V returns after logoff/restart."),
+    WinVStatusPending:      ("等待系统刷新", "Pending refresh"),
+    WinVStatusActive:       ("已接管", "Active"),
+    WinVStatusConflict:     ("Win+V 仍被占用", "Win+V still in use"),
+    WinVStatusRegistryError:("注册表写入失败", "Registry error"),
+    WinVStatusUpdateRequired:("需要更新注册表", "Registry update needed"),
+    WinVRecheckBtn:         ("重新检测", "Re-check"),
+    WinVManagedByMode:      ("由接管模式管理", "Managed by takeover"),
+    WinVGuideToTakeover:    ("Win+V 由 Windows 使用。开启接管开关后可用。", "Win+V is used by Windows. Enable takeover."),
+    WinVFallbackUnavailable:("备用快捷键不可用，请修改后再关闭接管。", "Fallback unavailable. Change before disabling."),
+    WinVManualSetupHint:    ("查看手动设置说明", "View manual setup"),
+    WinVAffectedShortcuts:  ("注意：同时禁用 Win+Ctrl+V、Win+Shift+V、Win+Alt+V", "Note: Also disables Win+Ctrl+V, Win+Shift+V, Win+Alt+V"),
+    WinVManualSetupContent: ("手动接管 Win+V 设置步骤:\n1. 打开注册表编辑器 (regedit)\n2. 定位到 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\n3. 找到或创建字符串值 DisabledHotkeys\n4. 在值中添加大写字母 V（不要删除已有字母）\n5. 注销后重新登录，或重启 Windows\n恢复方法：从 DisabledHotkeys 中删除 V", "Manual Win+V takeover setup:\n1. Open Registry Editor (regedit)\n2. Navigate to HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\n3. Find or create string value 'DisabledHotkeys'\n4. Add uppercase 'V' to its value (don't delete other letters)\n5. Log off and back on, or restart Windows\nTo undo: remove 'V' from DisabledHotkeys"),
+
     // ─── Sync settings (additional) ───
     SyncTabTitle:           ("同步", "Sync"),
     SyncInterval30s:        ("30秒", "30s"),

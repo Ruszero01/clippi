@@ -79,6 +79,8 @@ pub struct LatestHotkeyEntry {
 pub struct AppSettings {
     pub theme: String,
     pub hotkey: String,
+    #[serde(default)]
+    pub replace_system_win_v: bool,
     #[serde(default = "default_quick_hotkey")]
     pub quick_hotkey: String,
     #[serde(default)]
@@ -248,6 +250,7 @@ impl Default for AppSettings {
         Self {
             theme: "system".to_string(),
             hotkey: "Alt+V".to_string(),
+            replace_system_win_v: false,
             quick_hotkey: default_quick_hotkey(),
             quick_hotkey_enabled: false,
             auto_start: false,

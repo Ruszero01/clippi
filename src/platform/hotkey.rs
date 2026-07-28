@@ -263,6 +263,12 @@ fn parse_hotkey(value: &str) -> Result<HotKey, String> {
     Ok(HotKey::new(Some(modifiers), key))
 }
 
+/// Returns `true` if the given hotkey is exactly `Win+V` (Super + V).
+#[allow(dead_code)]
+pub fn is_win_v_hotkey(hotkey: HotKey) -> bool {
+    hotkey.id() == HotKey::new(Some(Modifiers::SUPER), Code::KeyV).id()
+}
+
 fn format_pressed_hotkey(modifiers: Modifiers, code: Code) -> String {
     let mut parts = Vec::new();
     if modifiers.contains(Modifiers::SUPER) {
@@ -297,7 +303,8 @@ fn format_recorded_hotkey(modifiers: Modifiers, code: Code) -> Option<HotkeyReco
 #[cfg(test)]
 mod tests {
     use super::{
-        format_recorded_hotkey, hotkey_register_error_message, parse_hotkey, HotkeyRecordingPress,
+        format_recorded_hotkey, hotkey_register_error_message, is_win_v_hotkey, parse_hotkey,
+        HotkeyRecordingPress,
     };
     use crate::core::i18n_keys::I18nKey;
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
@@ -420,6 +427,33 @@ mod tests {
 
         assert!(custom_body.contains("self.unregister();"));
         assert!(custom_body.contains("self.is_recording = true;"));
+    }
+
+    #[test]
+    fn is_win_v_hotkey_detects_exact_match() {
+        use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+
+        let win_v = HotKey::new(Some(Modifiers::SUPER), Code::KeyV);
+        assert!(is_win_v_hotkey(win_v));
+
+        // Similar but not exact matches.
+        assert!(!is_win_v_hotkey(HotKey::new(
+            Some(Modifiers::SUPER | Modifiers::SHIFT),
+            Code::KeyV
+        )));
+        assert!(!is_win_v_hotkey(HotKey::new(
+            Some(Modifiers::ALT),
+            Code::KeyV
+        )));
+        assert!(!is_win_v_hotkey(HotKey::new(
+            Some(Modifiers::SUPER),
+            Code::KeyC
+        )));
+        assert!(!is_win_v_hotkey(HotKey::new(None, Code::KeyV)));
+
+        // Verify parse_hotkey produces the same result.
+        assert!(is_win_v_hotkey(parse_hotkey("Win+V").unwrap()));
+        assert!(is_win_v_hotkey(parse_hotkey("Super+V").unwrap()));
     }
 }
 
@@ -696,6 +730,10 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
         let new_hotkey = parse_hotkey(hotkey_str)?;
+        // Already registered — no-op.
+        if self.registered && new_hotkey.id() == self.hotkey.id() {
+            return Ok(());
+        }
         // Refuse to shadow the quick-window hotkey.
         if self.is_conflicting_except(new_hotkey, None, None, true, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());

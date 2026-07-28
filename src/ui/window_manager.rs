@@ -24,6 +24,8 @@ use crate::platform::hotkey::{
 };
 use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
+#[cfg(target_os = "windows")]
+use crate::platform::windows_hotkeys;
 use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::services::gpui_sync::GpuiSyncService;
 use crate::services::transfer_station::GpuiTransferService;
@@ -296,6 +298,17 @@ fn transfer_cleanup_due(
     transfer_available && retention_cleanup_due(retention_days, last_date, today)
 }
 
+/// Non-persistent runtime status for the Win+V takeover feature (Windows only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum WinVTakeoverStatus {
+    Disabled,
+    RegistryUpdateRequired,
+    HotkeyUnavailable,
+    Active,
+    RegistryError,
+}
+
 /// Unified window manager entity.
 ///
 /// Owns the window lifecycle and all cross-service polling. Created once
@@ -315,6 +328,11 @@ pub struct WindowManager {
 
     // --- Platform resources ---
     hotkey: Option<Box<dyn HotkeyListener>>,
+    /// Runtime status for Win+V takeover (Windows only).
+    win_v_takeover_status: WinVTakeoverStatus,
+    /// Timestamp of last periodic registry re-check for Win+V takeover.
+    #[cfg(target_os = "windows")]
+    last_win_v_recheck: Option<Instant>,
     focus_watcher: Option<FocusWatcher>,
     foreground_app_name: ForegroundAppName,
 
@@ -433,11 +451,12 @@ impl WindowManager {
             tray_triggered: false,
             pinned: false,
             auto_hide: settings.auto_hide,
-            // When silent_start is true the window is created hidden
-            // (WindowOptions { show: false }), so `visible` starts false.
             visible: !settings.silent_start,
             suppress_until: Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS)),
             hotkey: None,
+            win_v_takeover_status: WinVTakeoverStatus::Disabled,
+            #[cfg(target_os = "windows")]
+            last_win_v_recheck: None,
             focus_watcher,
             foreground_app_name,
             saved_x: settings.saved_window_x,
@@ -608,6 +627,10 @@ impl WindowManager {
         if crate::services::file_status::take_status_changed() {
             cx.emit(WindowManagerEvent::FileStatusChanged);
         }
+
+        // --- 13. Periodic Win+V takeover registry re-check (Windows only) ---
+        #[cfg(target_os = "windows")]
+        self.periodic_win_v_recheck(cx);
     }
 
     fn poll_cleanup_refresh(&mut self, cx: &mut Context<Self>) {
@@ -812,6 +835,23 @@ impl WindowManager {
                 }
 
                 if !new_hotkey.is_empty() {
+                    // Guide to takeover if user tries to record Win+V.
+                    #[cfg(target_os = "windows")]
+                    if new_hotkey.eq_ignore_ascii_case("Win+V")
+                        && !self.state.read(cx).settings.replace_system_win_v
+                    {
+                        hk.finish_recording();
+                        hk.register();
+                        self.state.update(cx, |state, _cx| {
+                            state.hotkey_recording = false;
+                            state.toast_message =
+                                Some(I18nKey::WinVGuideToTakeover.text().to_string());
+                            state.toast_is_warning = true;
+                        });
+                        cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+                        return;
+                    }
+
                     match hk.update_hotkey(&new_hotkey) {
                         Ok(()) => {
                             // --- update_hotkey already registered the new hotkey. ---
@@ -1550,6 +1590,256 @@ impl WindowManager {
                 .collect();
             hk.reload_custom_hotkeys(&item_hotkeys, &latest_hotkeys);
         }
+
+        // After fallback hotkey is registered, attempt Win+V takeover if enabled.
+        self.init_win_v_takeover(cx);
+    }
+
+    // ── Win+V takeover (Windows only) ──
+
+    /// Try to apply the Win+V takeover after the fallback hotkey is already
+    /// registered.  Called from `init_hotkey()` at startup and from the
+    /// enable/recheck flows.
+    #[cfg(target_os = "windows")]
+    fn init_win_v_takeover(&mut self, cx: &mut Context<Self>) {
+        let replace = self.state.read(cx).settings.replace_system_win_v;
+        if !replace {
+            self.win_v_takeover_status = WinVTakeoverStatus::Disabled;
+            return;
+        }
+
+        match windows_hotkeys::inspect_win_v_registry() {
+            Ok(snapshot) => {
+                if !snapshot.win_v_disabled {
+                    self.win_v_takeover_status = WinVTakeoverStatus::RegistryUpdateRequired;
+                    return;
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to read Win+V registry state: {e}");
+                self.win_v_takeover_status = WinVTakeoverStatus::RegistryError;
+                return;
+            }
+        }
+
+        // Registry has V — try to register Win+V.
+        if let Some(ref mut hk) = self.hotkey {
+            match hk.update_hotkey("Win+V") {
+                Ok(()) => {
+                    log::info!("Win+V takeover: registered successfully");
+                    self.win_v_takeover_status = WinVTakeoverStatus::Active;
+                }
+                Err(e) => {
+                    log::warn!("Win+V takeover: register failed: {e}");
+                    self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+                }
+            }
+        } else {
+            // Hotkey listener not available — cannot register anything.
+            self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+        }
+    }
+
+    /// Enable Win+V takeover: write registry, persist setting, try to register.
+    #[cfg(target_os = "windows")]
+    pub fn enable_win_v_takeover(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let mutation = windows_hotkeys::configure_win_v_takeover()?;
+        log::info!("Win+V takeover enable: {mutation}");
+
+        self.state.update(cx, |state, _cx| {
+            state.settings.replace_system_win_v = true;
+            state.settings.save();
+        });
+
+        // Try to register Win+V immediately; keep fallback on failure.
+        if let Some(ref mut hk) = self.hotkey {
+            match hk.update_hotkey("Win+V") {
+                Ok(()) => {
+                    self.win_v_takeover_status = WinVTakeoverStatus::Active;
+                }
+                Err(_) => {
+                    self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+                }
+            }
+        } else {
+            self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+        }
+        cx.notify();
+        Ok(())
+    }
+
+    /// Disable Win+V takeover: cleanup registry, then switch to fallback.
+    ///
+    /// Uses a commit/rollback strategy:
+    /// 1. Switch hotkey to fallback.
+    /// 2. Clean up the registry.
+    /// 3. If registry cleanup fails, switch back to Win+V.
+    /// 4. Only persist the setting change after all steps succeed.
+    #[cfg(target_os = "windows")]
+    pub fn disable_win_v_takeover(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let fallback = self.state.read(cx).settings.hotkey.clone();
+
+        // Step 1: Switch to fallback hotkey.
+        if let Some(ref mut hk) = self.hotkey {
+            hk.update_hotkey(&fallback).map_err(|e| {
+                log::warn!("Win+V takeover: cannot restore fallback hotkey: {e}");
+                I18nKey::WinVFallbackUnavailable.text().to_string()
+            })?;
+        }
+
+        // Step 2: Clean up registry.
+        match windows_hotkeys::restore_win_v_if_managed() {
+            Ok(mutation) => {
+                log::info!("Win+V takeover disable: {mutation}");
+            }
+            Err(e) => {
+                log::error!("Win+V takeover: registry cleanup failed: {e}");
+                // Rollback: try to re-register Win+V.
+                if let Some(ref mut hk) = self.hotkey {
+                    if let Err(re) = hk.update_hotkey("Win+V") {
+                        log::error!(
+                            "Win+V takeover: rollback also failed ({re}); hotkey state is uncertain"
+                        );
+                        self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+                        cx.notify();
+                        return Err(format!(
+                            "Registry cleanup failed and rollback also failed: {e}"
+                        ));
+                    }
+                }
+                self.win_v_takeover_status = WinVTakeoverStatus::Active;
+                cx.notify();
+                return Err(format!("Registry cleanup failed; Win+V restored: {e}"));
+            }
+        }
+
+        // Step 3: All good — persist the setting change.
+        self.state.update(cx, |state, _cx| {
+            state.settings.replace_system_win_v = false;
+            state.settings.save();
+        });
+
+        self.win_v_takeover_status = WinVTakeoverStatus::Disabled;
+        cx.notify();
+        Ok(())
+    }
+
+    /// Get the current Win+V takeover status.
+    pub fn win_v_takeover_status(&self) -> WinVTakeoverStatus {
+        self.win_v_takeover_status
+    }
+
+    /// Re-check the registry and try to register Win+V (user-triggered).
+    #[cfg(target_os = "windows")]
+    pub fn recheck_win_v_takeover(&mut self, cx: &mut Context<Self>) {
+        match windows_hotkeys::inspect_win_v_registry() {
+            Ok(snapshot) => {
+                if !snapshot.win_v_disabled {
+                    self.win_v_takeover_status = WinVTakeoverStatus::RegistryUpdateRequired;
+                    cx.notify();
+                    return;
+                }
+            }
+            Err(e) => {
+                log::warn!("Win+V recheck: registry read failed: {e}");
+                self.win_v_takeover_status = WinVTakeoverStatus::RegistryError;
+                cx.notify();
+                return;
+            }
+        }
+
+        if let Some(ref mut hk) = self.hotkey {
+            match hk.update_hotkey("Win+V") {
+                Ok(()) => {
+                    log::info!("Win+V recheck: registered successfully");
+                    self.win_v_takeover_status = WinVTakeoverStatus::Active;
+                }
+                Err(_) => {
+                    self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Periodic registry re-check (called from 200 ms poll loop, throttled to 30 s).
+    ///
+    /// Entry condition is based on the persisted toggle, not the current runtime
+    /// status, so that `RegistryUpdateRequired` and `RegistryError` also
+    /// participate in automatic recovery.
+    #[cfg(target_os = "windows")]
+    fn periodic_win_v_recheck(&mut self, cx: &mut Context<Self>) {
+        if !self.state.read(cx).settings.replace_system_win_v {
+            return;
+        }
+
+        let now = Instant::now();
+        if let Some(last) = self.last_win_v_recheck {
+            if now.duration_since(last) < Duration::from_secs(30) {
+                return;
+            }
+        }
+        self.last_win_v_recheck = Some(now);
+
+        match windows_hotkeys::inspect_win_v_registry() {
+            Ok(snapshot) => {
+                if !snapshot.win_v_disabled {
+                    // V missing — if currently Active, fall back to configured hotkey.
+                    if self.win_v_takeover_status == WinVTakeoverStatus::Active {
+                        log::warn!("Win+V periodic: V removed from DisabledHotkeys; falling back");
+                        let fallback = self.state.read(cx).settings.hotkey.clone();
+                        if let Some(ref mut hk) = self.hotkey {
+                            if hk.update_hotkey(&fallback).is_err() {
+                                // Fallback registration failed, but Win+V is still
+                                // active (update_hotkey preserves old binding on
+                                // error).  Keep Active and retry next cycle.
+                                log::error!(
+                                    "Win+V periodic: fallback registration failed; Win+V still active"
+                                );
+                                cx.notify();
+                                return;
+                            }
+                        }
+                    }
+                    self.win_v_takeover_status = WinVTakeoverStatus::RegistryUpdateRequired;
+                    cx.notify();
+                    return;
+                }
+
+                // V is present — attempt registration if not already Active.
+                if self.win_v_takeover_status != WinVTakeoverStatus::Active {
+                    if let Some(ref mut hk) = self.hotkey {
+                        match hk.update_hotkey("Win+V") {
+                            Ok(()) => {
+                                log::info!("Win+V periodic: registered successfully");
+                                self.win_v_takeover_status = WinVTakeoverStatus::Active;
+                                cx.notify();
+                            }
+                            Err(_) => {
+                                self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+                                cx.notify();
+                            }
+                        }
+                    } else {
+                        self.win_v_takeover_status = WinVTakeoverStatus::HotkeyUnavailable;
+                        cx.notify();
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Win+V periodic: registry read failed: {e}");
+                if self.win_v_takeover_status != WinVTakeoverStatus::RegistryError {
+                    self.win_v_takeover_status = WinVTakeoverStatus::RegistryError;
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    /// Stubs for non-Windows platforms.
+    #[cfg(not(target_os = "windows"))]
+    fn init_win_v_takeover(&mut self, _cx: &mut Context<Self>) {
+        self.win_v_takeover_status = WinVTakeoverStatus::Disabled;
     }
 
     /// Release memory without changing window visibility.
@@ -2404,6 +2694,10 @@ impl WindowManager {
     }
 
     pub fn start_hotkey_recording(&mut self, cx: &mut Context<Self>) {
+        // Reject main hotkey recording when Win+V takeover is enabled.
+        if self.win_v_takeover_status != WinVTakeoverStatus::Disabled {
+            return;
+        }
         if let Some(ref mut hk) = self.hotkey {
             hk.unregister();
             hk.start_recording();

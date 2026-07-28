@@ -16,7 +16,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::LatestHotkeyEntry;
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
-use crate::ui::window_manager::WindowManager;
+use crate::ui::window_manager::{WinVTakeoverStatus, WindowManager};
 
 /// Confirm action for hotkey settings operations.
 /// Emitted by SettingsPanel, handled by RootView to show ConfirmDialog.
@@ -45,6 +45,12 @@ pub enum HotkeyConfirmAction {
     RemoveClipboardBlacklist {
         app_name: String,
     },
+    /// Enable Win+V takeover (Windows only).
+    WinVTakeoverEnable,
+    /// Disable Win+V takeover (Windows only).
+    WinVTakeoverDisable,
+    /// Show manual setup instructions (Windows only).
+    WinVManualSetup,
 }
 
 /// GPUI callback type alias for per-app list entries.
@@ -515,7 +521,14 @@ impl SettingsPanel {
         let recording = app.hotkey_recording;
         let blacklist = app.settings.hotkey_blacklist.clone();
         let paste_shortcuts = app.settings.paste_shortcuts.clone();
+        #[cfg(target_os = "windows")]
+        let _replace_system_win_v = app.settings.replace_system_win_v;
         // borrow released
+
+        #[cfg(target_os = "windows")]
+        let takeover_status = wm.read(cx).win_v_takeover_status();
+        #[cfg(target_os = "windows")]
+        let takeover_active = takeover_status != WinVTakeoverStatus::Disabled;
 
         let theme = &self.theme;
 
@@ -524,22 +537,97 @@ impl SettingsPanel {
             .flex_col()
             .gap(px(12.))
             .pt(px(8.))
-            // 1. Hotkey recording card (66px)
+            // 1. Hotkey recording card (66px) — or managed card when takeover active
             .child({
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
-                Self::render_recording_card(
-                    I18nKey::HotkeyTabTitle,
-                    hotkey_display.clone().into(),
-                    recording,
-                    theme,
-                    move |_window, cx| {
-                        wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
-                        state.update(cx, |s, _cx| s.hotkey_recording = true);
-                        this.update(cx, |_panel, cx| cx.notify());
-                    },
-                )
+
+                #[cfg(target_os = "windows")]
+                if takeover_active {
+                    // --- Managed by takeover: show "Win+V" fixed, disable recording ---
+                    let theme_surface = theme.surface;
+                    let theme_divider = theme.divider;
+                    let theme_text_1 = theme.text_1;
+                    let theme_text_3 = theme.text_3;
+                    div()
+                        .h(px(66.))
+                        .rounded(px(10.))
+                        .bg(theme_surface)
+                        .border(px(1.))
+                        .border_color(theme_divider)
+                        .px(px(14.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme_text_1)
+                                        .child(I18nKey::HotkeyTabTitle.text()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(theme_text_3)
+                                        .child(I18nKey::WinVManagedByMode.text()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h(px(28.))
+                                .w(px(80.))
+                                .rounded(px(7.))
+                                .bg(theme.accent_soft)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.accent)
+                                        .child("Win+V"),
+                                ),
+                        )
+                        .into_any_element()
+                } else {
+                    Self::render_recording_card(
+                        I18nKey::HotkeyTabTitle,
+                        hotkey_display.clone().into(),
+                        recording,
+                        theme,
+                        move |_window, cx| {
+                            wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                            state.update(cx, |s, _cx| s.hotkey_recording = true);
+                            this.update(cx, |_panel, cx| cx.notify());
+                        },
+                    )
+                    .into_any_element()
+                }
+
+                #[cfg(not(target_os = "windows"))]
+                {
+                    Self::render_recording_card(
+                        I18nKey::HotkeyTabTitle,
+                        hotkey_display.clone().into(),
+                        recording,
+                        theme,
+                        move |_window, cx| {
+                            wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                            state.update(cx, |s, _cx| s.hotkey_recording = true);
+                            this.update(cx, |_panel, cx| cx.notify());
+                        },
+                    )
+                    .into_any_element()
+                }
             })
             // 1b. Quick hotkey recording card (only visible when enabled)
             .when(self.state.read(cx).settings.quick_hotkey_enabled, {
@@ -563,7 +651,214 @@ impl SettingsPanel {
                     ))
                 }
             })
-            // 1c. Latest content hotkeys entry card
+            // 1c. Win+V takeover toggle + status (Windows only)
+            .when(cfg!(target_os = "windows"), {
+                let takeover_active_val = takeover_active;
+                let takeover_status_val = takeover_status;
+                let this_winv = this.clone();
+                let state_winv = state.clone();
+                let wm_winv = wm.clone();
+                move |parent| {
+                    parent.child(
+                        // Child is a container div.
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .child({
+                                // Simple toggle row without animation.
+                                let toggle_on = takeover_active_val;
+                                let accent = theme.accent;
+                                let divider = theme.divider;
+                                let toggle_bg = if toggle_on { accent } else { divider };
+                                let knob_x = if toggle_on { 20.0 } else { 2.0 };
+                                let this_toggle = this_winv.clone();
+                                let state_toggle = state_winv.clone();
+                                div()
+                                    .h(px(66.))
+                                    .rounded(px(10.))
+                                    .bg(theme.surface)
+                                    .border(px(1.))
+                                    .border_color(divider)
+                                    .px(px(14.))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .flex_col()
+                                            .gap(px(2.))
+                                            .child(
+                                                div()
+                                                    .max_w_full()
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .whitespace_nowrap()
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(theme.text_1)
+                                                    .child(I18nKey::WinVTakeoverLabel.text()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .max_w_full()
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .whitespace_nowrap()
+                                                    .text_size(px(10.))
+                                                    .text_color(theme.text_3)
+                                                    .child(I18nKey::WinVTakeoverDesc.text()),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(40.))
+                                            .h(px(22.))
+                                            .rounded(px(11.))
+                                            .bg(toggle_bg)
+                                            .flex()
+                                            .items_center()
+                                            .cursor(CursorStyle::PointingHand)
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_ev, _window, cx| {
+                                                    let current = state_toggle
+                                                        .read(cx)
+                                                        .settings
+                                                        .replace_system_win_v;
+                                                    if !current {
+                                                        this_toggle.update(cx, |_panel, cx| {
+                                                            cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                                                HotkeyConfirmAction::WinVTakeoverEnable,
+                                                            ));
+                                                        });
+                                                    } else {
+                                                        this_toggle.update(cx, |_panel, cx| {
+                                                            cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                                                HotkeyConfirmAction::WinVTakeoverDisable,
+                                                            ));
+                                                        });
+                                                    }
+                                                },
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(18.))
+                                                    .h(px(18.))
+                                                    .rounded(px(9.))
+                                                    .bg(rgb(0xffffff))
+                                                    .ml(px(knob_x)),
+                                            ),
+                                    )
+                            })
+                            .when(takeover_active_val, move |parent| {
+                                let status_text = match takeover_status_val {
+                                    WinVTakeoverStatus::Active => I18nKey::WinVStatusActive.text(),
+                                    WinVTakeoverStatus::HotkeyUnavailable => {
+                                        I18nKey::WinVStatusConflict.text()
+                                    }
+                                    WinVTakeoverStatus::RegistryUpdateRequired => {
+                                        I18nKey::WinVStatusUpdateRequired.text()
+                                    }
+                                    WinVTakeoverStatus::RegistryError => {
+                                        I18nKey::WinVStatusRegistryError.text()
+                                    }
+                                    WinVTakeoverStatus::Disabled => "",
+                                };
+                                let show_recheck = matches!(
+                                    takeover_status_val,
+                                    WinVTakeoverStatus::HotkeyUnavailable
+                                );
+                                let show_manual = matches!(
+                                    takeover_status_val,
+                                    WinVTakeoverStatus::RegistryError
+                                        | WinVTakeoverStatus::RegistryUpdateRequired
+                                );
+                                let accent = theme.accent;
+                                let wm_recheck = wm_winv.clone();
+                                let this_recheck = this_winv.clone();
+                                let this_manual = this_winv.clone();
+                                parent
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .justify_between()
+                                            .px(px(4.))
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(theme.text_3)
+                                                    .child(status_text),
+                                            )
+                                            .when(show_recheck, |row| {
+                                                row.child(
+                                                    div()
+                                                        .px(px(8.))
+                                                        .py(px(3.))
+                                                        .rounded(px(5.))
+                                                        .bg(accent)
+                                                        .text_size(px(10.))
+                                                        .text_color(rgb(0xffffff))
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .hover(|style| style.opacity(0.85))
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            move |_ev, _window, cx| {
+                                                                wm_recheck.update(cx, |wm, cx| {
+                                                                    wm.recheck_win_v_takeover(cx);
+                                                                });
+                                                                this_recheck.update(cx, |_panel, cx| {
+                                                                    cx.notify();
+                                                                });
+                                                            },
+                                                        )
+                                                        .child(I18nKey::WinVRecheckBtn.text()),
+                                                )
+                                            })
+                                            .when(show_manual, |row| {
+                                                let text_3 = theme.text_3;
+                                                row.child(
+                                                    div()
+                                                        .px(px(6.))
+                                                        .py(px(3.))
+                                                        .text_size(px(10.))
+                                                        .text_color(text_3)
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .hover(|style| style.opacity(0.7))
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            move |_ev, _window, cx| {
+                                                                this_manual.update(cx, |_panel, cx| {
+                                                                    cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                                                        HotkeyConfirmAction::WinVManualSetup,
+                                                                    ));
+                                                                });
+                                                            },
+                                                        )
+                                                        .child(I18nKey::WinVManualSetupHint.text()),
+                                                )
+                                            }),
+                                    )
+                                    // Show affected shortcut combos while takeover is active.
+                                    .child(
+                                        div()
+                                            .px(px(4.))
+                                            .pt(px(2.))
+                                            .text_size(px(9.))
+                                            .text_color(theme.text_3)
+                                            .child(I18nKey::WinVAffectedShortcuts.text()),
+                                    )
+                            }),
+                    )
+                }
+            })
+            // 1d. Latest content hotkeys entry card
             .child({
                 let this = this.clone();
                 let configured = app
