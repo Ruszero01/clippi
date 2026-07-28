@@ -456,7 +456,6 @@ define_i18n! {
     WinVGuideToTakeover:    ("Win+V 由 Windows 使用。开启接管开关后可用。", "Win+V is used by Windows. Enable takeover."),
     WinVFallbackUnavailable:("备用快捷键不可用，请修改后再关闭接管。", "Fallback unavailable. Change before disabling."),
     WinVManualSetupHint:    ("查看手动设置说明", "View manual setup"),
-    WinVAffectedShortcuts:  ("注意：同时禁用 Win+Ctrl+V、Win+Shift+V、Win+Alt+V", "Note: Also disables Win+Ctrl+V, Win+Shift+V, Win+Alt+V"),
     WinVManualSetupContent: ("手动接管 Win+V 设置步骤:\n1. 打开注册表编辑器 (regedit)\n2. 定位到 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\n3. 找到或创建字符串值 DisabledHotkeys\n4. 在值中添加大写字母 V（不要删除已有字母）\n5. 注销后重新登录，或重启 Windows\n恢复方法：从 DisabledHotkeys 中删除 V", "Manual Win+V takeover setup:\n1. Open Registry Editor (regedit)\n2. Navigate to HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\n3. Find or create string value 'DisabledHotkeys'\n4. Add uppercase 'V' to its value (don't delete other letters)\n5. Log off and back on, or restart Windows\nTo undo: remove 'V' from DisabledHotkeys"),
 
     // ─── Sync settings (additional) ───

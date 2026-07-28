@@ -659,6 +659,27 @@ impl SettingsPanel {
                 let state_winv = state.clone();
                 let wm_winv = wm.clone();
                 move |parent| {
+                    let status_text = match takeover_status_val {
+                        WinVTakeoverStatus::Active => I18nKey::WinVStatusActive.text(),
+                        WinVTakeoverStatus::HotkeyUnavailable => {
+                            I18nKey::WinVStatusConflict.text()
+                        }
+                        WinVTakeoverStatus::RegistryUpdateRequired => {
+                            I18nKey::WinVStatusUpdateRequired.text()
+                        }
+                        WinVTakeoverStatus::RegistryError => {
+                            I18nKey::WinVStatusRegistryError.text()
+                        }
+                        WinVTakeoverStatus::Disabled => I18nKey::WinVTakeoverDesc.text(),
+                    };
+                    let show_recheck =
+                        takeover_status_val == WinVTakeoverStatus::HotkeyUnavailable;
+                    let show_manual = matches!(
+                        takeover_status_val,
+                        WinVTakeoverStatus::RegistryError
+                            | WinVTakeoverStatus::RegistryUpdateRequired
+                    );
+
                     parent.child(
                         // Child is a container div.
                         div()
@@ -711,7 +732,7 @@ impl SettingsPanel {
                                                     .whitespace_nowrap()
                                                     .text_size(px(10.))
                                                     .text_color(theme.text_3)
-                                                    .child(I18nKey::WinVTakeoverDesc.text()),
+                                                    .child(status_text),
                                             ),
                                     )
                                     .child(
@@ -755,29 +776,7 @@ impl SettingsPanel {
                                             ),
                                     )
                             })
-                            .when(takeover_active_val, move |parent| {
-                                let status_text = match takeover_status_val {
-                                    WinVTakeoverStatus::Active => I18nKey::WinVStatusActive.text(),
-                                    WinVTakeoverStatus::HotkeyUnavailable => {
-                                        I18nKey::WinVStatusConflict.text()
-                                    }
-                                    WinVTakeoverStatus::RegistryUpdateRequired => {
-                                        I18nKey::WinVStatusUpdateRequired.text()
-                                    }
-                                    WinVTakeoverStatus::RegistryError => {
-                                        I18nKey::WinVStatusRegistryError.text()
-                                    }
-                                    WinVTakeoverStatus::Disabled => "",
-                                };
-                                let show_recheck = matches!(
-                                    takeover_status_val,
-                                    WinVTakeoverStatus::HotkeyUnavailable
-                                );
-                                let show_manual = matches!(
-                                    takeover_status_val,
-                                    WinVTakeoverStatus::RegistryError
-                                        | WinVTakeoverStatus::RegistryUpdateRequired
-                                );
+                            .when(show_recheck || show_manual, move |parent| {
                                 let accent = theme.accent;
                                 let wm_recheck = wm_winv.clone();
                                 let this_recheck = this_winv.clone();
@@ -788,14 +787,8 @@ impl SettingsPanel {
                                             .flex()
                                             .flex_row()
                                             .items_center()
-                                            .justify_between()
+                                            .justify_end()
                                             .px(px(4.))
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.))
-                                                    .text_color(theme.text_3)
-                                                    .child(status_text),
-                                            )
                                             .when(show_recheck, |row| {
                                                 row.child(
                                                     div()
@@ -844,15 +837,6 @@ impl SettingsPanel {
                                                         .child(I18nKey::WinVManualSetupHint.text()),
                                                 )
                                             }),
-                                    )
-                                    // Show affected shortcut combos while takeover is active.
-                                    .child(
-                                        div()
-                                            .px(px(4.))
-                                            .pt(px(2.))
-                                            .text_size(px(9.))
-                                            .text_color(theme.text_3)
-                                            .child(I18nKey::WinVAffectedShortcuts.text()),
                                     )
                             }),
                     )
