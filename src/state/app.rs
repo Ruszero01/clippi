@@ -54,6 +54,10 @@ pub struct AppState {
     pub has_hotkey_items: bool,
     /// Whether any persisted item is currently favorited.
     pub has_favorite_items: bool,
+    /// Number of non-transfer clipboard rows affected by "clear data".
+    pub clearable_history_count: u32,
+    /// Number of non-favorite, non-transfer rows affected by the default clear action.
+    pub clearable_non_favorite_history_count: u32,
     /// Whether remote transfer station files exist (controls titlebar button visibility).
     pub has_transfer_files: bool,
     /// Whether the transfer station filter/view is active.
@@ -298,18 +302,10 @@ impl AppState {
         };
         let db = Database::open(&db_path.to_string_lossy())
             .unwrap_or_else(|e| panic!("Failed to open database at {db_path:?}: {e}"));
-        let initial_cleanup_dirty =
-            if settings.cleanup_interval != "never" || settings.retention_days > 0 {
-                let scope = crate::core::cache_cleanup::CleanupSyncScope {
-                    include_images: settings.sync_include_images,
-                    favorites_only: settings.sync_favorites_only,
-                    device_name: crate::services::backends::local_folder::hostname(),
-                };
-                crate::core::cache_cleanup::run_cleanup(&db, settings.retention_days, Some(&scope))
-                    .sync_dirty
-            } else {
-                false
-            };
+        // Startup cleanup is deferred to the first WindowManager poll tick
+        // which checks cleanup_last_date / retention_cleanup_last_date and
+        // schedules the work on a background thread.
+        let initial_cleanup_dirty = false;
 
         let items = db
             .load_filtered_list_with_tags(&ClipboardFilters::default(), query_limit, order_by)
@@ -332,6 +328,16 @@ impl AppState {
             log::error!("Failed to load favorite item availability: {e}");
             false
         });
+        let clearable_history_count = db.count_clearable_history().unwrap_or_else(|error| {
+            log::error!("Failed to count clearable clipboard history: {error}");
+            0
+        });
+        let clearable_non_favorite_history_count = db
+            .count_clearable_non_favorite_history()
+            .unwrap_or_else(|error| {
+                log::error!("Failed to count clearable non-favorite history: {error}");
+                0
+            });
 
         Self {
             settings,
@@ -341,6 +347,8 @@ impl AppState {
             filters: ClipboardFilters::default(),
             has_hotkey_items,
             has_favorite_items,
+            clearable_history_count,
+            clearable_non_favorite_history_count,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
@@ -396,6 +404,16 @@ impl AppState {
             Ok(value) => self.has_favorite_items = value,
             Err(e) => log::error!("Failed to refresh favorite item availability: {e}"),
         }
+        match self.db.count_clearable_history() {
+            Ok(value) => self.clearable_history_count = value,
+            Err(error) => log::error!("Failed to refresh clearable history count: {error}"),
+        }
+        match self.db.count_clearable_non_favorite_history() {
+            Ok(value) => self.clearable_non_favorite_history_count = value,
+            Err(error) => {
+                log::error!("Failed to refresh clearable non-favorite history count: {error}")
+            }
+        }
     }
 
     /// Reload items from database with current filters.
@@ -431,6 +449,17 @@ impl AppState {
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
         self.refresh_titlebar_filter_availability();
+    }
+
+    /// Number of non-transfer history rows affected by the data-page
+    /// "clear data" action. The cached value is refreshed alongside other
+    /// titlebar/filter availability metadata, never queried from render().
+    pub fn clearable_history_count(&self) -> u32 {
+        self.clearable_history_count
+    }
+
+    pub fn clearable_non_favorite_history_count(&self) -> u32 {
+        self.clearable_non_favorite_history_count
     }
 
     fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
@@ -2048,7 +2077,17 @@ impl AppState {
         let deleted_paths = FileData::from_json(&deleted_item.file_data)
             .files
             .into_iter()
-            .map(|file| transfer_path_key(&file.path))
+            .map(|file| file.path)
+            .collect();
+        self.clear_deleted_file_transfer_associations(deleted_paths);
+    }
+
+    /// Remove hidden local transfer associations for file paths deleted by a
+    /// background maintenance task. Source files and remote objects are kept.
+    pub fn clear_deleted_file_transfer_associations(&mut self, deleted_paths: Vec<String>) {
+        let deleted_paths = deleted_paths
+            .into_iter()
+            .map(|path| transfer_path_key(&path))
             .collect::<HashSet<_>>();
         if deleted_paths.is_empty() {
             return;
@@ -2505,6 +2544,8 @@ mod tests {
             filters: ClipboardFilters::default(),
             has_hotkey_items: false,
             has_favorite_items: false,
+            clearable_history_count: 0,
+            clearable_non_favorite_history_count: 0,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),

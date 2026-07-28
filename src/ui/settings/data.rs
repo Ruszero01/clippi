@@ -3,7 +3,6 @@
 //! --- Mirrors the original Slint `SettingsTabData.slint` layout. ---
 //! Includes the reset-data-directory dialog for portable mode.
 
-use chrono::Datelike;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::Input;
@@ -102,6 +101,7 @@ impl SettingsPanel {
         let app = self.state.read(cx);
         let db_path_display = app.settings.resolve_db_path();
         let db_path_str = db_path_display.to_string_lossy().to_string();
+        let maintenance_running = self.window_manager.read(cx).is_maintenance_running();
         // --- borrow released ---
 
         div()
@@ -280,7 +280,7 @@ impl SettingsPanel {
                             }),
                     )
             })
-            // --- ── Max items row (66px, standard row) ── ---
+            // --- ── History retention card (max items + retention days) ── ---
             .child({
                 let surface = self.theme.surface;
                 let divider = self.theme.divider;
@@ -293,258 +293,247 @@ impl SettingsPanel {
                 };
 
                 div()
-                    .h(px(66.))
                     .rounded(px(10.))
                     .bg(surface)
                     .border(px(1.))
                     .border_color(divider)
-                    .px(px(14.))
+                    .overflow_hidden()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    // --- Left: label + description ---
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(text_1)
-                                    .child(I18nKey::SettingMaxItems.text()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(text_3)
-                                    .child(I18nKey::DescMaxItems.text()),
-                            ),
-                    )
-                    // --- Right: max-items value (button or Input) ---
+                    .flex_col()
+                    // --- Max items row ---
                     .child({
                         let this = this.clone();
-
-                        if self.editing_max_items {
-                            // --- ── Editing: Input with Enter to save, blur auto-saves ── ---
-                            div()
-                                .w(px(80.))
-                                .h(px(28.))
-                                .rounded(px(7.))
-                                .bg(input_bg)
-                                .border(px(1.))
-                                .border_color(self.theme.accent)
-                                .px(px(6.))
-                                .flex()
-                                .items_center()
-                                .child(
-                                    Input::new(&self.max_items_input)
-                                        .appearance(false)
-                                        .bordered(false)
-                                        .focus_bordered(false)
-                                        .w_full()
-                                        .h(px(20.))
-                                        .text_size(px(12.))
-                                        .text_color(text_1),
-                                )
-                                // --- Enter key saves (same pattern as tag_filter) ---
-                                .on_key_down({
-                                    move |ev: &KeyDownEvent, _window, cx| {
-                                        if ev.keystroke.key.as_str() == "enter" {
-                                            cx.stop_propagation();
-                                            this.update(cx, |panel, cx| {
-                                                panel.save_max_items(cx);
-                                            });
-                                        }
-                                    }
-                                })
-                        } else {
-                            // --- ── Normal: clickable value button ── ---
-                            let val = self.state.read(cx).settings.max_items;
-                            div()
-                                .w(px(90.))
-                                .h(px(28.))
-                                .rounded(px(7.))
-                                .bg(input_bg)
-                                .border(px(1.))
-                                .border_color(divider)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
-                                .on_mouse_down(MouseButton::Left, {
-                                    let this = this.clone();
-                                    move |_ev, _window, cx| {
-                                        cx.stop_propagation();
-                                        this.update(cx, |panel, cx| {
-                                            panel.start_edit_max_items(_window, cx);
-                                        });
-                                    }
-                                })
-                                .child(if val == 0 {
+                        div()
+                            .h(px(58.))
+                            .px(px(14.))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(1.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::SettingMaxItems.text()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(text_3)
+                                            .child(I18nKey::DescMaxItems.text()),
+                                    ),
+                            )
+                            .child({
+                                let this = this.clone();
+                                if self.editing_max_items {
                                     div()
-                                        .text_size(px(12.))
-                                        .text_color(text_3)
-                                        .child(I18nKey::Unlimited.text())
-                                        .into_any_element()
-                                } else {
-                                    div()
+                                        .w(px(80.))
+                                        .h(px(28.))
+                                        .rounded(px(7.))
+                                        .bg(input_bg)
+                                        .border(px(1.))
+                                        .border_color(self.theme.accent)
+                                        .px(px(6.))
                                         .flex()
-                                        .flex_row()
                                         .items_center()
-                                        .gap(px(2.))
                                         .child(
-                                            div()
+                                            Input::new(&self.max_items_input)
+                                                .appearance(false)
+                                                .bordered(false)
+                                                .focus_bordered(false)
+                                                .w_full()
+                                                .h(px(20.))
                                                 .text_size(px(12.))
-                                                .text_color(text_1)
-                                                .child(val.to_string()),
+                                                .text_color(text_1),
                                         )
-                                        .child(
+                                        .on_key_down({
+                                            move |ev: &KeyDownEvent, _window, cx| {
+                                                if ev.keystroke.key.as_str() == "enter" {
+                                                    cx.stop_propagation();
+                                                    this.update(cx, |panel, cx| {
+                                                        panel.save_max_items(cx);
+                                                    });
+                                                }
+                                            }
+                                        })
+                                } else {
+                                    let val = self.state.read(cx).settings.max_items;
+                                    div()
+                                        .w(px(90.))
+                                        .h(px(28.))
+                                        .rounded(px(7.))
+                                        .bg(input_bg)
+                                        .border(px(1.))
+                                        .border_color(divider)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let this = this.clone();
+                                            move |_ev, _window, cx| {
+                                                cx.stop_propagation();
+                                                this.update(cx, |panel, cx| {
+                                                    panel.start_edit_max_items(_window, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(if val == 0 {
                                             div()
                                                 .text_size(px(12.))
                                                 .text_color(text_3)
-                                                .child(I18nKey::UnitItems.text()),
-                                        )
-                                        .into_any_element()
-                                })
-                        }
+                                                .child(I18nKey::Unlimited.text())
+                                                .into_any_element()
+                                        } else {
+                                            div()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap(px(2.))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(text_1)
+                                                        .child(val.to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(text_3)
+                                                        .child(I18nKey::UnitItems.text()),
+                                                )
+                                                .into_any_element()
+                                        })
+                                }
+                            })
                     })
-            })
-            // --- ── Retention days row (66px, standard row) ── ---
-            .child({
-                let surface = self.theme.surface;
-                let divider = self.theme.divider;
-                let text_1 = self.theme.text_1;
-                let text_3 = self.theme.text_3;
-                let input_bg = if self.theme.bg == rgb(0x191a1b) {
-                    rgb(0x191a1b)
-                } else {
-                    rgb(0xf2f3f8)
-                };
-
-                div()
-                    .h(px(66.))
-                    .rounded(px(10.))
-                    .bg(surface)
-                    .border(px(1.))
-                    .border_color(divider)
-                    .px(px(14.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    // --- Left: label + description ---
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(text_1)
-                                    .child(I18nKey::SettingRetentionDays.text()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(text_3)
-                                    .child(I18nKey::DescRetentionDays.text()),
-                            ),
-                    )
-                    // --- Right: retention-days value (button or Input) ---
+                    // --- Separator ---
+                    .child(div().h(px(1.)).w_full().bg(divider))
+                    // --- Retention days row ---
                     .child({
                         let this = this.clone();
-
-                        if self.editing_retention_days {
-                            div()
-                                .w(px(80.))
-                                .h(px(28.))
-                                .rounded(px(7.))
-                                .bg(input_bg)
-                                .border(px(1.))
-                                .border_color(self.theme.accent)
-                                .px(px(6.))
-                                .flex()
-                                .items_center()
-                                .child(
-                                    Input::new(&self.retention_days_input)
-                                        .appearance(false)
-                                        .bordered(false)
-                                        .focus_bordered(false)
-                                        .w_full()
-                                        .h(px(20.))
-                                        .text_size(px(12.))
-                                        .text_color(text_1),
-                                )
-                                .on_key_down({
-                                    move |ev: &KeyDownEvent, _window, cx| {
-                                        if ev.keystroke.key.as_str() == "enter" {
-                                            cx.stop_propagation();
-                                            this.update(cx, |panel, cx| {
-                                                panel.save_retention_days(cx);
-                                            });
-                                        }
-                                    }
-                                })
-                        } else {
-                            let val = self.state.read(cx).settings.retention_days;
-                            div()
-                                .w(px(90.))
-                                .h(px(28.))
-                                .rounded(px(7.))
-                                .bg(input_bg)
-                                .border(px(1.))
-                                .border_color(divider)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
-                                .on_mouse_down(MouseButton::Left, {
-                                    let this = this.clone();
-                                    move |_ev, _window, cx| {
-                                        cx.stop_propagation();
-                                        this.update(cx, |panel, cx| {
-                                            panel.start_edit_retention_days(_window, cx);
-                                        });
-                                    }
-                                })
-                                .child(if val == 0 {
+                        div()
+                            .h(px(58.))
+                            .px(px(14.))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(1.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::SettingRetentionDays.text()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(text_3)
+                                            .child(I18nKey::DescRetentionDays.text()),
+                                    ),
+                            )
+                            .child({
+                                let this = this.clone();
+                                if self.editing_retention_days {
                                     div()
-                                        .text_size(px(12.))
-                                        .text_color(text_3)
-                                        .child(I18nKey::Unlimited.text())
-                                        .into_any_element()
-                                } else {
-                                    div()
+                                        .w(px(80.))
+                                        .h(px(28.))
+                                        .rounded(px(7.))
+                                        .bg(input_bg)
+                                        .border(px(1.))
+                                        .border_color(self.theme.accent)
+                                        .px(px(6.))
                                         .flex()
-                                        .flex_row()
                                         .items_center()
-                                        .gap(px(2.))
                                         .child(
-                                            div()
+                                            Input::new(&self.retention_days_input)
+                                                .appearance(false)
+                                                .bordered(false)
+                                                .focus_bordered(false)
+                                                .w_full()
+                                                .h(px(20.))
                                                 .text_size(px(12.))
-                                                .text_color(text_1)
-                                                .child(val.to_string()),
+                                                .text_color(text_1),
                                         )
-                                        .child(
+                                        .on_key_down({
+                                            move |ev: &KeyDownEvent, _window, cx| {
+                                                if ev.keystroke.key.as_str() == "enter" {
+                                                    cx.stop_propagation();
+                                                    this.update(cx, |panel, cx| {
+                                                        panel.save_retention_days(cx);
+                                                    });
+                                                }
+                                            }
+                                        })
+                                } else {
+                                    let val = self.state.read(cx).settings.retention_days;
+                                    div()
+                                        .w(px(90.))
+                                        .h(px(28.))
+                                        .rounded(px(7.))
+                                        .bg(input_bg)
+                                        .border(px(1.))
+                                        .border_color(divider)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let this = this.clone();
+                                            move |_ev, _window, cx| {
+                                                cx.stop_propagation();
+                                                this.update(cx, |panel, cx| {
+                                                    panel.start_edit_retention_days(_window, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(if val == 0 {
                                             div()
                                                 .text_size(px(12.))
                                                 .text_color(text_3)
-                                                .child(I18nKey::UnitDays.text()),
-                                        )
-                                        .into_any_element()
-                                })
-                        }
+                                                .child(I18nKey::Unlimited.text())
+                                                .into_any_element()
+                                        } else {
+                                            div()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap(px(2.))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(text_1)
+                                                        .child(val.to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(text_3)
+                                                        .child(I18nKey::UnitDays.text()),
+                                                )
+                                                .into_any_element()
+                                        })
+                                }
+                            })
                     })
             })
             // --- ── Cache cleanup card ── ---
             .child({
                 let state = self.state.clone();
                 let this = cx.entity().clone();
+                let window_manager = self.window_manager.clone();
                 let cleanup_interval = self.state.read(cx).settings.cleanup_interval.clone();
 
                 let surface = self.theme.surface;
@@ -553,6 +542,7 @@ impl SettingsPanel {
                 let text_2 = self.theme.text_2;
                 let text_3 = self.theme.text_3;
                 let accent = self.theme.accent;
+                let btn_hover = self.theme.btn_hover;
 
                 div()
                     .rounded(px(10.))
@@ -585,7 +575,75 @@ impl SettingsPanel {
                                     .child(I18nKey::DescCleanup.text()),
                             ),
                     )
-                    // --- Frequency buttons + clean-now button ---
+                    // --- Separator ---
+                    .child(div().h(px(1.)).w_full().bg(divider))
+                    // --- Cleanup options ---
+                    .child({
+                        let stale_enabled = self.state.read(cx).settings.cleanup_stale_items;
+                        let state = state.clone();
+
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .mx(px(-4.))
+                            .px(px(4.))
+                            .py(px(2.))
+                            .rounded(px(5.))
+                            .opacity(if maintenance_running { 0.55 } else { 1.0 })
+                            .cursor(if maintenance_running {
+                                CursorStyle::Arrow
+                            } else {
+                                CursorStyle::PointingHand
+                            })
+                            .when(!maintenance_running, |row| {
+                                row.hover(|row| row.bg(btn_hover)).on_mouse_down(
+                                    MouseButton::Left,
+                                    move |_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                        state.update(cx, |state, _cx| {
+                                            state.settings.cleanup_stale_items =
+                                                !state.settings.cleanup_stale_items;
+                                            state.settings.save();
+                                        });
+                                    },
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family("iconfont")
+                                    .text_size(px(12.))
+                                    .text_color(if stale_enabled { accent } else { text_3 })
+                                    .child(if stale_enabled {
+                                        "\u{e61f}"
+                                    } else {
+                                        "\u{e831}"
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(1.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(text_1)
+                                            .child(I18nKey::SettingCleanupStaleItems.text()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(text_3)
+                                            .child(I18nKey::DescCleanupStaleItems.text()),
+                                    ),
+                            )
+                    })
+                    // --- Separator ---
+                    .child(div().h(px(1.)).w_full().bg(divider))
+                    // --- Frequency buttons + clean-now button (bottom action row) ---
                     .child(
                         div()
                             .flex()
@@ -631,11 +689,23 @@ impl SettingsPanel {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
+                                                .opacity(if maintenance_running {
+                                                    0.55
+                                                } else {
+                                                    1.0
+                                                })
+                                                .cursor(if maintenance_running {
+                                                    CursorStyle::Arrow
+                                                } else {
+                                                    CursorStyle::PointingHand
+                                                })
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     move |_ev, _window, cx| {
                                                         cx.stop_propagation();
+                                                        if maintenance_running {
+                                                            return;
+                                                        }
                                                         state.update(cx, |s, _cx| {
                                                             s.settings.cleanup_interval =
                                                                 key.to_string();
@@ -655,105 +725,145 @@ impl SettingsPanel {
                             })
                             // Clean now button
                             .child({
-                                let state = state.clone();
                                 let this = this.clone();
+                                let window_manager = window_manager.clone();
                                 div()
                                     .h(px(26.))
                                     .px(px(10.))
                                     .rounded(px(7.))
-                                    .bg(accent)
+                                    .bg(if maintenance_running { divider } else { accent })
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .cursor(CursorStyle::PointingHand)
-                                    .hover(|s| s.opacity(0.85))
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        cx.stop_propagation();
-                                        let settings = state.read(cx).settings.clone();
-                                        let db_path = settings.resolve_db_path();
-                                        let retention_days = settings.retention_days;
-                                        let stats = match crate::core::db::Database::open(
-                                            &db_path.to_string_lossy(),
-                                        ) {
-                                            Ok(db) => {
-                                                let scope =
-                                                    crate::core::cache_cleanup::CleanupSyncScope {
-                                                        include_images: settings.sync_include_images,
-                                                        favorites_only: settings.sync_favorites_only,
-                                                        device_name: crate::services::backends::local_folder::hostname(),
-                                                    };
-                                                crate::core::cache_cleanup::run_cleanup(
-                                                    &db,
-                                                    retention_days,
-                                                    Some(&scope),
-                                                )
-                                            }
-                                            Err(e) => {
-                                                log::error!("cleanup: failed to open DB: {e}");
-                                                return;
-                                            }
-                                        };
-                                        // Update cache and retention cleanup markers separately.
-                                        let interval = settings.cleanup_interval.as_str();
-                                        let today = chrono::Local::now().date_naive();
-                                        let last_cleanup = match interval {
-                                            "weekly" => {
-                                                let wk = today.iso_week();
-                                                format!("{}-W{:02}", wk.year(), wk.week())
-                                            }
-                                            "daily" => {
-                                                today.format("%Y-%m-%d").to_string()
-                                            }
-                                            _ => {
-                                                today.format("%Y-%m-%d").to_string()
-                                            }
-                                        };
-                                        let retention_cleanup =
-                                            today.format("%Y-%m-%d").to_string();
-                                        state.update(cx, |s, _cx| {
-                                            s.settings.cleanup_last_date = last_cleanup;
-                                            s.settings.retention_cleanup_last_date =
-                                                retention_cleanup;
-                                            if stats.sync_dirty {
-                                                s.sync_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
-                                            }
-                                            s.pending_hotkey_unregister
-                                                .extend(stats.expired_hotkey_item_ids.iter().copied());
-                                            s.settings.save();
-                                            if stats.expired_items > 0 {
-                                                s.reload_items();
-                                                s.reload_tags();
-                                            }
-                                        });
-                                        // Show toast
-                                        if stats.is_empty() {
-                                            this.update(cx, |_panel, cx| {
-                                                cx.emit(SettingsEvent::DataToast(
-                                                    I18nKey::ToastCleanupNone.text().to_string(),
-                                                ));
-                                            });
-                                        } else {
-                                            let total_records =
-                                                stats.expired_tombstones + stats.expired_items;
-                                            let msg = I18nKey::ToastCleanupDone.fmt(&[
-                                                &stats.orphan_images.to_string(),
-                                                &stats.unreferenced_icons.to_string(),
-                                                &total_records.to_string(),
-                                            ]);
-                                            this.update(cx, |_panel, cx| {
-                                                cx.emit(SettingsEvent::DataToast(msg));
-                                            });
-                                        }
+                                    .cursor(if maintenance_running {
+                                        CursorStyle::Arrow
+                                    } else {
+                                        CursorStyle::PointingHand
+                                    })
+                                    .when(!maintenance_running, |button| {
+                                        button.hover(|s| s.opacity(0.85)).on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, _window, cx| {
+                                                cx.stop_propagation();
+                                                let accepted = window_manager
+                                                    .update(cx, |wm, cx| wm.request_cleanup(cx));
+                                                if accepted {
+                                                    this.update(cx, |_panel, cx| {
+                                                        cx.emit(SettingsEvent::DataToast(
+                                                            I18nKey::BtnCleaning.text().to_string(),
+                                                        ));
+                                                    });
+                                                }
+                                            },
+                                        )
                                     })
                                     .child(
                                         div()
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(rgb(0xffffff))
-                                            .child(I18nKey::BtnCleanupNow.text()),
+                                            .child(if maintenance_running {
+                                                I18nKey::BtnCleaning.text()
+                                            } else {
+                                                I18nKey::BtnCleanupNow.text()
+                                            }),
                                     )
                             }),
                     )
+            })
+            // --- ── Clear data card ── ---
+            .child({
+                let this = cx.entity().clone();
+                let item_count = self.state.read(cx).clearable_history_count();
+
+                let surface = self.theme.surface;
+                let divider = self.theme.divider;
+                let text_1 = self.theme.text_1;
+                let text_3 = self.theme.text_3;
+                let danger = self.theme.danger;
+
+                div()
+                    .h(px(58.))
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .px(px(14.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    // --- Title + description (left) ---
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::SettingClearData.text()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(text_3)
+                                    .child(I18nKey::DescClearData.text()),
+                            ),
+                    )
+                    // --- Clear data button (right) ---
+                    .child({
+                        let this = this.clone();
+                        div()
+                            .flex_shrink_0()
+                            .h(px(26.))
+                            .px(px(10.))
+                            .rounded(px(7.))
+                            .bg(if maintenance_running { divider } else { danger })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor(if maintenance_running {
+                                CursorStyle::Arrow
+                            } else {
+                                CursorStyle::PointingHand
+                            })
+                            .when(!maintenance_running, |button| {
+                                button.hover(|s| s.opacity(0.85)).on_mouse_down(
+                                    MouseButton::Left,
+                                    move |_ev, _window, cx| {
+                                        cx.stop_propagation();
+                                        if item_count == 0 {
+                                            this.update(cx, |_panel, cx| {
+                                                cx.emit(SettingsEvent::DataToast(
+                                                    I18nKey::ToastClearDataEmpty.text().to_string(),
+                                                ));
+                                            });
+                                            return;
+                                        }
+                                        this.update(cx, |_panel, cx| {
+                                            cx.emit(SettingsEvent::ShowClearDataConfirm);
+                                        });
+                                    },
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xffffff))
+                                    .child(if maintenance_running {
+                                        I18nKey::BtnClearingData.text()
+                                    } else {
+                                        I18nKey::BtnClearData.text()
+                                    }),
+                            )
+                    })
             })
     }
 

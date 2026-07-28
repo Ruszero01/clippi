@@ -25,6 +25,12 @@ use crate::ui::theme::ClippiTheme;
 
 type DialogHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
+struct DialogOption {
+    label: String,
+    selected: bool,
+    on_toggle: DialogHandler,
+}
+
 const DIALOG_ANIM_DURATION: Duration = Duration::from_millis(150);
 
 // --- Component ---
@@ -38,6 +44,7 @@ pub struct ConfirmDialog {
     theme: ClippiTheme,
     on_confirm: Option<DialogHandler>,
     on_cancel: Option<DialogHandler>,
+    option: Option<DialogOption>,
     focus_handle: Option<FocusHandle>,
 }
 
@@ -52,6 +59,7 @@ impl ConfirmDialog {
             theme: ClippiTheme::dark(),
             on_confirm: None,
             on_cancel: None,
+            option: None,
             focus_handle: None,
         }
     }
@@ -90,6 +98,21 @@ impl ConfirmDialog {
 
     pub fn on_cancel(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(handler));
+        self
+    }
+
+    /// Add a single radio-style boolean option between the message and actions.
+    pub fn option(
+        mut self,
+        label: impl Into<String>,
+        selected: bool,
+        on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.option = Some(DialogOption {
+            label: label.into(),
+            selected,
+            on_toggle: Rc::new(on_toggle),
+        });
         self
     }
 
@@ -190,6 +213,7 @@ impl ConfirmDialog {
             theme,
             on_confirm,
             on_cancel,
+            option,
             focus_handle,
         } = self;
 
@@ -293,6 +317,48 @@ impl ConfirmDialog {
                             .mt(px(8.))
                             .child(message),
                     )
+                    .when_some(option, |dialog, option| {
+                        let on_toggle = option.on_toggle.clone();
+                        dialog.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .mt(px(12.))
+                                .py(px(4.))
+                                .cursor(CursorStyle::PointingHand)
+                                .hover({
+                                    let hover_bg = theme.btn_hover;
+                                    move |row| row.rounded(px(4.)).bg(hover_bg)
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                    cx.stop_propagation();
+                                    on_toggle(window, cx);
+                                })
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .font_family("iconfont")
+                                        .text_size(px(12.))
+                                        .text_color(if option.selected {
+                                            theme.accent
+                                        } else {
+                                            theme.text_3
+                                        })
+                                        .child(if option.selected {
+                                            "\u{e61f}"
+                                        } else {
+                                            "\u{e831}"
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme.text_1)
+                                        .child(option.label),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .flex()

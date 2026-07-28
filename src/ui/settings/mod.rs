@@ -58,6 +58,8 @@ pub enum SettingsEvent {
     DataError(String),
     /// Data settings info toast — no error prefix.
     DataToast(String),
+    /// Show the clear-data confirmation at the RootView overlay level.
+    ShowClearDataConfirm,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}

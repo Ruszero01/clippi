@@ -83,6 +83,9 @@ pub struct RootView {
     last_toast_message: Option<String>,
     /// Set to true on WindowHidden, cleared after auto-focusing the search bar.
     needs_auto_focus: bool,
+    /// Root-level clear-data dialog state, outside the clipped settings list.
+    clear_data_confirm: bool,
+    clear_data_include_favorites: bool,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
@@ -417,6 +420,17 @@ impl RootView {
                         cx.notify();
                     }
                 }
+                WindowManagerEvent::DataMaintenanceToast(message) => {
+                    this._toast_timer = None;
+                    this.toast_dismissing = false;
+                    this.state.update(cx, |state, _cx| {
+                        state.toast_message = Some(message.clone());
+                    });
+                    this.toast_actions = None;
+                    this.toast_timer_expiry =
+                        Some(std::time::Instant::now() + Duration::from_secs(5));
+                    cx.notify();
+                }
             },
         );
 
@@ -639,6 +653,11 @@ impl RootView {
                         });
                         cx.notify();
                     }
+                    SettingsEvent::ShowClearDataConfirm => {
+                        this.clear_data_confirm = true;
+                        this.clear_data_include_favorites = false;
+                        cx.notify();
+                    }
                 },
             ),
         ];
@@ -716,6 +735,8 @@ impl RootView {
             toast_timer_expiry: None,
             last_toast_message: None,
             needs_auto_focus: true,
+            clear_data_confirm: false,
+            clear_data_include_favorites: false,
             _wm_subscription,
             _subscriptions,
             _appearance_subscription: Some(appearance_sub),
@@ -726,6 +747,7 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let root_entity = cx.entity().clone();
         let sidebar = self.sidebar.clone();
         let titlebar = self.titlebar.clone();
         let list_view = self.list_view.clone();
@@ -798,6 +820,7 @@ impl Render for RootView {
         let tag_picker_visible = tag_picker_open && is_clipboard;
         let confirm_dialog_visible = confirm_dialog_open && is_clipboard;
         let hotkey_confirm_visible = !is_edit && hotkey_confirm_open;
+        let clear_data_confirm_visible = is_settings && self.clear_data_confirm;
         let backend_panel_visible = is_settings && backend_panel_open;
         let hotkey_blacklist_popup_visible =
             is_settings && active_settings_tab == 2 && hotkey_blacklist_popup_open;
@@ -847,6 +870,8 @@ impl Render for RootView {
         let tag_picker_gen = self.overlay_generation("tag-picker", tag_picker_visible);
         let confirm_dialog_gen = self.overlay_generation("confirm-dialog", confirm_dialog_visible);
         let hotkey_confirm_gen = self.overlay_generation("hotkey-confirm", hotkey_confirm_visible);
+        let clear_data_confirm_gen =
+            self.overlay_generation("clear-data-confirm", clear_data_confirm_visible);
         let backend_panel_gen = self.overlay_generation("backend-panel", backend_panel_visible);
         let hotkey_blacklist_popup_gen =
             self.overlay_generation("hotkey-blacklist-popup", hotkey_blacklist_popup_visible);
@@ -2097,6 +2122,92 @@ impl Render for RootView {
                         else { settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddClipboardBlacklist { app_name: foreground_app.clone() }))); }
                     } }) as Rc<dyn Fn(&mut Window, &mut App)>),
                 }))
+            })
+            // --- Root-level clear-data ConfirmDialog ---
+            .when(clear_data_confirm_visible, |root| {
+                let include_favorites = self.clear_data_include_favorites;
+                let app_state = self.state.clone();
+                let items_count = if include_favorites {
+                    app_state.read(cx).clearable_history_count()
+                } else {
+                    app_state.read(cx).clearable_non_favorite_history_count()
+                };
+                let has_enabled_sync = app_state
+                    .read(cx)
+                    .settings
+                    .sync_backends
+                    .iter()
+                    .any(|backend| backend.enabled);
+                let mut message =
+                    I18nKey::ConfirmClearDataMsg.fmt(&[&items_count.to_string()]);
+                if has_enabled_sync {
+                    message.push('\n');
+                    message.push_str(I18nKey::ConfirmClearDataSyncWarning.text());
+                }
+
+                let wm = self.window_manager.clone();
+                let dialog_focus = cx.focus_handle();
+                root.child(
+                    div()
+                        .absolute()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .child(
+                            ConfirmDialog::new()
+                                .title(I18nKey::ConfirmClearDataTitle.text())
+                                .message(message)
+                                .option(
+                                    I18nKey::ConfirmClearDataIncludeFavorites.text(),
+                                    include_favorites,
+                                    {
+                                        let root_entity = root_entity.clone();
+                                        move |_window, cx| {
+                                            root_entity.update(cx, |root, cx| {
+                                                root.clear_data_include_favorites =
+                                                    !root.clear_data_include_favorites;
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                )
+                                .confirm_label(I18nKey::BtnClearData.text())
+                                .danger(true)
+                                .theme(self.theme.clone())
+                                .on_confirm({
+                                    let root_entity = root_entity.clone();
+                                    let app_state = app_state.clone();
+                                    move |_window, cx| {
+                                        let accepted = wm.update(cx, |wm, cx| {
+                                            wm.request_clear_data(include_favorites, cx)
+                                        });
+                                        root_entity.update(cx, |root, cx| {
+                                            root.clear_data_confirm = false;
+                                            if !accepted {
+                                                app_state.update(cx, |state, _cx| {
+                                                    state.toast_message = Some(
+                                                        I18nKey::BtnCleaning.text().to_string(),
+                                                    );
+                                                });
+                                            }
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .on_cancel({
+                                    let root_entity = root_entity.clone();
+                                    move |_window, cx| {
+                                        root_entity.update(cx, |root, cx| {
+                                            root.clear_data_confirm = false;
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .focus_handle(dialog_focus)
+                                .render_animated(window, cx, clear_data_confirm_gen),
+                        ),
+                )
             })
             // --- Settings hotkey blacklist ConfirmDialog ---
             .when(hotkey_confirm_visible, |root| {

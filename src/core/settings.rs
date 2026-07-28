@@ -181,6 +181,8 @@ pub struct AppSettings {
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval: String, // cache cleanup frequency: "daily" | "weekly" | "never"
     #[serde(default)]
+    pub cleanup_stale_items: bool, // auto-cleanup stale (missing source) file/path items
+    #[serde(default)]
     pub cleanup_last_date: String, // last cleanup date "YYYY-MM-DD" for periodic scheduling
     #[serde(default)]
     pub retention_cleanup_last_date: String, // last retention cleanup date "YYYY-MM-DD"
@@ -304,6 +306,7 @@ impl Default for AppSettings {
             copy_sound_file: default_copy_sound_file(),
             filter_foreign_paths: false,
             cleanup_interval: default_cleanup_interval(),
+            cleanup_stale_items: false,
             cleanup_last_date: String::new(),
             retention_cleanup_last_date: String::new(),
             transfer_cleanup_last_date: String::new(),
@@ -1174,5 +1177,19 @@ mod tests {
         let merged = merge_configs(&source, &target, "");
         // "KeePass" and "keepass" → one entry (source's original casing wins)
         assert_eq!(merged.clipboard_app_blacklist.len(), 2);
+    }
+
+    #[test]
+    fn missing_cleanup_stale_items_defaults_to_disabled() {
+        let serialized = toml::to_string(&AppSettings::default()).unwrap();
+        let legacy_config = serialized
+            .lines()
+            .filter(|line| !line.starts_with("cleanup_stale_items ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed: AppSettings = toml::from_str(&legacy_config).unwrap();
+
+        assert!(!parsed.cleanup_stale_items);
     }
 }

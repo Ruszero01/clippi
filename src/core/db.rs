@@ -1,8 +1,12 @@
 //! Database persistence for clipboard items
 
+use crate::core::cache_cleanup::{
+    CleanupSyncScope, ClearClipboardResult, ConfirmedStaleItem, DeleteItemsResult,
+    StaleItemCandidate,
+};
 use crate::core::filters::ClipboardFilters;
-use crate::core::types::{ClipboardItem, ContentType, TagInfo};
-use rusqlite::{params, Connection, Result as SqlResult};
+use crate::core::types::{ClipboardItem, ContentType, FileData, TagInfo};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -1777,6 +1781,375 @@ impl Database {
             tags_updated,
         })
     }
+
+    /// Find clipboard items that are candidates for stale-item cleanup.
+    /// Returns non-favorite, non-transfer file, native-path, and locally
+    /// captured image items.
+    pub fn find_stale_item_candidates(&self) -> SqlResult<Vec<StaleItemCandidate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content_hash, updated_at, content_type, full_text, image_path, file_data, \
+                    meta_type, source_app_name, source_app_icon, is_favorite \
+             FROM clipboard_items \
+             WHERE is_favorite = 0 \
+               AND meta_type != 'transfer' \
+               AND (content_type = 'file' OR content_type = 'image' OR meta_type = 'path') \
+             ORDER BY id",
+        )?;
+
+        let candidates: Vec<StaleItemCandidate> = stmt
+            .query_map([], |row| {
+                let content_type_str: String = row.get(3)?;
+                let is_favorite_int: i32 = row.get(10)?;
+                Ok(StaleItemCandidate {
+                    id: row.get(0)?,
+                    content_hash: row.get::<_, i64>(1)? as u64,
+                    updated_at: {
+                        let s: String = row.get(2)?;
+                        s.parse::<chrono::DateTime<chrono::Utc>>()
+                            .map_err(|error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    2,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(error),
+                                )
+                            })?
+                    },
+                    content_type: crate::core::types::ContentType::from_str(&content_type_str),
+                    full_text: row.get(4).unwrap_or_default(),
+                    image_path: row.get(5).unwrap_or_default(),
+                    file_data: row.get(6).unwrap_or_default(),
+                    meta_type: row.get(7).unwrap_or_default(),
+                    source_app_name: row.get(8).unwrap_or_default(),
+                    source_app_icon: row.get(9).unwrap_or_default(),
+                    is_favorite: is_favorite_int != 0,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+
+        Ok(candidates)
+    }
+
+    /// Count all non-transfer clipboard rows affected by "clear data".
+    pub fn count_clearable_history(&self) -> SqlResult<u32> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM clipboard_items WHERE meta_type != 'transfer'",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// Count non-favorite, non-transfer rows affected by the default clear action.
+    pub fn count_clearable_non_favorite_history(&self) -> SqlResult<u32> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM clipboard_items \
+             WHERE meta_type != 'transfer' AND is_favorite = 0",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// Delete confirmed-stale items in a transaction with identity re-check.
+    ///
+    /// Each candidate is re-checked within the transaction using
+    /// `id + content_hash + updated_at` to ensure the record hasn't changed
+    /// since the filesystem scan. Sync tombstones are written for items
+    /// within the sync scope.
+    pub fn delete_stale_items(
+        &self,
+        confirmed: &[ConfirmedStaleItem],
+        sync_scope: Option<&CleanupSyncScope>,
+    ) -> SqlResult<DeleteItemsResult> {
+        use crate::core::types::ContentType;
+
+        type StaleDeleteRow = (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i32,
+            String,
+        );
+
+        if confirmed.is_empty() {
+            return Ok(DeleteItemsResult::default());
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let device_name = sync_scope.map(|s| s.device_name.as_str()).unwrap_or("");
+        let mut deleted: u32 = 0;
+        let mut tombstones_written: u32 = 0;
+        let mut hotkey_ids: Vec<i64> = Vec::new();
+        let mut deleted_file_paths: Vec<String> = Vec::new();
+
+        // Process in batches of 100.
+        for chunk in confirmed.chunks(100) {
+            let tx = self.conn.unchecked_transaction()?;
+
+            for item in chunk {
+                // Re-check identity + safety guards and read fields in one query.
+                let mut stmt = tx.prepare(
+                    "SELECT updated_at, content_type, full_text, image_path, file_data, meta_type, \
+                            source_app_name, source_app_icon, is_favorite, custom_hotkey \
+                     FROM clipboard_items \
+                     WHERE id = ?1 AND content_hash = ?2 \
+                       AND is_favorite = 0 AND meta_type != 'transfer'",
+                )?;
+
+                let row: Option<StaleDeleteRow> = stmt
+                    .query_row(params![item.id, item.content_hash as i64], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2).unwrap_or_default(),
+                            row.get(3).unwrap_or_default(),
+                            row.get(4).unwrap_or_default(),
+                            row.get(5).unwrap_or_default(),
+                            row.get(6).unwrap_or_default(),
+                            row.get(7).unwrap_or_default(),
+                            row.get(8).unwrap_or_default(),
+                            row.get(9).unwrap_or_default(),
+                        ))
+                    })
+                    .optional()?;
+
+                let Some((
+                    updated_at_str,
+                    content_type_str,
+                    full_text,
+                    image_path,
+                    file_data,
+                    meta_type,
+                    source_app_name,
+                    source_app_icon,
+                    is_favorite,
+                    custom_hotkey,
+                )) = row
+                else {
+                    continue; // Record changed — skip this item.
+                };
+                drop(stmt);
+
+                let Ok(updated_at) = updated_at_str.parse::<chrono::DateTime<chrono::Utc>>() else {
+                    continue;
+                };
+                if updated_at != item.expected_updated_at {
+                    continue;
+                }
+
+                let content_type = ContentType::from_str(&content_type_str);
+                let candidate = StaleItemCandidate {
+                    id: item.id,
+                    content_hash: item.content_hash,
+                    updated_at,
+                    content_type,
+                    full_text,
+                    image_path,
+                    file_data: file_data.clone(),
+                    meta_type,
+                    source_app_name,
+                    source_app_icon,
+                    is_favorite: is_favorite != 0,
+                };
+                if !crate::core::cache_cleanup::check_candidate_stale(&candidate) {
+                    continue;
+                }
+
+                if !custom_hotkey.is_empty() {
+                    hotkey_ids.push(item.id);
+                }
+
+                // Write sync tombstone if applicable.
+                if let Some(scope) = sync_scope {
+                    if crate::core::sync_scope::item_in_sync_scope(
+                        content_type,
+                        false, // is_favorite is always 0 here
+                        scope.include_images,
+                        scope.favorites_only,
+                    ) {
+                        tx.execute(
+                            "INSERT INTO deleted_items (content_hash, deleted_at, device_name) \
+                             VALUES (?1, ?2, ?3) \
+                             ON CONFLICT(content_hash) DO UPDATE SET \
+                               deleted_at = excluded.deleted_at, \
+                               device_name = excluded.device_name",
+                            params![item.content_hash as i64, &now, device_name],
+                        )?;
+                        tombstones_written += 1;
+                    }
+                }
+
+                if content_type == ContentType::File {
+                    deleted_file_paths.extend(
+                        FileData::from_json(&file_data)
+                            .files
+                            .into_iter()
+                            .map(|file| file.path),
+                    );
+                }
+
+                // Delete item_tags and the item itself.
+                tx.execute("DELETE FROM item_tags WHERE item_id = ?1", params![item.id])?;
+                tx.execute(
+                    "DELETE FROM clipboard_items WHERE id = ?1",
+                    params![item.id],
+                )?;
+                deleted += 1;
+            }
+
+            tx.commit()?;
+        }
+
+        Ok(DeleteItemsResult {
+            deleted_items: deleted,
+            deleted_hotkey_item_ids: hotkey_ids,
+            deleted_file_paths,
+            tombstones_written,
+        })
+    }
+
+    /// Clear all non-transfer clipboard history in a single transaction.
+    ///
+    /// Writes deletion tombstones for all protocol-syncable content types
+    /// (text, rich_text, image) to prevent history from flowing back from
+    /// other devices. File items are excluded from tombstones but still
+    /// deleted locally.
+    pub fn clear_clipboard_history(
+        &self,
+        device_name: &str,
+        include_favorites: bool,
+    ) -> SqlResult<ClearClipboardResult> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Read all non-transfer items before deletion.
+        let mut stmt = tx.prepare(
+            "SELECT id, content_hash, content_type, is_favorite, custom_hotkey, file_data \
+             FROM clipboard_items \
+             WHERE meta_type != 'transfer' AND (?1 OR is_favorite = 0)",
+        )?;
+
+        struct ItemRow {
+            id: i64,
+            content_hash: i64,
+            content_type: String,
+            is_favorite: bool,
+            custom_hotkey: String,
+            file_data: String,
+        }
+
+        let rows: Vec<ItemRow> = stmt
+            .query_map(params![include_favorites], |row| {
+                let is_fav: i32 = row.get(3)?;
+                Ok(ItemRow {
+                    id: row.get(0)?,
+                    content_hash: row.get(1)?,
+                    content_type: row.get(2)?,
+                    is_favorite: is_fav != 0,
+                    custom_hotkey: row.get(4).unwrap_or_default(),
+                    file_data: row.get(5).unwrap_or_default(),
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        drop(stmt);
+
+        if rows.is_empty() {
+            tx.commit()?;
+            return Ok(ClearClipboardResult::default());
+        }
+
+        let mut deleted_items: u32 = 0;
+        let mut deleted_favorites: u32 = 0;
+        let mut tombstones_written: u32 = 0;
+        let mut hotkey_ids: Vec<i64> = Vec::new();
+        let mut deleted_file_paths: Vec<String> = Vec::new();
+
+        // Write tombstones for all protocol-syncable types.
+        let syncable_types = ["plain_text", "rich_text", "image"];
+        for row in &rows {
+            if syncable_types.contains(&row.content_type.as_str()) {
+                tx.execute(
+                    "INSERT INTO deleted_items (content_hash, deleted_at, device_name) \
+                     VALUES (?1, ?2, ?3) \
+                     ON CONFLICT(content_hash) DO UPDATE SET \
+                       deleted_at = excluded.deleted_at, \
+                       device_name = excluded.device_name",
+                    params![row.content_hash, &now, device_name],
+                )?;
+                tombstones_written += 1;
+            }
+
+            if row.content_type == ContentType::File.as_str() {
+                deleted_file_paths.extend(
+                    FileData::from_json(&row.file_data)
+                        .files
+                        .into_iter()
+                        .map(|file| file.path),
+                );
+            }
+
+            if row.is_favorite {
+                deleted_favorites += 1;
+            }
+
+            if !row.custom_hotkey.is_empty() {
+                hotkey_ids.push(row.id);
+            }
+
+            deleted_items += 1;
+        }
+
+        // Delete all item_tags for these items.
+        let item_ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        for chunk in item_ids.chunks(100) {
+            let placeholders: Vec<String> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect();
+            let sql = format!(
+                "DELETE FROM item_tags WHERE item_id IN ({})",
+                placeholders.join(",")
+            );
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
+            tx.execute(&sql, params_refs.as_slice())?;
+        }
+
+        // Delete all clipboard_items.
+        for chunk in item_ids.chunks(100) {
+            let placeholders: Vec<String> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect();
+            let sql = format!(
+                "DELETE FROM clipboard_items WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
+            tx.execute(&sql, params_refs.as_slice())?;
+        }
+
+        tx.commit()?;
+
+        Ok(ClearClipboardResult {
+            deleted_items,
+            deleted_favorites,
+            deleted_hotkey_item_ids: hotkey_ids,
+            deleted_file_paths,
+            tombstones_written,
+        })
+    }
 }
 
 fn rfc3339_newer_str(a: &str, b: &str) -> bool {
@@ -2414,5 +2787,208 @@ mod tests {
         let hotkeys = db.get_all_custom_item_hotkeys().unwrap();
 
         assert_eq!(hotkeys, vec![(hotkey_id, "Ctrl+Alt+2".to_string())]);
+    }
+
+    #[test]
+    fn clear_clipboard_history_is_atomic_and_preserves_transfer_rows_and_tags() {
+        let (path, db) = temp_db("clear-history");
+        let missing_file = path.parent().unwrap().join("missing-file.txt");
+        let file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "missing-file.txt".into(),
+                path: missing_file.to_string_lossy().into_owned(),
+                is_dir: false,
+            }],
+            transfer: false,
+            remote_hash: String::new(),
+        }
+        .to_json();
+
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, \
+                  is_favorite, custom_hotkey, file_data, meta_type) VALUES \
+                 ('plain_text', 'text', 101, ?1, ?1, 0, 'Ctrl+Alt+1', '', ''), \
+                 ('image', 'image', 102, ?1, ?1, 1, '', '', ''), \
+                 ('file', 'missing-file.txt', 103, ?1, ?1, 0, '', ?2, ''), \
+                 ('file', 'transfer', 104, ?1, ?1, 0, '', '', 'transfer')",
+                params!["2026-07-28T00:00:00Z", file_data],
+            )
+            .unwrap();
+        let tag_id = insert_tag(&db, "keep-tag", "#FF0000", "2026-07-28T00:00:00Z");
+        let text_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 101",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        tag_item(&db, text_id, tag_id);
+        db.conn
+            .execute(
+                "INSERT INTO deleted_items (content_hash, deleted_at, device_name) \
+                 VALUES (101, '2025-01-01T00:00:00Z', 'old-device')",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(db.count_clearable_history().unwrap(), 3);
+        assert_eq!(db.count_clearable_non_favorite_history().unwrap(), 2);
+        let result = db.clear_clipboard_history("test-device", true).unwrap();
+
+        assert_eq!(result.deleted_items, 3);
+        assert_eq!(result.deleted_favorites, 1);
+        assert_eq!(result.deleted_hotkey_item_ids, vec![text_id]);
+        assert_eq!(
+            result.deleted_file_paths,
+            vec![missing_file.to_string_lossy().into_owned()]
+        );
+        assert_eq!(result.tombstones_written, 2);
+        assert_eq!(count_items(&db), 1);
+        assert_eq!(count_tags(&db), 1);
+        let associations: u32 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM item_tags", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(associations, 0);
+        let tombstones: u32 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM deleted_items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(tombstones, 2);
+        let tombstone_device: String = db
+            .conn
+            .query_row(
+                "SELECT device_name FROM deleted_items WHERE content_hash = 101",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstone_device, "test-device");
+    }
+
+    #[test]
+    fn stale_delete_rechecks_identity_and_returns_deleted_file_paths() {
+        let (path, db) = temp_db("stale-identity");
+        let missing_file = path.parent().unwrap().join("missing.txt");
+        let file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "missing.txt".into(),
+                path: missing_file.to_string_lossy().into_owned(),
+                is_dir: false,
+            }],
+            transfer: false,
+            remote_hash: String::new(),
+        }
+        .to_json();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, file_data, meta_type) \
+                 VALUES ('file', 'missing.txt', 201, ?1, ?1, ?2, '')",
+                params!["2026-07-28T00:00:00Z", file_data],
+            )
+            .unwrap();
+
+        let candidates = db.find_stale_item_candidates().unwrap();
+        let confirmed = crate::core::cache_cleanup::verify_stale_candidates(&candidates);
+        assert_eq!(confirmed.len(), 1);
+
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET updated_at = ?1 WHERE content_hash = 201",
+                params!["2026-07-28T00:00:01Z"],
+            )
+            .unwrap();
+        let skipped = db.delete_stale_items(&confirmed, None).unwrap();
+        assert_eq!(skipped.deleted_items, 0);
+        assert_eq!(count_items(&db), 1);
+
+        let candidates = db.find_stale_item_candidates().unwrap();
+        let confirmed = crate::core::cache_cleanup::verify_stale_candidates(&candidates);
+        let deleted = db.delete_stale_items(&confirmed, None).unwrap();
+        assert_eq!(deleted.deleted_items, 1);
+        assert_eq!(
+            deleted.deleted_file_paths,
+            vec![missing_file.to_string_lossy().into_owned()]
+        );
+        assert_eq!(count_items(&db), 0);
+    }
+
+    #[test]
+    fn clear_clipboard_history_preserves_favorites_by_default() {
+        let (_path, db) = temp_db("clear-preserve-favorites");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, is_favorite) \
+                 VALUES ('plain_text', 'normal', 401, ?1, ?1, 0), \
+                        ('plain_text', 'favorite', 402, ?1, ?1, 1)",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+
+        let result = db.clear_clipboard_history("test-device", false).unwrap();
+
+        assert_eq!(result.deleted_items, 1);
+        assert_eq!(result.deleted_favorites, 0);
+        assert!(db.get_by_hash(401).unwrap().is_none());
+        assert!(db.get_by_hash(402).unwrap().is_some());
+    }
+
+    #[test]
+    fn stale_cleanup_deletes_missing_local_image_but_keeps_pending_sync_image() {
+        let (_path, db) = temp_db("stale-images");
+        let images_dir = crate::core::paths::images_dir();
+        let local_image = images_dir.join(format!(
+            "missing-local-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let synced_image = images_dir.join(format!(
+            "missing-synced-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        assert!(!local_image.exists());
+        assert!(!synced_image.exists());
+
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, meta_type) \
+                 VALUES ('image', '', 301, ?1, ?1, ?2, 'Local App', '')",
+                params![
+                    "2026-07-28T00:00:00Z",
+                    local_image.to_string_lossy().as_ref()
+                ],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, meta_type) \
+                 VALUES ('image', '', 302, ?1, ?1, ?2, '', '')",
+                params![
+                    "2026-07-28T00:00:00Z",
+                    synced_image.to_string_lossy().as_ref()
+                ],
+            )
+            .unwrap();
+
+        let candidates = db.find_stale_item_candidates().unwrap();
+        assert_eq!(candidates.len(), 2);
+        let confirmed = crate::core::cache_cleanup::verify_stale_candidates(&candidates);
+        assert_eq!(confirmed.len(), 1);
+        assert_eq!(confirmed[0].content_hash, 301);
+
+        let deleted = db.delete_stale_items(&confirmed, None).unwrap();
+        assert_eq!(deleted.deleted_items, 1);
+        assert!(db.get_by_hash(301).unwrap().is_none());
+        assert!(db.get_by_hash(302).unwrap().is_some());
     }
 }

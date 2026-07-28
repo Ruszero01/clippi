@@ -142,7 +142,8 @@ fn info_row_available_width(window: &Window) -> f32 {
 
 #[cfg(test)]
 mod info_row_tests {
-    use super::visible_tag_count;
+    use super::{image_is_waiting_for_sync, visible_tag_count};
+    use crate::core::types::ClipboardItem;
 
     #[test]
     fn shows_all_tags_when_they_fit() {
@@ -171,6 +172,24 @@ mod info_row_tests {
         let fixed = [40.0, 50.0];
 
         assert_eq!(visible_tag_count(&tags, &fixed, 118.0, |_| 20.0), 0);
+    }
+
+    #[test]
+    fn missing_managed_image_with_local_source_is_stale() {
+        let image_path = crate::core::paths::images_dir().join("missing-local-image.png");
+        let mut item =
+            ClipboardItem::new_image(1, &image_path.to_string_lossy(), 1, 100, 100, None);
+        item.source_app_name = "Local App".to_string();
+
+        assert!(!image_is_waiting_for_sync(&item));
+    }
+
+    #[test]
+    fn missing_managed_image_without_local_source_can_still_be_synced() {
+        let image_path = crate::core::paths::images_dir().join("missing-synced-image.png");
+        let item = ClipboardItem::new_image(1, &image_path.to_string_lossy(), 1, 100, 100, None);
+
+        assert!(image_is_waiting_for_sync(&item));
     }
 }
 
@@ -314,6 +333,15 @@ fn image_display_name(item: &ClipboardItem) -> String {
 fn image_path_is_cache_path(image_path: &str) -> bool {
     !image_path.is_empty()
         && std::path::Path::new(image_path).starts_with(crate::core::paths::images_dir())
+}
+
+/// Missing images imported from sync have no local source-app metadata and may
+/// still be downloaded by a later sync pass. A locally captured image keeps
+/// its source metadata, so a missing managed cache file is genuinely stale.
+fn image_is_waiting_for_sync(item: &ClipboardItem) -> bool {
+    image_path_is_cache_path(&item.image_path)
+        && item.source_app_name.is_empty()
+        && item.source_app_icon.is_empty()
 }
 
 /// Get a cached file system icon for a given file path.
@@ -1715,8 +1743,7 @@ impl RenderOnce for ClipboardCard {
                     ContentType::Image => {
                         let img_missing = !item.image_path.is_empty()
                             && !std::path::Path::new(&item.image_path).exists();
-                        let img_not_loaded =
-                            img_missing && image_path_is_cache_path(&item.image_path);
+                        let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
                         let img_stale = img_missing && !img_not_loaded;
                         // Show previews only when the full image exists locally. Synced images
                         // regenerate thumbnails after the blob is downloaded.
@@ -2150,7 +2177,7 @@ impl RenderOnce for ClipboardCard {
             ContentType::Image => {
                 let img_missing =
                     !item.image_path.is_empty() && !std::path::Path::new(&item.image_path).exists();
-                let img_not_loaded = img_missing && image_path_is_cache_path(&item.image_path);
+                let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
                 if img_not_loaded {
                     Some(I18nKey::CardImageNotLoaded.text().to_string())
                 } else if img_missing {

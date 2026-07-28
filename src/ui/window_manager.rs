@@ -40,6 +40,22 @@ use crate::ui::quick_paste::{
 /// Shared foreground app name for cross-service coordination.
 pub type ForegroundAppName = Arc<Mutex<String>>;
 
+/// Result from a completed data maintenance job.
+#[derive(Debug, Clone)]
+pub enum DataMaintenanceResult {
+    Cleanup {
+        stats: crate::core::cache_cleanup::CleanupStats,
+        cache_marker: Option<String>,
+        retention_marker: Option<String>,
+        show_toast: bool,
+    },
+    ClearClipboard {
+        stats: crate::core::cache_cleanup::ClearClipboardStats,
+        cache_marker: String,
+    },
+    Failed(String),
+}
+
 pub struct WebDavBackendForm {
     pub name: String,
     pub root_url: String,
@@ -261,6 +277,8 @@ pub enum WindowManagerEvent {
     /// Update progress changed — RootView should refresh toast / settings page.
     UpdateProgress(update::UpdatePhase),
     BitmapPasteFinished,
+    /// A background data maintenance task completed or failed.
+    DataMaintenanceToast(String),
     /// Reset RootView to clipboard history page (when always_reset_to_clipboard is on).
     ResetToClipboard,
 }
@@ -415,6 +433,10 @@ pub struct WindowManager {
     pending_cleanup_refresh: Arc<AtomicBool>,
     /// Custom hotkeys deleted by background cleanup and waiting to be unregistered.
     pending_cleanup_hotkey_unregister: Arc<Mutex<Vec<i64>>>,
+    /// If Some, a background maintenance job is running.
+    maintenance_job_running: bool,
+    /// Pending result from a completed maintenance job.
+    pending_maintenance_result: Arc<Mutex<Option<DataMaintenanceResult>>>,
 }
 
 impl EventEmitter<WindowManagerEvent> for WindowManager {}
@@ -501,6 +523,8 @@ impl WindowManager {
             update_check_running: Arc::new(AtomicBool::new(false)),
             pending_cleanup_refresh: Arc::new(AtomicBool::new(false)),
             pending_cleanup_hotkey_unregister: Arc::new(Mutex::new(Vec::new())),
+            maintenance_job_running: false,
+            pending_maintenance_result: Arc::new(Mutex::new(None)),
         };
 
         // --- Share the batch_pasting flag with AppState so it can suppress ---
@@ -620,6 +644,9 @@ impl WindowManager {
 
         self.poll_cleanup_refresh(cx);
 
+        // --- 10b. Collect maintenance job results ---
+        self.poll_maintenance_result(cx);
+
         // --- 11. Transfer station status check ---
         self.poll_transfer(cx);
 
@@ -653,6 +680,245 @@ impl WindowManager {
             });
             cx.emit(WindowManagerEvent::ClipboardChanged);
         }
+    }
+
+    /// Collect results from a completed background maintenance job.
+    fn poll_maintenance_result(&mut self, cx: &mut Context<Self>) {
+        let result = self
+            .pending_maintenance_result
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+
+        let Some(result) = result else {
+            return;
+        };
+
+        self.maintenance_job_running = false;
+
+        match result {
+            DataMaintenanceResult::Cleanup {
+                mut stats,
+                cache_marker,
+                retention_marker,
+                show_toast,
+            } => {
+                let deleted_file_paths = std::mem::take(&mut stats.deleted_file_paths);
+                self.state.update(cx, |state, _cx| {
+                    if stats.sync_dirty {
+                        state.sync_dirty.store(true, Ordering::SeqCst);
+                    }
+                    if !deleted_file_paths.is_empty() {
+                        state.clear_deleted_file_transfer_associations(deleted_file_paths);
+                    }
+                    if let Some(marker) = cache_marker {
+                        state.settings.cleanup_last_date = marker;
+                    }
+                    if let Some(marker) = retention_marker {
+                        state.settings.retention_cleanup_last_date = marker;
+                    }
+                    state.settings.save();
+                });
+                if stats.expired_items > 0 || stats.stale_items > 0 {
+                    self.pending_cleanup_refresh.store(true, Ordering::Release);
+                }
+                if !stats.deleted_hotkey_item_ids.is_empty() {
+                    if let Ok(mut ids) = self.pending_cleanup_hotkey_unregister.lock() {
+                        ids.extend(stats.deleted_hotkey_item_ids.iter().copied());
+                    }
+                }
+                if !stats.is_empty() {
+                    log::info!(
+                        "cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items, {} stale items",
+                        stats.orphan_images,
+                        stats.unreferenced_icons,
+                        stats.expired_tombstones,
+                        stats.expired_items,
+                        stats.stale_items,
+                    );
+                }
+                let message = if stats.is_empty() {
+                    I18nKey::ToastCleanupNone.text().to_string()
+                } else {
+                    I18nKey::ToastCleanupDone.text().to_string()
+                };
+                if show_toast {
+                    cx.emit(WindowManagerEvent::DataMaintenanceToast(message));
+                }
+            }
+            DataMaintenanceResult::ClearClipboard {
+                mut stats,
+                cache_marker,
+            } => {
+                let deleted_file_paths = std::mem::take(&mut stats.deleted_file_paths);
+                self.state.update(cx, |state, _cx| {
+                    if stats.sync_dirty {
+                        state.sync_dirty.store(true, Ordering::SeqCst);
+                    }
+                    if !deleted_file_paths.is_empty() {
+                        state.clear_deleted_file_transfer_associations(deleted_file_paths);
+                    }
+                    state.settings.cleanup_last_date = cache_marker;
+                    state.settings.save();
+                });
+                if stats.deleted_items > 0 {
+                    self.pending_cleanup_refresh.store(true, Ordering::Release);
+                }
+                if !stats.deleted_hotkey_item_ids.is_empty() {
+                    if let Ok(mut ids) = self.pending_cleanup_hotkey_unregister.lock() {
+                        ids.extend(stats.deleted_hotkey_item_ids.iter().copied());
+                    }
+                }
+                log::info!(
+                    "clear clipboard: {} items ({} favorites), {} orphan images, {} unreferenced icons",
+                    stats.deleted_items,
+                    stats.deleted_favorites,
+                    stats.orphan_images,
+                    stats.unreferenced_icons,
+                );
+                let message = if stats.deleted_items == 0 {
+                    I18nKey::ToastClearDataEmpty.text().to_string()
+                } else {
+                    I18nKey::ToastClearDataDone.fmt(&[&stats.deleted_items.to_string()])
+                };
+                cx.emit(WindowManagerEvent::DataMaintenanceToast(message));
+            }
+            DataMaintenanceResult::Failed(e) => {
+                log::error!("data maintenance failed: {e}");
+                cx.emit(WindowManagerEvent::DataMaintenanceToast(
+                    I18nKey::ToastDataMaintenanceFailed.text().to_string(),
+                ));
+            }
+        }
+    }
+
+    /// Request an immediate cleanup from the settings UI.
+    pub fn request_cleanup(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.maintenance_job_running {
+            return false;
+        }
+
+        let settings = self.state.read(cx).settings.clone();
+        let interval = settings.cleanup_interval.as_str();
+        let today = chrono::Local::now().date_naive();
+        let retention_days = settings.retention_days;
+
+        let options = crate::core::cache_cleanup::CleanupOptions {
+            clean_orphan_cache: true,
+            clean_expired_tombstones: true,
+            retention_days: if retention_days > 0 {
+                Some(retention_days)
+            } else {
+                None
+            },
+            clean_stale_items: settings.cleanup_stale_items,
+        };
+
+        let db_path = settings.resolve_db_path();
+        let sync_scope = crate::core::cache_cleanup::CleanupSyncScope {
+            include_images: settings.sync_include_images,
+            favorites_only: settings.sync_favorites_only,
+            device_name: crate::services::backends::local_folder::hostname(),
+        };
+        let pending_result = self.pending_maintenance_result.clone();
+        let cache_marker = cleanup_marker_for_interval(interval, today);
+        let retention_marker = (retention_days > 0).then(|| today.format("%Y-%m-%d").to_string());
+        self.maintenance_job_running = true;
+
+        std::thread::spawn(move || {
+            let result = match crate::core::db::Database::open(&db_path.to_string_lossy()) {
+                Ok(db) => {
+                    let stats = crate::core::cache_cleanup::run_cleanup_with_options(
+                        &db,
+                        &options,
+                        Some(&sync_scope),
+                    );
+                    DataMaintenanceResult::Cleanup {
+                        stats,
+                        cache_marker: Some(cache_marker),
+                        retention_marker,
+                        show_toast: true,
+                    }
+                }
+                Err(e) => {
+                    log::error!("request_cleanup: failed to open DB: {e}");
+                    DataMaintenanceResult::Failed(e.to_string())
+                }
+            };
+            if let Ok(mut slot) = pending_result.lock() {
+                *slot = Some(result);
+            }
+        });
+
+        true
+    }
+
+    /// Request a clear-clipboard operation from the settings UI.
+    pub fn request_clear_data(&mut self, include_favorites: bool, cx: &mut Context<Self>) -> bool {
+        if self.maintenance_job_running {
+            return false;
+        }
+
+        let settings = self.state.read(cx).settings.clone();
+        let db_path = settings.resolve_db_path();
+        let device_name = crate::services::backends::local_folder::hostname();
+        let pending_result = self.pending_maintenance_result.clone();
+        let today = chrono::Local::now().date_naive();
+        let cache_marker = cleanup_marker_for_interval(settings.cleanup_interval.as_str(), today);
+        self.maintenance_job_running = true;
+
+        std::thread::spawn(move || {
+            let result = match crate::core::db::Database::open(&db_path.to_string_lossy()) {
+                Ok(db) => {
+                    // Clear clipboard history in a transaction.
+                    let clear_result =
+                        match db.clear_clipboard_history(&device_name, include_favorites) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                log::error!("request_clear_data: clear failed: {e}");
+                                if let Ok(mut slot) = pending_result.lock() {
+                                    *slot = Some(DataMaintenanceResult::Failed(format!(
+                                        "Clear failed: {e}"
+                                    )));
+                                }
+                                return;
+                            }
+                        };
+
+                    // Post-clear cache maintenance.
+                    let (orphan_images, unreferenced_icons, _) =
+                        crate::core::cache_cleanup::run_cache_maintenance(&db);
+
+                    let stats = crate::core::cache_cleanup::ClearClipboardStats {
+                        deleted_items: clear_result.deleted_items,
+                        deleted_favorites: clear_result.deleted_favorites,
+                        deleted_hotkey_item_ids: clear_result.deleted_hotkey_item_ids,
+                        deleted_file_paths: clear_result.deleted_file_paths,
+                        orphan_images,
+                        unreferenced_icons,
+                        sync_dirty: clear_result.tombstones_written > 0,
+                    };
+                    DataMaintenanceResult::ClearClipboard {
+                        stats,
+                        cache_marker,
+                    }
+                }
+                Err(e) => {
+                    log::error!("request_clear_data: failed to open DB: {e}");
+                    DataMaintenanceResult::Failed(e.to_string())
+                }
+            };
+            if let Ok(mut slot) = pending_result.lock() {
+                *slot = Some(result);
+            }
+        });
+
+        true
+    }
+
+    /// Check if a maintenance job is currently running.
+    pub fn is_maintenance_running(&self) -> bool {
+        self.maintenance_job_running
     }
 
     fn poll_transfer(&mut self, cx: &mut Context<Self>) {
@@ -3562,8 +3828,12 @@ impl WindowManager {
         }
     }
 
-    /// Run daily maintenance for local caches, retained history, and transfer files.
+    /// Run periodic maintenance for local caches, retained history, and transfer files.
     fn poll_cleanup(&mut self, cx: &mut Context<Self>) {
+        if self.maintenance_job_running {
+            return; // A job is already in progress.
+        }
+
         let settings = self.state.read(cx).settings.clone();
         let transfer_available = self.state.read(cx).transfer_available();
         let interval = settings.cleanup_interval.as_str();
@@ -3583,65 +3853,66 @@ impl WindowManager {
             return;
         }
 
-        if cache_needed || retention_needed {
-            let db_path = settings.resolve_db_path();
-            let sync_scope = crate::core::cache_cleanup::CleanupSyncScope {
-                include_images: settings.sync_include_images,
-                favorites_only: settings.sync_favorites_only,
-                device_name: crate::services::backends::local_folder::hostname(),
-            };
-            let sync_dirty = self.state.read(cx).sync_dirty.clone();
-            let pending_cleanup_refresh = self.pending_cleanup_refresh.clone();
-            let pending_cleanup_hotkey_unregister = self.pending_cleanup_hotkey_unregister.clone();
-            std::thread::spawn(move || {
-                match crate::core::db::Database::open(&db_path.to_string_lossy()) {
-                    Ok(db) => {
-                        let stats = crate::core::cache_cleanup::run_cleanup(
-                            &db,
-                            retention_days,
-                            Some(&sync_scope),
-                        );
-                        if stats.sync_dirty {
-                            sync_dirty.store(true, Ordering::SeqCst);
-                        }
-                        if stats.expired_items > 0 {
-                            pending_cleanup_refresh.store(true, Ordering::Release);
-                        }
-                        if !stats.expired_hotkey_item_ids.is_empty() {
-                            if let Ok(mut ids) = pending_cleanup_hotkey_unregister.lock() {
-                                ids.extend(stats.expired_hotkey_item_ids.iter().copied());
-                            }
-                        }
-                        if !stats.is_empty() {
-                            log::info!(
-                                "periodic cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items",
-                                stats.orphan_images,
-                                stats.unreferenced_icons,
-                                stats.expired_tombstones,
-                                stats.expired_items,
-                            );
-                        }
-                    }
-                    Err(e) => log::error!("periodic cleanup: failed to open DB: {e}"),
-                }
+        if transfer_needed {
+            let daily_marker = today.format("%Y-%m-%d").to_string();
+            self.state.update(cx, |state, _cx| {
+                state.queue_daily_transfer_cleanup();
+                state.settings.transfer_cleanup_last_date = daily_marker;
+                state.settings.save();
             });
         }
 
-        // Update last cleanup date immediately (don't wait for thread).
-        let cache_marker = cleanup_marker_for_interval(interval, today);
-        let daily_marker = today.format("%Y-%m-%d").to_string();
-        self.state.update(cx, |s, _cx| {
-            if cache_needed {
-                s.settings.cleanup_last_date = cache_marker;
+        if !cache_needed && !retention_needed {
+            return;
+        }
+
+        // Build CleanupOptions based on what's due.
+        let stale_enabled = settings.cleanup_stale_items && cache_needed;
+        let options = crate::core::cache_cleanup::CleanupOptions {
+            clean_orphan_cache: cache_needed,
+            clean_expired_tombstones: cache_needed,
+            retention_days: if retention_needed && retention_days > 0 {
+                Some(retention_days)
+            } else {
+                None
+            },
+            clean_stale_items: stale_enabled,
+        };
+
+        let db_path = settings.resolve_db_path();
+        let sync_scope = crate::core::cache_cleanup::CleanupSyncScope {
+            include_images: settings.sync_include_images,
+            favorites_only: settings.sync_favorites_only,
+            device_name: crate::services::backends::local_folder::hostname(),
+        };
+        let pending_result = self.pending_maintenance_result.clone();
+        let cache_marker = cache_needed.then(|| cleanup_marker_for_interval(interval, today));
+        let retention_marker = retention_needed.then(|| today.format("%Y-%m-%d").to_string());
+        self.maintenance_job_running = true;
+
+        std::thread::spawn(move || {
+            let result = match crate::core::db::Database::open(&db_path.to_string_lossy()) {
+                Ok(db) => {
+                    let stats = crate::core::cache_cleanup::run_cleanup_with_options(
+                        &db,
+                        &options,
+                        Some(&sync_scope),
+                    );
+                    DataMaintenanceResult::Cleanup {
+                        stats,
+                        cache_marker,
+                        retention_marker,
+                        show_toast: false,
+                    }
+                }
+                Err(e) => {
+                    log::error!("periodic cleanup: failed to open DB: {e}");
+                    DataMaintenanceResult::Failed(e.to_string())
+                }
+            };
+            if let Ok(mut slot) = pending_result.lock() {
+                *slot = Some(result);
             }
-            if retention_needed {
-                s.settings.retention_cleanup_last_date = daily_marker.clone();
-            }
-            if transfer_needed {
-                s.queue_daily_transfer_cleanup();
-                s.settings.transfer_cleanup_last_date = daily_marker;
-            }
-            s.settings.save();
         });
     }
 }
