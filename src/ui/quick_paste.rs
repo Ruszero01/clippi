@@ -262,10 +262,14 @@ impl QuickPasteView {
             .enumerate()
             .filter(|(_, item)| {
                 // Exclude items whose source file is gone — useless for quick paste.
-                if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+                let is_remote = RichData::from_json(&item.rich_data).remote_host.is_some();
+                if !is_remote
+                    && item.content_type == ContentType::Image
+                    && !item.image_path.is_empty()
+                {
                     return std::path::Path::new(&item.image_path).exists();
                 }
-                if item.content_type == ContentType::File {
+                if !is_remote && item.content_type == ContentType::File {
                     let fd = FileData::from_json(&item.file_data);
                     // Only filter single-file items; multi-file stays.
                     if fd.files.len() == 1 {
@@ -277,6 +281,7 @@ impl QuickPasteView {
                 true
             })
             .map(|(slot, item)| {
+                let remote_host = RichData::from_json(&item.rich_data).remote_host;
                 let is_image =
                     item.content_type == ContentType::Image && !item.image_path.is_empty();
                 let color_swatch = if item.display_kind() == DisplayKind::Color {
@@ -298,7 +303,9 @@ impl QuickPasteView {
                 };
                 let (preview_label, preview_subtitle) = preview_parts(item, auto_fetch_title);
                 // File icon cache path for file-type items
-                let file_icon_path = if item.content_type == ContentType::File {
+                let file_icon_path = if item.content_type == ContentType::File
+                    && remote_host.is_none()
+                {
                     let data = FileData::from_json(&item.file_data);
                     data.files
                         .first()
@@ -333,7 +340,7 @@ impl QuickPasteView {
                     preview_subtitle,
                     item.note.clone(),
                     format_relative_time(&item.updated_at),
-                    is_image.then(|| item.image_path.clone()),
+                    (is_image && remote_host.is_none()).then(|| item.image_path.clone()),
                     favicon_path,
                     file_icon_path,
                     path_color,
@@ -1313,8 +1320,18 @@ fn styled_preview(item: &ClipboardItem) -> Option<Vec<rich_preview::StyledHtmlSp
 }
 
 fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Option<String>) {
+    let remote_host = RichData::from_json(&item.rich_data).remote_host;
     let raw = match item.content_type {
         ContentType::Image => {
+            if remote_host.is_some() {
+                let path = item.image_path.clone();
+                let name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Image")
+                    .to_string();
+                return (name, Some(path));
+            }
             let label = if item.image_width > 0 && item.image_height > 0 {
                 format!("Image {}×{}", item.image_width, item.image_height)
             } else {
@@ -1329,7 +1346,8 @@ fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Optio
             }
             let first_name = data.files[0].name.clone();
             if data.files.len() == 1 {
-                return (first_name, None);
+                let subtitle = remote_host.map(|_| data.files[0].path.clone());
+                return (first_name, subtitle);
             }
             // Multiple files: first name as label, "等N个文件" as faded subtitle
             let count_label = crate::core::i18n_keys::I18nKey::QuickFileCount

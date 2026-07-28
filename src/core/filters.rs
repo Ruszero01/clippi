@@ -200,17 +200,13 @@ impl ClipboardFilters {
                         type_conditions.push("content_type = 'image'".to_string());
                     }
                     "file" => {
-                        // Path-text entries are classified by current local
-                        // availability in AppState after this candidate query.
-                        type_conditions
-                            .push("(content_type = 'file' OR meta_type = 'path')".to_string());
+                        type_conditions.push("content_type = 'file'".to_string());
                     }
                     "link" => {
                         type_conditions.push("meta_type = 'link'".to_string());
                     }
                     "path" => {
-                        type_conditions
-                            .push("meta_type = 'path' AND content_type != 'file'".to_string());
+                        type_conditions.push("meta_type = 'path'".to_string());
                     }
                     "color" => {
                         type_conditions.push("meta_type = 'color'".to_string());
@@ -290,12 +286,24 @@ mod tests {
     }
     #[test]
 
-    fn file_filter_loads_path_text_candidates_for_runtime_classification() {
+    fn file_filter_only_matches_clipboard_file_items() {
         let mut filters = ClipboardFilters::default();
         filters.toggle_type("file");
 
         let (where_sql, params) = filters.db_where();
-        assert!(where_sql.contains("content_type = 'file' OR meta_type = 'path'"));
+        assert!(where_sql.contains("content_type = 'file'"));
+        assert!(!where_sql.contains("meta_type = 'path'"));
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn path_filter_matches_all_path_text_items() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("path");
+
+        let (where_sql, params) = filters.db_where();
+        assert!(where_sql.contains("meta_type = 'path'"));
+        assert!(!where_sql.contains("content_type = 'file'"));
         assert!(params.is_empty());
     }
 }

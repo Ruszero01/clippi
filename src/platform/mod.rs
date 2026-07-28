@@ -6,6 +6,7 @@ pub mod focus;
 pub mod hotkey;
 pub mod monitor;
 pub mod paste;
+pub mod remote_path;
 pub mod source;
 pub mod text_input;
 pub mod tray;

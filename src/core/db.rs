@@ -100,7 +100,8 @@ fn list_item_select_columns() -> String {
                  'ocr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.ocr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
                  'qr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.qr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
                  'page_title', NULLIF(substr(coalesce(json_extract(rich_data, '$.page_title'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
-                 'drive_label', NULLIF(substr(coalesce(json_extract(rich_data, '$.drive_label'), ''), 1, {LIST_RICH_AUX_LIMIT}), '')
+                 'drive_label', NULLIF(substr(coalesce(json_extract(rich_data, '$.drive_label'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
+                 'remote_host', NULLIF(substr(coalesce(json_extract(rich_data, '$.remote_host'), ''), 1, {LIST_RICH_AUX_LIMIT}), '')
              )
          END,
          file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format"

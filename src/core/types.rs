@@ -196,6 +196,9 @@ pub struct RichData {
     /// Drive / volume label for file-system paths (e.g. "配置(D:)").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drive_label: Option<String>,
+    /// Host label captured for a remote image/file reference (e.g. "NAS01").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_host: Option<String>,
 }
 
 impl RichData {

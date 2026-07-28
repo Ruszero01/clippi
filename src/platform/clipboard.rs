@@ -188,24 +188,54 @@ fn detect_files(
         let files_result = ctx.get_files();
         if let Ok(files) = files_result {
             if !files.is_empty() {
-                let entries: Vec<FileInfo> = files
+                let entries_with_remote: Vec<(FileInfo, Option<String>)> = files
                     .iter()
                     .map(|path| {
                         let p = std::path::Path::new(path);
-                        FileInfo {
-                            name: p
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| path.clone()),
-                            path: path.clone(),
-                            is_dir: p.is_dir(),
-                        }
+                        let remote_host =
+                            crate::platform::remote_path::remote_host_label(path.as_str());
+                        (
+                            FileInfo {
+                                name: p
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| path.clone()),
+                                path: path.clone(),
+                                // Never query a remote source merely to classify it.
+                                // Remote folders remain usable as file references.
+                                is_dir: remote_host.is_none() && p.is_dir(),
+                            },
+                            remote_host,
+                        )
                     })
                     .collect();
-                // Compute total file size in background thread (avoids blocking main thread poll)
-                let total_size: i64 = entries
+                let entries: Vec<FileInfo> = entries_with_remote
                     .iter()
-                    .filter_map(|f| std::fs::metadata(&f.path).ok())
+                    .map(|(entry, _)| entry.clone())
+                    .collect();
+                let first_remote_host = entries_with_remote
+                    .iter()
+                    .find_map(|(_, host)| host.as_ref())
+                    .cloned();
+                let common_remote_host = first_remote_host.map(|first| {
+                    if entries_with_remote
+                        .iter()
+                        .all(|(_, host)| host.as_deref() == Some(first.as_str()))
+                    {
+                        first
+                    } else {
+                        // Mixed local/remote or multi-host selections still need
+                        // the remote marker so later previews perform no I/O.
+                        "NAS".to_string()
+                    }
+                });
+
+                // Remote resources intentionally keep an unknown size. Querying
+                // NAS metadata here can stall the clipboard listener.
+                let total_size: i64 = entries_with_remote
+                    .iter()
+                    .filter(|(_, host)| host.is_none())
+                    .filter_map(|(entry, _)| std::fs::metadata(&entry.path).ok())
                     .map(|m| m.len())
                     .sum::<u64>() as i64;
 
@@ -213,19 +243,29 @@ fn detect_files(
                 if entries.len() == 1 && !entries[0].is_dir && is_image_extension(&entries[0].path)
                 {
                     let path = entries[0].path.clone();
-                    let hash = hash_image_file_reference(&path);
-                    let (iw, ih) = image::image_dimensions(&path).unwrap_or((0, 0));
-                    ensure_thumbnail_for_image(&path, hash);
+                    let remote_host = entries_with_remote[0].1.clone();
+                    let is_remote = remote_host.is_some();
+                    let hash = hash_image_file_reference(&path, !is_remote);
+                    let (iw, ih) = if is_remote {
+                        (0, 0)
+                    } else {
+                        image::image_dimensions(&path).unwrap_or((0, 0))
+                    };
+                    if !is_remote {
+                        ensure_thumbnail_for_image(&path, hash);
+                    }
 
                     mark_recent_image_file_reference();
-                    return Some(ClipboardItem::new_image(
-                        0,
-                        &path,
-                        hash,
-                        iw,
-                        ih,
-                        source_info.as_ref(),
-                    ));
+                    let mut item =
+                        ClipboardItem::new_image(0, &path, hash, iw, ih, source_info.as_ref());
+                    if remote_host.is_some() {
+                        item.rich_data = RichData {
+                            remote_host,
+                            ..Default::default()
+                        }
+                        .to_json();
+                    }
+                    return Some(item);
                 }
 
                 // --- Multi-file, single directory, or single non-image file → File type ---
@@ -239,24 +279,30 @@ fn detect_files(
                 }
                 let hash = hasher.finish();
 
-                return Some(ClipboardItem::new_file(
-                    0,
-                    &file_data,
-                    hash,
-                    source_info.as_ref(),
-                    total_size,
-                ));
+                let mut item =
+                    ClipboardItem::new_file(0, &file_data, hash, source_info.as_ref(), total_size);
+                if common_remote_host.is_some() {
+                    item.rich_data = RichData {
+                        remote_host: common_remote_host,
+                        ..Default::default()
+                    }
+                    .to_json();
+                }
+                return Some(item);
             }
         }
     }
     None
 }
 
-fn hash_image_file_reference(path: &str) -> u64 {
+fn hash_image_file_reference(path: &str, probe_metadata: bool) -> u64 {
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);
 
-    if let Ok(meta) = std::fs::metadata(path) {
+    if probe_metadata {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return hasher.finish();
+        };
         meta.len().hash(&mut hasher);
         if let Ok(modified) = meta.modified() {
             if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {

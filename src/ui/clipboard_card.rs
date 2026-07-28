@@ -142,8 +142,8 @@ fn info_row_available_width(window: &Window) -> f32 {
 
 #[cfg(test)]
 mod info_row_tests {
-    use super::{image_is_waiting_for_sync, visible_tag_count};
-    use crate::core::types::ClipboardItem;
+    use super::{estimate_card_height, image_is_waiting_for_sync, visible_tag_count};
+    use crate::core::types::{ClipboardItem, RichData};
 
     #[test]
     fn shows_all_tags_when_they_fit() {
@@ -190,6 +190,31 @@ mod info_row_tests {
         let item = ClipboardItem::new_image(1, &image_path.to_string_lossy(), 1, 100, 100, None);
 
         assert!(image_is_waiting_for_sync(&item));
+    }
+
+    #[test]
+    fn remote_image_path_card_is_compact_in_auto_height_mode() {
+        let mut item = ClipboardItem::new_image(1, r"\\NAS01\share\large-image.png", 1, 0, 0, None);
+        item.rich_data = RichData {
+            remote_host: Some("NAS01".to_string()),
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(estimate_card_height(&item, "auto"), 68.0);
+    }
+
+    #[test]
+    fn explicit_card_height_still_applies_to_remote_image_path_card() {
+        let mut item = ClipboardItem::new_image(1, r"\\NAS01\share\large-image.png", 1, 0, 0, None);
+        item.rich_data = RichData {
+            remote_host: Some("NAS01".to_string()),
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(estimate_card_height(&item, "medium"), 96.0);
+        assert_eq!(estimate_card_height(&item, "high"), 128.0);
     }
 }
 
@@ -328,6 +353,64 @@ fn image_display_name(item: &ClipboardItem) -> String {
         })
         .unwrap_or("Image")
         .to_string()
+}
+
+fn render_path_like_preview(
+    name: String,
+    full_path: String,
+    label_color: Rgba,
+    subtitle_color: Rgba,
+    search_terms: &[String],
+    highlight_bg: Rgba,
+    highlight_text: Rgba,
+) -> Div {
+    let preview = div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .overflow_hidden()
+        .child(
+            div()
+                .w_full()
+                .text_size(px(13.))
+                .line_height(px(16.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(label_color)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(search_highlight::render_highlighted_inline(
+                    name,
+                    search_terms,
+                    label_color,
+                    highlight_bg,
+                    highlight_text,
+                    13.0,
+                    Some(FontWeight::BOLD),
+                )),
+        );
+
+    if full_path.is_empty() {
+        preview
+    } else {
+        preview.child(
+            div()
+                .w_full()
+                .text_size(px(11.))
+                .line_height(px(14.))
+                .text_color(subtitle_color)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(search_highlight::render_highlighted_auxiliary_inline(
+                    full_path,
+                    search_terms,
+                    subtitle_color,
+                    highlight_bg,
+                    highlight_text,
+                    11.0,
+                )),
+        )
+    }
 }
 
 fn image_path_is_cache_path(image_path: &str) -> bool {
@@ -674,6 +757,15 @@ pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32
     if card_height_mode != "auto" {
         return 96.0;
     }
+    let uses_compact_remote_preview = RichData::from_json(&item.rich_data).remote_host.is_some()
+        && match item.content_type {
+            ContentType::Image => true,
+            ContentType::File => FileData::from_json(&item.file_data).files.len() == 1,
+            _ => false,
+        };
+    if uses_compact_remote_preview {
+        return 68.0;
+    }
     match item.content_type {
         ContentType::Image => {
             if item.image_width > 0 && item.image_height > 0 {
@@ -992,7 +1084,13 @@ impl RenderOnce for ClipboardCard {
         let full_text = &item.full_text; // borrowed — only cloned in the branches that own it
         let img_w = item.image_width;
         let img_h = item.image_height;
-        let preview_img_path = image_preview_path(&item);
+        let rich_data = RichData::from_json(&item.rich_data);
+        let remote_host = rich_data.remote_host.clone();
+        let preview_img_path = if remote_host.is_some() {
+            None
+        } else {
+            image_preview_path(&item)
+        };
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
         let tags = item.tags.clone();
@@ -1007,6 +1105,17 @@ impl RenderOnce for ClipboardCard {
                 .files
                 .first()
                 .is_none_or(|file| file.path.is_empty());
+        let remote_path_preview = match content_type {
+            ContentType::Image if remote_host.is_some() => {
+                Some((image_name.clone(), item.image_path.clone()))
+            }
+            ContentType::File if remote_host.is_some() => transfer_file_data
+                .files
+                .first()
+                .filter(|_| transfer_file_data.files.len() == 1)
+                .map(|file| (file.name.clone(), file.path.clone())),
+            _ => None,
+        };
         let source_is_uploaded = content_type == ContentType::File
             && !transfer_file_data.transfer
             && !transfer_file_data.remote_hash.is_empty();
@@ -1190,7 +1299,7 @@ impl RenderOnce for ClipboardCard {
                 ),
             DisplayKind::File => {
                 // --- Single file: prefer file system icon over source app icon ---
-                let file_icon = if transfer_is_cloud {
+                let file_icon = if transfer_is_cloud || remote_host.is_some() {
                     None
                 } else {
                     serde_json::from_str::<FileData>(&item.file_data)
@@ -1560,7 +1669,17 @@ impl RenderOnce for ClipboardCard {
             let content_kind = item.display_kind();
             // Link and Path rendering (now sub-types of PlainText via meta_type)
             // must be checked before the catch-all PlainText arm below.
-            if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
+            if let Some((name, path)) = remote_path_preview.clone() {
+                render_path_like_preview(
+                    name,
+                    path,
+                    text_1,
+                    text_3,
+                    &search_terms,
+                    highlight_bg,
+                    highlight_text,
+                )
+            } else if matches!(content_kind, DisplayKind::Link | DisplayKind::Path) {
                 if matches!(content_kind, DisplayKind::Link) {
                     let domain = url_domain(full_text);
                     let masked_url =
@@ -1641,70 +1760,20 @@ impl RenderOnce for ClipboardCard {
                         text_1
                     };
                     let path_text = item.full_text.trim_end_matches(['\\', '/']).to_string();
-                    let (leaf, show_full) = match path_text.rfind(['\\', '/']) {
-                        Some(pos) if pos + 1 < path_text.len() => {
-                            (path_text[pos + 1..].to_string(), true)
-                        }
-                        _ => (path_text, false),
-                    };
-                    if show_full {
-                        let full = item.full_text.clone();
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(label_color)
-                                    .child(search_highlight::render_highlighted_inline(
-                                        leaf,
-                                        &search_terms,
-                                        label_color,
-                                        highlight_bg,
-                                        highlight_text,
-                                        13.0,
-                                        Some(FontWeight::BOLD),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .text_color(text_3)
-                                    .mx(px(2.))
-                                    .child(" - "),
-                            )
-                            .child(div().text_size(px(13.)).text_color(text_3).child(
-                                search_highlight::render_highlighted_auxiliary_inline(
-                                    full,
-                                    &search_terms,
-                                    text_3,
-                                    highlight_bg,
-                                    highlight_text,
-                                    13.0,
-                                ),
-                            ))
-                    } else {
-                        div().flex_1().flex().items_center().child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(label_color)
-                                .overflow_hidden()
-                                .child(search_highlight::render_highlighted_inline(
-                                    item.full_text.clone(),
-                                    &search_terms,
-                                    label_color,
-                                    highlight_bg,
-                                    highlight_text,
-                                    13.0,
-                                    Some(FontWeight::BOLD),
-                                )),
-                        )
-                    }
+                    let leaf = path_text
+                        .rfind(['\\', '/'])
+                        .filter(|pos| pos + 1 < path_text.len())
+                        .map(|pos| path_text[pos + 1..].to_string())
+                        .unwrap_or_else(|| path_text.clone());
+                    render_path_like_preview(
+                        leaf,
+                        item.full_text.clone(),
+                        label_color,
+                        text_3,
+                        &search_terms,
+                        highlight_bg,
+                        highlight_text,
+                    )
                 }
             } else if matches!(
                 content_kind,
@@ -1987,7 +2056,8 @@ impl RenderOnce for ClipboardCard {
                             serde_json::from_str(&item.file_data).unwrap_or_default();
                         let files: Vec<FileInfo> = file_data.files;
                         let multi = files.len() > 1;
-                        let file_missing = !transfer_is_cloud
+                        let file_missing = remote_host.is_none()
+                            && !transfer_is_cloud
                             && !multi
                             && files.first().is_some_and(|file| {
                                 crate::services::file_status::cached_file_exists(&file.path)
@@ -2061,7 +2131,11 @@ impl RenderOnce for ClipboardCard {
                                     } else {
                                         split_name_ext(&fi.name)
                                     };
-                                    let cached_icon = cached_file_icon_path(&fi.path, fi.is_dir);
+                                    let cached_icon = if remote_host.is_some() {
+                                        None
+                                    } else {
+                                        cached_file_icon_path(&fi.path, fi.is_dir)
+                                    };
                                     let fallback_icon =
                                         if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
                                     let row = div()
@@ -2175,30 +2249,37 @@ impl RenderOnce for ClipboardCard {
                 }
             }
             ContentType::Image => {
-                let img_missing =
-                    !item.image_path.is_empty() && !std::path::Path::new(&item.image_path).exists();
-                let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
-                if img_not_loaded {
-                    Some(I18nKey::CardImageNotLoaded.text().to_string())
-                } else if img_missing {
-                    size_label_danger = true;
-                    Some(I18nKey::CardStaleFile.text().to_string())
-                } else if img_w > 0 && img_h > 0 {
-                    Some(format!("{}×{}", img_w, img_h))
+                if let Some(host) = remote_host.clone() {
+                    Some(host)
                 } else {
-                    None
+                    let img_missing = !item.image_path.is_empty()
+                        && !std::path::Path::new(&item.image_path).exists();
+                    let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
+                    if img_not_loaded {
+                        Some(I18nKey::CardImageNotLoaded.text().to_string())
+                    } else if img_missing {
+                        size_label_danger = true;
+                        Some(I18nKey::CardStaleFile.text().to_string())
+                    } else if img_w > 0 && img_h > 0 {
+                        Some(format!("{}×{}", img_w, img_h))
+                    } else {
+                        None
+                    }
                 }
             }
             ContentType::File => {
                 let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
                 let count = fd.files.len();
                 // Only check single-file items for missing sources.
-                let file_missing = !transfer_is_cloud
+                let file_missing = remote_host.is_none()
+                    && !transfer_is_cloud
                     && count == 1
                     && fd.files.first().is_some_and(|file| {
                         crate::services::file_status::cached_file_exists(&file.path) == Some(false)
                     });
-                if file_missing {
+                if let Some(host) = remote_host.clone() {
+                    Some(host)
+                } else if file_missing {
                     size_label_danger = true;
                     Some(I18nKey::CardStaleFile.text().to_string())
                 } else if count > 1 {

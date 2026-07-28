@@ -210,7 +210,8 @@ impl GpuiClipboardService {
             let mut need_qr = false;
             if item.content_type == ContentType::Image && !item.image_path.is_empty() {
                 let rd = RichData::from_json(&item.rich_data);
-                if ocr_enabled && rd.ocr_text.is_none() {
+                let allow_automatic_analysis = rd.remote_host.is_none();
+                if allow_automatic_analysis && ocr_enabled && rd.ocr_text.is_none() {
                     if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
                         let erd = RichData::from_json(&existing.rich_data);
                         if let Some(ref cached) = erd.ocr_text {
@@ -224,7 +225,7 @@ impl GpuiClipboardService {
                         need_ocr = true; // Brand-new image
                     }
                 }
-                if qr_enabled && rd.qr_text.is_none() {
+                if allow_automatic_analysis && qr_enabled && rd.qr_text.is_none() {
                     if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
                         let erd = RichData::from_json(&existing.rich_data);
                         if let Some(ref cached) = erd.qr_text {

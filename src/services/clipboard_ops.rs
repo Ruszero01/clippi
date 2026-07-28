@@ -7,29 +7,13 @@ use clipboard_rs::{Clipboard, ClipboardContent, ContentFormat};
 
 /// Write a clipboard item's content to the system clipboard.
 ///
-/// When `copy_as_plain_text` is true, only plain text is written; otherwise
-/// HTML and RTF formats are also restored from `rich_data`.
+/// When `copy_as_plain_text` is true, rich text is reduced to plain text.
+/// This setting does not convert images or files into path text.
 /// For images, the backing image file is written as a file reference.
 /// For files, file paths are written via `ClipboardContent::Files` (CF_HDROP).
 pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
     with_clipboard_context(|ctx| {
-        if copy_as_plain_text {
-            // Plain-text paste: write paths for image/file, full_text for everything else.
-            if item.content_type == ContentType::Image && !item.image_path.is_empty() {
-                let _ = Clipboard::set_text(ctx, item.image_path.clone());
-            } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
-                let file_data = crate::core::types::FileData::from_json(&item.file_data);
-                let paths_text: String = file_data
-                    .files
-                    .iter()
-                    .map(|f| f.path.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let _ = Clipboard::set_text(ctx, paths_text);
-            } else {
-                let _ = Clipboard::set_text(ctx, item.full_text.clone());
-            }
-        } else if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+        if item.content_type == ContentType::Image && !item.image_path.is_empty() {
             if std::path::Path::new(&item.image_path).is_file() {
                 let contents = vec![ClipboardContent::Files(vec![item.image_path.clone()])];
                 if let Err(e) = Clipboard::set(ctx, contents) {
@@ -50,6 +34,8 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
             let paths: Vec<String> = file_data.files.iter().map(|f| f.path.clone()).collect();
             let contents = vec![ClipboardContent::Files(paths)];
             let _ = Clipboard::set(ctx, contents);
+        } else if copy_as_plain_text {
+            let _ = Clipboard::set_text(ctx, item.full_text.clone());
         } else {
             let mut contents = vec![ClipboardContent::Text(item.full_text.clone())];
             let rich = RichData::from_json(&item.rich_data);
@@ -62,6 +48,27 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
             let _ = Clipboard::set(ctx, contents);
         }
     });
+}
+
+/// Write an item explicitly as plain text.
+///
+/// Unlike the global rich-text setting, this operation intentionally converts
+/// image and file items into their backing paths.
+pub fn write_item_as_plain_text_to_clipboard(item: &ClipboardItem) {
+    let text = if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+        item.image_path.clone()
+    } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
+        let file_data = crate::core::types::FileData::from_json(&item.file_data);
+        file_data
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        item.full_text.clone()
+    };
+    let _ = write_text_to_clipboard(&text);
 }
 
 /// Decode an image file for compatibility paste targets that require bitmap data.
