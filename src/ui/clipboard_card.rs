@@ -231,13 +231,13 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
         return "\u{e605}";
     }
     match item.display_kind() {
-        DisplayKind::PlainText => "\u{e60e}",
-        DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf => "\u{e6ae}",
+        DisplayKind::PlainText => "\u{e606}",
+        DisplayKind::Html | DisplayKind::Markdown | DisplayKind::Rtf => "\u{e853}",
         DisplayKind::Image => "\u{e626}",
         DisplayKind::File => "\u{e68a}",
         DisplayKind::Link => "\u{e6d7}",
         DisplayKind::Path => "\u{e60f}",
-        DisplayKind::Color => "\u{e610}",
+        DisplayKind::Color => "\u{e608}",
         DisplayKind::Email => "\u{e604}",
         DisplayKind::Phone => "\u{e966}",
         DisplayKind::Secret => "\u{e612}",

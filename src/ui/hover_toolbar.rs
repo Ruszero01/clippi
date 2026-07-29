@@ -150,7 +150,7 @@ impl RenderOnce for HoverToolbar {
                 ));
             }
             buttons.push((
-                "\u{e8b6}",
+                "\u{e696}",
                 "delete_transfer",
                 Box::new(move |hovered| if hovered { danger } else { text_2 }),
             ));
@@ -165,7 +165,7 @@ impl RenderOnce for HoverToolbar {
             // --- Paste Plain Text (only when item has actual rich formatting) ---
             if props.has_rich_content {
                 buttons.push((
-                    "\u{e60e}",
+                    "\u{e606}",
                     "paste_plain",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
@@ -228,14 +228,14 @@ impl RenderOnce for HoverToolbar {
 
             // Note
             buttons.push((
-                "\u{e606}",
+                "\u{e6fa}",
                 "edit_note",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
 
             // Tag
             buttons.push((
-                "\u{ec07}",
+                "\u{e886}",
                 "show_tag_picker",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
@@ -254,13 +254,13 @@ impl RenderOnce for HoverToolbar {
 
             // --- Delete ---
             buttons.push((
-                "\u{e8b6}",
+                "\u{e696}",
                 "delete",
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
         } else if is_batch && props.is_transfer {
             buttons.push((
-                "\u{e8b6}",
+                "\u{e696}",
                 "batch_delete_transfer",
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));
@@ -281,7 +281,7 @@ impl RenderOnce for HoverToolbar {
             }
             // --- Batch tag ---
             buttons.push((
-                "\u{ec07}",
+                "\u{e886}",
                 "batch_tag",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
@@ -293,7 +293,7 @@ impl RenderOnce for HoverToolbar {
             ));
             // --- Batch delete ---
             buttons.push((
-                "\u{e8b6}",
+                "\u{e696}",
                 "batch_delete",
                 Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
             ));

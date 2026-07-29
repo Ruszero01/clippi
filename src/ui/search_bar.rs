@@ -33,12 +33,12 @@ pub(crate) const FILTER_TYPES: &[FilterDef] = &[
     FilterDef {
         label_key: I18nKey::FilterTextLabel,
         key: "plain_text",
-        icon: "\u{e60e}",
+        icon: "\u{e606}",
     },
     FilterDef {
         label_key: I18nKey::FilterRtfLabel,
         key: "rich_text",
-        icon: "\u{e6ae}",
+        icon: "\u{e853}",
     },
     FilterDef {
         label_key: I18nKey::FilterImageLabel,
@@ -63,12 +63,12 @@ pub(crate) const FILTER_TYPES: &[FilterDef] = &[
     FilterDef {
         label_key: I18nKey::FilterColorLabel,
         key: "color",
-        icon: "\u{e610}",
+        icon: "\u{e608}",
     },
     FilterDef {
         label_key: I18nKey::FilterContactLabel,
         key: "contact",
-        icon: "\u{e604}",
+        icon: "\u{e616}",
     },
 ];
 const SEARCH_BAR_HORIZONTAL_PADDING: f32 = 16.0;
@@ -551,7 +551,7 @@ impl Render for SearchBar {
                                             } else {
                                                 text_2
                                             })
-                                            .child("\u{ec07}"),
+                                            .child("\u{e886}"),
                                     ),
                             ),
                     ),

@@ -164,7 +164,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxPastePlain.text().into(),
                 action: "paste_plain".into(),
-                icon: "\u{e60e}".into(),
+                icon: "\u{e606}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Shift+Enter"),
@@ -214,7 +214,7 @@ impl ContextMenu {
         items.push(RawMenuItem {
             label: I18nKey::EditNote.text().into(),
             action: "edit_note".into(),
-            icon: "\u{e606}".into(),
+            icon: "\u{e6fa}".into(),
             danger: false,
             fav: false,
             shortcut: sc("F2"),
@@ -297,7 +297,7 @@ impl ContextMenu {
         items.push(RawMenuItem {
             label: I18nKey::CtxTag.text().into(),
             action: "show_tag_picker".into(),
-            icon: "\u{ec07}".into(),
+            icon: "\u{e886}".into(),
             danger: false,
             fav: false,
             shortcut: ctrl_shortcut("T"),
@@ -388,7 +388,7 @@ impl ContextMenu {
         items.push(RawMenuItem {
             label: I18nKey::CtxDelete.text().into(),
             action: "delete".into(),
-            icon: "\u{e8b6}".into(),
+            icon: "\u{e696}".into(),
             danger: true,
             fav: false,
             shortcut: sc("Delete"),
@@ -431,7 +431,7 @@ impl ContextMenu {
             RawMenuItem {
                 label: I18nKey::CtxBatchTag.text().into(),
                 action: "show_tag_picker".into(),
-                icon: "\u{ec07}".into(),
+                icon: "\u{e886}".into(),
                 danger: false,
                 fav: false,
                 shortcut: ctrl_shortcut("T"),
@@ -455,7 +455,7 @@ impl ContextMenu {
             RawMenuItem {
                 label: I18nKey::CtxBatchDelete.text().into(),
                 action: "batch_delete".into(),
-                icon: "\u{e8b6}".into(),
+                icon: "\u{e696}".into(),
                 danger: true,
                 fav: false,
                 shortcut: sc("Delete"),
@@ -469,7 +469,7 @@ impl ContextMenu {
         Self::new().items(vec![RawMenuItem {
             label: I18nKey::RemoveSelectedFromTransfer.text().into(),
             action: "batch_delete_transfer".into(),
-            icon: "\u{e8b6}".into(),
+            icon: "\u{e696}".into(),
             danger: true,
             fav: false,
             shortcut: sc("Delete"),
@@ -512,7 +512,7 @@ impl ContextMenu {
         items.push(RawMenuItem {
             label: I18nKey::RemoveFromTransfer.text().into(),
             action: "delete_transfer".into(),
-            icon: "\u{e8b6}".into(),
+            icon: "\u{e696}".into(),
             danger: true,
             fav: false,
             shortcut: sc("Delete"),
