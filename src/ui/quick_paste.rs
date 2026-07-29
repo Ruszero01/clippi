@@ -785,8 +785,12 @@ impl Render for QuickPasteView {
                                 .overflow_hidden()
                                 .text_size(px(10.0))
                                 .font_weight(FontWeight::MEDIUM)
-                                .bg(tag_color)
-                                .text_color(rgb(0xffffff))
+                                .bg(if active {
+                                    theme.accent_overlay()
+                                } else {
+                                    tag_color
+                                })
+                                .text_color(if active { tag_color } else { rgb(0xffffff) })
                                 .cursor(CursorStyle::PointingHand)
                                 .when(tag_compact, move |d| {
                                     let tip = tag_name_for_tip;
