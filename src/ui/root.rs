@@ -25,8 +25,8 @@ const VIEW_ANIM_DURATION: Duration = Duration::from_millis(180);
 /// Floating panel / dialog enter animation duration.
 const OVERLAY_ANIM_DURATION: Duration = Duration::from_millis(150);
 
-use super::clipboard_list::{ClipboardListEvent, ClipboardListView, ConfirmDialogState};
 use super::bottom_bar::BottomBar;
+use super::clipboard_list::{ClipboardListEvent, ClipboardListView, ConfirmDialogState};
 use super::components::app_list_dialog::{
     render_app_list_dialog, AppListDialogEntry, AppListDialogParams,
 };
@@ -1269,7 +1269,7 @@ impl Render for RootView {
                             theme.clone(),
                         );
                         panel.child(bottom)
-                    })
+                    }),
             )
             // --- Tag filter panel — ConfirmDialog pattern: ---
             // --- full-screen backdrop that closes on click outside, ---
@@ -1742,9 +1742,8 @@ impl Render for RootView {
                         is_recording_target: false,
                     })
                     .collect();
-                let add_button_label = (!foreground_app.is_empty()).then(|| {
-                    I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app])
-                });
+                let add_button_label = (!foreground_app.is_empty())
+                    .then(|| I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app]));
                 root.child(render_app_list_dialog(AppListDialogParams {
                     title: I18nKey::HotkeyBlacklist.text().to_string(),
                     empty_hint: I18nKey::HotkeyBlacklistEmptyHint.text().to_string(),
@@ -1835,9 +1834,8 @@ impl Render for RootView {
                 let add_button_label = if recording_active {
                     Some(I18nKey::HotkeyPasteShortcutRecording.text().to_string())
                 } else {
-                    (!foreground_app.is_empty()).then(|| {
-                        I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app])
-                    })
+                    (!foreground_app.is_empty())
+                        .then(|| I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app]))
                 };
                 root.child(render_app_list_dialog(AppListDialogParams {
                     title: I18nKey::HotkeyPasteShortcut.text().to_string(),
@@ -1937,12 +1935,19 @@ impl Render for RootView {
                 let settings = self.settings_panel.clone();
                 let state = self.state.clone();
                 let foreground_app = state.read(cx).foreground_app_name.clone();
-                let entries = state.read(cx).settings.clipboard_app_blacklist.iter().map(|app_name| {
-                    AppListDialogEntry { app_name: app_name.clone(), shortcut: None, is_recording_target: false }
-                }).collect();
-                let add_button_label = (!foreground_app.is_empty()).then(|| {
-                    I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app])
-                });
+                let entries = state
+                    .read(cx)
+                    .settings
+                    .clipboard_app_blacklist
+                    .iter()
+                    .map(|app_name| AppListDialogEntry {
+                        app_name: app_name.clone(),
+                        shortcut: None,
+                        is_recording_target: false,
+                    })
+                    .collect();
+                let add_button_label = (!foreground_app.is_empty())
+                    .then(|| I18nKey::ClipboardAppBlacklistAddLabel.fmt(&[&foreground_app]));
                 root.child(render_app_list_dialog(AppListDialogParams {
                     title: I18nKey::ClipboardAppBlacklistTitle.text().to_string(),
                     empty_hint: I18nKey::ClipboardAppBlacklistEmptyHint.text().to_string(),
@@ -1953,15 +1958,62 @@ impl Render for RootView {
                     add_button_label,
                     add_button_recording: false,
                     theme: self.theme.clone(),
-                    layout: (app_blacklist_popup_opacity, app_blacklist_popup_scale, app_blacklist_popup_offset, win_w, win_h),
-                    on_close: Rc::new({ let settings = settings.clone(); move |_window, cx| settings.update(cx, |panel, cx| { panel.close_app_list_popups(); cx.notify(); }) }),
-                    on_delete: Rc::new({ let settings = settings.clone(); move |app_name, _window, cx| settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::RemoveClipboardBlacklist { app_name }))) }),
+                    layout: (
+                        app_blacklist_popup_opacity,
+                        app_blacklist_popup_scale,
+                        app_blacklist_popup_offset,
+                        win_w,
+                        win_h,
+                    ),
+                    on_close: Rc::new({
+                        let settings = settings.clone();
+                        move |_window, cx| {
+                            settings.update(cx, |panel, cx| {
+                                panel.close_app_list_popups();
+                                cx.notify();
+                            })
+                        }
+                    }),
+                    on_delete: Rc::new({
+                        let settings = settings.clone();
+                        move |app_name, _window, cx| {
+                            settings.update(cx, |_panel, cx| {
+                                cx.emit(SettingsEvent::ShowHotkeyConfirm(
+                                    hotkey::HotkeyConfirmAction::RemoveClipboardBlacklist {
+                                        app_name,
+                                    },
+                                ))
+                            })
+                        }
+                    }),
                     on_shortcut_click: None,
                     on_cancel_recording: None,
-                    on_add: (!foreground_app.is_empty()).then(|| Rc::new({ let settings = settings.clone(); let state = state.clone(); let foreground_app = foreground_app.clone(); move |_window: &mut Window, cx: &mut App| {
-                        if crate::core::settings::is_app_in_list(&state.read(cx).settings.clipboard_app_blacklist, &foreground_app) { state.update(cx, |state, cx| { state.show_toast(I18nKey::BottomBarAlreadyInList.text()); cx.notify(); }); }
-                        else { settings.update(cx, |_panel, cx| cx.emit(SettingsEvent::ShowHotkeyConfirm(hotkey::HotkeyConfirmAction::AddClipboardBlacklist { app_name: foreground_app.clone() }))); }
-                    } }) as Rc<dyn Fn(&mut Window, &mut App)>),
+                    on_add: (!foreground_app.is_empty()).then(|| {
+                        Rc::new({
+                            let settings = settings.clone();
+                            let state = state.clone();
+                            let foreground_app = foreground_app.clone();
+                            move |_window: &mut Window, cx: &mut App| {
+                                if crate::core::settings::is_app_in_list(
+                                    &state.read(cx).settings.clipboard_app_blacklist,
+                                    &foreground_app,
+                                ) {
+                                    state.update(cx, |state, cx| {
+                                        state.show_toast(I18nKey::BottomBarAlreadyInList.text());
+                                        cx.notify();
+                                    });
+                                } else {
+                                    settings.update(cx, |_panel, cx| {
+                                        cx.emit(SettingsEvent::ShowHotkeyConfirm(
+                                            hotkey::HotkeyConfirmAction::AddClipboardBlacklist {
+                                                app_name: foreground_app.clone(),
+                                            },
+                                        ))
+                                    });
+                                }
+                            }
+                        }) as Rc<dyn Fn(&mut Window, &mut App)>
+                    }),
                 }))
             })
             // --- Root-level clear-data ConfirmDialog ---
@@ -1979,8 +2031,7 @@ impl Render for RootView {
                     .sync_backends
                     .iter()
                     .any(|backend| backend.enabled);
-                let mut message =
-                    I18nKey::ConfirmClearDataMsg.fmt(&[&items_count.to_string()]);
+                let mut message = I18nKey::ConfirmClearDataMsg.fmt(&[&items_count.to_string()]);
                 if has_enabled_sync {
                     message.push('\n');
                     message.push_str(I18nKey::ConfirmClearDataSyncWarning.text());
@@ -2206,11 +2257,14 @@ impl Render for RootView {
                                             &s.settings.clipboard_app_blacklist,
                                             &app_name,
                                         ) {
-                                            s.settings.clipboard_app_blacklist.push(app_name.clone());
+                                            s.settings
+                                                .clipboard_app_blacklist
+                                                .push(app_name.clone());
                                             s.settings.save();
                                         }
                                     });
-                                    let updated = app_state.read(cx).settings.clipboard_app_blacklist.clone();
+                                    let updated =
+                                        app_state.read(cx).settings.clipboard_app_blacklist.clone();
                                     wm.update(cx, |wm, _cx| {
                                         wm.set_clipboard_app_blacklist(updated);
                                     });
@@ -2241,11 +2295,15 @@ impl Render for RootView {
                                 move |_window, cx| {
                                     app_state.update(cx, |s, _cx| {
                                         s.settings.clipboard_app_blacklist.retain(|a| {
-                                            !crate::core::settings::is_app_in_list(std::slice::from_ref(a), &app_name)
+                                            !crate::core::settings::is_app_in_list(
+                                                std::slice::from_ref(a),
+                                                &app_name,
+                                            )
                                         });
                                         s.settings.save();
                                     });
-                                    let updated = app_state.read(cx).settings.clipboard_app_blacklist.clone();
+                                    let updated =
+                                        app_state.read(cx).settings.clipboard_app_blacklist.clone();
                                     wm.update(cx, |wm, _cx| {
                                         wm.set_clipboard_app_blacklist(updated);
                                     });
@@ -2270,10 +2328,7 @@ impl Render for RootView {
                         let fallback_hotkey = app_state.read(cx).settings.hotkey.clone();
                         ConfirmDialog::new()
                             .title(I18nKey::WinVTakeoverConfirmTitle.text())
-                            .message(
-                                I18nKey::WinVTakeoverConfirmMsg
-                                    .fmt(&[&fallback_hotkey]),
-                            )
+                            .message(I18nKey::WinVTakeoverConfirmMsg.fmt(&[&fallback_hotkey]))
                             .confirm_label(I18nKey::DialogConfirm.text())
                             .theme(self.theme.clone())
                             .on_confirm({
@@ -2281,9 +2336,8 @@ impl Render for RootView {
                                 let settings = settings.clone();
                                 let app_state = app_state.clone();
                                 move |_window, cx| {
-                                    let result = wm.update(cx, |wm, cx| {
-                                        wm.enable_win_v_takeover(cx)
-                                    });
+                                    let result =
+                                        wm.update(cx, |wm, cx| wm.enable_win_v_takeover(cx));
                                     if let Err(e) = result {
                                         log::error!("Win+V takeover enable failed: {e}");
                                         app_state.update(cx, |state, _cx| {
@@ -2307,69 +2361,63 @@ impl Render for RootView {
                             .focus_handle(dialog_focus.clone())
                             .render_animated(window, cx, hotkey_confirm_gen)
                     }
-                    Some(hotkey::HotkeyConfirmAction::WinVTakeoverDisable) => {
-                        ConfirmDialog::new()
-                            .title(I18nKey::WinVTakeoverRestoreTitle.text())
-                            .message(I18nKey::WinVTakeoverRestoreMsg.text())
-                            .confirm_label(I18nKey::DialogConfirm.text())
-                            .theme(self.theme.clone())
-                            .on_confirm({
-                                let wm = wm.clone();
-                                let settings = settings.clone();
-                                let app_state = app_state.clone();
-                                move |_window, cx| {
-                                    let result = wm.update(cx, |wm, cx| {
-                                        wm.disable_win_v_takeover(cx)
-                                    });
-                                    if let Err(e) = result {
-                                        log::error!("Win+V takeover disable failed: {e}");
-                                        app_state.update(cx, |state, _cx| {
-                                            state.toast_message = Some(e);
-                                            state.toast_is_warning = true;
-                                        });
-                                    }
-                                    settings.update(cx, |panel, cx| {
-                                        panel.clear_hotkey_confirm(cx);
+                    Some(hotkey::HotkeyConfirmAction::WinVTakeoverDisable) => ConfirmDialog::new()
+                        .title(I18nKey::WinVTakeoverRestoreTitle.text())
+                        .message(I18nKey::WinVTakeoverRestoreMsg.text())
+                        .confirm_label(I18nKey::DialogConfirm.text())
+                        .theme(self.theme.clone())
+                        .on_confirm({
+                            let wm = wm.clone();
+                            let settings = settings.clone();
+                            let app_state = app_state.clone();
+                            move |_window, cx| {
+                                let result = wm.update(cx, |wm, cx| wm.disable_win_v_takeover(cx));
+                                if let Err(e) = result {
+                                    log::error!("Win+V takeover disable failed: {e}");
+                                    app_state.update(cx, |state, _cx| {
+                                        state.toast_message = Some(e);
+                                        state.toast_is_warning = true;
                                     });
                                 }
-                            })
-                            .on_cancel({
-                                let settings = settings.clone();
-                                move |_window, cx| {
-                                    settings.update(cx, |panel, cx| {
-                                        panel.clear_hotkey_confirm(cx);
-                                    });
-                                }
-                            })
-                            .focus_handle(dialog_focus.clone())
-                            .render_animated(window, cx, hotkey_confirm_gen)
-                    }
+                                settings.update(cx, |panel, cx| {
+                                    panel.clear_hotkey_confirm(cx);
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let settings = settings.clone();
+                            move |_window, cx| {
+                                settings.update(cx, |panel, cx| {
+                                    panel.clear_hotkey_confirm(cx);
+                                });
+                            }
+                        })
+                        .focus_handle(dialog_focus.clone())
+                        .render_animated(window, cx, hotkey_confirm_gen),
                     // ── Win+V manual setup instructions ──
-                    Some(hotkey::HotkeyConfirmAction::WinVManualSetup) => {
-                        ConfirmDialog::new()
-                            .title(I18nKey::WinVManualSetupHint.text())
-                            .message(I18nKey::WinVManualSetupContent.text())
-                            .confirm_label(I18nKey::DialogConfirm.text())
-                            .theme(self.theme.clone())
-                            .on_confirm({
-                                let settings = settings.clone();
-                                move |_window, cx| {
-                                    settings.update(cx, |panel, cx| {
-                                        panel.clear_hotkey_confirm(cx);
-                                    });
-                                }
-                            })
-                            .on_cancel({
-                                let settings = settings.clone();
-                                move |_window, cx| {
-                                    settings.update(cx, |panel, cx| {
-                                        panel.clear_hotkey_confirm(cx);
-                                    });
-                                }
-                            })
-                            .focus_handle(dialog_focus.clone())
-                            .render_animated(window, cx, hotkey_confirm_gen)
-                    }
+                    Some(hotkey::HotkeyConfirmAction::WinVManualSetup) => ConfirmDialog::new()
+                        .title(I18nKey::WinVManualSetupHint.text())
+                        .message(I18nKey::WinVManualSetupContent.text())
+                        .confirm_label(I18nKey::DialogConfirm.text())
+                        .theme(self.theme.clone())
+                        .on_confirm({
+                            let settings = settings.clone();
+                            move |_window, cx| {
+                                settings.update(cx, |panel, cx| {
+                                    panel.clear_hotkey_confirm(cx);
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let settings = settings.clone();
+                            move |_window, cx| {
+                                settings.update(cx, |panel, cx| {
+                                    panel.clear_hotkey_confirm(cx);
+                                });
+                            }
+                        })
+                        .focus_handle(dialog_focus.clone())
+                        .render_animated(window, cx, hotkey_confirm_gen),
                     None => div().into_any_element(),
                 };
 

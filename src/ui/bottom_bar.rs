@@ -6,8 +6,8 @@
 //! --- - Left: app icon (18×18) + app name (12px) + window title (11px) ---
 //! --- - Right: clipboard-blacklist + hotkey-blacklist icon buttons (22×22) ---
 
-use gpui::*;
 use gpui::prelude::*;
+use gpui::*;
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
@@ -26,8 +26,16 @@ pub struct BottomBar {
 }
 
 impl BottomBar {
-    pub fn new(state: Entity<AppState>, settings: Entity<SettingsPanel>, theme: ClippiTheme) -> Self {
-        Self { state, settings, theme }
+    pub fn new(
+        state: Entity<AppState>,
+        settings: Entity<SettingsPanel>,
+        theme: ClippiTheme,
+    ) -> Self {
+        Self {
+            state,
+            settings,
+            theme,
+        }
     }
 }
 

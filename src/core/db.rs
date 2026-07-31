@@ -30,6 +30,7 @@ pub struct PrunedClipboardItem {
     pub content_type: ContentType,
     pub is_favorite: bool,
     pub custom_hotkey: String,
+    pub file_data: String,
 }
 
 const SOURCE_APP_ICON_INLINE_LIMIT: usize = 256 * 1024;
@@ -1233,13 +1234,26 @@ impl Database {
     /// Prune non-favorite items not updated within retention_days.
     /// Returns the deleted items. retention_days == 0 means no limit.
     /// Uses updated_at so frequently re-captured content stays fresh.
+    #[cfg(test)]
     pub fn prune_expired_items(&self, retention_days: u32) -> SqlResult<Vec<PrunedClipboardItem>> {
+        self.prune_expired_items_with_sync_scope(retention_days, None)
+            .map(|(items, _)| items)
+    }
+
+    /// Prune expired items and write any required sync tombstones in the same
+    /// transaction as the item/tag deletions.
+    pub fn prune_expired_items_with_sync_scope(
+        &self,
+        retention_days: u32,
+        sync_scope: Option<&CleanupSyncScope>,
+    ) -> SqlResult<(Vec<PrunedClipboardItem>, u32)> {
         if retention_days == 0 {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         }
         let cutoff = format!("-{} days", retention_days);
-        let mut stmt = self.conn.prepare(
-            "SELECT id, content_hash, content_type, is_favorite, custom_hotkey FROM clipboard_items \
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
+            "SELECT id, content_hash, content_type, is_favorite, custom_hotkey, file_data FROM clipboard_items \
              WHERE is_favorite = 0 AND meta_type != 'transfer' \
                AND julianday(updated_at) < julianday('now', ?1)",
         )?;
@@ -1253,12 +1267,51 @@ impl Database {
                     content_type: ContentType::from_str(&content_type),
                     is_favorite: is_favorite != 0,
                     custom_hotkey: row.get(4).unwrap_or_default(),
+                    file_data: row.get(5).unwrap_or_default(),
                 })
             })?
             .collect::<SqlResult<Vec<_>>>()?;
+        drop(stmt);
+
+        let mut tombstones_written = 0;
+        if let Some(scope) = sync_scope {
+            let now = chrono::Utc::now().to_rfc3339();
+            for item in &expired_items {
+                if crate::core::sync_scope::item_in_sync_scope(
+                    item.content_type,
+                    item.is_favorite,
+                    scope.include_images,
+                    scope.favorites_only,
+                ) {
+                    tx.execute(
+                        "INSERT INTO deleted_items (content_hash, deleted_at, device_name) \
+                         VALUES (?1, ?2, ?3) \
+                         ON CONFLICT(content_hash) DO UPDATE SET \
+                           deleted_at = excluded.deleted_at, \
+                           device_name = excluded.device_name",
+                        params![item.content_hash as i64, &now, &scope.device_name],
+                    )?;
+                    tombstones_written += 1;
+                }
+            }
+        }
+
         let expired_ids: Vec<i64> = expired_items.iter().map(|item| item.id).collect();
-        self.delete_items_in_chunks(&expired_ids)?;
-        Ok(expired_items)
+        for chunk in expired_ids.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            tx.execute(
+                &format!("DELETE FROM item_tags WHERE item_id IN ({placeholders})"),
+                rusqlite::params_from_iter(chunk.iter()),
+            )?;
+            tx.execute(
+                &format!("DELETE FROM clipboard_items WHERE id IN ({placeholders})"),
+                rusqlite::params_from_iter(chunk.iter()),
+            )?;
+        }
+        tx.commit()?;
+        Ok((expired_items, tombstones_written))
     }
 
     /// Clean up tombstones older than N days.
@@ -2677,6 +2730,50 @@ mod tests {
             .query_row("SELECT full_text FROM clipboard_items", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, "recent_item");
+    }
+
+    #[test]
+    fn prune_expired_writes_sync_tombstones_atomically() {
+        let (_path, db) = temp_db("prune-exp-sync");
+        insert_item(&db, 77, "old", "2020-01-01T00:00:00Z");
+        let scope = CleanupSyncScope {
+            include_images: true,
+            favorites_only: false,
+            device_name: "test-device".to_string(),
+        };
+
+        let (removed, tombstones) = db
+            .prune_expired_items_with_sync_scope(30, Some(&scope))
+            .unwrap();
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(tombstones, 1);
+        assert_eq!(count_items(&db), 0);
+        assert!(db.is_item_tombstoned(77).unwrap());
+    }
+
+    #[test]
+    fn prune_expired_rolls_back_when_tombstone_write_fails() {
+        let (_path, db) = temp_db("prune-exp-sync-rollback");
+        insert_item(&db, 78, "old", "2020-01-01T00:00:00Z");
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_expiry_tombstone \
+                 BEFORE INSERT ON deleted_items \
+                 BEGIN SELECT RAISE(ABORT, 'reject tombstone'); END;",
+            )
+            .unwrap();
+        let scope = CleanupSyncScope {
+            include_images: true,
+            favorites_only: false,
+            device_name: "test-device".to_string(),
+        };
+
+        assert!(db
+            .prune_expired_items_with_sync_scope(30, Some(&scope))
+            .is_err());
+        assert_eq!(count_items(&db), 1);
+        assert!(!db.is_item_tombstoned(78).unwrap());
     }
 
     #[test]

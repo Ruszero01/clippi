@@ -180,7 +180,7 @@ impl Render for TypeFilterConfigPanel {
 
                         // Look up display info from FILTER_TYPES
                         let (icon, label) =
-                            filter_type_display(&key).unwrap_or(("\u{e60e}", key.clone()));
+                            filter_type_display(&key).unwrap_or(("\u{e606}", key.clone()));
 
                         let key_for_toggle = key.clone();
 

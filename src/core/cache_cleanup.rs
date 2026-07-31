@@ -252,42 +252,34 @@ fn clean_expired_clipboard_items(
     db: &Database,
     retention_days: u32,
     sync_scope: Option<&CleanupSyncScope>,
-) -> (u32, bool, Vec<i64>) {
-    match db.prune_expired_items(retention_days) {
-        Ok(items) => {
-            let mut sync_dirty = false;
+) -> (u32, bool, Vec<i64>, Vec<String>) {
+    match db.prune_expired_items_with_sync_scope(retention_days, sync_scope) {
+        Ok((items, tombstones_written)) => {
             let hotkey_item_ids = items
                 .iter()
                 .filter(|item| !item.custom_hotkey.is_empty())
                 .map(|item| item.id)
                 .collect();
-            if let Some(scope) = sync_scope {
-                let now = chrono::Utc::now().to_rfc3339();
-                for item in &items {
-                    if crate::core::sync_scope::item_in_sync_scope(
-                        item.content_type,
-                        item.is_favorite,
-                        scope.include_images,
-                        scope.favorites_only,
-                    ) {
-                        if let Err(e) =
-                            db.record_item_deletion(item.content_hash, &now, &scope.device_name)
-                        {
-                            log::error!(
-                                "clean_expired_clipboard_items: record tombstone {}: {e}",
-                                item.content_hash
-                            );
-                        } else {
-                            sync_dirty = true;
-                        }
-                    }
-                }
-            }
-            (items.len() as u32, sync_dirty, hotkey_item_ids)
+            let deleted_file_paths = items
+                .iter()
+                .filter(|item| item.content_type == crate::core::types::ContentType::File)
+                .flat_map(|item| {
+                    crate::core::types::FileData::from_json(&item.file_data)
+                        .files
+                        .into_iter()
+                        .map(|file| file.path)
+                })
+                .collect();
+            (
+                items.len() as u32,
+                tombstones_written > 0,
+                hotkey_item_ids,
+                deleted_file_paths,
+            )
         }
         Err(e) => {
             log::error!("clean_expired_clipboard_items: {e}");
-            (0, false, Vec::new())
+            (0, false, Vec::new(), Vec::new())
         }
     }
 }
@@ -392,7 +384,7 @@ pub(crate) fn check_candidate_stale(candidate: &StaleItemCandidate) -> bool {
 fn is_path_definitely_missing(path_str: &str) -> bool {
     let path = std::path::Path::new(path_str);
 
-    if is_unc_or_network_path(path_str)
+    if crate::platform::remote_path::remote_host_label(path_str).is_some()
         || !path.is_absolute()
         || !crate::core::types::path_is_native(path_str)
     {
@@ -414,18 +406,6 @@ fn is_path_definitely_missing(path_str: &str) -> bool {
             false
         }
     }
-}
-
-/// Detect UNC paths (Windows) and other network/remote path formats.
-fn is_unc_or_network_path(path_str: &str) -> bool {
-    // Windows UNC: \\server\share\...
-    if path_str.starts_with("\\\\") {
-        return true;
-    }
-
-    // macOS network mounts often start with /Volumes/ but that's also local.
-    // We treat them as local unless we have specific indicators.
-    false
 }
 
 /// Detect whether a path belongs to a different platform (e.g. macOS path
@@ -516,11 +496,12 @@ pub fn run_cleanup_with_options(
     // Phase 3: Retention-based expiry.
     if let Some(retention_days) = options.retention_days {
         if retention_days > 0 {
-            let (expired, sync_dirty, hotkey_ids) =
+            let (expired, sync_dirty, hotkey_ids, deleted_file_paths) =
                 clean_expired_clipboard_items(db, retention_days, sync_scope);
             stats.expired_items = expired;
             stats.sync_dirty = stats.sync_dirty || sync_dirty;
             stats.deleted_hotkey_item_ids.extend(hotkey_ids);
+            stats.deleted_file_paths.extend(deleted_file_paths);
         }
     }
 
@@ -693,5 +674,12 @@ mod tests {
         );
 
         assert!(!is_path_definitely_missing(&path));
+    }
+
+    #[test]
+    fn unc_network_path_is_never_confirmed_stale() {
+        assert!(!is_path_definitely_missing(
+            r"\\nas.example\share\missing.txt"
+        ));
     }
 }

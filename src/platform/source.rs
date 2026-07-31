@@ -209,16 +209,35 @@ mod macos_impl {
     use crate::core::i18n_keys::I18nKey;
     use crate::core::types::SourceAppInfo;
     use crate::platform::util::nsimage_to_base64_png;
-    use objc2_app_kit::NSWorkspace;
+    use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+
+    fn clipboard_source_pid(
+        frontmost_pid: i32,
+        own_pid: i32,
+        last_non_clippi_pid: Option<i32>,
+    ) -> Option<i32> {
+        if frontmost_pid == own_pid {
+            last_non_clippi_pid
+        } else {
+            Some(frontmost_pid)
+        }
+        .filter(|pid| *pid != own_pid && *pid != 0)
+    }
 
     pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
         let workspace = NSWorkspace::sharedWorkspace();
-        let app = workspace.frontmostApplication()?;
-
-        // --- Don't record Clippi itself as the source ---
-        if app.processIdentifier() == std::process::id() as i32 {
-            return None;
-        }
+        let frontmost = workspace.frontmostApplication()?;
+        let own_pid = std::process::id() as i32;
+        let source_pid = clipboard_source_pid(
+            frontmost.processIdentifier(),
+            own_pid,
+            crate::platform::focus::get_last_non_clippi_pid(),
+        )?;
+        let app = if source_pid == frontmost.processIdentifier() {
+            frontmost
+        } else {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(source_pid)?
+        };
 
         // --- Use generated methods (nil-safe via Option) ---
         let app_name = app
@@ -247,6 +266,22 @@ mod macos_impl {
     /// macOS `iconForFile:` already reads the actual file icon — delegate.
     pub fn get_actual_file_icon_base64(file_path: &str) -> Option<String> {
         get_file_icon_base64(file_path, false)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::clipboard_source_pid;
+
+        #[test]
+        fn falls_back_to_last_external_app_when_clippi_is_frontmost() {
+            assert_eq!(clipboard_source_pid(100, 100, Some(42)), Some(42));
+            assert_eq!(clipboard_source_pid(100, 100, None), None);
+        }
+
+        #[test]
+        fn keeps_the_current_external_app() {
+            assert_eq!(clipboard_source_pid(42, 100, Some(7)), Some(42));
+        }
     }
 }
 

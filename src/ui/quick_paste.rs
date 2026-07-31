@@ -650,7 +650,7 @@ impl Render for QuickPasteView {
                                 .children(visible_type_entries.iter().map(|entry| {
                                     let active = filters.is_type_active(&entry.key);
                                     let (icon, label) = filter_type_display(&entry.key)
-                                        .unwrap_or(("\u{e60e}", "".into()));
+                                        .unwrap_or(("\u{e606}", "".into()));
                                     let key = entry.key.clone();
                                     let t = theme.clone();
                                     let app_state = self.state.clone();
@@ -1304,7 +1304,7 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
         DisplayKind::Color => "\u{e608}",
         DisplayKind::Email => "\u{e604}",
         DisplayKind::Phone => "\u{e966}",
-        DisplayKind::Secret => "\u{e60e}",
+        DisplayKind::Secret => "\u{e612}",
     }
 }
 

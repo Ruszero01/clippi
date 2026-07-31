@@ -197,35 +197,40 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                         })),
                 )
                 // ── Add button ──
-                .when(has_add, |card| {
-                    let on_add = params.on_add.clone().unwrap();
-                    let btn_text = params.add_button_label.clone().unwrap();
-                    card.child(div().h(px(1.)).bg(divider)).child(
-                        div()
-                            .h(px(ADD_BUTTON_HEIGHT * scale))
-                            .rounded(px(7.))
-                            .bg(add_button_bg)
-                            .border(px(1.))
-                            .border_color(add_button_border)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(6.))
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(add_button_text)
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.bg(add_button_hover))
-                            .on_mouse_down(MouseButton::Left, {
-                                let on_add = on_add.clone();
-                                move |_ev, window, cx| {
-                                    cx.stop_propagation();
-                                    on_add(window, cx)
-                                }
-                            })
-                            .child(btn_text.clone()),
-                    )
-                }),
+                .when_some(
+                    params
+                        .on_add
+                        .clone()
+                        .zip(params.add_button_label.clone())
+                        .filter(|_| has_add),
+                    |card, (on_add, btn_text)| {
+                        card.child(div().h(px(1.)).bg(divider)).child(
+                            div()
+                                .h(px(ADD_BUTTON_HEIGHT * scale))
+                                .rounded(px(7.))
+                                .bg(add_button_bg)
+                                .border(px(1.))
+                                .border_color(add_button_border)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(6.))
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(add_button_text)
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |style| style.bg(add_button_hover))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let on_add = on_add.clone();
+                                    move |_ev, window, cx| {
+                                        cx.stop_propagation();
+                                        on_add(window, cx)
+                                    }
+                                })
+                                .child(btn_text.clone()),
+                        )
+                    },
+                ),
         )
 }
 

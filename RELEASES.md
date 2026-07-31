@@ -10,7 +10,7 @@
   - 检测覆盖 GitHub Token、OpenAI Key、AWS Access Key、Stripe Key、Slack Token、Google API Key、JWT、Bearer/Basic 认证头、PEM 私钥块以及 `password=`/`api_key=` 等显式字段名
   - 主列表卡片和快速粘贴窗口统一对密钥值做 3+4 脱敏显示（如 `sk-****WXYZ`），掩码固定四位星号不反映原文长度
   - 不超过 7 个字符的密钥仅显示 `****`，私钥块统一显示 `PRIVATE KEY · ****`
-  - URL 内嵌凭据（`user:password@host`）和敏感查询参数（`?token=xxx`）在链接预览中局部脱敏，条目仍保留链接类型和 favicon
+  - URL 内嵌凭据（`user:password@host`）和敏感查询参数（`?token=xxx`）在链接预览中局部脱敏，条目仍保留链接类型和 favicon；含敏感参数的链接不会自动访问完整 URL 获取标题
   - 短邮箱本地部分（≤3 字符）从完整显示改为仅显示首字符加掩码，短电话（≤7 字符）从原文显示改为仅显示 `****`
   - 编辑面板可手动将条目类型改为"密钥"或纠正误识别，"信息"类型筛选同时覆盖邮箱、电话和密钥
 

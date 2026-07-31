@@ -122,7 +122,10 @@ impl GpuiClipboardService {
         let shared = ClipboardShared::new();
         // Populate the blacklist snapshot BEFORE starting the listener so
         // capture_baseline and the first poll find the correct value.
-        *shared.clipboard_app_blacklist.write().unwrap() = initial_app_blacklist;
+        *shared
+            .clipboard_app_blacklist
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = initial_app_blacklist;
         let mut listener = create_listener();
         if let Err(err) = listener.start(&shared) {
             log::error!("Failed to start clipboard listener: {err}");
@@ -141,7 +144,11 @@ impl GpuiClipboardService {
     /// Update the app-blacklist snapshot used by the listener thread.
     /// Call after every add / remove so the next poll picks up the change.
     pub fn set_app_blacklist(&self, blacklist: Vec<String>) {
-        *self.shared.clipboard_app_blacklist.write().unwrap() = blacklist;
+        *self
+            .shared
+            .clipboard_app_blacklist
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = blacklist;
     }
 
     /// Access the `batch_pasting` flag shared with the clipboard listener.
@@ -285,7 +292,9 @@ impl GpuiClipboardService {
                     item.full_text.clone(),
                 );
             }
-            if item.meta_type == "link" && state.settings.auto_fetch_url_title {
+            if item.meta_type == "link"
+                && should_fetch_url_title(&item.full_text, state.settings.auto_fetch_url_title)
+            {
                 let url = item.full_text.clone();
                 let content_hash = item.content_hash;
                 let db_path = db_path.clone();
@@ -334,6 +343,10 @@ impl GpuiClipboardService {
             do_ocr,
         });
     }
+}
+
+fn should_fetch_url_title(url: &str, enabled: bool) -> bool {
+    enabled && crate::core::secret::url_sensitive_ranges(url).is_empty()
 }
 
 impl Drop for GpuiClipboardService {
@@ -396,5 +409,28 @@ fn run_ocr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
         }
         Ok(_) => { /* empty result, skip */ }
         Err(e) => log::error!("OCR error: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod url_title_policy_tests {
+    use super::should_fetch_url_title;
+
+    #[test]
+    fn skips_title_fetch_for_sensitive_urls() {
+        assert!(!should_fetch_url_title(
+            "https://user:password@example.com/reset",
+            true
+        ));
+        assert!(!should_fetch_url_title(
+            "https://example.com/reset?token=one-time-secret",
+            true
+        ));
+    }
+
+    #[test]
+    fn allows_title_fetch_for_normal_urls_when_enabled() {
+        assert!(should_fetch_url_title("https://example.com/docs", true));
+        assert!(!should_fetch_url_title("https://example.com/docs", false));
     }
 }
