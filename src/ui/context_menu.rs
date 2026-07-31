@@ -203,7 +203,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxEdit.text().into(),
                 action: "edit".into(),
-                icon: "\u{e648}".into(),
+                icon: "\u{e679}".into(),
                 danger: false,
                 fav: false,
                 shortcut: ctrl_shortcut("E"),
@@ -262,7 +262,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteImagePath.text().into(),
                 action: "paste_image_path".into(),
-                icon: "\u{e60e}".into(),
+                icon: "\u{e606}".into(),
                 danger: false,
                 fav: false,
                 shortcut: None,
@@ -308,7 +308,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenLink.text().into(),
                 action: "open_location".into(),
-                icon: "\u{e643}".into(),
+                icon: "\u{e641}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -319,7 +319,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
                 action: "open_location".into(),
-                icon: "\u{e609}".into(),
+                icon: "\u{e64d}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -330,7 +330,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
                 action: "open_location".into(),
-                icon: "\u{e609}".into(),
+                icon: "\u{e64d}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -341,7 +341,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteFilePath.text().into(),
                 action: "paste_file_path".into(),
-                icon: "\u{e60e}".into(),
+                icon: "\u{e606}".into(),
                 danger: false,
                 fav: false,
                 shortcut: None,
@@ -494,7 +494,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
                 action: "open_transfer_location".into(),
-                icon: "\u{e609}".into(),
+                icon: "\u{e64d}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),

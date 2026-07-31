@@ -10,8 +10,11 @@ use std::rc::Rc;
 
 type ToolbarActionHandler = Rc<dyn Fn(&str, &mut gpui::Window, &mut gpui::App)>;
 
+use gpui::prelude::*;
 use gpui::*;
+use gpui_component::tooltip::Tooltip;
 
+use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{ContentType, RichData};
 
 use super::theme::ClippiTheme;
@@ -138,7 +141,7 @@ impl RenderOnce for HoverToolbar {
         if is_single && props.is_transfer {
             if props.transfer_is_local {
                 buttons.push((
-                    "\u{e609}",
+                    "\u{e64d}",
                     "open_transfer_location",
                     Box::new(move |hovered| if hovered { accent } else { text_2 }),
                 ));
@@ -192,7 +195,7 @@ impl RenderOnce for HoverToolbar {
             // --- Open in browser (link only) ---
             if props.meta_type == "link" {
                 buttons.push((
-                    "\u{e643}",
+                    "\u{e641}",
                     "open_location",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
@@ -203,7 +206,7 @@ impl RenderOnce for HoverToolbar {
                 && crate::core::types::path_exists(&props.full_text)
             {
                 buttons.push((
-                    "\u{e609}",
+                    "\u{e64d}",
                     "open_location",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
@@ -211,7 +214,7 @@ impl RenderOnce for HoverToolbar {
             // --- Reveal in folder (file only) ---
             if props.content_type == ContentType::File {
                 buttons.push((
-                    "\u{e609}",
+                    "\u{e64d}",
                     "open_location",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
@@ -220,7 +223,7 @@ impl RenderOnce for HoverToolbar {
             // --- Edit (not image or file) ---
             if props.content_type != ContentType::Image && props.content_type != ContentType::File {
                 buttons.push((
-                    "\u{e648}",
+                    "\u{e679}",
                     "edit",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
@@ -307,6 +310,9 @@ impl RenderOnce for HoverToolbar {
         let n = buttons.len();
         let content_w = (n * 18 + (n.saturating_sub(1)) * 2) as f32;
         let toolbar_w = content_w + 10.0;
+        let is_favorite = props.is_favorite;
+        let selected_count = props.selected_count;
+        let meta_type = props.meta_type.clone();
 
         div()
             .h(px(22.))
@@ -322,10 +328,40 @@ impl RenderOnce for HoverToolbar {
             .gap(px(2.))
             .children(buttons.into_iter().map(move |(icon, action, color_fn)| {
                 let on_action = on_action.clone();
+                let tooltip = match action {
+                    "copy" => I18nKey::CtxCopy.text().to_string(),
+                    "paste_plain" => I18nKey::CtxPastePlain.text().to_string(),
+                    "open_image" => I18nKey::CtxOpenImage.text().to_string(),
+                    "qr_action" => I18nKey::CtxDetectQr.text().to_string(),
+                    "open_location" if meta_type == "link" => {
+                        I18nKey::CtxOpenLink.text().to_string()
+                    }
+                    "open_location" => I18nKey::CtxOpenFolder.text().to_string(),
+                    "edit" => I18nKey::CtxEdit.text().to_string(),
+                    "edit_note" => I18nKey::EditNote.text().to_string(),
+                    "show_tag_picker" => I18nKey::CtxTag.text().to_string(),
+                    "toggle_favorite" if is_favorite => I18nKey::CtxUnfav.text().to_string(),
+                    "toggle_favorite" => I18nKey::CtxFav.text().to_string(),
+                    "delete" => I18nKey::CtxDelete.text().to_string(),
+                    "batch_paste" => I18nKey::CtxBatchPasteN.fmt(&[&selected_count.to_string()]),
+                    "merge_selected" => I18nKey::CtxMergeSelected.text().to_string(),
+                    "batch_tag" => I18nKey::CtxBatchTag.text().to_string(),
+                    "batch_favorite" => I18nKey::CtxBatchFav.text().to_string(),
+                    "batch_delete" => I18nKey::CtxBatchDelete.text().to_string(),
+                    "open_transfer_location" => I18nKey::CtxOpenFolder.text().to_string(),
+                    "download_transfer" => I18nKey::DownloadTransfer.text().to_string(),
+                    "delete_transfer" => I18nKey::RemoveFromTransfer.text().to_string(),
+                    "batch_delete_transfer" => {
+                        I18nKey::RemoveSelectedFromTransfer.text().to_string()
+                    }
+                    _ => action.to_string(),
+                };
+                let action_id = action;
                 let action = action.to_string();
                 let icon = icon.to_string();
 
                 div()
+                    .id(action_id)
                     .w(px(18.))
                     .h(px(18.))
                     .flex()
@@ -334,6 +370,13 @@ impl RenderOnce for HoverToolbar {
                     .rounded(px(3.))
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |style| style.bg(hover_bg))
+                    .tooltip(move |window, cx| {
+                        let label = tooltip.clone();
+                        Tooltip::element(move |_window, _cx| {
+                            div().text_size(px(10.)).child(label.clone())
+                        })
+                        .build(window, cx)
+                    })
                     .child({
                         let icon = icon.clone();
                         let color_normal = color_fn(false);

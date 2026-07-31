@@ -687,7 +687,7 @@ impl SettingsPanel {
                                             .child(if auto_enabled {
                                                 icon_button(
                                                     ("sync-edit", key),
-                                                    "\u{e648}",
+                                                    "\u{e679}",
                                                     text_3,
                                                     accent,
                                                     I18nKey::BackendTooltipEdit.text(),
@@ -710,7 +710,7 @@ impl SettingsPanel {
                                             } else {
                                                 disabled_icon_button(
                                                     ("sync-edit", key),
-                                                    "\u{e648}",
+                                                    "\u{e679}",
                                                     text_3,
                                                     I18nKey::BackendTooltipEdit.text(),
                                                 )
@@ -719,7 +719,7 @@ impl SettingsPanel {
                                             .child(if auto_enabled {
                                                 icon_button(
                                                     ("sync-delete", key),
-                                                    "\u{e8b6}",
+                                                    "\u{e696}",
                                                     text_3,
                                                     danger,
                                                     I18nKey::BackendTooltipDelete.text(),
@@ -745,7 +745,7 @@ impl SettingsPanel {
                                             } else {
                                                 disabled_icon_button(
                                                     ("sync-delete", key),
-                                                    "\u{e8b6}",
+                                                    "\u{e696}",
                                                     text_3,
                                                     I18nKey::BackendTooltipDelete.text(),
                                                 )

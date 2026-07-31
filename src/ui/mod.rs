@@ -1,6 +1,7 @@
 //! UI module declarations and re-exports for Clippi GPUI components.
 
 pub mod add_backend;
+pub mod bottom_bar;
 pub mod clipboard_card;
 pub mod clipboard_list;
 pub mod components;
