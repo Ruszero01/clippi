@@ -2,8 +2,8 @@
 //! and provides quick actions (clipboard blacklist, hotkey blacklist).
 //!
 //! --- Matches the original Slint design: ---
-//! --- - 28px height, 1px top border, divider color ---
-//! --- - Left: app icon (18×18) + app name (12px) + window title (11px) ---
+//! --- - 26px height, 1px top border, divider color ---
+//! --- - Left: app icon (15×15) + app name (12px) + window title (11px) ---
 //! --- - Right: clipboard-blacklist + hotkey-blacklist icon buttons (22×22) ---
 
 use gpui::prelude::*;
@@ -58,7 +58,7 @@ impl RenderOnce for BottomBar {
             .filter(|path| path.exists());
 
         div()
-            .h(px(28.))
+            .h(px(26.))
             .w_full()
             .px(px(10.))
             .flex()
@@ -77,9 +77,9 @@ impl RenderOnce for BottomBar {
                     .when_some(foreground_icon, |row, image| {
                         row.child(
                             gpui::img(image)
-                                .w(px(18.))
-                                .h(px(18.))
-                                .rounded(px(3.))
+                                .w(px(15.))
+                                .h(px(15.))
+                                .rounded(px(2.))
                                 .flex_shrink_0(),
                         )
                     })
