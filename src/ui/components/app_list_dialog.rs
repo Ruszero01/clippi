@@ -490,7 +490,7 @@ fn render_entry(
                                 del_cb(del_name.clone(), window, cx);
                             }
                         })
-                        .child("\u{e8b6}")
+                        .child("\u{e696}")
                 }),
         )
 }

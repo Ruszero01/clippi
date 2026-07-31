@@ -181,7 +181,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: label.into(),
                 action: action.into(),
-                icon: "\u{e610}".into(),
+                icon: "\u{e608}".into(),
                 danger: false,
                 fav: false,
                 shortcut: None,

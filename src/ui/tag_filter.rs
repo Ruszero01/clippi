@@ -463,7 +463,7 @@ impl Render for TagFilterPanel {
                                             },
                                         ))
                                         .child(small_btn(
-                                            "\u{e8b6}",
+                                            "\u{e696}",
                                             text_3,
                                             true,
                                             btn_hover,
