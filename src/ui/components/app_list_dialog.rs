@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
@@ -44,6 +44,10 @@ pub struct AppListDialogParams {
     pub title: String,
     pub empty_hint: String,
     pub entries: Vec<AppListDialogEntry>,
+    /// Stable key for the entry list's scroll state. Must be unique per
+    /// dialog instance so the three app-list popups never share or leak
+    /// scroll offsets into one another.
+    pub scroll_key: &'static str,
     /// App currently being recorded for (paste-shortcut mode).
     pub recording_app: Option<String>,
     /// Show the shortcut column (paste-shortcut mode).
@@ -67,6 +71,59 @@ pub struct AppListDialogParams {
     pub on_cancel_recording: Option<AppListAction>,
     /// Called when the bottom "+ 添加当前应用" button is clicked.
     pub on_add: Option<AppListAction>,
+}
+
+/// Scrollable entry list with a per-dialog scroll-state key.
+///
+/// Mirrors `gpui_component::scroll::Scrollable` (tracked scroll handle +
+/// overlay scrollbar), but keys the `ScrollHandle` by an explicit name
+/// instead of the call-site location, so each app-list popup keeps its own
+/// scroll state and never inherits another popup's offset.
+#[derive(IntoElement)]
+struct AppListScrollArea {
+    key: &'static str,
+    children: Vec<AnyElement>,
+}
+
+impl RenderOnce for AppListScrollArea {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let key = ElementId::Name(self.key.into());
+        let scroll_handle = window
+            .use_keyed_state(key.clone(), cx, |_, _| ScrollHandle::default())
+            .read(cx)
+            .clone();
+        div()
+            .id(key)
+            .size_full()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.))
+            .relative()
+            .child(
+                div()
+                    .id("app-list-scroll-area")
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll_handle)
+                    .children(self.children),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(
+                        Scrollbar::new(&scroll_handle)
+                            .id("app-list-scrollbar")
+                            .axis(ScrollbarAxis::Vertical),
+                    ),
+            )
+    }
 }
 
 /// Render the app-list dialog overlay (one-shot, not a persistent Entity).
@@ -161,41 +218,41 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                 ))
                 .child(div().h(px(1.)).bg(divider))
                 // ── Entry list or empty hint ──
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.))
-                        .overflow_y_scrollbar()
-                        .when(entry_count == 0, |list| {
-                            list.child(
-                                div()
-                                    .flex_1()
-                                    .min_h(px(EMPTY_LIST_HEIGHT * scale))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(px(11.))
-                                    .text_color(text_3)
-                                    .child(params.empty_hint.clone()),
-                            )
-                        })
-                        .children(params.entries.iter().map(|entry| {
-                            render_entry(
-                                entry,
-                                params.show_shortcut_column,
-                                AppListEntryActions {
-                                    recording_app: params.recording_app.as_deref(),
-                                    on_delete: &params.on_delete,
-                                    on_shortcut_click: &params.on_shortcut_click,
-                                    on_cancel_recording: &params.on_cancel_recording,
-                                },
-                                &theme,
-                                scale,
-                            )
-                        })),
-                )
+                .child(AppListScrollArea {
+                    key: params.scroll_key,
+                    children: if entry_count == 0 {
+                        vec![div()
+                            .flex_1()
+                            .min_h(px(EMPTY_LIST_HEIGHT * scale))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.))
+                            .text_color(text_3)
+                            .child(params.empty_hint.clone())
+                            .into_any_element()]
+                    } else {
+                        params
+                            .entries
+                            .iter()
+                            .map(|entry| {
+                                render_entry(
+                                    entry,
+                                    params.show_shortcut_column,
+                                    AppListEntryActions {
+                                        recording_app: params.recording_app.as_deref(),
+                                        on_delete: &params.on_delete,
+                                        on_shortcut_click: &params.on_shortcut_click,
+                                        on_cancel_recording: &params.on_cancel_recording,
+                                    },
+                                    &theme,
+                                    scale,
+                                )
+                                .into_any_element()
+                            })
+                            .collect()
+                    },
+                })
                 // ── Add button ──
                 .when_some(
                     params
@@ -384,6 +441,8 @@ fn render_entry(
                 .flex()
                 .items_center()
                 .gap(px(6. * scale))
+                .flex_1()
+                .min_w(px(0.))
                 .child(
                     gpui::img(std::path::Path::new(&icon_path))
                         .w(px(18. * scale))
@@ -391,7 +450,15 @@ fn render_entry(
                 )
                 .text_size(px(11.))
                 .text_color(text_1)
-                .child(name_display),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(name_display),
+                ),
         )
         .child(
             div()
