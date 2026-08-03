@@ -786,6 +786,58 @@ impl LocalFolderBackend {
     fn manifest_path(&self) -> PathBuf {
         PathBuf::from(&self.config.folder_path).join(MANIFEST_FILENAME)
     }
+
+    fn config_sync_path(&self) -> PathBuf {
+        PathBuf::from(&self.config.folder_path).join(crate::core::config_sync::CONFIG_SYNC_FILENAME)
+    }
+}
+
+impl crate::services::backends::ConfigSnapshotBackend for LocalFolderBackend {
+    fn download_config_snapshot(&self, max_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+        let path = self.config_sync_path();
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("open {}: {e}", path.display())),
+        };
+        // Bound the read at the source so a file that grows or is replaced
+        // between open and read cannot exceed the limit.
+        let mut body = Vec::new();
+        file.take(max_bytes + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        if body.len() as u64 > max_bytes {
+            return Err(format!(
+                "config snapshot too large: {} bytes (limit {})",
+                body.len(),
+                max_bytes
+            ));
+        }
+        Ok(Some(body))
+    }
+
+    fn upload_config_snapshot(&self, data: &[u8]) -> Result<(), String> {
+        let path = self.config_sync_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+        }
+        let tmp = path.with_extension(format!("json.tmp.{}", crate::core::settings::generate_id()));
+        std::fs::write(&tmp, data).map_err(|e| format!("write temp {}: {e}", tmp.display()))?;
+        if let Err(e) = crate::services::file_ops::replace_file(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "replace {} -> {}: {e}",
+                tmp.display(),
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn backend_name(&self) -> String {
+        self.config.name.clone()
+    }
 }
 
 // --- ── Platform detection helpers ── ---

@@ -26,6 +26,7 @@ use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
 #[cfg(target_os = "windows")]
 use crate::platform::windows_hotkeys;
+use crate::services::config_sync::{ConfigSyncResult, ConfigSyncService};
 use crate::services::gpui_clipboard::GpuiClipboardService;
 use crate::services::gpui_sync::GpuiSyncService;
 use crate::services::transfer_station::GpuiTransferService;
@@ -437,6 +438,11 @@ pub struct WindowManager {
     maintenance_job_running: bool,
     /// Pending result from a completed maintenance job.
     pending_maintenance_result: Arc<Mutex<Option<DataMaintenanceResult>>>,
+
+    // ── Config sync ──
+    config_sync_service: ConfigSyncService,
+    /// Snapshot downloaded from the backend, awaiting user confirmation.
+    config_sync_pending_snapshot: Option<crate::core::config_sync::ConfigSnapshot>,
 }
 
 impl EventEmitter<WindowManagerEvent> for WindowManager {}
@@ -464,6 +470,7 @@ impl WindowManager {
         let clipboard_service = GpuiClipboardService::new(settings.clipboard_app_blacklist.clone());
         let sync_service = GpuiSyncService::new(&settings, state.read(cx).sync_dirty.clone());
         let transfer_service = GpuiTransferService::new(&settings);
+        let config_sync_service = ConfigSyncService::new();
 
         // --- Initialize tray ---
         let tray = Some(TrayManager::new());
@@ -525,6 +532,8 @@ impl WindowManager {
             pending_cleanup_hotkey_unregister: Arc::new(Mutex::new(Vec::new())),
             maintenance_job_running: false,
             pending_maintenance_result: Arc::new(Mutex::new(None)),
+            config_sync_service,
+            config_sync_pending_snapshot: None,
         };
 
         // --- Share the batch_pasting flag with AppState so it can suppress ---
@@ -658,6 +667,9 @@ impl WindowManager {
         // --- 13. Periodic Win+V takeover registry re-check (Windows only) ---
         #[cfg(target_os = "windows")]
         self.periodic_win_v_recheck(cx);
+
+        // --- 14. Config sync results ---
+        self.poll_config_sync(cx);
     }
 
     fn poll_cleanup_refresh(&mut self, cx: &mut Context<Self>) {
@@ -919,6 +931,169 @@ impl WindowManager {
     /// Check if a maintenance job is currently running.
     pub fn is_maintenance_running(&self) -> bool {
         self.maintenance_job_running
+    }
+
+    // ── Config sync ──
+
+    /// Collect completed config-sync results from the background thread.
+    fn poll_config_sync(&mut self, cx: &mut Context<Self>) {
+        let Some(result) = self.config_sync_service.take_result() else {
+            return;
+        };
+
+        match result {
+            ConfigSyncResult::Uploaded => {
+                self.state.update(cx, |state, cx| {
+                    state.show_toast(I18nKey::ConfigSyncToastUploaded.text());
+                    cx.notify();
+                });
+                cx.emit(WindowManagerEvent::SyncChanged);
+            }
+            ConfigSyncResult::Downloaded(snapshot) => {
+                self.config_sync_pending_snapshot = Some(*snapshot);
+                cx.emit(WindowManagerEvent::SyncChanged);
+            }
+            ConfigSyncResult::Error(e) => {
+                use crate::core::config_sync::ConfigSyncError;
+                log::warn!("Config sync error: {e}");
+                let msg = match &e {
+                    ConfigSyncError::RemoteNotFound => {
+                        I18nKey::ConfigSyncToastNotFound.text().to_string()
+                    }
+                    ConfigSyncError::Transport(detail) => {
+                        I18nKey::ConfigSyncToastTransport.fmt(&[detail])
+                    }
+                    ConfigSyncError::TooLarge => {
+                        I18nKey::ConfigSyncToastTooLarge.text().to_string()
+                    }
+                    ConfigSyncError::InvalidSnapshot(detail)
+                    | ConfigSyncError::InvalidTimestamp(detail)
+                    | ConfigSyncError::InvalidFieldValue(detail) => {
+                        I18nKey::ConfigSyncToastInvalidSnapshot.fmt(&[detail])
+                    }
+                    ConfigSyncError::UnsupportedVersion(v) => {
+                        I18nKey::ConfigSyncToastUnsupportedVersion.fmt(&[&v.to_string()])
+                    }
+                    other => format!("{other}"),
+                };
+                self.state.update(cx, |state, cx| {
+                    state.show_warning_toast(msg);
+                    cx.notify();
+                });
+                cx.emit(WindowManagerEvent::SyncChanged);
+            }
+        }
+    }
+
+    /// Whether a config-sync operation is currently in flight.
+    pub fn is_config_sync_busy(&self) -> bool {
+        self.config_sync_service.is_busy()
+    }
+
+    /// Get the downloaded snapshot (if any) awaiting user confirmation.
+    pub fn config_sync_pending_snapshot(
+        &self,
+    ) -> Option<&crate::core::config_sync::ConfigSnapshot> {
+        self.config_sync_pending_snapshot.as_ref()
+    }
+
+    /// Clear the pending snapshot (user dismissed the confirmation dialog).
+    pub fn clear_config_sync_pending_snapshot(&mut self) {
+        self.config_sync_pending_snapshot = None;
+    }
+
+    /// Start uploading local config to the given backend.
+    pub fn start_config_upload(
+        &mut self,
+        backend: Arc<dyn crate::services::backends::ConfigSnapshotBackend>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let settings = self.state.read(cx).settings.clone();
+        self.config_sync_service.start_upload(settings, backend)
+    }
+
+    /// Start downloading config from the given backend.
+    pub fn start_config_download(
+        &mut self,
+        backend: Arc<dyn crate::services::backends::ConfigSnapshotBackend>,
+    ) -> bool {
+        self.config_sync_pending_snapshot = None;
+        self.config_sync_service.start_download(backend)
+    }
+
+    /// Apply the downloaded snapshot: backup, merge, save, restart.
+    pub fn apply_config_snapshot(&mut self, cx: &mut Context<Self>) {
+        let snapshot = match self.config_sync_pending_snapshot.take() {
+            Some(s) => s,
+            None => {
+                self.state.update(cx, |state, cx| {
+                    state.show_warning_toast(I18nKey::ConfigSyncToastInvalidSnapshot.text());
+                    cx.notify();
+                });
+                return;
+            }
+        };
+
+        // Merge whitelist fields onto current settings.
+        let current = self.state.read(cx).settings.clone();
+        let merged = snapshot.settings.apply_to(&current);
+
+        // Backup current config. Backup success is a precondition for
+        // continuing — without it there is no way to recover the previous
+        // settings if the merge or save fails.
+        let config_path = crate::core::paths::config_path();
+        let now = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+        let backup_path =
+            config_path.with_file_name(format!("clippi.toml.before-cloud-apply.{now}.bak"));
+        if let Err(e) = std::fs::copy(&config_path, &backup_path) {
+            log::error!(
+                "Failed to create config backup {}: {e}; aborting apply",
+                backup_path.display()
+            );
+            self.state.update(cx, |state, cx| {
+                state.show_warning_toast(I18nKey::ConfigSyncToastSaveFailed.text());
+                cx.notify();
+            });
+            return;
+        }
+        log::info!("Config backup saved to {}", backup_path.display());
+
+        // Save merged config to disk first, then commit it to memory so a
+        // later `settings.save()` (window-geometry capture, shutdown, any
+        // setting change) cannot overwrite the freshly applied cloud config
+        // with the stale in-memory copy.
+        if let Err(e) = merged.save_atomic_to(&config_path) {
+            log::error!("Failed to save merged config: {e}");
+            self.state.update(cx, |state, cx| {
+                state.show_warning_toast(I18nKey::ConfigSyncToastSaveFailed.text());
+                cx.notify();
+            });
+            return;
+        }
+        self.state.update(cx, |state, _cx| {
+            state.settings = merged.clone();
+        });
+
+        // Restart: only shut down when the new process actually started.
+        // On spawn failure the merged config stays on disk and in memory
+        // (recoverable from the backup), and the current process keeps
+        // running — the next manual restart picks up the new config.
+        match crate::core::settings::spawn_new_process() {
+            Ok(()) => {
+                log::info!("Restarting after cloud config apply");
+                // Graceful shutdown: WAL checkpoint + geometry save run
+                // with the merged settings already committed to AppState.
+                self.prepare_shutdown(cx);
+                cx.quit();
+            }
+            Err(e) => {
+                log::error!("Restart after config apply failed: {e}");
+                self.state.update(cx, |state, cx| {
+                    state.show_warning_toast(I18nKey::ConfigSyncToastRestartFailed.text());
+                    cx.notify();
+                });
+            }
+        }
     }
 
     fn poll_transfer(&mut self, cx: &mut Context<Self>) {
@@ -1523,7 +1698,7 @@ impl WindowManager {
     /// Restart the application: flush, spawn new process, then quit.
     fn do_restart(&mut self, cx: &mut Context<Self>) {
         self.prepare_shutdown(cx);
-        crate::core::settings::spawn_new_process();
+        let _ = crate::core::settings::spawn_new_process();
         cx.quit();
     }
 

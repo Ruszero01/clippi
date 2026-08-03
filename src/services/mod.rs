@@ -2,6 +2,7 @@
 
 pub mod backends;
 pub mod clipboard_ops;
+pub mod config_sync;
 pub mod copy_sound;
 pub mod downloader;
 pub mod favicon;

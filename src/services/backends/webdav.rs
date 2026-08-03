@@ -679,6 +679,90 @@ impl SyncBackend for WebDAVBackend {
     }
 }
 
+impl crate::services::backends::ConfigSnapshotBackend for WebDAVBackend {
+    fn download_config_snapshot(&self, max_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+        let url = self.config_sync_url();
+        let auth = self.auth_header();
+
+        let response = match self.agent.get(&url).set("Authorization", &auth).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(404, _)) => return Ok(None),
+            Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+                return Err(format!("auth failed ({code})"));
+            }
+            Err(e) => return Err(format!("download config snapshot: {e}")),
+        };
+
+        if let Some(len) = response.header("Content-Length") {
+            let len: u64 = len
+                .parse()
+                .map_err(|_| format!("invalid Content-Length: {len}"))?;
+            if len > max_bytes {
+                return Err(format!(
+                    "config snapshot too large: {len} bytes (limit {max_bytes})"
+                ));
+            }
+        }
+
+        let mut body: Vec<u8> = Vec::new();
+        response
+            .into_reader()
+            .take(max_bytes + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| format!("read config snapshot body: {e}"))?;
+
+        if body.len() as u64 > max_bytes {
+            return Err(format!(
+                "config snapshot too large: {} bytes (limit {max_bytes})",
+                body.len()
+            ));
+        }
+
+        Ok(Some(body))
+    }
+
+    fn upload_config_snapshot(&self, data: &[u8]) -> Result<(), String> {
+        let url = self.config_sync_url();
+        let auth = self.auth_header();
+
+        let response = match self
+            .agent
+            .put(&url)
+            .set("Authorization", &auth)
+            .set("Content-Type", "application/json")
+            .send_bytes(data)
+        {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+                return Err(format!("auth failed ({code})"));
+            }
+            Err(e) => return Err(format!("upload config snapshot: {e}")),
+        };
+
+        let status = response.status();
+        if !(200..300).contains(&status) {
+            return Err(format!("upload config snapshot: HTTP {status}"));
+        }
+
+        Ok(())
+    }
+
+    fn backend_name(&self) -> String {
+        self.config.name.clone()
+    }
+}
+
+impl WebDAVBackend {
+    fn config_sync_url(&self) -> String {
+        let base = self.config.webdav_url.trim_end_matches('/');
+        format!(
+            "{}/{}",
+            base,
+            crate::core::config_sync::CONFIG_SYNC_FILENAME
+        )
+    }
+}
+
 /// Extract the filename from a DAV:href XML element.
 /// Handles both `<D:href>filename.png</D:href>` and `<d:href>...</d:href>`.
 fn extract_href_filename(line: &str) -> Option<String> {

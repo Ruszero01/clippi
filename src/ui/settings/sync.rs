@@ -11,7 +11,6 @@ use gpui_transitions::WindowUseTransition;
 use crate::core::i18n_keys::I18nKey;
 use crate::services::gpui_sync::format_last_sync;
 use crate::state::sync::BackendStatus;
-use crate::ui::components::confirm_dialog::ConfirmDialog;
 use crate::ui::components::toggle::{render_toggle, ToggleColors};
 
 use super::{BackendCollapseState, SettingsPanel};
@@ -33,6 +32,7 @@ impl SettingsPanel {
         let accent_soft = self.theme.accent_soft;
         let text_1 = self.theme.text_1;
         let text_2 = self.theme.text_2;
+        let text_3 = self.theme.text_3;
         let transfer_enabled = self.state.read(cx).settings.transfer_station_enabled;
         let transfer_retention = self.state.read(cx).settings.transfer_retention_days;
         let enabled_backend_count = sync
@@ -49,12 +49,6 @@ impl SettingsPanel {
                     .into_any_element()
             })
             .collect();
-
-        let delete_dialog_gen = if self.delete_backend_confirm.is_some() {
-            self.delete_backend_confirm_gen
-        } else {
-            0
-        };
 
         div()
             .relative()
@@ -349,6 +343,281 @@ impl SettingsPanel {
                         )
                     }),
             )
+            .child({
+                // ── Config sync card ──
+                let sync = self.state.read(cx).sync.clone();
+                let config_backends: Vec<BackendStatus> = sync
+                    .backends
+                    .iter()
+                    .filter(|b| b.config.backend_type == "local_folder" || b.config.backend_type == "webdav")
+                    .cloned()
+                    .collect();
+
+                if self.config_sync_backend_id.is_none() {
+                    self.config_sync_backend_id = config_backends.first().map(|b| b.config.id.clone());
+                }
+
+                // Revalidate the selected backend every render: if it was
+                // deleted, fall back to the first available one so the buttons
+                // never silently operate on a stale ID.
+                let selected_still_exists = self
+                    .config_sync_backend_id
+                    .as_ref()
+                    .is_some_and(|id| config_backends.iter().any(|b| &b.config.id == id));
+                if !selected_still_exists {
+                    self.config_sync_backend_id =
+                        config_backends.first().map(|b| b.config.id.clone());
+                }
+
+                let selected_id = self.config_sync_backend_id.clone();
+                let no_backends = config_backends.is_empty();
+                let busy = wm.read(cx).is_config_sync_busy();
+                let buttons_disabled = no_backends || busy;
+
+                let selected_name = config_backends
+                    .iter()
+                    .find(|b| Some(&b.config.id) == selected_id.as_ref())
+                    .map(|b| b.config.name.clone())
+                    .unwrap_or_default();
+
+                let ids: Vec<String> = config_backends.iter().map(|b| b.config.id.clone()).collect();
+                let names: Vec<String> = config_backends.iter().map(|b| b.config.name.clone()).collect();
+                let menu_open = self.config_sync_menu_open && ids.len() > 1;
+
+                div()
+                    .relative()
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .rounded_t(px(10.))
+                            .px(px(14.))
+                            .py(px(10.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(text_1)
+                                            .child(I18nKey::ConfigSyncTitle.text()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(text_2)
+                                    .child(I18nKey::ConfigSyncDesc.text()),
+                            ),
+                    )
+                    .child(div().h(px(1.)).bg(divider))
+                    .child({
+
+                        div()
+                            .px(px(14.))
+                            .py(px(8.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(text_2)
+                                    .child(I18nKey::ConfigSyncTargetBackend.text()),
+                            )
+                            .child({
+                                let this = cx.entity().clone();
+                                div()
+                                    .flex_1()
+                                    .h(px(22.))
+                                    .px(px(8.))
+                                    .rounded(px(4.))
+                                    .border(px(1.))
+                                    .border_color(if menu_open { accent } else { divider })
+                                    .bg(surface)
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .text_size(px(10.))
+                                    .text_color(if no_backends { text_3 } else { accent })
+                                    .cursor(if ids.len() <= 1 { CursorStyle::Arrow } else { CursorStyle::PointingHand })
+                                    .opacity(if no_backends { 0.45 } else { 1.0 })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .child(if no_backends {
+                                                I18nKey::ConfigSyncNoBackend.text().to_string()
+                                            } else {
+                                                selected_name.clone()
+                                            }),
+                                    )
+                                    .when(ids.len() > 1, |el| {
+                                        el.child(
+                                            div()
+                                                .ml(px(2.))
+                                                .flex_shrink_0()
+                                                .font_family("iconfont")
+                                                .text_size(px(8.))
+                                                .text_color(text_3)
+                                                .child("\u{e602}"),
+                                        )
+                                    })
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let ids = ids.clone();
+                                        let this = this.clone();
+                                        move |_ev, _window, cx| {
+                                            if ids.len() <= 1 {
+                                                return;
+                                            }
+                                            this.update(cx, |panel, cx| {
+                                                panel.config_sync_menu_open = !panel.config_sync_menu_open;
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                            })
+                    })
+                    .child(div().h(px(1.)).bg(divider))
+                    .child(
+                        div()
+                            .px(px(14.))
+                            .py(px(8.))
+                            .flex()
+                            .gap(px(6.))
+                            .child({
+                                let _wm = wm.clone();
+                                let selected = selected_id.clone();
+                                let backend_name = selected_name.clone();
+                                let this = cx.entity().clone();
+                                div()
+                                    .flex_1()
+                                    .h(px(28.))
+                                    .rounded(px(6.))
+                                    .bg(accent)
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xffffff))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(if buttons_disabled { CursorStyle::Arrow } else { CursorStyle::PointingHand })
+                                    .opacity(if buttons_disabled { 0.45 } else { 1.0 })
+                                    .child(if busy { I18nKey::ConfigSyncUploading.text() } else { I18nKey::ConfigSyncUpload.text() })
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        if buttons_disabled {
+                                            return;
+                                        }
+                                        if let Some(ref _id) = selected {
+                                            this.update(cx, |panel, cx| {
+                                                panel.config_sync_upload_confirm = Some(backend_name.clone());
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                            })
+                            .child({
+                                let wm = wm.clone();
+                                let selected = selected_id.clone();
+                                let this = cx.entity().clone();
+                                div()
+                                    .flex_1()
+                                    .h(px(28.))
+                                    .rounded(px(6.))
+                                    .bg(accent_soft)
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(if buttons_disabled { CursorStyle::Arrow } else { CursorStyle::PointingHand })
+                                    .opacity(if buttons_disabled { 0.45 } else { 1.0 })
+                                    .child(if busy { I18nKey::ConfigSyncDownloading.text() } else { I18nKey::ConfigSyncApply.text() })
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        if buttons_disabled {
+                                            return;
+                                        }
+                                        if let Some(ref id) = selected {
+                                            let backends = this.read(cx).state.read(cx).settings.sync_backends.clone();
+                                            if let Some(cfg) = backends.iter().find(|b| &b.id == id) {
+                                                if let Some(backend) = crate::services::backends::create_config_snapshot_backend(cfg) {
+                                                    wm.update(cx, |wm, _cx| {
+                                                        wm.start_config_download(backend);
+                                                    });
+                                                }
+                                            }
+                                            this.update(cx, |_panel, cx| {
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                            }),
+                    )
+                    .when(menu_open, |card| {
+                        let ids = ids.clone();
+                        let names = names.clone();
+                        let selected = selected_id.clone();
+                        let this = cx.entity().clone();
+                        card.child(
+                            div()
+                                .absolute()
+                                .top(px(92.))
+                                .left(px(60.))
+                                .right(px(14.))
+                                .rounded(px(6.))
+                                .border(px(1.))
+                                .border_color(divider)
+                                .bg(surface)
+                                .shadow_lg()
+                                .p(px(4.))
+                                .occlude()
+                                .children(ids.iter().enumerate().map(|(i, id)| {
+                                    let name = names[i].clone();
+                                    let id = id.clone();
+                                    let active = Some(&id) == selected.as_ref();
+                                    let this = this.clone();
+                                    div()
+                                        .h(px(24.))
+                                        .rounded(px(4.))
+                                        .px(px(8.))
+                                        .flex()
+                                        .items_center()
+                                        .text_size(px(10.))
+                                        .text_color(if active { accent } else { text_1 })
+                                        .bg(if active { accent_soft } else { rgba(0x00000000) })
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(move |style| {
+                                            if !active {
+                                                style.bg(accent_soft)
+                                            } else {
+                                                style
+                                            }
+                                        })
+                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                            this.update(cx, |panel, cx| {
+                                                panel.config_sync_backend_id = Some(id.clone());
+                                                panel.config_sync_menu_open = false;
+                                                cx.notify();
+                                            });
+                                        })
+                                        .child(name)
+                                })),
+                        )
+                    })
+            })
             .child(
                 div()
                     .rounded(px(10.))
@@ -398,41 +667,6 @@ impl SettingsPanel {
                         )
                     }),
             )
-            .when(self.delete_backend_confirm.is_some(), |root| {
-                let wm = self.window_manager.clone();
-                let this = cx.entity().clone();
-                let theme = self.theme.clone();
-                root.child(
-                    ConfirmDialog::new()
-                        .title(I18nKey::ConfirmDeleteSingleTitle.text())
-                        .message(I18nKey::BackendDeleteConfirmMsg.text())
-                        .confirm_label(I18nKey::ConfirmDeleteLabel.text())
-                        .danger(true)
-                        .theme(theme)
-                        .on_confirm({
-                            let id = self.delete_backend_confirm.clone().unwrap_or_default();
-                            let wm = wm.clone();
-                            let this = this.clone();
-                            move |_window, cx| {
-                                wm.update(cx, |wm, cx| wm.remove_sync_backend(&id, cx));
-                                this.update(cx, |panel, cx| {
-                                    panel.delete_backend_confirm = None;
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .on_cancel({
-                            let this = this.clone();
-                            move |_window, cx| {
-                                this.update(cx, |panel, cx| {
-                                    panel.delete_backend_confirm = None;
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .render_animated(window, cx, delete_dialog_gen),
-                )
-            })
     }
 
     fn render_backend_card(

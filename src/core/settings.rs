@@ -480,6 +480,28 @@ impl AppSettings {
         }
     }
 
+    /// Atomically save settings to an arbitrary path.
+    ///
+    /// Writes to a temporary file, then renames it onto `path`.  The caller
+    /// is responsible for ensuring the parent directory exists.
+    /// Used by config-sync to write merged settings without risking
+    /// truncation of the live `clippi.toml`.
+    pub fn save_atomic_to(&self, path: &Path) -> Result<(), String> {
+        let content = toml::to_string_pretty(self).map_err(|e| format!("serialize TOML: {e}"))?;
+        let tmp = path.with_extension(format!("toml.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, &content)
+            .map_err(|e| format!("write temp file {}: {e}", tmp.display()))?;
+        if let Err(e) = crate::services::file_ops::replace_file(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "replace {} -> {}: {e}",
+                tmp.display(),
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
     fn config_path() -> PathBuf {
         super::paths::config_path()
     }
@@ -669,18 +691,21 @@ pub fn migrate_database(old_path: &Path, new_path: &Path) -> Result<(), String> 
     Ok(())
 }
 
-pub fn spawn_new_process() {
-    if let Ok(exe) = std::env::current_exe() {
-        match Command::new(&exe).arg("--restart").spawn() {
-            Ok(child) => {
-                log::info!("Spawned new process (pid: {}) for restart", child.id());
-            }
-            Err(e) => {
-                log::error!("Failed to spawn new process for restart: {e}");
-            }
+/// Spawn a new process with the `--restart` flag and return the result.
+///
+/// The caller decides what to do next: exit the current process on success,
+/// or keep running and notify the user when spawning fails.
+pub fn spawn_new_process() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("get current executable path: {e}"))?;
+    match Command::new(&exe).arg("--restart").spawn() {
+        Ok(child) => {
+            log::info!("Spawned new process (pid: {}) for restart", child.id());
+            Ok(())
         }
-    } else {
-        log::error!("Failed to get current executable path for restart");
+        Err(e) => {
+            log::error!("Failed to spawn new process for restart: {e}");
+            Err(format!("spawn new process: {e}"))
+        }
     }
 }
 
@@ -1191,5 +1216,81 @@ mod tests {
         let parsed: AppSettings = toml::from_str(&legacy_config).unwrap();
 
         assert!(!parsed.cleanup_stale_items);
+    }
+
+    #[test]
+    fn save_atomic_to_overwrites_existing_file() {
+        // Cloud-apply writes the merged config over the live clippi.toml.
+        // This must work when the destination already exists (Windows
+        // `std::fs::rename` would fail here; `replace_file` must not).
+        let dir = std::env::temp_dir().join(format!(
+            "clippi-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clippi.toml");
+
+        let old = AppSettings {
+            theme: "light".into(),
+            ..Default::default()
+        };
+        old.save_atomic_to(&path).unwrap();
+
+        let merged = AppSettings {
+            theme: "dark".into(),
+            auto_hide: false,
+            ..Default::default()
+        };
+        merged.save_atomic_to(&path).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let loaded: AppSettings = toml::from_str(&content).unwrap();
+        assert_eq!(loaded.theme, "dark");
+        assert!(!loaded.auto_hide);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repeated_save_atomic_to_is_consistent() {
+        // Re-saving the same merged settings must not change the file.
+        // This covers the "apply + later save" disk behavior only;
+        // the actual regression guard for committing `merged` into
+        // `AppState.settings` lives in `WindowManager::apply_config_snapshot`
+        // (it needs a GPUI context and cannot be exercised here).
+        let dir = std::env::temp_dir().join(format!(
+            "clippi-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clippi.toml");
+
+        let merged = AppSettings {
+            theme: "dark".into(),
+            max_items: 250,
+            ..Default::default()
+        };
+        merged.save_atomic_to(&path).unwrap();
+        let after_apply = std::fs::read_to_string(&path).unwrap();
+
+        // Later runtime saves happen from the committed in-memory settings:
+        // writing the same merged content again is idempotent on disk.
+        merged.save_atomic_to(&path).unwrap();
+        let after_resave = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after_apply, after_resave);
+
+        let loaded: AppSettings = toml::from_str(&after_resave).unwrap();
+        assert_eq!(loaded.theme, "dark");
+        assert_eq!(loaded.max_items, 250);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

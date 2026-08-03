@@ -228,7 +228,8 @@ impl SettingsPanel {
                                                         s.settings.db_path = path_str;
                                                         s.settings.save();
                                                     });
-                                                    crate::core::settings::spawn_new_process();
+                                                    let _ =
+                                                        crate::core::settings::spawn_new_process();
                                                     let _ = cx.update(|cx| cx.quit());
                                                 }
                                                 Err(e) => {
@@ -1095,7 +1096,7 @@ impl SettingsPanel {
             let _ = std::fs::remove_file(exe_dir.join("clippi.toml"));
         }
 
-        crate::core::settings::spawn_new_process();
+        let _ = crate::core::settings::spawn_new_process();
         cx.quit();
     }
 

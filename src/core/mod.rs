@@ -2,6 +2,7 @@
 
 pub mod cache_cleanup;
 pub mod color;
+pub mod config_sync;
 pub mod db;
 pub mod filters;
 pub mod frontend;

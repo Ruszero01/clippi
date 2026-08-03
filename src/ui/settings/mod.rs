@@ -33,6 +33,7 @@ use hotkey::HotkeyConfirmAction;
 use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 use crate::ui::add_backend::AddBackendPanel;
+use crate::ui::components::confirm_dialog::ConfirmDialog;
 use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};
 use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
@@ -113,6 +114,19 @@ pub struct SettingsPanel {
     pub copy_sound_anim_gen: u64,
     /// Focus handle for keyboard events (ESC to go back).
     focus_handle: FocusHandle,
+
+    // ── Config sync ──
+    /// Selected backend ID for config sync (defaults to first available).
+    pub config_sync_backend_id: Option<String>,
+    /// Upload confirmation dialog state.
+    pub config_sync_upload_confirm: Option<String>,
+    /// Apply confirmation dialog generation (incremented on each new dialog).
+    pub config_sync_apply_confirm_gen: u64,
+    /// When the apply confirmation was shown.
+    #[allow(dead_code)]
+    pub config_sync_apply_confirm_started: Option<Instant>,
+    /// Whether the config-sync backend selector dropdown is open.
+    pub config_sync_menu_open: bool,
 }
 
 fn tab_names() -> [&'static str; 6] {
@@ -213,6 +227,11 @@ impl SettingsPanel {
             retention_days_input,
             _retention_days_focus_sub,
             copy_sound_anim_gen: 0,
+            config_sync_backend_id: None,
+            config_sync_upload_confirm: None,
+            config_sync_apply_confirm_gen: 0,
+            config_sync_apply_confirm_started: None,
+            config_sync_menu_open: false,
         }
     }
 
@@ -267,6 +286,216 @@ impl SettingsPanel {
     pub fn backend_panel(&self) -> Entity<AddBackendPanel> {
         self.backend_panel.clone()
     }
+
+    /// Render config-sync confirmation dialogs as absolute-positioned overlays
+    /// on the settings panel root. This avoids clipping from the scroll container.
+    fn render_config_sync_dialogs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let wm = self.window_manager.clone();
+        let this = cx.entity().clone();
+        let theme = self.theme.clone();
+
+        let show_upload = self.config_sync_upload_confirm.is_some();
+        let show_apply = wm.read(cx).config_sync_pending_snapshot().is_some();
+
+        div()
+            .when(show_upload || show_apply, |root| {
+                root.absolute().size_full().top_0().left_0()
+            })
+            .when(show_upload, |root| {
+                let backend_name = self.config_sync_upload_confirm.clone().unwrap_or_default();
+                let msg = I18nKey::ConfigSyncConfirmUploadMsg.fmt(&[&backend_name]);
+                let backend_id = self.config_sync_backend_id.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                let theme = theme.clone();
+
+                root.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .top_0()
+                        .left_0()
+                        .bg(rgba(0x00000055))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            ConfirmDialog::new()
+                                .title(I18nKey::ConfigSyncConfirmUploadTitle.text())
+                                .message(msg)
+                                .confirm_label(I18nKey::BtnApply.text())
+                                .danger(false)
+                                .theme(theme)
+                                .on_confirm({
+                                    let wm = wm.clone();
+                                    let this = this.clone();
+                                    let bid = backend_id.clone();
+                                    move |_window, app| {
+                                        let backends = this.read(app).state.read(app).settings.sync_backends.clone();
+                                        if let Some(ref id) = bid {
+                                            if let Some(cfg) = backends.iter().find(|b| &b.id == id) {
+                                                if let Some(backend) = crate::services::backends::create_config_snapshot_backend(cfg) {
+                                                    wm.update(app, |wm, cx| {
+                                                        wm.start_config_upload(backend, cx);
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        this.update(app, |panel, cx| {
+                                            panel.config_sync_upload_confirm = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .on_cancel({
+                                    let this = this.clone();
+                                    move |_window, app| {
+                                        this.update(app, |panel, cx| {
+                                            panel.config_sync_upload_confirm = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .render_animated(window, cx, 0),
+                        ),
+                )
+            })
+            .when(show_apply, |root| {
+                let wm = wm.clone();
+                let this = this.clone();
+                let theme = theme.clone();
+                let snapshot = wm.read(cx).config_sync_pending_snapshot().cloned();
+
+                if let Some(ref snap) = snapshot {
+                    let uploaded = format_uploaded_at(&snap.uploaded_at);
+                    let platform = snap.source.platform.clone();
+                    let version = snap.source.app_version.clone();
+                    let msg = I18nKey::ConfigSyncConfirmApplyMsg.fmt(&[&uploaded, &platform, &version]);
+                    let gen = self.config_sync_apply_confirm_gen;
+
+                    root.child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .top_0()
+                            .left_0()
+                            .bg(rgba(0x00000055))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                ConfirmDialog::new()
+                                    .title(I18nKey::ConfigSyncConfirmApplyTitle.text())
+                                    .message(msg)
+                                    .confirm_label(I18nKey::BtnRestartNow.text())
+                                    .danger(false)
+                                    .theme(theme)
+                                    .on_confirm({
+                                        let wm = wm.clone();
+                                        move |_window, app| {
+                                            wm.update(app, |wm, cx| {
+                                                wm.apply_config_snapshot(cx);
+                                            });
+                                        }
+                                    })
+                                    .on_cancel({
+                                        let wm = wm.clone();
+                                        let this = this.clone();
+                                        move |_window, app| {
+                                            wm.update(app, |wm, _cx| {
+                                                wm.clear_config_sync_pending_snapshot();
+                                            });
+                                            this.update(app, |_panel, cx| {
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                                    .render_animated(window, cx, gen),
+                            ),
+                    )
+                } else {
+                    root.child(div())
+                }
+            })
+    }
+
+    /// Render delete-backend confirmation dialog as an absolute overlay.
+    fn render_delete_backend_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let show = self.delete_backend_confirm.is_some();
+        let gen = if show {
+            self.delete_backend_confirm_gen
+        } else {
+            0
+        };
+        let wm = self.window_manager.clone();
+        let this = cx.entity().clone();
+        let theme = self.theme.clone();
+
+        div().when(show, |root| {
+            let id = self.delete_backend_confirm.clone().unwrap_or_default();
+            root.absolute().size_full().top_0().left_0().child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .top_0()
+                    .left_0()
+                    .bg(rgba(0x00000055))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        ConfirmDialog::new()
+                            .title(I18nKey::ConfirmDeleteSingleTitle.text())
+                            .message(I18nKey::BackendDeleteConfirmMsg.text())
+                            .confirm_label(I18nKey::ConfirmDeleteLabel.text())
+                            .danger(true)
+                            .theme(theme)
+                            .on_confirm({
+                                let wm = wm.clone();
+                                let this = this.clone();
+                                move |_window, app| {
+                                    wm.update(app, |wm, cx| {
+                                        wm.remove_sync_backend(&id, cx);
+                                    });
+                                    this.update(app, |panel, cx| {
+                                        panel.delete_backend_confirm = None;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let this = this.clone();
+                                move |_window, app| {
+                                    this.update(app, |panel, cx| {
+                                        panel.delete_backend_confirm = None;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .render_animated(window, cx, gen),
+                    ),
+            )
+        })
+    }
+}
+
+/// Format an RFC3339 timestamp as local date-time.
+fn format_uploaded_at(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| rfc3339.to_string())
 }
 
 impl Render for SettingsPanel {
@@ -470,6 +699,16 @@ impl Render for SettingsPanel {
                     )
                     // --- Reset data directory dialog (overlay) ---
                     .child(self.render_reset_data_dialog(window, cx).into_any_element()),
+            )
+            // --- Config sync dialogs (absolute overlay on root) ---
+            .child(
+                self.render_config_sync_dialogs(window, cx)
+                    .into_any_element(),
+            )
+            // --- Delete backend dialog (absolute overlay on root) ---
+            .child(
+                self.render_delete_backend_dialog(window, cx)
+                    .into_any_element(),
             )
     }
 }
