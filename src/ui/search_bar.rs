@@ -318,6 +318,16 @@ impl Render for SearchBar {
                                     });
                                     cx.stop_propagation();
                                 }
+                                // Ctrl/Cmd+Enter — bitmap paste for a single selected
+                                // image, default paste otherwise. Floating-panel guard
+                                // lives inside the list's unified action method.
+                                (true, false, "enter") => {
+                                    list.update(cx, |list, cx| {
+                                        list.focus(window);
+                                        list.action_paste_bitmap_or_default(cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
                                 // Ctrl+D — toggle favorite
                                 (true, false, "d") => {
                                     list.update(cx, |list, cx| {

@@ -254,7 +254,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenImage.text().into(),
                 action: "open_image".into(),
-                icon: "\u{e626}".into(),
+                icon: "\u{e69f}".into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -273,7 +273,7 @@ impl ContextMenu {
                 icon: "\u{e626}".into(),
                 danger: false,
                 fav: false,
-                shortcut: None,
+                shortcut: ctrl_shortcut("Enter"),
             });
             items.push(RawMenuItem {
                 label: I18nKey::CtxPasteOcr.text().into(),

@@ -59,6 +59,39 @@ pub enum ClipboardListEvent {
     RequestHide,
 }
 
+/// Modifier kind for a modified double-click paste candidate.
+enum ModifiedPasteModifier {
+    Bitmap,
+    PlainText,
+}
+
+/// One-shot candidate for modified double-click paste, established when a
+/// first modified click leaves the selection set unchanged.
+struct ModifiedDoubleClickCandidate {
+    item_id: i64,
+    modifier: ModifiedPasteModifier,
+}
+
+/// Normalized modifier classification for modified double-click gestures.
+///
+/// Only a bare primary modifier (Ctrl on Windows/Linux, Cmd on macOS) or a
+/// bare Shift forms a paste kind. Any extra modifier (Alt, Fn, Win/Super, …)
+/// or combination (Ctrl+Shift, …) yields `None`, so those gestures can never
+/// establish a candidate or paste on the second click. Shared by candidate
+/// formation and double-click matching so both sides stay consistent.
+fn modified_double_click_kind(modifiers: Modifiers) -> Option<ModifiedPasteModifier> {
+    if modifiers.number_of_modifiers() != 1 {
+        return None;
+    }
+    if primary_modifier_pressed(modifiers) {
+        Some(ModifiedPasteModifier::Bitmap)
+    } else if modifiers.shift {
+        Some(ModifiedPasteModifier::PlainText)
+    } else {
+        None
+    }
+}
+
 impl EventEmitter<ClipboardListEvent> for ClipboardListView {}
 
 /// The clipboard list view entity.
@@ -116,6 +149,8 @@ pub struct ClipboardListView {
     recording_hotkey_format: String,
     /// One-shot guard for an ESC event already consumed by inline UI.
     escape_consumed_inline: bool,
+    /// Candidate for Ctrl/Cmd/Shift double-click paste (see `handle_card_click`).
+    modified_double_click_candidate: Option<ModifiedDoubleClickCandidate>,
 }
 
 impl ClipboardListView {
@@ -169,6 +204,7 @@ impl ClipboardListView {
             recording_hotkey_id: -1,
             recording_hotkey_format: String::new(),
             escape_consumed_inline: false,
+            modified_double_click_candidate: None,
         }
     }
 
@@ -187,6 +223,7 @@ impl ClipboardListView {
         self.anchor_index = None;
         self.selected_count = 0;
         self.hovered_index = None;
+        self.modified_double_click_candidate = None;
         let scroll_to_latest = self.state.read(cx).settings.auto_scroll_to_top;
         if scroll_to_latest && !self.items.is_empty() {
             let latest_idx = self
@@ -239,6 +276,7 @@ impl ClipboardListView {
         self.anchor_index = None;
         self.selected_count = 0;
         self.hovered_index = None;
+        self.modified_double_click_candidate = None;
         self.context_menu_visible = false;
         self.context_menu_item = None;
         self.tag_picker_visible = false;
@@ -319,6 +357,9 @@ impl ClipboardListView {
         self.selected_ids.clear();
         self.selected_ids.push(item_id);
         self.selected_index = Some(index);
+        self.anchor_index = Some(index);
+        self.selected_count = 1;
+        self.modified_double_click_candidate = None;
         self.scroll_handle.scroll_to_item(index, scroll_strategy);
         self.state.update(cx, move |state, _cx| {
             state.select_single(item_id);
@@ -336,6 +377,7 @@ impl ClipboardListView {
         self.selected_index = Some(index);
         self.anchor_index = Some(index);
         self.selected_count = 1;
+        self.modified_double_click_candidate = None;
         self.state.update(cx, move |state, _cx| {
             state.select_single(item_id);
         });
@@ -344,6 +386,7 @@ impl ClipboardListView {
 
     /// Toggle selection of an item (Ctrl+click).
     fn toggle_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.modified_double_click_candidate = None;
         let Some(item) = self.items.get(index) else {
             return;
         };
@@ -354,6 +397,19 @@ impl ClipboardListView {
                 return;
             }
             self.selected_ids.remove(pos);
+            // --- Keep selected_index/anchor_index pointing at a remaining selected item ---
+            if self.selected_index == Some(index) || self.anchor_index == Some(index) {
+                let first_remaining = self
+                    .selected_ids
+                    .first()
+                    .and_then(|&id| self.items.iter().position(|item| item.id == id));
+                if self.selected_index == Some(index) {
+                    self.selected_index = first_remaining;
+                }
+                if self.anchor_index == Some(index) {
+                    self.anchor_index = first_remaining;
+                }
+            }
         } else {
             self.selected_ids.push(item_id);
             self.anchor_index = Some(index);
@@ -369,6 +425,7 @@ impl ClipboardListView {
 
     /// Range select from anchor to given index (Shift+click).
     fn range_select_to_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.modified_double_click_candidate = None;
         let anchor = match self.anchor_index {
             Some(a) => a,
             None => {
@@ -430,22 +487,190 @@ impl ClipboardListView {
 
     // --- Keyboard-shortcut action helpers (pub(crate) so SearchBar can call them) ---
 
+    /// Dismiss floating panels instead of pasting when any panel is open.
+    /// Shared by `action_paste` and `action_paste_bitmap_or_default` so the
+    /// list key handler and the search bar behave identically.
+    fn guard_panels_before_paste(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.has_any_panel_or_editing() {
+            self.dismiss_all_panels(cx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ID of the single selected item, if exactly one item is selected.
+    fn single_selected_id(&self) -> Option<i64> {
+        if self.selected_ids.len() == 1 {
+            self.selected_ids.first().copied()
+        } else {
+            None
+        }
+    }
+
     /// Paste selected item(s). Called from list key handler and search bar.
     pub(crate) fn action_paste(&mut self, plain: bool, cx: &mut Context<Self>) {
-        if self.selected_count > 1 {
+        if self.guard_panels_before_paste(cx) {
+            return;
+        }
+        if self.selected_ids.len() > 1 {
             let ids = self.selected_ids.clone();
             self.state.update(cx, |s, _cx| s.batch_paste(&ids, plain));
-        } else if let Some(idx) = self.selected_index {
-            if let Some(item) = self.items.get(idx) {
-                let id = item.id;
-                if plain {
-                    self.state.update(cx, |s, _cx| s.paste_item_plain(id));
-                } else {
-                    self.state.update(cx, |s, _cx| s.paste_item(id, plain));
-                }
+        } else if let Some(item) = self
+            .single_selected_id()
+            .and_then(|id| self.items.iter().find(|item| item.id == id))
+        {
+            let id = item.id;
+            if plain {
+                self.state.update(cx, |s, _cx| s.paste_item_plain(id));
+            } else {
+                self.state.update(cx, |s, _cx| s.paste_item(id, plain));
             }
         }
         self.sync_items_from_state(cx);
+    }
+
+    /// Ctrl/Cmd+Enter: paste the single selected image as bitmap; any other
+    /// selection falls back to the default paste behavior (`action_paste`).
+    pub(crate) fn action_paste_bitmap_or_default(&mut self, cx: &mut Context<Self>) {
+        if self.guard_panels_before_paste(cx) {
+            return;
+        }
+        if let Some(item) = self
+            .single_selected_id()
+            .and_then(|id| self.items.iter().find(|item| item.id == id))
+        {
+            if item.content_type == ContentType::Image {
+                let id = item.id;
+                self.state.update(cx, |s, _cx| s.paste_image_as_bitmap(id));
+                self.sync_items_from_state_for_usage(cx);
+                return;
+            }
+        }
+        let plain = self.state.read(cx).settings.copy_as_plain_text;
+        self.action_paste(plain, cx);
+    }
+
+    /// Single-click selection plus modified double-click candidate arbitration.
+    ///
+    /// A candidate is established only when the first modified click targets
+    /// the single selected item and leaves the selection set unchanged; the
+    /// additive+Shift combination never forms a candidate.
+    fn handle_card_click(
+        &mut self,
+        index: usize,
+        modifiers: Modifiers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // --- Clicking another card while editing → commit first ---
+        if self.editing_note_id > 0 {
+            self.commit_note_edit(window, cx);
+        }
+
+        let before_ids = self.selected_ids.clone();
+        let was_unique_selected = self.selected_ids.len() == 1
+            && self
+                .items
+                .get(index)
+                .is_some_and(|item| self.selected_ids[0] == item.id);
+        let candidate_modifier = modified_double_click_kind(modifiers);
+
+        if additive_selection_modifier(modifiers) {
+            self.toggle_index(index, cx);
+        } else if modifiers.shift {
+            self.range_select_to_index(index, cx);
+        } else {
+            self.select_index_without_scroll(index, cx);
+        }
+
+        self.modified_double_click_candidate = match candidate_modifier {
+            Some(modifier) if was_unique_selected && self.selected_ids == before_ids => self
+                .items
+                .get(index)
+                .map(|item| ModifiedDoubleClickCandidate {
+                    item_id: item.id,
+                    modifier,
+                }),
+            _ => None,
+        };
+    }
+
+    /// Default double-click behavior (no modifiers): paste with full formatting.
+    fn double_click_paste_default(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.selected_ids.len() > 1 {
+            let ids = self.selected_ids.clone();
+            self.state.update(cx, |s, _cx| s.batch_paste(&ids, false));
+            self.sync_items_from_state_for_usage(cx);
+        } else if let Some(item) = self.items.get(index) {
+            if item.id < 0 && item.meta_type == "transfer" {
+                let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                let hash = file_data.remote_hash;
+                let local_path = file_data.files.first().map(|file| file.path.clone());
+                self.state.update(cx, |state, _cx| {
+                    if let Some(path) = local_path.filter(|path| !path.is_empty()) {
+                        state.open_transfer_location(&path);
+                    } else {
+                        state.download_transfer_entry(&hash);
+                    }
+                });
+                self.sync_items_from_state(cx);
+                return;
+            }
+            let item_id = item.id;
+            self.state.update(cx, |s, _cx| s.paste_item(item_id, false));
+            self.sync_items_from_state_for_usage(cx);
+        }
+    }
+
+    /// Double-click with modifiers: paste only when the first click left the
+    /// selection unchanged (candidate established); otherwise consume the click
+    /// and keep the first click's selection result.
+    fn handle_double_click(&mut self, index: usize, modifiers: Modifiers, cx: &mut Context<Self>) {
+        match modified_double_click_kind(modifiers) {
+            // No modifiers at all — existing default paste, never gated by candidate.
+            None if modifiers.number_of_modifiers() == 0 => {
+                self.double_click_paste_default(index, cx);
+                self.modified_double_click_candidate = None;
+            }
+            // Bare primary modifier (Ctrl/Cmd) — candidate-gated bitmap paste.
+            Some(ModifiedPasteModifier::Bitmap) => {
+                let Some(candidate) = self.modified_double_click_candidate.take() else {
+                    return;
+                };
+                let Some(item) = self.items.get(index) else {
+                    return;
+                };
+                if candidate.item_id == item.id
+                    && matches!(candidate.modifier, ModifiedPasteModifier::Bitmap)
+                    && item.content_type == ContentType::Image
+                {
+                    let id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_image_as_bitmap(id));
+                    self.sync_items_from_state_for_usage(cx);
+                }
+            }
+            // Bare Shift — candidate-gated plain-text paste.
+            Some(ModifiedPasteModifier::PlainText) => {
+                let Some(candidate) = self.modified_double_click_candidate.take() else {
+                    return;
+                };
+                let Some(item) = self.items.get(index) else {
+                    return;
+                };
+                if candidate.item_id == item.id
+                    && matches!(candidate.modifier, ModifiedPasteModifier::PlainText)
+                {
+                    let id = item.id;
+                    self.state.update(cx, |s, _cx| s.paste_item_plain(id));
+                    self.sync_items_from_state_for_usage(cx);
+                }
+            }
+            // Any other modifier combination — consume the click, never paste.
+            None => {
+                self.modified_double_click_candidate = None;
+            }
+        }
     }
 
     /// Toggle favorite on selected item(s).
@@ -612,6 +837,7 @@ impl ClipboardListView {
             self.selected_index = Some(idx);
             self.anchor_index = Some(idx);
             self.selected_count = 1;
+            self.modified_double_click_candidate = None;
             self.state.update(cx, |state, _cx| {
                 state.select_single(first_id);
             });
@@ -862,6 +1088,7 @@ impl ClipboardListView {
         self.selected_index = Some(index);
         self.anchor_index = Some(index);
         self.selected_count = 1;
+        self.modified_double_click_candidate = None;
         self.hovered_index = Some(index);
         self.state.update(cx, |state, _cx| {
             state.select_single(item_id);
@@ -1324,6 +1551,20 @@ impl ClipboardListView {
             "batch_delete_transfer" => {
                 self.show_transfer_batch_delete_confirm(cx);
             }
+            "paste_image_bitmap" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        // --- Double-check the type even though the toolbar only ---
+                        // --- generates this action for image cards.             ---
+                        if item.content_type == ContentType::Image {
+                            let item_id = item.id;
+                            self.state
+                                .update(cx, |s, _cx| s.paste_image_as_bitmap(item_id));
+                            self.sync_items_from_state_for_usage(cx);
+                        }
+                    }
+                }
+            }
             "open_image" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
@@ -1483,6 +1724,14 @@ impl Render for ClipboardListView {
                                 }
                                 cx.stop_propagation();
                             }
+                            "enter" if !shift => {
+                                // Ctrl/Cmd+Enter — bitmap paste for a single selected
+                                // image, default paste otherwise. The floating-panel
+                                // guard lives inside the action method. Ctrl/Cmd+Shift+Enter
+                                // is intentionally unhandled.
+                                this.action_paste_bitmap_or_default(cx);
+                                cx.stop_propagation();
+                            }
                             "d" if !this.has_any_panel_or_editing() => {
                                 // Ctrl+D — toggle favorite
                                 this.action_toggle_favorite(cx);
@@ -1517,13 +1766,9 @@ impl Render for ClipboardListView {
 
                     // --- Shift+Enter — paste as plain text ---
                     if shift && key == "enter" {
-                        if this.has_any_panel_or_editing() {
-                            this.dismiss_all_panels(cx);
-                            cx.stop_propagation();
-                        } else {
-                            this.action_paste(true, cx);
-                            cx.stop_propagation();
-                        }
+                        // Floating-panel guard handled by `action_paste`.
+                        this.action_paste(true, cx);
+                        cx.stop_propagation();
                         return;
                     }
 
@@ -1540,15 +1785,11 @@ impl Render for ClipboardListView {
                             cx.stop_propagation();
                         }
                         "enter" => {
-                            // --- Only paste when no floating panel or inline editing is active ---
-                            if this.has_any_panel_or_editing() {
-                                this.dismiss_all_panels(cx);
-                                cx.stop_propagation();
-                            } else {
-                                let plain = this.state.read(cx).settings.copy_as_plain_text;
-                                this.action_paste(plain, cx);
-                                cx.stop_propagation();
-                            }
+                            // Paste with the plain-text setting; floating panels
+                            // are dismissed instead by `action_paste`.
+                            let plain = this.state.read(cx).settings.copy_as_plain_text;
+                            this.action_paste(plain, cx);
+                            cx.stop_propagation();
                         }
                         "space" if !this.has_any_panel_or_editing() => {
                             // Space — smart open based on item type
@@ -1713,21 +1954,12 @@ impl Render for ClipboardListView {
                                                   modifiers: Modifiers,
                                                   window: &mut Window,
                                                   cx: &mut App| {
-                                            focus_handle.focus(window);
-                                            list_view.update(cx, move |this, cx| {
-                                                // --- Clicking another card while editing → commit first ---
-                                                if this.editing_note_id > 0 {
-                                                    this.commit_note_edit(window, cx);
-                                                }
-                                                if additive_selection_modifier(modifiers) {
-                                                    this.toggle_index(idx, cx);
-                                                } else if modifiers.shift {
-                                                    this.range_select_to_index(idx, cx);
-                                                } else {
-                                                    this.select_index_without_scroll(idx, cx);
-                                                }
-                                            });
-                                        });
+                                                focus_handle.focus(window);
+                                                list_view.update(cx, move |this, cx| {
+                                                    this.handle_card_click(idx, modifiers, window, cx);
+                                                });
+                                            },
+                                        );
 
                                         let list_for_right = list_entity.clone();
                                         let list_for_hover = list_entity.clone();
@@ -1796,6 +2028,7 @@ impl Render for ClipboardListView {
                                                                             Some(i);
                                                                         this.anchor_index = Some(i);
                                                                         this.selected_count = 1;
+                                                                        this.modified_double_click_candidate = None;
                                                                         let item_id = item.id;
                                                                         this.state.update(
                                                                             cx,
@@ -1817,6 +2050,7 @@ impl Render for ClipboardListView {
                                                     MouseButton::Right,
                                                     move |ev: &MouseDownEvent, _window, cx| {
                                                         list_for_right.update(cx, |this, cx| {
+                                                            this.modified_double_click_candidate = None;
                                                             #[cfg(target_os = "macos")]
                                                             if macos_control_modifier_pressed() {
                                                                 this.toggle_index(i, cx);
@@ -1919,74 +2153,9 @@ impl Render for ClipboardListView {
                                                     })
                                                     .on_double_click({
                                                         let list_for_dbl = list_entity.clone();
-                                                        Rc::new(move |idx, _window, cx| {
+                                                        Rc::new(move |idx, modifiers, _window, cx| {
                                                             list_for_dbl.update(cx, |this, cx| {
-                                                                // Double-click always pastes with full formatting —
-                                                                // user chose this specific item deliberately.
-                                                                if this.selected_count > 1 {
-                                                                    let ids =
-                                                                        this.selected_ids.clone();
-                                                                    this.state.update(
-                                                                        cx,
-                                                                        |s, _cx| {
-                                                                            s.batch_paste(
-                                                                                &ids, false,
-                                                                            );
-                                                                        },
-                                                                    );
-                                                                    this.sync_items_from_state_for_usage(cx);
-                                                                } else if let Some(item) =
-                                                                    this.items.get(idx)
-                                                                {
-                                                                    if item.id < 0
-                                                                        && item.meta_type
-                                                                            == "transfer"
-                                                                    {
-                                                                        let file_data =
-                                                                            crate::core::types::FileData::from_json(
-                                                                                &item.file_data,
-                                                                            );
-                                                                        let hash =
-                                                                            file_data.remote_hash;
-                                                                        let local_path =
-                                                                            file_data.files.first().map(
-                                                                                |file| {
-                                                                                    file.path.clone()
-                                                                                },
-                                                                            );
-                                                                        this.state.update(
-                                                                            cx,
-                                                                            |state, _cx| {
-                                                                                if let Some(path) =
-                                                                                    local_path
-                                                                                        .filter(|path| {
-                                                                                            !path.is_empty()
-                                                                                        })
-                                                                                {
-                                                                                    state.open_transfer_location(
-                                                                                        &path,
-                                                                                    );
-                                                                                } else {
-                                                                                    state.download_transfer_entry(
-                                                                                        &hash,
-                                                                                    );
-                                                                                }
-                                                                            },
-                                                                        );
-                                                                        this.sync_items_from_state(cx);
-                                                                        return;
-                                                                    }
-                                                                    let item_id = item.id;
-                                                                    this.state.update(
-                                                                        cx,
-                                                                        |s, _cx| {
-                                                                            s.paste_item(
-                                                                                item_id, false,
-                                                                            );
-                                                                        },
-                                                                    );
-                                                                    this.sync_items_from_state_for_usage(cx);
-                                                                }
+                                                                this.handle_double_click(idx, modifiers, cx);
                                                             });
                                                         })
                                                     });

@@ -37,7 +37,7 @@ use super::search_highlight;
 use super::theme::ClippiTheme;
 
 type CardClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
-type CardIndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+type CardDoubleClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
 type CardActionHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 type CardWindowHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 type CardFormatHandler = Rc<dyn Fn(HotkeyPasteFormat, &mut Window, &mut App)>;
@@ -827,7 +827,7 @@ pub struct ClipboardCard {
     selected_count: usize,
     can_merge_selection: bool,
     on_toolbar_action: Option<CardActionHandler>,
-    on_double_click: Option<CardIndexHandler>,
+    on_double_click: Option<CardDoubleClickHandler>,
     /// Whether this card is in note-editing mode (shows inline editor).
     editing: bool,
     /// Shared InputState from ClipboardListView (only Some when editing is true).
@@ -926,7 +926,7 @@ impl ClipboardCard {
         self
     }
 
-    pub fn on_double_click(mut self, handler: CardIndexHandler) -> Self {
+    pub fn on_double_click(mut self, handler: CardDoubleClickHandler) -> Self {
         self.on_double_click = Some(handler);
         self
     }
@@ -1159,9 +1159,9 @@ impl RenderOnce for ClipboardCard {
                 MouseButton::Left,
                 move |ev, window, cx| {
                     if ev.click_count == 2 {
-                        // --- Double-click → paste ---
+                        // --- Double-click → paste (modifiers passed for arbitration) ---
                         if let Some(ref dbl_handler) = double_click_handler {
-                            dbl_handler(index, window, cx);
+                            dbl_handler(index, ev.modifiers, window, cx);
                         }
                     } else {
                         // --- Single click → select ---
