@@ -251,7 +251,6 @@ define_i18n! {
     CtxPasteImagePath:  ("粘贴图片路径", "Paste image path"),
     CtxPasteFilePath:  ("粘贴文件路径", "Paste file path"),
     CtxPasteImageBitmap: ("粘贴为位图", "Paste as bitmap"),
-    CtxPasteImageBitmapTip: ("粘贴为位图 ({0}+Enter / {0}+双击)", "Paste as bitmap ({0}+Enter / {0}+double-click)"),
     CtxPasteOcr:        ("粘贴 OCR 文本", "Paste OCR text"),
     CtxDetectQr:        ("识别二维码", "Detect QR Code"),
     CtxPasteAsRgb:      ("粘贴为 RGB", "Paste as RGB"),

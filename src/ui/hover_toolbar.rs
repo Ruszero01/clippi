@@ -19,18 +19,6 @@ use crate::core::types::{ContentType, RichData};
 
 use super::theme::ClippiTheme;
 
-/// Platform-aware primary modifier label for shortcut hints.
-fn primary_modifier_label() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "Cmd"
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "Ctrl"
-    }
-}
-
 /// Properties that determine which toolbar buttons to show.
 pub struct HoverToolbarProps {
     pub content_type: ContentType,
@@ -348,9 +336,7 @@ impl RenderOnce for HoverToolbar {
                 let tooltip = match action {
                     "copy" => I18nKey::CtxCopy.text().to_string(),
                     "paste_plain" => I18nKey::CtxPastePlain.text().to_string(),
-                    "paste_image_bitmap" => I18nKey::CtxPasteImageBitmapTip
-                        .fmt(&[primary_modifier_label()])
-                        .to_string(),
+                    "paste_image_bitmap" => I18nKey::CtxPasteImageBitmap.text().to_string(),
                     "open_image" => I18nKey::CtxOpenImage.text().to_string(),
                     "qr_action" => I18nKey::CtxDetectQr.text().to_string(),
                     "open_location" if meta_type == "link" => {
