@@ -9,8 +9,8 @@ use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::{AppSettings, BackendConfig};
 use crate::core::sync::SyncBackend;
 use crate::core::transfer_types::{
-    validate_portable_file_name, FileManifest, ManifestEntry, ManifestWriteError, ResolvedEntry,
-    MAX_TRANSFER_FILE_SIZE_BYTES,
+    effective_expiration, validate_portable_file_name, FileManifest, ManifestEntry,
+    ManifestWriteError, ResolvedEntry, MAX_TRANSFER_FILE_SIZE_BYTES,
 };
 use crate::core::types::{ClipboardItem, ContentType, FileData, FileInfo};
 use crate::core::{migration, paths};
@@ -151,6 +151,10 @@ pub enum TransferCommand {
         entry: ManifestEntry,
     },
     Cleanup,
+    SetPinned {
+        entry: ManifestEntry,
+        pinned: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +164,7 @@ enum TransferAction {
     Download(ManifestEntry, String),
     Delete(String),
     Cleanup(u32),
+    SetPinned(String),
 }
 
 #[derive(Debug, Clone)]
@@ -473,11 +478,17 @@ fn clear_pending_for_stale_result(app: &mut AppState, result: &TransferJobResult
         Ok(TransferAction::Download(entry, _)) => {
             app.pending_transfer_downloads.remove(&entry.hash);
         }
+        Ok(TransferAction::SetPinned(hash)) => {
+            app.pending_transfer_pin_updates.remove(hash);
+        }
         Err((TransferCommand::Upload { source_path, .. }, _)) => {
             app.pending_transfer_uploads.remove(source_path);
         }
         Err((TransferCommand::Download { entry }, _)) => {
             app.pending_transfer_downloads.remove(&entry.hash);
+        }
+        Err((TransferCommand::SetPinned { entry, .. }, _)) => {
+            app.pending_transfer_pin_updates.remove(&entry.hash);
         }
         _ => {}
     }
@@ -539,6 +550,11 @@ fn run_command(
             let count = cleanup_expired(backend, &db, retention_days)?;
             TransferAction::Cleanup(count)
         }
+        TransferCommand::SetPinned { entry, pinned } => {
+            let hash = entry.hash.clone();
+            set_pinned_file(backend, &entry, pinned, retention_days)?;
+            TransferAction::SetPinned(hash)
+        }
     };
     let resolved = fetch_and_resolve_manifest(backend, &db)?;
     Ok((action, resolved))
@@ -589,6 +605,10 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
                 data_changed = true;
             }
         }
+        Ok(TransferAction::SetPinned(hash)) => {
+            app.pending_transfer_pin_updates.remove(&hash);
+            data_changed = true;
+        }
         Err((command, error)) => {
             log::warn!("[transfer] command failed: {error}");
             if let TransferCommand::Download { ref entry } = command {
@@ -600,10 +620,14 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
             {
                 app.pending_transfer_uploads.remove(source_path);
             }
+            if let TransferCommand::SetPinned { ref entry, .. } = command {
+                app.pending_transfer_pin_updates.remove(&entry.hash);
+            }
             let key = match command {
                 TransferCommand::Upload { .. } => I18nKey::TransferUploadFailed,
                 TransferCommand::Download { .. } => I18nKey::TransferDownloadFailed,
                 TransferCommand::Delete { .. } => I18nKey::TransferDeleteFailed,
+                TransferCommand::SetPinned { .. } => I18nKey::TransferPinFailed,
                 TransferCommand::Refresh | TransferCommand::Cleanup => I18nKey::SyncErrPull,
             };
             app.toast_message = Some(key.text().replace("{0}", &error));
@@ -640,10 +664,7 @@ fn fetch_and_resolve_manifest(
 ) -> Result<ResolvedManifest, String> {
     let mut snapshot = backend.pull_file_manifest()?;
     if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
-        return Err(format!(
-            "unsupported transfer manifest version {}",
-            snapshot.manifest.version
-        ));
+        return Err(I18nKey::TransferProtocolUnsupported.text().into());
     }
     migration::migrate_file_manifest(&mut snapshot.manifest);
     validate_manifest(&snapshot.manifest)?;
@@ -835,6 +856,7 @@ fn upload_file(
         uploaded_at: now.to_rfc3339(),
         expires_at,
         uploaded_by: device_name.to_string(),
+        pinned: false,
     };
     entry.validate()?;
 
@@ -952,6 +974,41 @@ fn delete_file(
     Ok(())
 }
 
+/// Flip the pinned flag on the manifest entry that matches both `hash` and
+/// the upload generation (`blob_key()`), so a stale click can never modify a
+/// newer blob with identical content. Unpinning resets `expires_at` to a full
+/// retention window measured from now.
+fn set_pinned_file(
+    backend: &dyn SyncBackend,
+    entry: &ManifestEntry,
+    pinned: bool,
+    retention_days: u32,
+) -> Result<(), String> {
+    entry.validate()?;
+    let target_hash = entry.hash.clone();
+    let target_blob_key = entry.blob_key().to_string();
+    let updated = mutate_manifest(backend, |manifest| {
+        let Some(target) = manifest.files.iter_mut().find(|existing| {
+            existing.hash == target_hash && existing.blob_key() == target_blob_key
+        }) else {
+            return false;
+        };
+        target.pinned = pinned;
+        if !pinned {
+            target.expires_at = if retention_days == 0 {
+                String::new()
+            } else {
+                (chrono::Utc::now() + chrono::Duration::days(retention_days as i64)).to_rfc3339()
+            };
+        }
+        true
+    })?;
+    if !updated {
+        return Err(I18nKey::TransferEntryExpired.text().into());
+    }
+    Ok(())
+}
+
 fn cleanup_expired(
     backend: &dyn SyncBackend,
     db: &Database,
@@ -1002,14 +1059,10 @@ fn entry_expired(
     now: chrono::DateTime<chrono::Utc>,
     retention_days: u32,
 ) -> bool {
-    let expires_at = chrono::DateTime::parse_from_rfc3339(&entry.expires_at)
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .or_else(|_| {
-            chrono::DateTime::parse_from_rfc3339(&entry.uploaded_at).map(|value| {
-                value.with_timezone(&chrono::Utc) + chrono::Duration::days(retention_days as i64)
-            })
-        });
-    expires_at.is_ok_and(|value| value <= now)
+    // Pinned entries never expire automatically. Everything else shares the
+    // same `effective_expiration` rules as the UI remaining-time projection.
+    !entry.pinned
+        && effective_expiration(entry, retention_days).is_some_and(|expires| expires <= now)
 }
 
 fn mutate_manifest<T>(
@@ -1019,10 +1072,7 @@ fn mutate_manifest<T>(
     for _ in 0..MANIFEST_UPDATE_RETRIES {
         let mut snapshot = backend.pull_file_manifest()?;
         if snapshot.manifest.version > migration::TRANSFER_PROTOCOL_VERSION {
-            return Err(format!(
-                "unsupported transfer manifest version {}",
-                snapshot.manifest.version
-            ));
+            return Err(I18nKey::TransferProtocolUnsupported.text().into());
         }
         migration::migrate_file_manifest(&mut snapshot.manifest);
         validate_manifest(&snapshot.manifest)?;
@@ -1434,6 +1484,7 @@ mod tests {
             uploaded_at: chrono::Utc::now().to_rfc3339(),
             expires_at: String::new(),
             uploaded_by: "test".into(),
+            pinned: false,
         }
     }
 
@@ -1541,6 +1592,7 @@ mod tests {
             uploaded_at: chrono::Utc::now().to_rfc3339(),
             expires_at: String::new(),
             uploaded_by: String::new(),
+            pinned: false,
         };
         assert!(entry.validate().is_err());
     }
@@ -1600,12 +1652,112 @@ mod tests {
             uploaded_at: (now - chrono::Duration::days(2)).to_rfc3339(),
             expires_at: (now + chrono::Duration::hours(1)).to_rfc3339(),
             uploaded_by: String::new(),
+            pinned: false,
         };
         assert!(!entry_expired(&entry, now, 1));
 
         entry.expires_at.clear();
         assert!(entry_expired(&entry, now, 1));
         assert!(!entry_expired(&entry, now, 3));
+    }
+
+    #[test]
+    fn pinned_entries_never_expire_even_after_their_timestamp() {
+        let now = chrono::Utc::now();
+        let mut entry = valid_entry('a', "pinned.bin");
+        entry.pinned = true;
+        entry.uploaded_at = (now - chrono::Duration::days(10)).to_rfc3339();
+        entry.expires_at = (now - chrono::Duration::days(3)).to_rfc3339();
+        assert!(!entry_expired(&entry, now, 3));
+
+        entry.pinned = false;
+        assert!(entry_expired(&entry, now, 3));
+    }
+
+    #[test]
+    fn set_pinned_only_touches_matching_hash_and_generation() {
+        let backend = ConflictManifestBackend::new(0);
+        let current = valid_entry('a', "current.bin");
+        let hash = current.hash.clone();
+        let current_blob = current.blob_key().to_string();
+
+        // A stale click referencing an older upload generation of the same
+        // content must not modify the current entry.
+        let mut stale = valid_entry('b', "stale.bin");
+        stale.hash = hash.clone();
+        stale.blob_id = format!("{}-{}", stale.hash, uuid::Uuid::new_v4());
+        mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![current.clone()];
+        })
+        .unwrap();
+
+        let error = set_pinned_file(&backend, &stale, true, 3).unwrap_err();
+        assert_eq!(error, I18nKey::TransferEntryExpired.text());
+        assert!(!backend.manifest.lock().unwrap().files[0].pinned);
+
+        // The exact current generation can be pinned.
+        set_pinned_file(&backend, &current, true, 3).unwrap();
+        let stored = backend.manifest.lock().unwrap().files[0].clone();
+        assert!(stored.pinned);
+        assert_eq!(stored.blob_key(), current_blob);
+    }
+
+    #[test]
+    fn set_pinned_on_missing_entry_reports_expired() {
+        let backend = ConflictManifestBackend::new(0);
+        mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![valid_entry('a', "kept.bin")];
+        })
+        .unwrap();
+        let missing = valid_entry('b', "gone.bin");
+        let error = set_pinned_file(&backend, &missing, true, 3).unwrap_err();
+        assert_eq!(error, I18nKey::TransferEntryExpired.text());
+    }
+
+    #[test]
+    fn unpin_resets_expiration_from_now_and_respects_retention_off() {
+        let now = chrono::Utc::now();
+        let mut entry = valid_entry('a', "unpin.bin");
+        entry.expires_at = (now - chrono::Duration::days(30)).to_rfc3339();
+
+        let backend = ConflictManifestBackend::new(0);
+        mutate_manifest(&backend, |manifest| {
+            manifest.files = vec![entry.clone()];
+        })
+        .unwrap();
+
+        set_pinned_file(&backend, &entry, true, 3).unwrap();
+        set_pinned_file(&backend, &entry, false, 3).unwrap();
+        let stored = backend
+            .manifest
+            .lock()
+            .unwrap()
+            .files
+            .iter()
+            .find(|existing| existing.hash == entry.hash)
+            .unwrap()
+            .clone();
+        assert!(!stored.pinned);
+        let expires = chrono::DateTime::parse_from_rfc3339(&stored.expires_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let remaining = expires - now;
+        assert!(remaining >= chrono::Duration::days(2));
+        assert!(remaining <= chrono::Duration::days(3) + chrono::Duration::minutes(5));
+
+        // Retention disabled: unpinning leaves the expiration empty (forever).
+        set_pinned_file(&backend, &entry, true, 0).unwrap();
+        set_pinned_file(&backend, &entry, false, 0).unwrap();
+        let stored = backend
+            .manifest
+            .lock()
+            .unwrap()
+            .files
+            .iter()
+            .find(|existing| existing.hash == entry.hash)
+            .unwrap()
+            .clone();
+        assert!(stored.expires_at.is_empty());
     }
 
     #[test]

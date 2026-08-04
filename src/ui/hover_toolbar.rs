@@ -32,6 +32,8 @@ pub struct HoverToolbarProps {
     pub can_merge_selection: bool,
     pub is_transfer: bool,
     pub transfer_is_local: bool,
+    /// True when the transfer entry is pinned (remote manifest state).
+    pub transfer_pinned: bool,
 }
 
 impl HoverToolbarProps {
@@ -47,6 +49,10 @@ impl HoverToolbarProps {
                 .files
                 .first()
                 .is_some_and(|file| !file.path.is_empty()),
+            transfer_pinned: item
+                .tags
+                .iter()
+                .any(|tag| tag.uid == crate::core::transfer_types::TRANSFER_STATUS_PINNED_UID),
             content_type: item.content_type,
             meta_type: item.meta_type.clone(),
             full_text: item.full_text.clone(),
@@ -139,6 +145,8 @@ impl RenderOnce for HoverToolbar {
         let mut buttons: Vec<(&str, &str, ColorFn)> = Vec::new();
 
         if is_single && props.is_transfer {
+            let transfer_pinned = props.transfer_pinned;
+            let pin_color = theme.transfer_pin_color;
             if props.transfer_is_local {
                 buttons.push((
                     "\u{e64d}",
@@ -152,6 +160,18 @@ impl RenderOnce for HoverToolbar {
                     Box::new(move |hovered| if hovered { accent } else { text_2 }),
                 ));
             }
+            // Pin/unpin — between open/download and delete.
+            buttons.push((
+                "\u{e633}",
+                "toggle_transfer_pin",
+                Box::new(move |hovered| {
+                    if hovered || transfer_pinned {
+                        pin_color
+                    } else {
+                        text_2
+                    }
+                }),
+            ));
             buttons.push((
                 "\u{e696}",
                 "delete_transfer",
@@ -356,6 +376,10 @@ impl RenderOnce for HoverToolbar {
                     "batch_delete" => I18nKey::CtxBatchDelete.text().to_string(),
                     "open_transfer_location" => I18nKey::CtxOpenFolder.text().to_string(),
                     "download_transfer" => I18nKey::DownloadTransfer.text().to_string(),
+                    "toggle_transfer_pin" if props.transfer_pinned => {
+                        I18nKey::TransferUnpin.text().to_string()
+                    }
+                    "toggle_transfer_pin" => I18nKey::TransferPin.text().to_string(),
                     "delete_transfer" => I18nKey::RemoveFromTransfer.text().to_string(),
                     "batch_delete_transfer" => {
                         I18nKey::RemoveSelectedFromTransfer.text().to_string()

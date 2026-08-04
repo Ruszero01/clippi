@@ -10,26 +10,26 @@ use gpui::*;
 use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
-use super::search_bar::{filter_type_display, SearchBar};
+use super::filter_bar::{filter_type_display, FilterBar};
 use super::theme::ClippiTheme;
 
 pub struct TypeFilterConfigPanel {
     state: Entity<AppState>,
-    search_bar: Entity<SearchBar>,
+    filter_bar: Entity<FilterBar>,
 }
 
 impl TypeFilterConfigPanel {
     pub fn new(
         state: Entity<AppState>,
-        search_bar: Entity<SearchBar>,
+        filter_bar: Entity<FilterBar>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Self {
-        Self { state, search_bar }
+        Self { state, filter_bar }
     }
 
     pub fn close(&self, cx: &mut App) {
-        self.search_bar
+        self.filter_bar
             .update(cx, |bar, cx| bar.close_filter_config(cx));
     }
 
@@ -51,7 +51,7 @@ impl TypeFilterConfigPanel {
                 s.reload_items();
             }
         });
-        self.search_bar.update(cx, |_b, cx| cx.notify());
+        self.filter_bar.update(cx, |_b, cx| cx.notify());
     }
 
     fn move_up(&self, index: usize, cx: &mut App) {
@@ -63,7 +63,7 @@ impl TypeFilterConfigPanel {
             s.settings.save();
             s.reload_items();
         });
-        self.search_bar.update(cx, |_b, cx| cx.notify());
+        self.filter_bar.update(cx, |_b, cx| cx.notify());
     }
 
     fn move_down(&self, index: usize, cx: &mut App) {
@@ -76,7 +76,7 @@ impl TypeFilterConfigPanel {
             s.settings.save();
             s.reload_items();
         });
-        self.search_bar.update(cx, |_b, cx| cx.notify());
+        self.filter_bar.update(cx, |_b, cx| cx.notify());
     }
 }
 

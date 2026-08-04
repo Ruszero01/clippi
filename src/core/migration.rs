@@ -29,7 +29,7 @@ pub const DB_VERSION: i64 = DB_MIGRATIONS.len() as i64;
 pub const SYNC_VERSION: u32 = 5;
 
 /// Current transfer station protocol version — written into every `FileManifest`.
-pub const TRANSFER_PROTOCOL_VERSION: u32 = 2;
+pub const TRANSFER_PROTOCOL_VERSION: u32 = 3;
 
 /// A registered database migration.
 struct DbMigration {
@@ -300,6 +300,13 @@ pub fn migrate_file_manifest(manifest: &mut crate::core::transfer_types::FileMan
         // required for WebDAV or for the legacy local-folder baseline.
         manifest.version = 2;
     }
+    if manifest.version < 3 {
+        // v2 -> v3 adds `ManifestEntry.pinned` with `#[serde(default)]`; old
+        // entries naturally migrate to unpinned. Bumping the version makes
+        // older clients reject the newer manifest instead of rewriting and
+        // silently dropping the pinned field.
+        manifest.version = 3;
+    }
 }
 
 #[cfg(test)]
@@ -341,5 +348,59 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, DB_VERSION);
+    }
+
+    #[test]
+    fn v2_manifest_migrates_to_v3_with_unpinned_entries() {
+        use crate::core::transfer_types::FileManifest;
+        // Hand-written v2 payload: the pinned field does not exist at all.
+        let now = chrono::Utc::now().to_rfc3339();
+        let json = format!(
+            r#"{{"version":2,"device_name":"legacy","updated_at":"{now}","files":[{{"hash":"{}","blob_id":"","name":"legacy.bin","ext":"bin","size":1,"uploaded_at":"{now}","expires_at":"","uploaded_by":""}}]}}"#,
+            "a".repeat(64)
+        );
+        let mut parsed: FileManifest = serde_json::from_str(&json).unwrap();
+        migrate_file_manifest(&mut parsed);
+
+        assert_eq!(parsed.version, TRANSFER_PROTOCOL_VERSION);
+        assert_eq!(parsed.files.len(), 1);
+        assert!(!parsed.files[0].pinned);
+    }
+
+    #[test]
+    fn v3_manifest_round_trip_preserves_pinned() {
+        use crate::core::transfer_types::{FileManifest, ManifestEntry};
+        let manifest = FileManifest {
+            version: TRANSFER_PROTOCOL_VERSION,
+            device_name: "device".into(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            files: vec![ManifestEntry {
+                hash: "b".repeat(64),
+                blob_id: String::new(),
+                name: "pinned.bin".into(),
+                ext: "bin".into(),
+                size: 1,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: String::new(),
+                pinned: true,
+            }],
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let parsed: FileManifest = serde_json::from_str(&json).unwrap();
+        assert!(parsed.files[0].pinned);
+    }
+
+    #[test]
+    fn newer_manifest_versions_are_left_untouched_for_callers_to_reject() {
+        use crate::core::transfer_types::FileManifest;
+        let mut manifest = FileManifest {
+            version: TRANSFER_PROTOCOL_VERSION + 1,
+            device_name: String::new(),
+            updated_at: String::new(),
+            files: Vec::new(),
+        };
+        migrate_file_manifest(&mut manifest);
+        assert_eq!(manifest.version, TRANSFER_PROTOCOL_VERSION + 1);
     }
 }

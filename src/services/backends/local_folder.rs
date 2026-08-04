@@ -76,6 +76,17 @@ fn merge_manifest_snapshots(mut left: FileManifest, right: FileManifest) -> File
             {
                 *current = candidate;
             }
+            // Same upload generation with conflicting pin states: keep the
+            // pinned version so a pure baseline merge can never drop a pin.
+            // The operation log remains the final authority on ordering.
+            Some(current)
+                if candidate.uploaded_at == current.uploaded_at
+                    && candidate.blob_id == current.blob_id
+                    && candidate.pinned
+                    && !current.pinned =>
+            {
+                current.pinned = true;
+            }
             None => {
                 files.insert(candidate.hash.clone(), candidate);
             }
@@ -392,7 +403,10 @@ impl LocalFolderBackend {
     fn write_protocol_marker(&self, manifest: &FileManifest) -> bool {
         let root = PathBuf::from(&self.config.folder_path);
         let destination = self.manifest_path();
-        let temporary = root.join(format!(".{MANIFEST_FILENAME}.v2.tmp"));
+        let temporary = root.join(format!(
+            ".{MANIFEST_FILENAME}.v{}.tmp",
+            crate::core::migration::TRANSFER_PROTOCOL_VERSION
+        ));
         let result = serde_json::to_vec_pretty(manifest)
             .map_err(|error| format!("serialize protocol marker: {error}"))
             .and_then(|data| {
@@ -414,7 +428,12 @@ impl LocalFolderBackend {
 }
 
 fn validate_manifest_operation(operation: &ManifestOperation) -> Result<(), String> {
-    if operation.version != crate::core::migration::TRANSFER_PROTOCOL_VERSION {
+    // Protocol 2 and 3 operations are both materializable: v2 entries simply
+    // lack the `pinned` field and default to false. Newer protocols are
+    // rejected so an old client never silently drops fields.
+    if operation.version < 2
+        || operation.version > crate::core::migration::TRANSFER_PROTOCOL_VERSION
+    {
         return Err(format!(
             "unsupported manifest operation version {}",
             operation.version
@@ -1012,6 +1031,7 @@ mod transfer_tests {
             uploaded_at: chrono::Utc::now().to_rfc3339(),
             expires_at: String::new(),
             uploaded_by: "test".into(),
+            pinned: false,
         }
     }
 
@@ -1243,5 +1263,99 @@ mod transfer_tests {
             .is_err());
         assert!(oversized.is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_operation_validation_accepts_v2_and_v3_only() {
+        let base = ManifestOperation {
+            version: crate::core::migration::TRANSFER_PROTOCOL_VERSION,
+            id: uuid::Uuid::new_v4().to_string(),
+            logical_clock: 1,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            device_name: "test".into(),
+            changes: vec![ManifestChange::Upsert {
+                entry: entry('a', "file.bin"),
+            }],
+        };
+        assert!(validate_manifest_operation(&base).is_ok());
+
+        let mut v2 = base.clone();
+        v2.version = 2;
+        assert!(validate_manifest_operation(&v2).is_ok());
+
+        let mut too_old = base.clone();
+        too_old.version = 1;
+        assert!(validate_manifest_operation(&too_old).is_err());
+
+        let mut too_new = base.clone();
+        too_new.version = crate::core::migration::TRANSFER_PROTOCOL_VERSION + 1;
+        assert!(validate_manifest_operation(&too_new).is_err());
+    }
+
+    #[test]
+    fn v2_operation_without_pinned_field_materializes_as_unpinned() {
+        let (root, backend) = temp_backend("v2-op");
+        let hash = "a".repeat(64);
+        let now = chrono::Utc::now().to_rfc3339();
+        // Hand-written v2 operation payload: the pinned field does not exist.
+        let json = format!(
+            r#"{{"version":2,"id":"{}","logical_clock":1,"created_at":"{now}","device_name":"legacy-device","changes":[{{"action":"upsert","entry":{{"hash":"{hash}","blob_id":"{hash}-{}","name":"legacy.bin","ext":"bin","size":4,"uploaded_at":"{now}","expires_at":"","uploaded_by":"legacy-device"}}}}]}}"#,
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4()
+        );
+        let operation: ManifestOperation = serde_json::from_str(&json).unwrap();
+        std::fs::create_dir_all(root.join(MANIFEST_OPS_DIR)).unwrap();
+        std::fs::write(
+            root.join(MANIFEST_OPS_DIR)
+                .join(format!("{}.json", operation.id)),
+            &json,
+        )
+        .unwrap();
+
+        let (materialized, _) = backend.materialize_file_manifest().unwrap();
+        assert_eq!(materialized.files.len(), 1);
+        assert!(!materialized.files[0].pinned);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn conflict_snapshot_merge_keeps_pin_when_generation_ties() {
+        let mut pinned = entry('a', "tie.bin");
+        pinned.pinned = true;
+        let mut unpinned = entry('a', "tie.bin");
+        // Same upload generation: identical uploaded_at and blob_id.
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        pinned.uploaded_at = timestamp.clone();
+        unpinned.uploaded_at = timestamp.clone();
+        let blob_id = format!("{}-{}", "a".repeat(64), uuid::Uuid::new_v4());
+        pinned.blob_id = blob_id.clone();
+        unpinned.blob_id = blob_id.clone();
+
+        let left = manifest(vec![unpinned], "A");
+        let right = manifest(vec![pinned.clone()], "B");
+        let merged = merge_manifest_snapshots(left, right);
+        let stored = merged
+            .files
+            .iter()
+            .find(|existing| existing.hash == pinned.hash)
+            .unwrap();
+        assert!(stored.pinned);
+
+        // A newer upload generation still wins over the pin state.
+        let mut newer = pinned.clone();
+        newer.uploaded_at = (chrono::DateTime::parse_from_rfc3339(&timestamp).unwrap()
+            + chrono::Duration::days(1))
+        .to_rfc3339();
+        newer.pinned = false;
+        let merged = merge_manifest_snapshots(
+            manifest(vec![pinned], "A"),
+            manifest(vec![newer.clone()], "B"),
+        );
+        let stored = merged
+            .files
+            .iter()
+            .find(|existing| existing.hash == newer.hash)
+            .unwrap();
+        assert!(!stored.pinned);
     }
 }

@@ -17,7 +17,7 @@ use crate::core::types::{ClipboardItem, ContentType, FileData, HotkeyPasteFormat
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
-use super::search_bar::SearchBar;
+use super::search_box::SearchBox;
 use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
 
@@ -105,9 +105,9 @@ pub struct ClipboardListView {
     selected_index: Option<usize>,
     anchor_index: Option<usize>,
     state: Entity<AppState>,
-    /// Reference to the search bar for programmatic focus (Ctrl+F).
+    /// Reference to the search box for programmatic focus (Ctrl+F).
     /// Set after construction to resolve circular dependency.
-    pub(crate) search_bar: Option<Entity<SearchBar>>,
+    pub(crate) search_bar: Option<Entity<SearchBox>>,
     // --- Hover tracking ---
     hovered_index: Option<usize>,
     last_hover_pos: Option<Point<Pixels>>,
@@ -1378,6 +1378,18 @@ impl ClipboardListView {
                     cx.notify();
                 }
             }
+            "toggle_transfer_pin" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let fd = crate::core::types::FileData::from_json(&item.file_data);
+                    let is_pinned = item.tags.iter().any(|tag| {
+                        tag.uid == crate::core::transfer_types::TRANSFER_STATUS_PINNED_UID
+                    });
+                    self.state.update(cx, |s, _cx| {
+                        s.set_transfer_entry_pinned(&fd.remote_hash, !is_pinned);
+                    });
+                    self.sync_items_from_state(cx);
+                }
+            }
             "open_transfer_location" => {
                 if let Some(ref item) = self.context_menu_item {
                     let file_data = crate::core::types::FileData::from_json(&item.file_data);
@@ -1474,6 +1486,18 @@ impl ClipboardListView {
                         self.state
                             .update(cx, |state, _cx| state.open_transfer_location(&path));
                     }
+                }
+            }
+            "toggle_transfer_pin" => {
+                if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
+                    let file_data = crate::core::types::FileData::from_json(&item.file_data);
+                    let is_pinned = item.tags.iter().any(|tag| {
+                        tag.uid == crate::core::transfer_types::TRANSFER_STATUS_PINNED_UID
+                    });
+                    self.state.update(cx, |state, _cx| {
+                        state.set_transfer_entry_pinned(&file_data.remote_hash, !is_pinned);
+                    });
+                    self.sync_items_from_state(cx);
                 }
             }
             "copy" => {

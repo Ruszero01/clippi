@@ -31,6 +31,7 @@ fn titlebar_logo_image() -> Arc<Image> {
 
 pub enum TitlebarEvent {
     TogglePin,
+    ToggleTransfer,
     OpenSettings,
 }
 
@@ -97,11 +98,9 @@ impl Render for Titlebar {
         let hotkey_list_view = self.list_view.clone();
         let fav_state = self.state.clone();
         let fav_list_view = self.list_view.clone();
-        let transfer_state = self.state.clone();
-        let transfer_list_view = self.list_view.clone();
+        let transfer_titlebar = cx.entity().clone();
         let hotkey_titlebar = cx.entity().clone();
         let fav_titlebar = cx.entity().clone();
-        let transfer_titlebar = cx.entity().clone();
         let pin_titlebar = cx.entity().clone();
         let settings_titlebar = cx.entity().clone();
         let logo = titlebar_logo_image();
@@ -206,13 +205,9 @@ impl Render for Titlebar {
                                     .build(window, cx)
                                 })
                                 .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                    let items = transfer_state.update(cx, |state, _cx| {
-                                        state.toggle_transfer_filter();
-                                        state.visible_items()
+                                    transfer_titlebar.update(cx, |_titlebar, cx| {
+                                        cx.emit(TitlebarEvent::ToggleTransfer);
                                     });
-                                    transfer_list_view
-                                        .update(cx, |list, cx| list.set_items(items, cx));
-                                    transfer_titlebar.update(cx, |_titlebar, cx| cx.notify());
                                 })
                                 .child(
                                     div()

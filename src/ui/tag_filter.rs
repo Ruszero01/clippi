@@ -17,16 +17,16 @@ use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{tag_preset_colors, TagInfo};
-use crate::state::app::{pinyin_match, AppState};
+use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
-use super::search_bar::SearchBar;
+use super::filter_bar::FilterBar;
 use super::theme::ClippiTheme;
 
 pub struct TagFilterPanel {
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
-    search_bar: Entity<SearchBar>,
+    filter_bar: Entity<FilterBar>,
     create_input: Entity<InputState>,
     edit_name_input: Entity<InputState>,
     last_edit_tag_id: i64,
@@ -37,7 +37,7 @@ impl TagFilterPanel {
     pub fn new(
         state: Entity<AppState>,
         list_view: Entity<ClipboardListView>,
-        search_bar: Entity<SearchBar>,
+        filter_bar: Entity<FilterBar>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -51,7 +51,7 @@ impl TagFilterPanel {
         Self {
             state,
             list_view,
-            search_bar,
+            filter_bar,
             create_input,
             edit_name_input,
             last_edit_tag_id: -1,
@@ -62,7 +62,7 @@ impl TagFilterPanel {
     pub(crate) fn refresh_list(&self, cx: &mut App) {
         let items = self.state.read(cx).visible_items();
         self.list_view.update(cx, |l, cx| l.set_items(items, cx));
-        self.search_bar.update(cx, |_b, cx| cx.notify());
+        self.filter_bar.update(cx, |_b, cx| cx.notify());
     }
 
     pub(crate) fn cancel_edit_tag(&self, cx: &mut App) {
@@ -101,7 +101,7 @@ impl TagFilterPanel {
     }
 
     fn close(&self, cx: &mut App) {
-        self.search_bar
+        self.filter_bar
             .update(cx, |bar, cx| bar.close_tag_panel(cx));
     }
 
@@ -167,7 +167,10 @@ impl Render for TagFilterPanel {
         let tags: Vec<(TagInfo, bool, bool)> = app_state
             .tags
             .iter()
-            .filter(|t| filter_text.is_empty() || pinyin_match(&t.name, &filter_text))
+            .filter(|t| {
+                filter_text.is_empty()
+                    || crate::core::search::text_matches_term(&t.name, &filter_text)
+            })
             .map(|t| {
                 (
                     t.clone(),

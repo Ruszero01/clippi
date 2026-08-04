@@ -420,7 +420,7 @@ pub fn focus_styled_html_lines(
 
     let Some((hit_idx, _)) = lines.iter().enumerate().find_map(|(idx, line)| {
         let text: String = line.iter().map(|span| span.text.as_str()).collect();
-        search_highlight::first_match_range(&text, terms).map(|range| (idx, range))
+        crate::core::search::first_match_range(&text, terms).map(|range| (idx, range))
     }) else {
         return lines.into_iter().take(6).collect();
     };
@@ -463,7 +463,7 @@ pub fn has_highlighted_span(lines: &[Vec<StyledHtmlSpan>], highlight_bg: Rgba) -
 fn highlight_ranges(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut offset = 0usize;
-    for segment in search_highlight::highlight_segments(text, terms) {
+    for segment in crate::core::search::highlight_segments(text, terms) {
         let end = offset + segment.text.len();
         if segment.highlighted {
             ranges.push((offset, end));

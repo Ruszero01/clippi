@@ -15,7 +15,7 @@ use crate::core::types::{
 };
 use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
-use crate::ui::search_bar::filter_type_display;
+use crate::ui::filter_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
 use gpui_component::tooltip::Tooltip;
 use gpui_transitions::WindowUseTransition;

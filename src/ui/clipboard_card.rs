@@ -23,6 +23,7 @@ use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::transfer_types::{
     TRANSFER_STATUS_CLOUD_UID, TRANSFER_STATUS_DOWNLOADING_UID, TRANSFER_STATUS_LOCAL_UID,
+    TRANSFER_STATUS_PINNED_UID, TRANSFER_STATUS_RETENTION_UID,
 };
 use crate::core::types::{
     format_relative_time, parse_hex_color, url_domain, url_path, url_site_name, ClipboardItem,
@@ -142,8 +143,98 @@ fn info_row_available_width(window: &Window) -> f32 {
 
 #[cfg(test)]
 mod info_row_tests {
-    use super::{estimate_card_height, image_is_waiting_for_sync, visible_tag_count};
+    use super::{
+        estimate_card_height, file_name_segments, image_is_waiting_for_sync, remaining_days_ceil,
+        visible_tag_count,
+    };
     use crate::core::types::{ClipboardItem, RichData};
+
+    #[test]
+    fn remaining_days_ceil_never_collapses_day_boundaries() {
+        let hour = chrono::Duration::hours(1);
+        assert_eq!(remaining_days_ceil(hour * 24), 1);
+        // Sub-hour remainders must round up, not truncate.
+        assert_eq!(
+            remaining_days_ceil(hour * 24 + chrono::Duration::seconds(1)),
+            2
+        );
+        assert_eq!(remaining_days_ceil(hour * 25), 2);
+        assert_eq!(
+            remaining_days_ceil(hour * 47 + chrono::Duration::minutes(59)),
+            2
+        );
+        assert_eq!(
+            remaining_days_ceil(hour * 48 + chrono::Duration::seconds(1)),
+            3
+        );
+    }
+
+    #[test]
+    fn file_name_segments_highlight_full_name_terms() {
+        // A complete file name as one search term must highlight across the
+        // stem/extension split (the filter matches the full name).
+        let terms = vec!["report.pdf".to_string()];
+        let (stem, ext) = file_name_segments("report.pdf", 6, &terms);
+        assert_eq!(stem, vec![("report".to_string(), true)]);
+        assert_eq!(ext, vec![(".pdf".to_string(), true)]);
+    }
+
+    #[test]
+    fn file_name_segments_highlight_stem_only() {
+        let terms = vec!["report".to_string()];
+        let (stem, ext) = file_name_segments("report.pdf", 6, &terms);
+        assert_eq!(stem, vec![("report".to_string(), true)]);
+        assert_eq!(ext, vec![(".pdf".to_string(), false)]);
+    }
+
+    #[test]
+    fn file_name_segments_highlight_extension_only() {
+        let terms = vec!["pdf".to_string()];
+        let (stem, ext) = file_name_segments("report.pdf", 6, &terms);
+        assert_eq!(stem, vec![("report".to_string(), false)]);
+        // The dot itself is not part of the match; only "pdf" highlights.
+        assert_eq!(
+            ext,
+            vec![(".".to_string(), false), ("pdf".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn file_name_segments_highlight_multi_word_across_boundary() {
+        // Two terms hitting the stem and the extension separately.
+        let terms = vec!["report".to_string(), "pdf".to_string()];
+        let (stem, ext) = file_name_segments("report.pdf", 6, &terms);
+        assert_eq!(stem, vec![("report".to_string(), true)]);
+        assert_eq!(
+            ext,
+            vec![(".".to_string(), false), ("pdf".to_string(), true)]
+        );
+
+        // A term spanning the boundary is split into two highlighted halves.
+        let terms = vec!["report.p".to_string()];
+        let (stem, ext) = file_name_segments("report.pdf", 6, &terms);
+        assert_eq!(stem, vec![("report".to_string(), true)]);
+        assert_eq!(
+            ext,
+            vec![(".p".to_string(), true), ("df".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn file_name_segments_highlight_chinese_pinyin() {
+        // 工作计划 = 4 chars × 3 bytes; .docx = 5 bytes.
+        let terms = vec!["gzjh".to_string()];
+        let (stem, ext) = file_name_segments("工作计划.docx", 12, &terms);
+        assert_eq!(stem, vec![("工作计划".to_string(), true)]);
+        assert_eq!(ext, vec![(".docx".to_string(), false)]);
+    }
+
+    #[test]
+    fn file_name_segments_plain_when_no_terms() {
+        let (stem, ext) = file_name_segments("report.pdf", 6, &[]);
+        assert_eq!(stem, vec![("report".to_string(), false)]);
+        assert_eq!(ext, vec![(".pdf".to_string(), false)]);
+    }
 
     #[test]
     fn shows_all_tags_when_they_fit() {
@@ -318,6 +409,96 @@ fn split_name_ext(filename: &str) -> (String, String) {
         format!(".{}", ext)
     };
     (stem.to_string(), ext_with_dot)
+}
+
+/// Ceiling of `remaining` measured in whole days, used by the transfer
+/// remaining-time pill. Computed on milliseconds so sub-hour remainders can
+/// never collapse a day boundary: 24h + 1s → 2 days, 48h + 30m → 3 days.
+fn remaining_days_ceil(remaining: chrono::Duration) -> u32 {
+    ((remaining.num_milliseconds() + 86_399_999) / 86_400_000) as u32
+}
+
+/// One highlight segment of a file name: `(text, highlighted)`.
+type NameSegment = (String, bool);
+
+/// Split a file name's keyword matches across the stem/extension byte
+/// boundary, so each part can keep its own base color while the highlight
+/// ranges are computed against the *full* name — the same string the list
+/// filter matches. Returns `(stem_segments, extension_segments)`.
+fn file_name_segments(
+    name: &str,
+    stem_len: usize,
+    terms: &[String],
+) -> (Vec<NameSegment>, Vec<NameSegment>) {
+    let mut stem: Vec<NameSegment> = Vec::new();
+    let mut ext: Vec<NameSegment> = Vec::new();
+    let mut cursor = 0usize;
+    for (start, end) in crate::core::search::match_ranges(name, terms) {
+        // Plain gap before this match, split at the boundary.
+        let gap_stem_end = start.min(stem_len);
+        if gap_stem_end > cursor {
+            stem.push((name[cursor..gap_stem_end].to_string(), false));
+        }
+        if start > stem_len {
+            let gap_ext_start = stem_len.max(cursor);
+            if gap_ext_start < start {
+                ext.push((name[gap_ext_start..start].to_string(), false));
+            }
+        }
+        // The highlighted range itself, split at the boundary.
+        if start < stem_len {
+            stem.push((name[start..end.min(stem_len)].to_string(), true));
+        }
+        if end > stem_len {
+            ext.push((name[stem_len.max(start)..end].to_string(), true));
+        }
+        cursor = end;
+    }
+    // Trailing plain text.
+    if cursor < stem_len {
+        stem.push((name[cursor..stem_len].to_string(), false));
+    }
+    if name.len() > stem_len && cursor < name.len() {
+        ext.push((name[stem_len.max(cursor)..name.len()].to_string(), false));
+    }
+    if stem.is_empty() {
+        stem.push((name[..stem_len.min(name.len())].to_string(), false));
+    }
+    (stem, ext)
+}
+
+/// Render a file name (stem + extension) with keyword highlights computed
+/// against the full name, then split at the stem/extension boundary so each
+/// part keeps its base color. Segments render inside a horizontal flex row to
+/// guarantee a single line; falls back to plain text when no terms match.
+fn file_name_highlighted(
+    name: &str,
+    stem_len: usize,
+    stem_color: Rgba,
+    ext_color: Rgba,
+    terms: &[String],
+    highlight_bg: Rgba,
+    highlight_text: Rgba,
+) -> (AnyElement, AnyElement) {
+    let (stem, ext) = file_name_segments(name, stem_len, terms);
+    let render = |segments: Vec<NameSegment>, color: Rgba, nowrap: bool| -> AnyElement {
+        let mut el = div().flex().flex_row().text_size(px(10.)).text_color(color);
+        if nowrap {
+            el = el.whitespace_nowrap().overflow_hidden();
+        }
+        el.children(segments.into_iter().map(|(text, highlighted)| {
+            let mut segment_el = div().child(text);
+            if highlighted {
+                segment_el = segment_el.text_color(highlight_text).text_bg(highlight_bg);
+            }
+            segment_el
+        }))
+        .into_any_element()
+    };
+    (
+        render(stem, stem_color, true),
+        render(ext, ext_color, false),
+    )
 }
 
 fn swatch_color(text: &str, fallback: Rgba) -> Rgba {
@@ -715,9 +896,9 @@ fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
     }
 
     let full_text_matches = if matches!(item.display_kind(), DisplayKind::Html) {
-        search_highlight::contains_match(&html_text::visible_text(&item.full_text), terms)
+        crate::core::search::contains_match(&html_text::visible_text(&item.full_text), terms)
     } else {
-        search_highlight::contains_match(&item.full_text, terms)
+        crate::core::search::contains_match(&item.full_text, terms)
     };
     if full_text_matches {
         return true;
@@ -726,7 +907,7 @@ fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
     let rich = RichData::from_json(&item.rich_data);
     if let Some(html) = rich.html.as_deref() {
         let html = rich_preview::normalize_clipboard_html_for_render(html);
-        if search_highlight::contains_match(&html_text::visible_text(&html), terms) {
+        if crate::core::search::contains_match(&html_text::visible_text(&html), terms) {
             return true;
         }
     }
@@ -739,7 +920,7 @@ fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
     ]
     .into_iter()
     .flatten()
-    .any(|text| search_highlight::contains_match(text, terms));
+    .any(|text| crate::core::search::contains_match(text, terms));
     rich_text_matches
 }
 
@@ -1491,7 +1672,7 @@ impl RenderOnce for ClipboardCard {
         };
 
         let note_matches =
-            !search_terms.is_empty() && search_highlight::contains_match(&note, &search_terms);
+            !search_terms.is_empty() && crate::core::search::contains_match(&note, &search_terms);
         let content_matches = card_content_matches_search(&item, &search_terms);
         let show_note_preview = !(note.is_empty()
             || show_original_on_hover && is_hovered
@@ -2065,11 +2246,20 @@ impl RenderOnce for ClipboardCard {
                             });
                         if file_missing {
                             let fi = &files[0];
-                            let (stem, ext) = if fi.is_dir {
-                                (fi.name.clone(), String::new())
+                            let stem_len = if fi.is_dir {
+                                fi.name.len()
                             } else {
-                                split_name_ext(&fi.name)
+                                split_name_ext(&fi.name).0.len()
                             };
+                            let (stem_el, ext_el) = file_name_highlighted(
+                                &fi.name,
+                                stem_len,
+                                danger,
+                                danger,
+                                &search_terms,
+                                highlight_bg,
+                                highlight_text,
+                            );
                             let bad_icon = if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
                             div()
                                 .flex_1()
@@ -2102,20 +2292,8 @@ impl RenderOnce for ClipboardCard {
                                                 .flex_row()
                                                 .gap(px(0.))
                                                 .overflow_hidden()
-                                                .child(
-                                                    div()
-                                                        .text_size(px(10.))
-                                                        .text_color(danger)
-                                                        .whitespace_nowrap()
-                                                        .overflow_hidden()
-                                                        .child(stem),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(10.))
-                                                        .text_color(danger)
-                                                        .child(ext),
-                                                ),
+                                                .child(stem_el)
+                                                .child(ext_el),
                                         ),
                                 )
                         } else {
@@ -2126,11 +2304,20 @@ impl RenderOnce for ClipboardCard {
                                 .gap(px(3.))
                                 .overflow_hidden()
                                 .children(files.iter().take(4).map(|fi| {
-                                    let (stem, ext) = if fi.is_dir {
-                                        (fi.name.clone(), String::new())
+                                    let stem_len = if fi.is_dir {
+                                        fi.name.len()
                                     } else {
-                                        split_name_ext(&fi.name)
+                                        split_name_ext(&fi.name).0.len()
                                     };
+                                    let (stem_el, ext_el) = file_name_highlighted(
+                                        &fi.name,
+                                        stem_len,
+                                        text_1,
+                                        text_2,
+                                        &search_terms,
+                                        highlight_bg,
+                                        highlight_text,
+                                    );
                                     let cached_icon = if remote_host.is_some() {
                                         None
                                     } else {
@@ -2185,24 +2372,8 @@ impl RenderOnce for ClipboardCard {
                                             .flex_row()
                                             .gap(px(0.))
                                             .overflow_hidden()
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.))
-                                                    .text_color(text_1)
-                                                    .whitespace_nowrap()
-                                                    .overflow_hidden()
-                                                    .child(stem),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.))
-                                                    .text_color(if file_missing {
-                                                        danger
-                                                    } else {
-                                                        text_2
-                                                    })
-                                                    .child(ext),
-                                            ),
+                                            .child(stem_el)
+                                            .child(ext_el),
                                     )
                                 }))
                         }
@@ -2300,16 +2471,62 @@ impl RenderOnce for ClipboardCard {
                 TRANSFER_STATUS_LOCAL_UID
                     | TRANSFER_STATUS_CLOUD_UID
                     | TRANSFER_STATUS_DOWNLOADING_UID
+                    | TRANSFER_STATUS_PINNED_UID
+                    | TRANSFER_STATUS_RETENTION_UID
             )
         };
         let is_transfer =
             item.meta_type == "transfer" && tags.iter().any(|tag| is_transfer_status(&tag.uid));
+        let is_pinned = is_transfer && tags.iter().any(|tag| tag.uid == TRANSFER_STATUS_PINNED_UID);
         let transfer_is_local =
             is_transfer && tags.iter().any(|tag| tag.uid == TRANSFER_STATUS_LOCAL_UID);
         let transfer_is_downloading = is_transfer
             && tags
                 .iter()
                 .any(|tag| tag.uid == TRANSFER_STATUS_DOWNLOADING_UID);
+        // --- Time pill: transfer entries show lifecycle state instead of ---
+        // --- the ordinary relative time. Pinned wins; otherwise the retention ---
+        // --- timestamp carried by the virtual retention tag drives the label. ---
+        let (time_str, time_pill_color) = if is_transfer {
+            let retention = tags
+                .iter()
+                .find(|tag| tag.uid == TRANSFER_STATUS_RETENTION_UID)
+                .and_then(|tag| {
+                    chrono::DateTime::parse_from_rfc3339(&tag.updated_at)
+                        .ok()
+                        .map(|parsed| parsed.with_timezone(&chrono::Utc))
+                });
+            if is_pinned {
+                (
+                    I18nKey::TransferKeepForever.text().to_string(),
+                    theme.transfer_pin_color,
+                )
+            } else {
+                match retention {
+                    // Empty/unparseable retention timestamp: global retention off.
+                    None => (I18nKey::TransferKeepForever.text().to_string(), text_2),
+                    Some(expires) => {
+                        let now = chrono::Utc::now();
+                        if expires <= now {
+                            (I18nKey::TransferExpired.text().to_string(), danger)
+                        } else {
+                            let remaining = expires - now;
+                            if remaining <= chrono::Duration::hours(24) {
+                                (I18nKey::TransferRemainingDays.fmt(&["1"]), danger)
+                            } else {
+                                let days = remaining_days_ceil(remaining);
+                                (
+                                    I18nKey::TransferRemainingDays.fmt(&[&days.to_string()]),
+                                    text_2,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            (time_str, text_2)
+        };
         let display_tags: Vec<_> = if is_transfer {
             tags.iter()
                 .filter(|tag| !is_transfer_status(&tag.uid))
@@ -2546,7 +2763,12 @@ impl RenderOnce for ClipboardCard {
                     .px(px(7.))
                     .flex()
                     .items_center()
-                    .child(div().text_size(px(9.)).text_color(text_2).child(time_str)),
+                    .child(
+                        div()
+                            .text_size(px(9.))
+                            .text_color(time_pill_color)
+                            .child(time_str),
+                    ),
             );
 
         // --- Assemble card ---
@@ -2558,8 +2780,20 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // --- Fav indicator bar (left edge, scales with card height) ---
-        let card = if is_fav {
+        // --- Pinned indicator bar (left edge, blue, scales with card height) ---
+        // --- Fav indicator bar (left edge, 3px, fav-color, scales with card height) ---
+        let card = if is_pinned {
+            card.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(4.))
+                    .bottom(px(4.))
+                    .w(px(3.))
+                    .rounded(px(2.))
+                    .bg(theme.transfer_pin_color),
+            )
+        } else if is_fav {
             card.child(
                 div()
                     .absolute()

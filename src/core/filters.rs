@@ -24,19 +24,9 @@ pub const BUILTIN_TYPE_KEYS: &[&str] = &[
 const SUBTYPE_EXCLUDE_FROM_PLAIN_TEXT: &[&str] =
     &["email", "phone", "secret", "link", "path", "color"];
 
-/// Split user-entered search text into normalized keyword terms.
-///
-/// Whitespace separates terms. All returned terms are non-empty and unique,
-/// preserving the user's first-seen order.
-pub fn split_keyword_terms(keyword: &str) -> Vec<String> {
-    let mut terms = Vec::new();
-    for term in keyword.split_whitespace() {
-        if !terms.iter().any(|existing| existing == term) {
-            terms.push(term.to_string());
-        }
-    }
-    terms
-}
+/// Tokenization lives in `core::search` — the single source of truth shared
+/// with the transfer-station search and the highlight renderer.
+pub use crate::core::search::split_keyword_terms;
 
 /// Unified filter state for clipboard queries.
 ///
@@ -235,7 +225,8 @@ impl ClipboardFilters {
 
 #[cfg(test)]
 mod tests {
-    use super::{split_keyword_terms, ClipboardFilters};
+    use super::ClipboardFilters;
+    use crate::core::search::split_keyword_terms;
 
     #[test]
     fn keyword_terms_split_on_whitespace_and_deduplicate() {

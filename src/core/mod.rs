@@ -13,6 +13,7 @@ pub mod migration;
 pub mod ocr;
 pub mod paths;
 pub mod qr;
+pub mod search;
 pub mod secret;
 pub mod settings;
 pub mod sync;

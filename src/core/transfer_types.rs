@@ -4,6 +4,7 @@
 //! backend, decoupled from the sync payload (`clippi_sync.json`). It carries
 //! file metadata and blob references for cross-device file transfer.
 
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Hard safety limit for a single transfer. The current transports buffer the
@@ -13,6 +14,16 @@ pub const MAX_TRANSFER_FILE_SIZE_BYTES: u64 = 512 * 1024 * 1024;
 pub const TRANSFER_STATUS_LOCAL_UID: &str = "clippi:transfer:local";
 pub const TRANSFER_STATUS_CLOUD_UID: &str = "clippi:transfer:cloud";
 pub const TRANSFER_STATUS_DOWNLOADING_UID: &str = "clippi:transfer:downloading";
+
+/// Virtual tag UID marking a transfer entry as pinned by the user.
+pub const TRANSFER_STATUS_PINNED_UID: &str = "clippi:transfer:pinned";
+/// Virtual tag UID carrying the effective expiration timestamp of a transfer
+/// entry (`TagInfo.updated_at`), used by the card's remaining-time pill.
+pub const TRANSFER_STATUS_RETENTION_UID: &str = "clippi:transfer:retention";
+
+/// Shared transfer-station blue used for pinned state, cloud/downloading
+/// status tags and the pin toolbar accent.
+pub const TRANSFER_BLUE: &str = "#3B82F6";
 
 /// A manifest together with the backend revision used for optimistic locking.
 #[derive(Debug, Clone)]
@@ -66,6 +77,11 @@ pub struct ManifestEntry {
     /// Name of the device that uploaded this file.
     #[serde(default)]
     pub uploaded_by: String,
+    /// Whether the user pinned this entry. Pinned entries are never removed
+    /// by automatic expiration cleanup. Protocol v2 entries omit it and
+    /// deserialize as `false`.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// A manifest entry resolved against the local database.
@@ -186,6 +202,34 @@ impl ManifestEntry {
     }
 }
 
+/// Compute the effective expiration instant for a manifest entry.
+///
+/// Shared by automatic cleanup and the UI remaining-time projection so they
+/// never diverge on the legacy fallback rules:
+/// - global retention off (`retention_days == 0`) means keep forever: stale
+///   explicit `expires_at` values from earlier settings are ignored so the UI
+///   projection and the (disabled) cleanup scheduling can never disagree;
+/// - otherwise a parseable `expires_at` wins;
+/// - legacy entries with an empty `expires_at` fall back to
+///   `uploaded_at + retention_days`.
+///
+/// `pinned` does not change the returned value; callers decide whether the
+/// entry is exempt from cleanup, so unpinning can still recompute a fresh
+/// retention window from this function's rules.
+pub fn effective_expiration(entry: &ManifestEntry, retention_days: u32) -> Option<DateTime<Utc>> {
+    if retention_days == 0 {
+        return None;
+    }
+    if !entry.expires_at.is_empty() {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(&entry.expires_at) {
+            return Some(parsed.with_timezone(&Utc));
+        }
+    }
+    DateTime::parse_from_rfc3339(&entry.uploaded_at)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc) + Duration::days(retention_days as i64))
+}
+
 fn validate_utc_timestamp(value: &str, allow_empty: bool, label: &str) -> Result<(), String> {
     if allow_empty && value.is_empty() {
         return Ok(());
@@ -196,4 +240,60 @@ fn validate_utc_timestamp(value: &str, allow_empty: bool, label: &str) -> Result
         return Err(format!("{label} must use UTC"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(now: chrono::DateTime<Utc>) -> ManifestEntry {
+        ManifestEntry {
+            hash: "a".repeat(64),
+            blob_id: String::new(),
+            name: "file.bin".into(),
+            ext: "bin".into(),
+            size: 1,
+            uploaded_at: now.to_rfc3339(),
+            expires_at: String::new(),
+            uploaded_by: String::new(),
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn effective_expiration_prefers_explicit_timestamp() {
+        let now = Utc::now();
+        let mut e = entry(now);
+        e.expires_at = (now + Duration::days(7)).to_rfc3339();
+        let expires = effective_expiration(&e, 1).unwrap();
+        assert_eq!(expires, now + Duration::days(7));
+    }
+
+    #[test]
+    fn effective_expiration_falls_back_to_uploaded_plus_retention() {
+        let now = Utc::now();
+        let e = entry(now - Duration::days(2));
+        let expires = effective_expiration(&e, 5).unwrap();
+        assert_eq!(expires, now + Duration::days(3));
+    }
+
+    #[test]
+    fn effective_expiration_returns_none_when_retention_is_disabled() {
+        let now = Utc::now();
+        let e = entry(now);
+        assert_eq!(effective_expiration(&e, 0), None);
+        // Global "keep forever" ignores stale explicit expirations from
+        // earlier retention settings so UI and cleanup stay consistent.
+        let mut e = entry(now);
+        e.expires_at = (now + Duration::days(2)).to_rfc3339();
+        assert_eq!(effective_expiration(&e, 0), None);
+    }
+
+    #[test]
+    fn pinned_does_not_change_effective_expiration() {
+        let now = Utc::now();
+        let mut e = entry(now);
+        e.pinned = true;
+        assert_eq!(effective_expiration(&e, 3), Some(now + Duration::days(3)));
+    }
 }

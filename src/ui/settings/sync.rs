@@ -341,6 +341,14 @@ impl SettingsPanel {
                                         .child(label)
                                 })),
                         )
+                        .child(
+                            div()
+                                .px(px(14.))
+                                .pb(px(8.))
+                                .text_size(px(9.))
+                                .text_color(text_3)
+                                .child(I18nKey::TransferProtocolUpgradeRequired.text()),
+                        )
                     }),
             )
             .child({

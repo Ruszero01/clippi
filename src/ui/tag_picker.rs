@@ -13,7 +13,6 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
-use crate::state::app::pinyin_match;
 
 use crate::core::types::TagInfo;
 
@@ -122,7 +121,7 @@ impl RenderOnce for TagPickerPanel {
             tags
         } else {
             tags.into_iter()
-                .filter(|(tag, _)| pinyin_match(&tag.name, &filter_text))
+                .filter(|(tag, _)| crate::core::search::text_matches_term(&tag.name, &filter_text))
                 .collect()
         };
         let rows: Vec<Vec<(TagInfo, TagState)>> =

@@ -29,6 +29,9 @@ pub struct ClippiTheme {
     pub danger: Rgba,
     pub divider: Rgba,
     pub btn_hover: Rgba,
+    /// Transfer-station pinned state accent (blue), also used by the pin
+    /// toolbar button and the pinned card bar.
+    pub transfer_pin_color: Rgba,
 
     // --- Tags ---
     pub tag_bg: Rgba,
@@ -62,6 +65,7 @@ impl ClippiTheme {
             danger: rgb(0xff5f57),
             divider: rgb(0x2b2c2d),
             btn_hover: rgb(0x2b2c2d),
+            transfer_pin_color: rgb(0x3B82F6),
 
             tag_bg: rgb(0x2c2e2f),
             tag_text: rgb(0xddf5e4),
@@ -92,6 +96,7 @@ impl ClippiTheme {
             danger: rgb(0xff5f57),
             divider: rgb(0xe6e8f0),
             btn_hover: rgb(0xf0f1f8),
+            transfer_pin_color: rgb(0x3B82F6),
 
             tag_bg: rgb(0xe6e8f0),
             tag_text: rgb(0x6c857c),

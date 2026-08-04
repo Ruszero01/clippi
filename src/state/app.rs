@@ -10,7 +10,8 @@ use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::AppSettings;
 use crate::core::transfer_types::{
-    TRANSFER_STATUS_CLOUD_UID, TRANSFER_STATUS_DOWNLOADING_UID, TRANSFER_STATUS_LOCAL_UID,
+    TRANSFER_BLUE, TRANSFER_STATUS_CLOUD_UID, TRANSFER_STATUS_DOWNLOADING_UID,
+    TRANSFER_STATUS_LOCAL_UID, TRANSFER_STATUS_PINNED_UID, TRANSFER_STATUS_RETENTION_UID,
 };
 use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
@@ -21,7 +22,6 @@ use crate::core::types::RichData;
 use crate::core::types::TagInfo;
 use crate::services::update::{UpdateInfo, UpdatePhase};
 use crate::state::sync::SyncState;
-use pinyin::ToPinyin;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -70,6 +70,9 @@ pub struct AppState {
     /// Hashes of cloud entries queued for or currently being downloaded.
     /// Used to render per-entry progress feedback and suppress duplicate jobs.
     pub pending_transfer_downloads: HashSet<String>,
+    /// Hashes with an in-flight pin/unpin command; duplicate clicks are ignored
+    /// until the command completes (success or failure) and the hash is removed.
+    pub pending_transfer_pin_updates: HashSet<String>,
     /// Source paths queued for or currently being uploaded.
     pub pending_transfer_uploads: HashSet<String>,
     /// Whether a transfer worker is currently running.
@@ -124,43 +127,15 @@ pub struct AppState {
     pub update_phase: UpdatePhase,
 }
 
-/// Pinyin-aware text matching.
-///
-/// This function checks three forms in order:
-/// 1. Direct lowercase substring match (covers English text)
-/// 2. Full pinyin match — "zhongguo" matches "中国"
-/// 3. Pinyin initial match — "zg" matches "中国"
-pub fn pinyin_match(text: &str, keyword: &str) -> bool {
-    if text.is_empty() {
-        return false;
-    }
-    let kw = keyword.to_lowercase();
-
-    // 1. Direct text match — covers English, numbers, symbols
-    if text.to_lowercase().contains(&kw) {
-        return true;
-    }
-
-    // 2. Full pinyin match
-    let full_py: String = text.to_pinyin().flatten().map(|p| p.plain()).collect();
-    if full_py.contains(&kw) {
-        return true;
-    }
-
-    // 3. Pinyin initials match
-    let initials: String = text
-        .to_pinyin()
-        .flatten()
-        .filter_map(|p| p.plain().chars().next())
-        .collect();
-    initials.contains(&kw)
-}
-
+/// Pinyin-aware matching now lives in `core::search::text_matches_term` —
+/// the single implementation shared with the transfer-station search and the
+/// highlight renderer. This keeps filtering and highlighting in lockstep.
 fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str) -> bool {
+    let matches = |text: &str| crate::core::search::text_matches_term(text, keyword);
     let full_text_matches = if matches!(item.display_kind(), DisplayKind::Html) {
-        html_text::has_visible_match(&item.full_text, |text| pinyin_match(text, keyword))
+        html_text::has_visible_match(&item.full_text, matches)
     } else {
-        pinyin_match(&item.full_text, keyword)
+        matches(&item.full_text)
     };
     if full_text_matches {
         return true;
@@ -170,7 +145,7 @@ fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str)
         let rich = RichData::from_json(&item.rich_data);
 
         if let Some(html) = rich.html.as_deref() {
-            if html_text::has_visible_match(html, |text| pinyin_match(text, keyword)) {
+            if html_text::has_visible_match(html, matches) {
                 return true;
             }
         }
@@ -181,20 +156,16 @@ fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str)
             rich.qr_text.as_deref(),
             rich.page_title.as_deref(),
         ];
-        if rich_texts
-            .into_iter()
-            .flatten()
-            .any(|text| pinyin_match(text, keyword))
-        {
+        if rich_texts.into_iter().flatten().any(matches) {
             return true;
         }
     }
 
-    if !item.note.is_empty() && pinyin_match(&item.note, keyword) {
+    if !item.note.is_empty() && matches(&item.note) {
         return true;
     }
 
-    item.tags.iter().any(|tag| pinyin_match(&tag.name, keyword))
+    item.tags.iter().any(|tag| matches(&tag.name))
 }
 
 fn item_matches_keywords(item: &crate::core::types::ClipboardItem, keywords: &[String]) -> bool {
@@ -333,6 +304,7 @@ impl AppState {
             transfer_entries: Vec::new(),
             pending_transfer_commands: VecDeque::new(),
             pending_transfer_downloads: HashSet::new(),
+            pending_transfer_pin_updates: HashSet::new(),
             pending_transfer_uploads: HashSet::new(),
             transfer_busy: false,
             transfer_refreshing: false,
@@ -507,6 +479,11 @@ impl AppState {
     pub fn set_keyword(&mut self, keyword: &str) {
         self.filters.set_keyword(keyword);
         self.selected_ids.clear();
+        if self.transfer_filter_active {
+            // The transfer view filters the in-memory manifest inside
+            // `visible_items()`; never touch the DB per keystroke here.
+            return;
+        }
         self.reload_items();
     }
 
@@ -2260,6 +2237,8 @@ impl AppState {
                     crate::services::transfer_station::TransferCommand::Refresh
                 )
             });
+            // Re-apply the current search term to the database-backed list.
+            self.reload_items();
         }
     }
 
@@ -2370,6 +2349,28 @@ impl AppState {
         });
     }
 
+    /// Queue a pin/unpin command for a transfer entry. Duplicate clicks for the
+    /// same hash are ignored while the first command is still in flight; the
+    /// remote manifest remains the single source of truth for the final state.
+    pub fn set_transfer_entry_pinned(&mut self, hash: &str, pinned: bool) {
+        if self.pending_transfer_pin_updates.contains(hash) {
+            return;
+        }
+        let Some(entry) = self
+            .transfer_entries
+            .iter()
+            .find(|resolved| resolved.entry.hash == hash)
+            .map(|resolved| resolved.entry.clone())
+        else {
+            self.toast_message = Some(I18nKey::TransferEntryExpired.text().into());
+            return;
+        };
+        self.pending_transfer_pin_updates.insert(hash.to_string());
+        self.queue_transfer_command(
+            crate::services::transfer_station::TransferCommand::SetPinned { entry, pinned },
+        );
+    }
+
     pub fn open_transfer_location(&self, path: &str) {
         if !std::path::Path::new(path).is_file() {
             return;
@@ -2379,42 +2380,74 @@ impl AppState {
     }
 
     /// Get visible items based on current filter mode.
-    /// In transfer mode, returns converted manifest entries. Otherwise returns DB items.
+    /// In transfer mode, returns converted manifest entries (keyword-filtered
+    /// on the remote file name — never touching the DB). Otherwise returns DB items.
     pub fn visible_items(&self) -> Vec<ClipboardItem> {
         if self.transfer_filter_active {
+            let terms = self.filters.keyword_terms();
+            let retention_days = self.settings.transfer_retention_days;
             self.transfer_entries
                 .iter()
+                .filter(|re| {
+                    terms.is_empty()
+                        || crate::core::search::text_matches_all_terms(&re.entry.name, &terms)
+                })
                 .map(|re| {
                     let uploaded_at: chrono::DateTime<chrono::Utc> =
                         chrono::DateTime::parse_from_rfc3339(&re.entry.uploaded_at)
                             .map(|dt| dt.with_timezone(&chrono::Utc))
                             .unwrap_or_else(|_| chrono::Utc::now());
                     // Determine status tags based on is_local
-                    let status_tags = if self.pending_transfer_downloads.contains(&re.entry.hash) {
-                        vec![TagInfo {
-                            id: -3,
-                            uid: TRANSFER_STATUS_DOWNLOADING_UID.into(),
-                            name: I18nKey::TransferDownloading.text().to_string(),
-                            color: "#3B82F6".to_string(),
+                    let mut status_tags =
+                        if self.pending_transfer_downloads.contains(&re.entry.hash) {
+                            vec![TagInfo {
+                                id: -3,
+                                uid: TRANSFER_STATUS_DOWNLOADING_UID.into(),
+                                name: I18nKey::TransferDownloading.text().to_string(),
+                                color: TRANSFER_BLUE.into(),
+                                updated_at: String::new(),
+                            }]
+                        } else if re.is_local {
+                            vec![TagInfo {
+                                id: -1,
+                                uid: TRANSFER_STATUS_LOCAL_UID.into(),
+                                name: I18nKey::TransferLocal.text().to_string(),
+                                color: "#22C55E".to_string(),
+                                updated_at: String::new(),
+                            }]
+                        } else {
+                            vec![TagInfo {
+                                id: -2,
+                                uid: TRANSFER_STATUS_CLOUD_UID.into(),
+                                name: I18nKey::TransferCloud.text().to_string(),
+                                color: TRANSFER_BLUE.into(),
+                                updated_at: String::new(),
+                            }]
+                        };
+                    // Pinned marker + effective expiration metadata live only on
+                    // these in-memory virtual items; the remote manifest stays
+                    // the single source of truth (no DB persistence).
+                    if re.entry.pinned {
+                        status_tags.push(TagInfo {
+                            id: -4,
+                            uid: TRANSFER_STATUS_PINNED_UID.into(),
+                            name: I18nKey::TransferKeepForever.text().to_string(),
+                            color: TRANSFER_BLUE.into(),
                             updated_at: String::new(),
-                        }]
-                    } else if re.is_local {
-                        vec![TagInfo {
-                            id: -1,
-                            uid: TRANSFER_STATUS_LOCAL_UID.into(),
-                            name: I18nKey::TransferLocal.text().to_string(),
-                            color: "#22C55E".to_string(),
-                            updated_at: String::new(),
-                        }]
-                    } else {
-                        vec![TagInfo {
-                            id: -2,
-                            uid: TRANSFER_STATUS_CLOUD_UID.into(),
-                            name: I18nKey::TransferCloud.text().to_string(),
-                            color: "#3B82F6".to_string(),
-                            updated_at: String::new(),
-                        }]
-                    };
+                        });
+                    }
+                    status_tags.push(TagInfo {
+                        id: -5,
+                        uid: TRANSFER_STATUS_RETENTION_UID.into(),
+                        name: String::new(),
+                        color: TRANSFER_BLUE.into(),
+                        updated_at: crate::core::transfer_types::effective_expiration(
+                            &re.entry,
+                            retention_days,
+                        )
+                        .map(|expires| expires.to_rfc3339())
+                        .unwrap_or_default(),
+                    });
                     ClipboardItem {
                         id: transfer_item_id(&re.entry.hash),
                         content_type: ContentType::File,
@@ -2532,6 +2565,7 @@ mod tests {
             transfer_entries: Vec::new(),
             pending_transfer_commands: VecDeque::new(),
             pending_transfer_downloads: HashSet::new(),
+            pending_transfer_pin_updates: HashSet::new(),
             pending_transfer_uploads: HashSet::new(),
             transfer_busy: false,
             transfer_refreshing: false,
@@ -2695,6 +2729,7 @@ mod tests {
                 uploaded_at: chrono::Utc::now().to_rfc3339(),
                 expires_at: String::new(),
                 uploaded_by: "test".into(),
+                pinned: false,
             },
             is_local: true,
             local_path: Some("C:\\cache\\report.pdf".into()),
@@ -2726,6 +2761,7 @@ mod tests {
                 uploaded_at: chrono::Utc::now().to_rfc3339(),
                 expires_at: String::new(),
                 uploaded_by: "test".into(),
+                pinned: false,
             },
             is_local: false,
             local_path: None,
@@ -2856,6 +2892,7 @@ mod tests {
                 uploaded_at: chrono::Utc::now().to_rfc3339(),
                 expires_at: String::new(),
                 uploaded_by: "test".into(),
+                pinned: false,
             },
             is_local: true,
             local_path: Some(path_text),
@@ -2936,6 +2973,7 @@ mod tests {
                     uploaded_at: chrono::Utc::now().to_rfc3339(),
                     expires_at: String::new(),
                     uploaded_by: "test".into(),
+                    pinned: false,
                 },
                 is_local: false,
                 local_path: None,
@@ -2952,6 +2990,187 @@ mod tests {
                 command,
                 crate::services::transfer_station::TransferCommand::Delete { .. }
             )));
+    }
+
+    #[test]
+    fn transfer_search_filters_manifest_names_with_shared_rules() {
+        let (mut state, _dirty) = test_state();
+        state.transfer_filter_active = true;
+        let mut entries = Vec::new();
+        for (hash_byte, name) in [('a', "Railway-Order.pdf"), ('b', "工作计划.docx")] {
+            entries.push(crate::core::transfer_types::ResolvedEntry {
+                entry: crate::core::transfer_types::ManifestEntry {
+                    hash: hash_byte.to_string().repeat(64),
+                    blob_id: String::new(),
+                    name: name.into(),
+                    ext: "bin".into(),
+                    size: 42,
+                    uploaded_at: chrono::Utc::now().to_rfc3339(),
+                    expires_at: String::new(),
+                    uploaded_by: "DESKTOP-A".into(),
+                    pinned: false,
+                },
+                is_local: false,
+                local_path: None,
+            });
+        }
+        state.transfer_entries = entries;
+
+        state.set_keyword("rail order");
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].full_text, "Railway-Order.pdf");
+
+        state.set_keyword("gzjh");
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].full_text, "工作计划.docx");
+
+        // Only the file name is searched — upload device must not match.
+        state.set_keyword("DESKTOP-A");
+        assert!(state.visible_items().is_empty());
+
+        state.set_keyword("");
+        assert_eq!(state.visible_items().len(), 2);
+    }
+
+    #[test]
+    fn transfer_keyword_input_does_not_reload_database_items() {
+        let (mut state, _dirty) = test_state();
+        // Seed the DB and populate self.items through a normal reload.
+        let item = make_item(1, ContentType::PlainText, false, "数据库条目");
+        state.db.upsert(&item).unwrap();
+        state.reload_items();
+        let ids_before: Vec<i64> = state.items.iter().map(|item| item.id).collect();
+        assert!(!ids_before.is_empty());
+
+        state.transfer_filter_active = true;
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: "a".repeat(64),
+                blob_id: String::new(),
+                name: "计划.txt".into(),
+                ext: "txt".into(),
+                size: 1,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+                pinned: false,
+            },
+            is_local: false,
+            local_path: None,
+        }];
+
+        // Keystrokes in the transfer view must not touch the DB-backed list.
+        state.set_keyword("计划");
+        assert_eq!(
+            state.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            ids_before
+        );
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].full_text, "计划.txt");
+
+        state.set_keyword("");
+        assert_eq!(
+            state.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            ids_before
+        );
+    }
+
+    #[test]
+    fn transfer_pin_commands_are_deduplicated_and_reject_missing_entries() {
+        let (mut state, _dirty) = test_state();
+        state.transfer_filter_active = true;
+        let hash = "a".repeat(64);
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: hash.clone(),
+                blob_id: String::new(),
+                name: "pin.bin".into(),
+                ext: "bin".into(),
+                size: 1,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: String::new(),
+                uploaded_by: "test".into(),
+                pinned: false,
+            },
+            is_local: false,
+            local_path: None,
+        }];
+
+        state.set_transfer_entry_pinned(&hash, true);
+        state.set_transfer_entry_pinned(&hash, false);
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert!(state.pending_transfer_pin_updates.contains(&hash));
+        assert!(matches!(
+            state.pending_transfer_commands.front(),
+            Some(
+                crate::services::transfer_station::TransferCommand::SetPinned { pinned: true, .. }
+            )
+        ));
+
+        state.set_transfer_entry_pinned("e".repeat(64).as_str(), true);
+        assert_eq!(state.pending_transfer_commands.len(), 1);
+        assert_eq!(
+            state.toast_message,
+            Some(I18nKey::TransferEntryExpired.text().into())
+        );
+    }
+
+    #[test]
+    fn visible_items_expose_pinned_and_retention_metadata_tags() {
+        let (mut state, _dirty) = test_state();
+        state.transfer_filter_active = true;
+        let expires_at = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+        state.transfer_entries = vec![crate::core::transfer_types::ResolvedEntry {
+            entry: crate::core::transfer_types::ManifestEntry {
+                hash: "a".repeat(64),
+                blob_id: String::new(),
+                name: "pin.bin".into(),
+                ext: "bin".into(),
+                size: 1,
+                uploaded_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: expires_at.clone(),
+                uploaded_by: "test".into(),
+                pinned: true,
+            },
+            is_local: false,
+            local_path: None,
+        }];
+
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        let uids: Vec<&str> = visible[0].tags.iter().map(|tag| tag.uid.as_str()).collect();
+        assert!(uids.contains(&crate::core::transfer_types::TRANSFER_STATUS_PINNED_UID));
+        assert!(uids.contains(&crate::core::transfer_types::TRANSFER_STATUS_RETENTION_UID));
+        let retention = visible[0]
+            .tags
+            .iter()
+            .find(|tag| tag.uid == crate::core::transfer_types::TRANSFER_STATUS_RETENTION_UID)
+            .unwrap();
+        assert_eq!(retention.updated_at, expires_at);
+
+        // Global retention off: stale explicit expirations are ignored too,
+        // so the card can never show a countdown while cleanup is disabled.
+        state.settings.transfer_retention_days = 0;
+        let visible = state.visible_items();
+        let retention = visible[0]
+            .tags
+            .iter()
+            .find(|tag| tag.uid == crate::core::transfer_types::TRANSFER_STATUS_RETENTION_UID)
+            .unwrap();
+        assert!(retention.updated_at.is_empty());
+
+        // ... and entries without any explicit expiry stay timeless as well.
+        state.transfer_entries[0].entry.expires_at.clear();
+        let visible = state.visible_items();
+        let retention = visible[0]
+            .tags
+            .iter()
+            .find(|tag| tag.uid == crate::core::transfer_types::TRANSFER_STATUS_RETENTION_UID)
+            .unwrap();
+        assert!(retention.updated_at.is_empty());
     }
 
     #[test]

@@ -477,8 +477,9 @@ impl ContextMenu {
     }
 
     /// Build a context menu for a transfer station entry.
-    /// Shows download (cloud-only), open location (local-only), and delete.
-    pub fn for_transfer_entry(is_local: bool) -> Self {
+    /// Shows download (cloud-only), open location (local-only), pin/unpin,
+    /// and delete.
+    pub fn for_transfer_entry(is_local: bool, is_pinned: bool) -> Self {
         let mut items = Vec::new();
         if !is_local {
             items.push(RawMenuItem {
@@ -500,6 +501,18 @@ impl ContextMenu {
                 shortcut: sc("Space"),
             });
         }
+        items.push(RawMenuItem {
+            label: if is_pinned {
+                I18nKey::TransferUnpin.text().into()
+            } else {
+                I18nKey::TransferPin.text().into()
+            },
+            action: "toggle_transfer_pin".into(),
+            icon: "\u{e633}".into(),
+            danger: false,
+            fav: false,
+            shortcut: None,
+        });
         // Separator
         items.push(RawMenuItem {
             label: SEPARATOR_LABEL.into(),

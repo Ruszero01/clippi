@@ -35,7 +35,8 @@ use super::components::spinner::activity_spinner;
 use super::components::toast::Toast;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::edit_panel::{EditPanel, EditPanelEvent};
-use super::search_bar::SearchBar;
+use super::filter_bar::FilterBar;
+use super::search_box::SearchBox;
 use super::settings::hotkey;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
@@ -50,13 +51,17 @@ pub struct RootView {
     window_manager: Entity<WindowManager>,
     titlebar: Entity<Titlebar>,
     list_view: Entity<ClipboardListView>,
-    search_bar: Entity<SearchBar>,
+    search_box: Entity<SearchBox>,
+    filter_bar: Entity<FilterBar>,
     settings_panel: Entity<SettingsPanel>,
     edit_panel: Entity<EditPanel>,
     sidebar: Entity<Sidebar>,
     tag_filter_panel: Entity<TagFilterPanel>,
     type_filter_config_panel: Entity<TypeFilterConfigPanel>,
     current_view: String,
+    /// Page to restore when the transfer station is closed from the list view.
+    /// Only set when the station was opened from the settings page.
+    transfer_return_view: Option<String>,
     view_transition_generation: u64,
     view_transition_started: Option<Instant>,
     overlay_transitions: HashMap<&'static str, OverlayTransitionState>,
@@ -123,11 +128,13 @@ impl RootView {
         });
         list_view.update(cx, |list, _cx| list.focus(window));
         let titlebar = cx.new(|_cx| Titlebar::new(state.clone(), list_view.clone(), theme.clone()));
-        let search_bar = cx
-            .new(|cx| SearchBar::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
-        // Wire up search_bar reference for Ctrl+F keyboard shortcut.
+        let search_box = cx
+            .new(|cx| SearchBox::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
+        let filter_bar =
+            cx.new(|_cx| FilterBar::new(state.clone(), list_view.clone(), theme.clone()));
+        // Wire up search_box reference for Ctrl+F keyboard shortcut.
         list_view.update(cx, |list, _cx| {
-            list.search_bar = Some(search_bar.clone());
+            list.search_bar = Some(search_box.clone());
         });
         let settings_panel = cx.new(|cx| {
             SettingsPanel::new(
@@ -144,13 +151,13 @@ impl RootView {
             TagFilterPanel::new(
                 state.clone(),
                 list_view.clone(),
-                search_bar.clone(),
+                filter_bar.clone(),
                 window,
                 cx,
             )
         });
         let type_filter_config_panel =
-            cx.new(|cx| TypeFilterConfigPanel::new(state.clone(), search_bar.clone(), window, cx));
+            cx.new(|cx| TypeFilterConfigPanel::new(state.clone(), filter_bar.clone(), window, cx));
 
         // Subscribe to WindowManager events for clipboard changes and pin state.
         let _wm_subscription = cx.subscribe(
@@ -180,7 +187,7 @@ impl RootView {
                 }
                 WindowManagerEvent::OpenSettings => {
                     this.switch_view("settings");
-                    this.search_bar
+                    this.filter_bar
                         .update(cx, |bar, cx| bar.close_tag_panel(cx));
                     cx.notify();
                 }
@@ -196,7 +203,7 @@ impl RootView {
                     this.switch_view("settings");
                     this.settings_panel
                         .update(cx, |panel, _cx| panel.set_active_tab(5));
-                    this.search_bar
+                    this.filter_bar
                         .update(cx, |bar, cx| bar.close_tag_panel(cx));
                     cx.notify();
                 }
@@ -256,7 +263,7 @@ impl RootView {
                     this.list_view.update(cx, |list, cx| {
                         list.release_items_for_hide(cx);
                     });
-                    this.search_bar.update(cx, |bar, cx| {
+                    this.filter_bar.update(cx, |bar, cx| {
                         bar.close_tag_panel(cx);
                     });
                     _wm.update(cx, |wm, _cx| {
@@ -438,7 +445,10 @@ impl RootView {
         let titlebar_for_events = titlebar.clone();
         let backend_panel = settings_panel.read(cx).backend_panel();
         let _subscriptions = vec![
-            cx.observe(&search_bar, |_this, _, cx| {
+            cx.observe(&search_box, |_this, _, cx| {
+                cx.notify();
+            }),
+            cx.observe(&filter_bar, |_this, _, cx| {
                 cx.notify();
             }),
             cx.observe(&tag_filter_panel, |_this, _, cx| {
@@ -459,7 +469,7 @@ impl RootView {
                             .update(cx, |state, _cx| state.start_edit_item(*id));
                         if opened {
                             this.switch_view("edit");
-                            this.search_bar
+                            this.filter_bar
                                 .update(cx, |bar, cx| bar.close_tag_panel(cx));
                             cx.notify();
                         }
@@ -503,9 +513,12 @@ impl RootView {
                     }
                     TitlebarEvent::OpenSettings => {
                         this.switch_view("settings");
-                        this.search_bar
+                        this.filter_bar
                             .update(cx, |bar, cx| bar.close_tag_panel(cx));
                         cx.notify();
+                    }
+                    TitlebarEvent::ToggleTransfer => {
+                        this.handle_toggle_transfer(cx);
                     }
                 },
             ),
@@ -561,8 +574,11 @@ impl RootView {
                         this.titlebar.update(cx, |titlebar, cx| {
                             titlebar.set_theme(theme.clone(), cx);
                         });
-                        this.search_bar.update(cx, |search_bar, cx| {
-                            search_bar.set_theme(theme.clone(), cx);
+                        this.search_box.update(cx, |search_box, cx| {
+                            search_box.set_theme(theme.clone(), cx);
+                        });
+                        this.filter_bar.update(cx, |filter_bar, cx| {
+                            filter_bar.set_theme(theme.clone(), cx);
                         });
                         this.list_view.update(cx, |list_view, cx| {
                             list_view.set_theme(theme.clone(), cx);
@@ -695,8 +711,10 @@ impl RootView {
             // Propagate to child views (mirrors ThemeChanged handler).
             this.titlebar
                 .update(cx, |tb, cx| tb.set_theme(theme.clone(), cx));
-            this.search_bar
+            this.search_box
                 .update(cx, |sb, cx| sb.set_theme(theme.clone(), cx));
+            this.filter_bar
+                .update(cx, |fb, cx| fb.set_theme(theme.clone(), cx));
             this.list_view
                 .update(cx, |lv, cx| lv.set_theme(theme.clone(), cx));
             this.settings_panel
@@ -713,13 +731,15 @@ impl RootView {
             window_manager,
             titlebar,
             list_view,
-            search_bar,
+            search_box,
+            filter_bar,
             settings_panel,
             edit_panel,
             sidebar,
             tag_filter_panel,
             type_filter_config_panel,
             current_view: "clipboard".into(),
+            transfer_return_view: None,
             view_transition_generation: 0,
             view_transition_started: None,
             overlay_transitions: HashMap::new(),
@@ -751,13 +771,14 @@ impl Render for RootView {
         let sidebar = self.sidebar.clone();
         let titlebar = self.titlebar.clone();
         let list_view = self.list_view.clone();
-        let search_bar = self.search_bar.clone();
+        let search_box = self.search_box.clone();
+        let filter_bar = self.filter_bar.clone();
         let settings_panel = self.settings_panel.clone();
         let backend_panel = self.settings_panel.read(cx).backend_panel();
         let backend_panel_open = backend_panel.read(cx).is_visible();
         let edit_panel = self.edit_panel.clone();
         let tag_filter_panel = self.tag_filter_panel.clone();
-        let tag_panel_open = self.search_bar.read(cx).tag_panel_open();
+        let tag_panel_open = self.filter_bar.read(cx).tag_panel_open();
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
@@ -778,7 +799,7 @@ impl Render for RootView {
         let win_w = f32::from(viewport.width);
         let win_h = f32::from(viewport.height);
 
-        let filter_config_open = self.search_bar.read(cx).filter_config_open();
+        let filter_config_open = self.filter_bar.read(cx).filter_config_open();
         let context_menu_open = self.list_view.read(cx).context_menu_visible();
         let tag_picker_open = self.list_view.read(cx).tag_picker_visible();
         let confirm_dialog_open = self.list_view.read(cx).confirm_dialog_state().is_some();
@@ -1053,18 +1074,18 @@ impl Render for RootView {
                 0.0
             };
 
-        // --- Auto-focus and clear search bar when the window opens ---
+        // --- Auto-focus and clear search box when the window opens ---
         if self.needs_auto_focus && is_clipboard {
             self.needs_auto_focus = false;
             let clear_search = self.state.read(cx).settings.clear_search_on_show;
             let auto_focus = self.state.read(cx).settings.auto_focus_search;
             if clear_search {
-                self.search_bar.update(cx, |bar, cx| {
+                self.search_box.update(cx, |bar, cx| {
                     bar.clear_text(window, cx);
                 });
             }
             if auto_focus {
-                self.search_bar.update(cx, |bar, cx| {
+                self.search_box.update(cx, |bar, cx| {
                     bar.focus(window, cx);
                 });
             } else {
@@ -1227,36 +1248,39 @@ impl Render for RootView {
                             .opacity(view_opacity)
                             .mt(px(view_offset))
                             .when(is_clipboard, |view| {
-                                view.child(search_bar.clone()).child(
-                                    div()
-                                        .relative()
-                                        .flex_1()
-                                        .flex()
-                                        .flex_col()
-                                        .overflow_hidden()
-                                        .child(list_view.clone())
-                                        .when(transfer_refreshing, |list| {
-                                            list.child(
-                                                div()
-                                                    .absolute()
-                                                    .right(px(12.))
-                                                    .bottom(px(12.))
-                                                    .size(px(22.))
-                                                    .rounded(px(11.))
-                                                    .bg(theme.toast_bg)
-                                                    .border(px(1.))
-                                                    .border_color(theme.divider)
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .child(activity_spinner(
-                                                        "transfer-refresh-spinner",
-                                                        theme.accent,
-                                                        17.,
-                                                    )),
-                                            )
-                                        }),
-                                )
+                                let transfer_active = self.state.read(cx).transfer_filter_active;
+                                view.child(search_box.clone())
+                                    .when(!transfer_active, |view| view.child(filter_bar.clone()))
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .overflow_hidden()
+                                            .child(list_view.clone())
+                                            .when(transfer_refreshing, |list| {
+                                                list.child(
+                                                    div()
+                                                        .absolute()
+                                                        .right(px(12.))
+                                                        .bottom(px(12.))
+                                                        .size(px(22.))
+                                                        .rounded(px(11.))
+                                                        .bg(theme.toast_bg)
+                                                        .border(px(1.))
+                                                        .border_color(theme.divider)
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .child(activity_spinner(
+                                                            "transfer-refresh-spinner",
+                                                            theme.accent,
+                                                            17.,
+                                                        )),
+                                                )
+                                            }),
+                                    )
                             })
                             .when(is_settings, |view| view.child(settings_panel))
                             .when(is_edit, |view| view.child(edit_panel)),
@@ -1275,7 +1299,7 @@ impl Render for RootView {
             // --- full-screen backdrop that closes on click outside, ---
             // --- panel positioned top-right, occlude prevents click-through. ---
             .when(tag_panel_visible, |root| {
-                let search_for_backdrop = search_bar.clone();
+                let search_for_backdrop = filter_bar.clone();
                 root.child(
                     div()
                         .absolute()
@@ -1302,7 +1326,7 @@ impl Render for RootView {
             })
             // --- Type filter config panel — same backdrop pattern as tag filter ---
             .when(filter_config_visible, |root| {
-                let search_for_backdrop = search_bar.clone();
+                let search_for_backdrop = filter_bar.clone();
                 let config_panel = self.type_filter_config_panel.clone();
                 root.child(
                     div()
@@ -1476,7 +1500,11 @@ impl Render for RootView {
                                         t.name
                                             == crate::core::i18n_keys::I18nKey::TransferLocal.text()
                                     });
-                                    ContextMenu::for_transfer_entry(is_local)
+                                    let is_pinned = clip_item.tags.iter().any(|t| {
+                                        t.uid
+                                            == crate::core::transfer_types::TRANSFER_STATUS_PINNED_UID
+                                    });
+                                    ContextMenu::for_transfer_entry(is_local, is_pinned)
                                         .with_position(menu_x, menu_y, win_w, win_h)
                                         .theme(self.theme.clone())
                                         .on_action({
@@ -2549,6 +2577,71 @@ impl Render for RootView {
 }
 
 impl RootView {
+    /// Unified transfer-station toggle handled here (not the titlebar):
+    /// closes list overlays, switches view state, and restores the page the
+    /// station was opened from. Plain list/settings switches never change the
+    /// transfer state or the recorded return page.
+    fn handle_toggle_transfer(&mut self, cx: &mut Context<Self>) {
+        // Dismiss floating list overlays before switching modes.
+        self.filter_bar.update(cx, |bar, cx| {
+            bar.close_tag_panel(cx);
+            bar.close_filter_config(cx);
+        });
+        self.list_view.update(cx, |list, cx| {
+            list.dismiss_context_menu(cx);
+            list.hide_tag_picker(cx);
+        });
+
+        let current_view = self.current_view.clone();
+        let transfer_active = self.state.read(cx).transfer_filter_active;
+        let return_view = self.transfer_return_view.clone();
+        match (
+            current_view.as_str(),
+            transfer_active,
+            return_view.as_deref(),
+        ) {
+            // List page, station off: open it and stay on the list.
+            ("clipboard", false, _) => {
+                self.state
+                    .update(cx, |state, _cx| state.toggle_transfer_filter());
+                self.transfer_return_view = None;
+            }
+            // Settings page, station off: remember the return page, switch to
+            // the list and open the station there.
+            ("settings", false, _) => {
+                self.transfer_return_view = Some("settings".to_string());
+                self.state
+                    .update(cx, |state, _cx| state.toggle_transfer_filter());
+                self.switch_view("clipboard");
+            }
+            // List page with a recorded return page: close and go back.
+            ("clipboard", true, Some(return_view)) => {
+                self.state
+                    .update(cx, |state, _cx| state.toggle_transfer_filter());
+                self.switch_view(return_view);
+                self.transfer_return_view = None;
+            }
+            // List page, station on: close it and stay.
+            ("clipboard", true, None) => {
+                self.state
+                    .update(cx, |state, _cx| state.toggle_transfer_filter());
+            }
+            // Settings page with the station still on: close and stay.
+            ("settings", true, _) => {
+                self.state
+                    .update(cx, |state, _cx| state.toggle_transfer_filter());
+                self.transfer_return_view = None;
+            }
+            _ => {}
+        }
+
+        let items = self.state.read(cx).visible_items();
+        self.list_view
+            .update(cx, |list, cx| list.set_items(items, cx));
+        self.titlebar.update(cx, |_titlebar, cx| cx.notify());
+        cx.notify();
+    }
+
     fn switch_view(&mut self, view: &str) {
         if self.current_view != view {
             self.current_view = view.into();
