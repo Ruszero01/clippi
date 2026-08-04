@@ -756,11 +756,16 @@ impl ClipboardListener for PollingClipboardListener {
         })));
 
         self.handle = Some(thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
+            // One poll cycle, extracted so the macOS branch can run inside an
+            // autorelease pool: NSPasteboard/NSImage/NSWorkspace calls on this
+            // self-managed thread can otherwise leave autoreleased Objective-C
+            // temporaries that only accumulate during long idle periods.
+            // Early returns mirror the old `continue` (each already slept).
+            let cycle = || {
                 // --- Skip recording during batch paste to avoid redundant entries ---
                 if batch_pasting.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
-                    continue;
+                    return;
                 }
 
                 // --- Internal copy: caller already pushed to pending, listener skips this cycle ---
@@ -781,7 +786,7 @@ impl ClipboardListener for PollingClipboardListener {
                         *last_cc.lock().unwrap_or_else(|e| e.into_inner()) = cc;
                     }
                     thread::sleep(Duration::from_millis(50));
-                    continue;
+                    return;
                 }
 
                 // Do not consume a real clipboard change during startup. The
@@ -802,7 +807,7 @@ impl ClipboardListener for PollingClipboardListener {
                     if !should_process_clipboard_sequence(startup_done, &seq, &*last) {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
-                        continue;
+                        return;
                     }
                     *last = seq;
                 }
@@ -817,7 +822,7 @@ impl ClipboardListener for PollingClipboardListener {
                     if !should_process_clipboard_sequence(startup_done, &cc, &*last) {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
-                        continue;
+                        return;
                     }
                     *last = cc;
                 }
@@ -825,7 +830,7 @@ impl ClipboardListener for PollingClipboardListener {
                 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                 if !startup_done {
                     thread::sleep(Duration::from_millis(50));
-                    continue;
+                    return;
                 }
 
                 // ── Capture source identity once (before opening clipboard) ──
@@ -876,7 +881,7 @@ impl ClipboardListener for PollingClipboardListener {
                     if suppress_duplicate {
                         drop(guard);
                         thread::sleep(Duration::from_millis(50));
-                        continue;
+                        return;
                     }
 
                     *guard = LastClipState {
@@ -890,6 +895,13 @@ impl ClipboardListener for PollingClipboardListener {
                 }
 
                 thread::sleep(Duration::from_millis(50));
+            };
+
+            while running.load(Ordering::SeqCst) {
+                #[cfg(target_os = "macos")]
+                objc2::rc::autoreleasepool(|_| cycle());
+                #[cfg(not(target_os = "macos"))]
+                cycle();
             }
         }));
 

@@ -258,11 +258,16 @@ impl RootView {
                     this.switch_view("clipboard");
                     cx.notify();
                 }
-                WindowManagerEvent::WindowHidden => {
-                    this.needs_auto_focus = true;
+                WindowManagerEvent::ReleaseUiResources => {
+                    // Drop the list's own item copies and image cache. This
+                    // runs synchronously before the deferred allocator
+                    // pressure relief so the pages are actually reclaimable.
                     this.list_view.update(cx, |list, cx| {
                         list.release_items_for_hide(cx);
                     });
+                }
+                WindowManagerEvent::WindowHidden => {
+                    this.needs_auto_focus = true;
                     this.filter_bar.update(cx, |bar, cx| {
                         bar.close_tag_panel(cx);
                     });

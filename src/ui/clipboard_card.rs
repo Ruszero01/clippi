@@ -511,7 +511,12 @@ fn source_icon_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     crate::core::paths::cache_app_icon(&item.source_app_name, &item.source_app_icon)
 }
 
-fn image_preview_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
+/// Thumbnail path for an image item, falling back to async thumbnail
+/// generation (returns `None` until the thumbnail is ready).
+///
+/// Shared by the main list and Quick Paste so both views use the same
+/// 310px thumbnail strategy instead of loading full-size originals.
+pub(crate) fn image_preview_path(item: &ClipboardItem) -> Option<std::path::PathBuf> {
     if let Some(thumb) = crate::platform::clipboard::image_thumbnail_path(item.content_hash) {
         return Some(thumb);
     }

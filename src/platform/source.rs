@@ -225,42 +225,48 @@ mod macos_impl {
     }
 
     pub fn get_clipboard_owner_info() -> Option<SourceAppInfo> {
-        let workspace = NSWorkspace::sharedWorkspace();
-        let frontmost = workspace.frontmostApplication()?;
-        let own_pid = std::process::id() as i32;
-        let source_pid = clipboard_source_pid(
-            frontmost.processIdentifier(),
-            own_pid,
-            crate::platform::focus::get_last_non_clippi_pid(),
-        )?;
-        let app = if source_pid == frontmost.processIdentifier() {
-            frontmost
-        } else {
-            NSRunningApplication::runningApplicationWithProcessIdentifier(source_pid)?
-        };
+        // Runs on the clipboard polling thread — drain autoreleased
+        // NSWorkspace/NSRunningApplication/NSImage temporaries per call.
+        objc2::rc::autoreleasepool(|_| {
+            let workspace = NSWorkspace::sharedWorkspace();
+            let frontmost = workspace.frontmostApplication()?;
+            let own_pid = std::process::id() as i32;
+            let source_pid = clipboard_source_pid(
+                frontmost.processIdentifier(),
+                own_pid,
+                crate::platform::focus::get_last_non_clippi_pid(),
+            )?;
+            let app = if source_pid == frontmost.processIdentifier() {
+                frontmost
+            } else {
+                NSRunningApplication::runningApplicationWithProcessIdentifier(source_pid)?
+            };
 
-        // --- Use generated methods (nil-safe via Option) ---
-        let app_name = app
-            .localizedName()
-            .map(|n| n.to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| I18nKey::UnknownApp.text().to_string());
-        let icon_base64 = app
-            .icon()
-            .and_then(|i| nsimage_to_base64_png(&i, 32))
-            .unwrap_or_default();
+            // --- Use generated methods (nil-safe via Option) ---
+            let app_name = app
+                .localizedName()
+                .map(|n| n.to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| I18nKey::UnknownApp.text().to_string());
+            let icon_base64 = app
+                .icon()
+                .and_then(|i| nsimage_to_base64_png(&i, 32))
+                .unwrap_or_default();
 
-        Some(SourceAppInfo {
-            app_name,
-            icon_base64,
+            Some(SourceAppInfo {
+                app_name,
+                icon_base64,
+            })
         })
     }
 
     pub fn get_file_icon_base64(file_path: &str, _is_dir: bool) -> Option<String> {
-        let path = objc2_foundation::NSString::from_str(file_path);
-        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-        let icon = workspace.iconForFile(&path);
-        super::super::util::nsimage_to_base64_png(&icon, 32)
+        objc2::rc::autoreleasepool(|_| {
+            let path = objc2_foundation::NSString::from_str(file_path);
+            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+            let icon = workspace.iconForFile(&path);
+            super::super::util::nsimage_to_base64_png(&icon, 32)
+        })
     }
 
     /// macOS `iconForFile:` already reads the actual file icon — delegate.

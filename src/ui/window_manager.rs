@@ -268,6 +268,10 @@ pub enum WindowManagerEvent {
     },
     /// Window was hidden — RootView should dismiss all floating panels.
     WindowHidden,
+    /// Memory release requested — subscribers must synchronously drop their
+    /// live objects (list items, image caches) before the allocator pressure
+    /// relief runs in the next app update.
+    ReleaseUiResources,
     /// Main window DPI changed — RootView should force a re-render.
     #[cfg(target_os = "windows")]
     DpiChanged,
@@ -1361,6 +1365,14 @@ impl WindowManager {
             .update(cx, |state, _cx| self.clipboard_service.poll_state(state));
         if changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
+            // Async thumbnail generation completed — the main list refreshes
+            // via ClipboardChanged, but the Quick Paste popup needs an
+            // explicit redraw so placeholders are replaced by thumbnails.
+            if self.quick_visible {
+                if let Some(view) = self.quick_view.clone() {
+                    view.update(cx, |view, cx| view.notify_thumbnail_ready(cx));
+                }
+            }
         }
     }
 
@@ -1732,29 +1744,41 @@ impl WindowManager {
             return;
         }
 
-        if let Some(info) = get_foreground_app_info() {
-            let app_changed = self
-                .foreground_app_name
-                .lock()
-                .map(|mut foreground| {
-                    let changed = *foreground != info.app_name;
-                    *foreground = info.app_name.clone();
-                    changed
-                })
-                .unwrap_or(false);
-            // Push foreground app info to AppState for the settings UI.
-            let app_name = info.app_name.clone();
-            let window_title = info.window_title.clone();
-            let icon_base64 = info.icon_base64.clone();
-            if app_changed {
-                let _ = crate::core::paths::cache_app_icon(&app_name, &icon_base64);
-            }
-            self.state.update(cx, |state, _cx| {
-                state.foreground_app_name = app_name;
-                state.foreground_window_title = window_title;
-                state.foreground_app_icon_base64 = icon_base64;
-            });
+        let Some(info) = get_foreground_app_info() else {
+            return;
+        };
+        let app_changed = self
+            .foreground_app_name
+            .lock()
+            .map(|mut foreground| {
+                let changed = *foreground != info.app_name;
+                if changed {
+                    foreground.clone_from(&info.app_name);
+                }
+                changed
+            })
+            .unwrap_or(false);
+
+        // Compare the complete payload, not just app name/title: a new process
+        // with the same display name can still have a different icon.
+        let state_changed = {
+            let state = self.state.read(cx);
+            state.foreground_app_name != info.app_name
+                || state.foreground_window_title != info.window_title
+                || state.foreground_app_icon_base64 != info.icon_base64
+        };
+        if !state_changed {
+            return;
         }
+
+        if app_changed {
+            let _ = crate::core::paths::cache_app_icon(&info.app_name, &info.icon_base64);
+        }
+        self.state.update(cx, move |state, _cx| {
+            state.foreground_app_name = info.app_name;
+            state.foreground_window_title = info.window_title;
+            state.foreground_app_icon_base64 = info.icon_base64;
+        });
     }
 
     // --- Position calculation ---
@@ -2299,19 +2323,28 @@ impl WindowManager {
     /// Release memory without changing window visibility.
     ///
     /// Used when the window starts hidden (silent_start via
-    /// `WindowOptions { show: false }`) — drops the in-memory items list,
-    /// checkpoints the WAL, and trims the process working set.  This is
-    /// the same cleanup that `hide()` does, but without the platform
-    /// show/hide call.
+    /// `WindowOptions { show: false }`) and on hide — drops the in-memory
+    /// items list, releases UI image caches, checkpoints the WAL, and trims
+    /// the process working set.
+    ///
+    /// Cleanup order matters: live objects (items, image caches) must be
+    /// dropped *before* `malloc_zone_pressure_relief` runs, otherwise the
+    /// allocator cannot return their pages. Subscribers release their
+    /// objects synchronously on `ReleaseUiResources`, and the pressure
+    /// relief is deferred to the next app update to also cover any
+    /// render-side drops.
     pub fn release_memory(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _cx| state.clear_items());
-        cx.emit(WindowManagerEvent::ClipboardChanged);
+        // Synchronously release list items + image caches in subscribers.
+        cx.emit(WindowManagerEvent::ReleaseUiResources);
         self.state.update(cx, |state, _cx| {
             if let Err(e) = state.db.checkpoint() {
                 log::error!("WAL checkpoint failed (clipboard changed): {e}");
             }
         });
-        crate::platform::util::trim_process_working_set();
+        // Pressure relief must run after the objects above are dropped;
+        // defer it to the next app update so render-side drops also land.
+        cx.defer(|_cx| crate::platform::util::trim_process_working_set());
     }
 
     /// Hide the window to background — does NOT exit the process.
@@ -2485,7 +2518,7 @@ impl WindowManager {
         }
     }
 
-    fn hide_quick_window(&mut self, _cx: &mut Context<Self>) {
+    fn hide_quick_window(&mut self, cx: &mut Context<Self>) {
         self._quick_poll_task = None; // cancel fast poll
         #[cfg(target_os = "windows")]
         {
@@ -2495,6 +2528,12 @@ impl WindowManager {
         self.quick_mouse_down = false;
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(false);
+        }
+
+        // Release decoded thumbnails/favicons/file icons while hidden so the
+        // popup no longer pins image memory between uses.
+        if let Some(view) = self.quick_view.clone() {
+            view.update(cx, |view, cx| view.release_images_for_hide(cx));
         }
 
         #[cfg(target_os = "windows")]

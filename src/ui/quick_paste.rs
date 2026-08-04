@@ -15,6 +15,7 @@ use crate::core::types::{
 };
 use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
+use crate::ui::clipboard_card::image_preview_path;
 use crate::ui::filter_bar::filter_type_display;
 use crate::ui::theme::ClippiTheme;
 use gpui_component::tooltip::Tooltip;
@@ -81,7 +82,7 @@ pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
     h + HINT_BAR_HEIGHT // always: bottom hint bar
 }
 
-/// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, image_path, favicon_path, file_icon_path, path_color, styled_first_line)
+/// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, preview_img_path, favicon_path, file_icon_path, path_color, styled_first_line)
 type RowData = (
     usize,
     i64,
@@ -110,6 +111,9 @@ pub struct QuickPasteView {
     first_visible: usize,
     /// Hover tracking — when set, drives selection in single-item mode.
     hovered_index: Option<usize>,
+    /// Per-view image cache so thumbnails/favicons/file icons are released
+    /// when the popup hides instead of living forever in the global asset cache.
+    image_cache: Entity<RetainAllImageCache>,
     _appearance_subscription: Subscription,
     // Modifier key state (updated by WindowManager poll)
     pub(crate) shift_held: bool,
@@ -134,6 +138,7 @@ impl QuickPasteView {
             selected_index: 0,
             first_visible: 0,
             hovered_index: None,
+            image_cache: RetainAllImageCache::new(cx),
             _appearance_subscription: appearance_subscription,
             shift_held: false,
             ctrl_held: false,
@@ -249,6 +254,19 @@ impl QuickPasteView {
         cx.notify();
     }
 
+    /// Replace the image cache so decoded thumbnails/favicons/file icons are
+    /// released. Called when the popup hides or the app goes to background.
+    pub(crate) fn release_images_for_hide(&mut self, cx: &mut Context<Self>) {
+        self.image_cache = RetainAllImageCache::new(cx);
+        cx.notify();
+    }
+
+    /// Redraw after an async thumbnail finished generating. The main list is
+    /// refreshed via `ClipboardChanged`; the popup needs an explicit notify.
+    pub(crate) fn notify_thumbnail_ready(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
     fn row_data(&self, cx: &Context<Self>) -> Vec<RowData> {
         let settings = &self.state.read(cx).settings;
         let auto_fetch_title = settings.auto_fetch_url_title;
@@ -284,6 +302,14 @@ impl QuickPasteView {
                 let remote_host = RichData::from_json(&item.rich_data).remote_host;
                 let is_image =
                     item.content_type == ContentType::Image && !item.image_path.is_empty();
+                // Use the shared 310px thumbnail when available; otherwise the
+                // async thumbnail job is started and a placeholder is shown.
+                // Never fall back to the full-size original.
+                let preview_img_path = if is_image && remote_host.is_none() {
+                    image_preview_path(item).map(|p| p.to_string_lossy().to_string())
+                } else {
+                    None
+                };
                 let color_swatch = if item.display_kind() == DisplayKind::Color {
                     detect_color(&item.full_text)
                         .map(|c| rgb(((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32))
@@ -340,7 +366,7 @@ impl QuickPasteView {
                     preview_subtitle,
                     item.note.clone(),
                     format_relative_time(&item.updated_at),
-                    (is_image && remote_host.is_none()).then(|| item.image_path.clone()),
+                    preview_img_path,
                     favicon_path,
                     file_icon_path,
                     path_color,
@@ -878,6 +904,7 @@ impl Render for QuickPasteView {
                         let t = theme.clone();
                         let selected_index = self.selected_index;
                         let first_visible = self.first_visible;
+                        let image_cache = self.image_cache.clone();
                         let view_entity = cx.entity();
                         self.row_data(cx)
                             .into_iter()
@@ -926,6 +953,7 @@ impl Render for QuickPasteView {
                                             .items_center()
                                             .child(
                                                 gpui::img(std::path::Path::new(path))
+                                                    .image_cache(&image_cache)
                                                     .h(px(thumb_h))
                                                     .object_fit(ObjectFit::Contain),
                                             )
@@ -1112,6 +1140,7 @@ impl Render for QuickPasteView {
                                         } else if let Some(ref fav_path) = favicon_path {
                                             // Favicon image for link-type items
                                             gpui::img(std::path::Path::new(fav_path))
+                                                .image_cache(&image_cache)
                                                 .w(px(16.0))
                                                 .h(px(16.0))
                                                 .rounded(px(3.0))
@@ -1119,6 +1148,7 @@ impl Render for QuickPasteView {
                                         } else if let Some(ref ficon_path) = file_icon_path {
                                             // File extension icon
                                             gpui::img(std::path::Path::new(ficon_path))
+                                                .image_cache(&image_cache)
                                                 .w(px(16.0))
                                                 .h(px(16.0))
                                                 .rounded(px(3.0))

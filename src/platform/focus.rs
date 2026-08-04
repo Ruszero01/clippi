@@ -201,16 +201,21 @@ pub fn start_focus_watcher() -> Result<FocusWatcher, String> {
 
     let thread = std::thread::spawn(move || {
         while running_clone.load(Ordering::SeqCst) {
-            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-            if let Some(app) = workspace.frontmostApplication() {
-                let pid = app.processIdentifier();
+            // NSWorkspace/frontmostApplication can create autoreleased
+            // Objective-C temporaries on this non-AppKit thread; drain them
+            // every cycle so long idle periods don't accumulate them.
+            objc2::rc::autoreleasepool(|_| {
+                let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+                if let Some(app) = workspace.frontmostApplication() {
+                    let pid = app.processIdentifier();
 
-                if pid == my_pid {
-                    // --- LAST_NON_CLIPPI_PID already holds the correct paste target. ---
-                } else {
-                    LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
+                    if pid == my_pid {
+                        // --- LAST_NON_CLIPPI_PID already holds the correct paste target. ---
+                    } else {
+                        LAST_NON_CLIPPI_PID.store(pid, Ordering::SeqCst);
+                    }
                 }
-            }
+            });
 
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
@@ -450,43 +455,48 @@ fn windows_foreground_info() -> Option<ForegroundAppInfo> {
 
 #[cfg(target_os = "macos")]
 fn macos_foreground_info() -> Option<ForegroundAppInfo> {
-    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-    let app = workspace.frontmostApplication()?;
-    let pid = app.processIdentifier();
+    // This runs every polling cycle, so drain autoreleased
+    // NSWorkspace/NSRunningApplication/NSImage temporaries per call.
+    // Only owned Rust values (PID, String) escape the pool.
+    objc2::rc::autoreleasepool(|_| {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let app = workspace.frontmostApplication()?;
+        let pid = app.processIdentifier();
 
-    if pid == std::process::id() as i32 {
-        // --- Clippi itself — no foreground info to show ---
-        return None;
-    }
-
-    let cache = FOREGROUND_INFO_CACHE.get_or_init(|| Mutex::new(None));
-    if let Ok(cache_guard) = cache.lock() {
-        if let Some(cached) = cache_guard.as_ref().filter(|cached| cached.pid == pid) {
-            return Some(cached.info.clone());
+        if pid == std::process::id() as i32 {
+            // --- Clippi itself — no foreground info to show ---
+            return None;
         }
-    }
 
-    // --- Use generated methods (nil-safe via Option) ---
-    let app_name = app
-        .localizedName()
-        .map(|n| n.to_string())
-        .unwrap_or_default();
-    let icon_base64 = app
-        .icon()
-        .and_then(|i| super::util::nsimage_to_base64_png(&i, 32))
-        .unwrap_or_default();
-
-    Some(ForegroundAppInfo {
-        app_name,
-        window_title: String::new(), // macOS window title extraction requires extra permissions
-        icon_base64,
-    })
-    .inspect(|info| {
-        if let Ok(mut cache_guard) = cache.lock() {
-            *cache_guard = Some(CachedForegroundAppInfo {
-                pid,
-                info: info.clone(),
-            });
+        let cache = FOREGROUND_INFO_CACHE.get_or_init(|| Mutex::new(None));
+        if let Ok(cache_guard) = cache.lock() {
+            if let Some(cached) = cache_guard.as_ref().filter(|cached| cached.pid == pid) {
+                return Some(cached.info.clone());
+            }
         }
+
+        // --- Use generated methods (nil-safe via Option) ---
+        let app_name = app
+            .localizedName()
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        let icon_base64 = app
+            .icon()
+            .and_then(|i| super::util::nsimage_to_base64_png(&i, 32))
+            .unwrap_or_default();
+
+        Some(ForegroundAppInfo {
+            app_name,
+            window_title: String::new(), // macOS window title extraction requires extra permissions
+            icon_base64,
+        })
+        .inspect(|info| {
+            if let Ok(mut cache_guard) = cache.lock() {
+                *cache_guard = Some(CachedForegroundAppInfo {
+                    pid,
+                    info: info.clone(),
+                });
+            }
+        })
     })
 }
