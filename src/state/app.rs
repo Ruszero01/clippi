@@ -2216,10 +2216,13 @@ impl AppState {
             })
     }
 
-    pub fn toggle_transfer_filter(&mut self) {
+    /// Toggle the transfer station view. Returns `false` when the station
+    /// could not be activated (no enabled matching backend); the caller must
+    /// not switch pages or record a return view in that case.
+    pub fn toggle_transfer_filter(&mut self) -> bool {
         if !self.transfer_filter_active && !self.transfer_available() {
             self.toast_message = Some(I18nKey::TransferNoBackend.text().into());
-            return;
+            return false;
         }
         self.transfer_filter_active = !self.transfer_filter_active;
         if self.transfer_filter_active {
@@ -2240,6 +2243,7 @@ impl AppState {
             // Re-apply the current search term to the database-backed list.
             self.reload_items();
         }
+        true
     }
 
     pub fn queue_daily_transfer_cleanup(&mut self) {
@@ -2540,6 +2544,26 @@ mod tests {
             meta_type: String::new(),
             custom_hotkey: String::new(),
             custom_hotkey_format: String::new(),
+        }
+    }
+
+    fn backend_config(id: &str, enabled: bool) -> crate::core::settings::BackendConfig {
+        crate::core::settings::BackendConfig {
+            id: id.to_string(),
+            enabled,
+            backend_type: "local_folder".to_string(),
+            name: "test".to_string(),
+            folder_path: String::new(),
+            device_name: String::new(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: String::new(),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
         }
     }
 
@@ -2940,6 +2964,70 @@ mod tests {
             state.pending_transfer_commands.back(),
             Some(crate::services::transfer_station::TransferCommand::Upload { .. })
         ));
+    }
+
+    #[test]
+    fn toggle_transfer_refuses_without_enabled_backend() {
+        // Enabled station but no sync backend at all: activation must fail,
+        // show the toast, and leave the view state untouched so callers do
+        // not switch pages or record a return view.
+        let (mut state, _dirty) = test_state();
+        state.settings.transfer_station_enabled = true;
+
+        assert!(!state.toggle_transfer_filter());
+        assert!(!state.transfer_filter_active);
+        assert!(!state.transfer_refreshing);
+        assert!(state.toast_message.is_some());
+        assert!(state.pending_transfer_commands.is_empty());
+    }
+
+    #[test]
+    fn toggle_transfer_refuses_when_selected_backend_disabled_or_deleted() {
+        let (mut state, _dirty) = test_state();
+        state.settings.transfer_station_enabled = true;
+        state.settings.transfer_backend_id = "selected-id".to_string();
+        state.settings.sync_backends = vec![backend_config("selected-id", true)];
+        // The selected backend is disabled: no other backend may take over.
+        state.settings.sync_backends[0].enabled = false;
+        assert!(!state.toggle_transfer_filter());
+        assert!(!state.transfer_filter_active);
+
+        // The selected backend was deleted entirely.
+        state.settings.sync_backends = vec![backend_config("other-id", true)];
+        assert!(!state.toggle_transfer_filter());
+        assert!(!state.transfer_filter_active);
+    }
+
+    #[test]
+    fn toggle_transfer_activates_with_enabled_backend_and_reports_success() {
+        let (mut state, _dirty) = test_state();
+        state.settings.transfer_station_enabled = true;
+        state.settings.sync_backends = vec![backend_config("backend-1", true)];
+
+        assert!(state.toggle_transfer_filter());
+        assert!(state.transfer_filter_active);
+        assert!(state.transfer_refreshing);
+        assert!(state.pending_transfer_commands.iter().any(|command| {
+            matches!(
+                command,
+                crate::services::transfer_station::TransferCommand::Refresh
+            )
+        }));
+
+        // Deactivating again always succeeds and reports success.
+        assert!(state.toggle_transfer_filter());
+        assert!(!state.transfer_filter_active);
+    }
+
+    #[test]
+    fn toggle_transfer_keeps_station_off_when_station_disabled() {
+        let (mut state, _dirty) = test_state();
+        state.settings.transfer_station_enabled = false;
+        state.settings.sync_backends = vec![backend_config("backend-1", true)];
+
+        assert!(!state.toggle_transfer_filter());
+        assert!(!state.transfer_filter_active);
+        assert!(state.toast_message.is_some());
     }
 
     #[test]

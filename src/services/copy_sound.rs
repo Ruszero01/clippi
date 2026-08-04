@@ -172,20 +172,133 @@ fn playback_worker(rx: Receiver<&'static [u8]>) {
     }
 }
 
-fn current_output_device() -> Option<(rodio::Device, String)> {
-    let device = rodio::cpal::default_host().default_output_device()?;
+/// Stable identity for the current output device.
+///
+/// On macOS this is the CoreAudio Device UID, which uniquely identifies a
+/// physical or aggregate device and stays stable across renames. The
+/// name/format-based fallback (used on other platforms) can collide when two
+/// devices share the same name and format — e.g. two identical USB audio
+/// devices — which would keep a stale output stream open when the system
+/// default switches between them.
+fn output_device_id(device: &rodio::Device) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(uid) = coreaudio_uid::default_output_device_uid() {
+            return uid;
+        }
+        log::warn!(
+            "copy_sound: failed to resolve CoreAudio device UID; falling back to name-based identity"
+        );
+    }
     let name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
-    let config = device.default_output_config().ok();
-    let device_id = match config {
-        Some(config) => format!(
+    match device.default_output_config() {
+        Ok(config) => format!(
             "{name}|{}|{}|{:?}",
             config.channels(),
             config.sample_rate().0,
             config.sample_format()
         ),
-        None => name,
-    };
+        Err(_) => name,
+    }
+}
+
+fn current_output_device() -> Option<(rodio::Device, String)> {
+    let device = rodio::cpal::default_host().default_output_device()?;
+    let device_id = output_device_id(&device);
     Some((device, device_id))
+}
+
+/// CoreAudio lookup for the default output device UID.
+///
+/// Only two read-only properties are queried (`kAudioHardwarePropertyDefaultOutputDevice`
+/// on the system object, then `kAudioDevicePropertyDeviceUID` on the device),
+/// so no audio stream or device handle is kept alive here.
+#[cfg(target_os = "macos")]
+mod coreaudio_uid {
+    use core_foundation::base::{CFTypeRef, TCFType};
+    use core_foundation::string::{CFString, CFStringRef};
+    use coreaudio::sys::{
+        kAudioDevicePropertyDeviceUID, kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyElementMaster, kAudioObjectPropertyScopeGlobal,
+        kAudioObjectSystemObject, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
+        AudioObjectID, AudioObjectPropertyAddress,
+    };
+    use std::ffi::c_void;
+
+    /// UID of the current default output device, or `None` when CoreAudio is
+    /// unavailable or the property cannot be read.
+    pub(super) fn default_output_device_uid() -> Option<String> {
+        let mut device_id: AudioObjectID = 0;
+        let address = AudioObjectPropertyAddress {
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMaster,
+        };
+        let mut size = std::mem::size_of::<AudioObjectID>() as u32;
+        // Safety: `out_data` points to a writable `AudioObjectID` sized buffer.
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                kAudioObjectSystemObject,
+                &address,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut device_id as *mut AudioObjectID as *mut c_void,
+            )
+        };
+        if status != 0 || device_id == 0 {
+            return None;
+        }
+
+        // The UID property holds a CFStringRef; query its size first (the
+        // standard two-call CoreAudio pattern), then read the value.
+        let uid_address = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMaster,
+        };
+        let mut uid_size = 0u32;
+        // Safety: `uid_size` points to writable storage for the property size.
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(
+                device_id,
+                &uid_address,
+                0,
+                std::ptr::null(),
+                &mut uid_size,
+            )
+        };
+        if status != 0 || uid_size as usize != std::mem::size_of::<CFTypeRef>() {
+            return None;
+        }
+
+        let mut string_ref: CFTypeRef = std::ptr::null();
+        let mut size = std::mem::size_of::<CFTypeRef>() as u32;
+        // Safety: `out_data` points to a writable `CFTypeRef` sized buffer.
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                device_id,
+                &uid_address,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut string_ref as *mut CFTypeRef as *mut c_void,
+            )
+        };
+        if status != 0 || string_ref.is_null() {
+            return None;
+        }
+
+        // `kAudioDevicePropertyDeviceUID` returns a new reference (create
+        // rule); wrapping it lets `CFString` release it on drop.
+        let uid = unsafe { CFString::wrap_under_create_rule(string_ref as CFStringRef) };
+        let uid = uid.to_string();
+        if uid.is_empty() {
+            None
+        } else {
+            Some(uid)
+        }
+    }
 }
 
 /// Play the copy confirmation sound asynchronously.

@@ -21,6 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::filters::BUILTIN_TYPE_KEYS;
 use crate::core::settings::{AppSettings, TypeFilterEntry};
 
 /// File name stored in each backend's root directory.
@@ -42,6 +43,25 @@ const VALID_COPY_SOUND_FILES: &[&str] = &[
     "copy_blip.wav",
     "copy_bubble.wav",
 ];
+
+/// Upper bound for `max_items` accepted from a cloud snapshot (0 = unlimited).
+/// Loose enough for any real history, tight enough to reject absurd values
+/// that would pin an unbounded amount of data on the receiving device.
+const MAX_ITEMS_LIMIT: u32 = 100_000;
+
+/// Upper bound for `retention_days` accepted from a cloud snapshot (0 = keep
+/// forever). 10 years exceeds any plausible retention setting; larger values
+/// would silently delete every non-favorite item on the receiving device.
+const MAX_RETENTION_DAYS: u32 = 3_650;
+
+/// Accepted bounds for the global `sync_interval_secs` (1 second … 1 day).
+const MIN_SYNC_INTERVAL_SECS: u64 = 1;
+const MAX_SYNC_INTERVAL_SECS: u64 = 86_400;
+
+/// `transfer_retention_days` must be one of the options offered by the
+/// settings UI — anything else is rejected before it can reach the transfer
+/// station, where oversized values would overflow Chrono date math.
+const TRANSFER_RETENTION_OPTIONS: &[u32] = &[0, 1, 3, 7, 30];
 
 // ── Error type ────────────────────────────────────────────────────────────
 
@@ -233,6 +253,10 @@ impl ConfigSnapshot {
 
     /// Serialise to a pretty-printed JSON byte vector.
     pub fn to_vec(&self) -> Result<Vec<u8>, ConfigSyncError> {
+        // Apply the same policy to locally generated snapshots so invalid
+        // local/TOML values can never poison the remote snapshot slot.
+        self.settings.validate()?;
+
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| ConfigSyncError::InvalidSnapshot(e.to_string()))?;
 
@@ -410,6 +434,70 @@ impl PortableSettingsV1 {
                 "unknown cleanup interval: {}",
                 self.cleanup_interval
             )));
+        }
+
+        // max_items — 0 means unlimited; cap to reject runaway values.
+        if self.max_items > MAX_ITEMS_LIMIT {
+            return Err(ConfigSyncError::InvalidFieldValue(format!(
+                "max_items out of range: {}",
+                self.max_items
+            )));
+        }
+
+        // retention_days — 0 means keep forever; cap to reject values that
+        // would delete every non-favorite item on the receiving device.
+        if self.retention_days > MAX_RETENTION_DAYS {
+            return Err(ConfigSyncError::InvalidFieldValue(format!(
+                "retention_days out of range: {}",
+                self.retention_days
+            )));
+        }
+
+        // sync_interval_secs — the global sync cadence must stay within sane
+        // bounds so a bad snapshot cannot disable or overwhelm syncing.
+        if !(MIN_SYNC_INTERVAL_SECS..=MAX_SYNC_INTERVAL_SECS).contains(&self.sync_interval_secs) {
+            return Err(ConfigSyncError::InvalidFieldValue(format!(
+                "sync_interval_secs out of range: {}",
+                self.sync_interval_secs
+            )));
+        }
+
+        // transfer_retention_days — must be one of the UI options. Oversized
+        // values would overflow Chrono date arithmetic in the transfer
+        // station (`DateTime + Duration::days(u32::MAX)` panics).
+        if !TRANSFER_RETENTION_OPTIONS.contains(&self.transfer_retention_days) {
+            return Err(ConfigSyncError::InvalidFieldValue(format!(
+                "transfer_retention_days out of range: {}",
+                self.transfer_retention_days
+            )));
+        }
+
+        // type_filter_config — only built-in keys, no duplicates, and at most
+        // one entry per built-in key. Unknown keys would still consume toolbar
+        // width in the filter bar (they are skipped only at render time), and
+        // duplicate or oversized lists would let a snapshot bloat the layout
+        // and per-frame iteration cost.
+        if self.type_filter_config.len() > BUILTIN_TYPE_KEYS.len() {
+            return Err(ConfigSyncError::InvalidFieldValue(format!(
+                "type_filter_config too long: {}",
+                self.type_filter_config.len()
+            )));
+        }
+        let mut seen = Vec::with_capacity(self.type_filter_config.len());
+        for entry in &self.type_filter_config {
+            if !BUILTIN_TYPE_KEYS.contains(&entry.key.as_str()) {
+                return Err(ConfigSyncError::InvalidFieldValue(format!(
+                    "unknown type filter key: {}",
+                    entry.key
+                )));
+            }
+            if seen.contains(&entry.key) {
+                return Err(ConfigSyncError::InvalidFieldValue(format!(
+                    "duplicate type filter key: {}",
+                    entry.key
+                )));
+            }
+            seen.push(entry.key.clone());
         }
 
         Ok(())
@@ -656,6 +744,138 @@ mod tests {
         let data = serde_json::to_vec(&json).unwrap();
         let result = ConfigSnapshot::from_slice(&data);
         assert!(matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))));
+    }
+
+    #[test]
+    fn rejects_transfer_retention_days_outside_ui_options() {
+        for invalid in [4_u32, 31, 365, u32::MAX] {
+            let mut json = snapshot_json("system");
+            json["settings"]["transfer_retention_days"] = serde_json::json!(invalid);
+            let data = serde_json::to_vec(&json).unwrap();
+            let result = ConfigSnapshot::from_slice(&data);
+            assert!(
+                matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))),
+                "transfer_retention_days {invalid} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_transfer_retention_days_in_ui_options() {
+        for valid in [0_u32, 1, 3, 7, 30] {
+            let mut json = snapshot_json("system");
+            json["settings"]["transfer_retention_days"] = serde_json::json!(valid);
+            let data = serde_json::to_vec(&json).unwrap();
+            let parsed = ConfigSnapshot::from_slice(&data)
+                .unwrap_or_else(|e| panic!("transfer_retention_days {valid} rejected: {e}"));
+            assert_eq!(parsed.settings.transfer_retention_days, valid);
+        }
+    }
+
+    #[test]
+    fn rejects_max_items_above_limit() {
+        let mut json = snapshot_json("system");
+        json["settings"]["max_items"] = serde_json::json!(MAX_ITEMS_LIMIT + 1);
+        let data = serde_json::to_vec(&json).unwrap();
+        let result = ConfigSnapshot::from_slice(&data);
+        assert!(matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))));
+    }
+
+    #[test]
+    fn rejects_retention_days_above_limit() {
+        let mut json = snapshot_json("system");
+        json["settings"]["retention_days"] = serde_json::json!(MAX_RETENTION_DAYS + 1);
+        let data = serde_json::to_vec(&json).unwrap();
+        let result = ConfigSnapshot::from_slice(&data);
+        assert!(matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))));
+    }
+
+    #[test]
+    fn rejects_sync_interval_out_of_bounds() {
+        for invalid in [0_u64, MAX_SYNC_INTERVAL_SECS + 1, u64::MAX] {
+            let mut json = snapshot_json("system");
+            json["settings"]["sync_interval_secs"] = serde_json::json!(invalid);
+            let data = serde_json::to_vec(&json).unwrap();
+            let result = ConfigSnapshot::from_slice(&data);
+            assert!(
+                matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))),
+                "sync_interval_secs {invalid} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_boundary_numeric_values() {
+        let mut json = snapshot_json("system");
+        json["settings"]["max_items"] = serde_json::json!(MAX_ITEMS_LIMIT);
+        json["settings"]["retention_days"] = serde_json::json!(MAX_RETENTION_DAYS);
+        json["settings"]["sync_interval_secs"] = serde_json::json!(MAX_SYNC_INTERVAL_SECS);
+        let data = serde_json::to_vec(&json).unwrap();
+        assert!(ConfigSnapshot::from_slice(&data).is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_type_filter_key() {
+        let mut json = snapshot_json("system");
+        json["settings"]["type_filter_config"] = serde_json::json!([
+            { "key": "plain_text", "visible": true },
+            { "key": "custom_type", "visible": true }
+        ]);
+        let data = serde_json::to_vec(&json).unwrap();
+        let result = ConfigSnapshot::from_slice(&data);
+        assert!(matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))));
+    }
+
+    #[test]
+    fn rejects_duplicate_type_filter_keys() {
+        let mut json = snapshot_json("system");
+        json["settings"]["type_filter_config"] = serde_json::json!([
+            { "key": "plain_text", "visible": true },
+            { "key": "plain_text", "visible": false }
+        ]);
+        let data = serde_json::to_vec(&json).unwrap();
+        let result = ConfigSnapshot::from_slice(&data);
+        assert!(matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))));
+    }
+
+    #[test]
+    fn rejects_oversized_type_filter_config() {
+        let mut json = snapshot_json("system");
+        let entries: Vec<serde_json::Value> = BUILTIN_TYPE_KEYS
+            .iter()
+            .map(|key| serde_json::json!({ "key": key, "visible": true }))
+            .collect();
+        let mut duplicate = entries.clone();
+        duplicate.push(serde_json::json!({ "key": "plain_text", "visible": true }));
+        json["settings"]["type_filter_config"] = serde_json::Value::Array(duplicate);
+        let data = serde_json::to_vec(&json).unwrap();
+        let result = ConfigSnapshot::from_slice(&data);
+        assert!(matches!(result, Err(ConfigSyncError::InvalidFieldValue(_))));
+    }
+
+    #[test]
+    fn accepts_full_builtin_type_filter_config() {
+        let mut json = snapshot_json("system");
+        let entries: Vec<serde_json::Value> = BUILTIN_TYPE_KEYS
+            .iter()
+            .map(|key| serde_json::json!({ "key": key, "visible": true }))
+            .collect();
+        json["settings"]["type_filter_config"] = serde_json::Value::Array(entries);
+        let data = serde_json::to_vec(&json).unwrap();
+        assert!(ConfigSnapshot::from_slice(&data).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_values_before_upload_serialization() {
+        let settings = AppSettings {
+            transfer_retention_days: u32::MAX,
+            ..AppSettings::default()
+        };
+        let snapshot = ConfigSnapshot::from_local(&settings, "0.4.1");
+        assert!(matches!(
+            snapshot.to_vec(),
+            Err(ConfigSyncError::InvalidFieldValue(_))
+        ));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "clippi"
-version = "0.4.0"
+version = "0.4.1"
 description = "A lightweight clipboard manager"
 authors = ["Rains"]
 repository = "https://github.com/Ruszero01/clippi"
@@ -12,7 +12,7 @@ build = "build.rs"
 name = "Clippi"
 identifier = "com.clippi.app"
 icon = ["assets/LOGO.icns"]
-version = "0.4.0"
+version = "0.4.1"
 copyright= "Copyright © 2026 Rains. MIT license."
 category = "Utility"
 short_description = "A lightweight clipboard manager"
@@ -68,6 +68,7 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRu
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "objc2-core-foundation"] }
 core-graphics = { version = "0.25", features = ["elcapitan"] }
 core-foundation = "0.10"
+coreaudio-rs = { version = "0.11", default-features = false, features = ["core_audio"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"

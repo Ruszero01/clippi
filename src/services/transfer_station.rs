@@ -9,8 +9,8 @@ use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::{AppSettings, BackendConfig};
 use crate::core::sync::SyncBackend;
 use crate::core::transfer_types::{
-    effective_expiration, validate_portable_file_name, FileManifest, ManifestEntry,
-    ManifestWriteError, ResolvedEntry, MAX_TRANSFER_FILE_SIZE_BYTES,
+    effective_expiration, retention_expiration, validate_portable_file_name, FileManifest,
+    ManifestEntry, ManifestWriteError, ResolvedEntry, MAX_TRANSFER_FILE_SIZE_BYTES,
 };
 use crate::core::types::{ClipboardItem, ContentType, FileData, FileInfo};
 use crate::core::{migration, paths};
@@ -845,7 +845,9 @@ fn upload_file(
     let expires_at = if retention_days == 0 {
         String::new()
     } else {
-        (now + chrono::Duration::days(retention_days as i64)).to_rfc3339()
+        retention_expiration(now, retention_days)
+            .ok_or_else(|| "transfer retention days are out of range".to_string())?
+            .to_rfc3339()
     };
     let entry = ManifestEntry {
         hash: hash.clone(),
@@ -985,6 +987,13 @@ fn set_pinned_file(
     retention_days: u32,
 ) -> Result<(), String> {
     entry.validate()?;
+    let unpinned_expires_at = if pinned || retention_days == 0 {
+        String::new()
+    } else {
+        retention_expiration(chrono::Utc::now(), retention_days)
+            .ok_or_else(|| "transfer retention days are out of range".to_string())?
+            .to_rfc3339()
+    };
     let target_hash = entry.hash.clone();
     let target_blob_key = entry.blob_key().to_string();
     let updated = mutate_manifest(backend, |manifest| {
@@ -995,11 +1004,7 @@ fn set_pinned_file(
         };
         target.pinned = pinned;
         if !pinned {
-            target.expires_at = if retention_days == 0 {
-                String::new()
-            } else {
-                (chrono::Utc::now() + chrono::Duration::days(retention_days as i64)).to_rfc3339()
-            };
+            target.expires_at = unpinned_expires_at.clone();
         }
         true
     })?;

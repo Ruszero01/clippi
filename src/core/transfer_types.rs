@@ -227,7 +227,16 @@ pub fn effective_expiration(entry: &ManifestEntry, retention_days: u32) -> Optio
     }
     DateTime::parse_from_rfc3339(&entry.uploaded_at)
         .ok()
-        .map(|parsed| parsed.with_timezone(&Utc) + Duration::days(retention_days as i64))
+        .and_then(|parsed| retention_expiration(parsed.with_timezone(&Utc), retention_days))
+}
+
+/// Return the end of a retention window without panicking on an invalid local
+/// setting or a timestamp too close to Chrono's upper bound.
+pub fn retention_expiration(start: DateTime<Utc>, retention_days: u32) -> Option<DateTime<Utc>> {
+    if retention_days == 0 {
+        return None;
+    }
+    start.checked_add_signed(Duration::days(i64::from(retention_days)))
 }
 
 fn validate_utc_timestamp(value: &str, allow_empty: bool, label: &str) -> Result<(), String> {
@@ -287,6 +296,12 @@ mod tests {
         let mut e = entry(now);
         e.expires_at = (now + Duration::days(2)).to_rfc3339();
         assert_eq!(effective_expiration(&e, 0), None);
+    }
+
+    #[test]
+    fn effective_expiration_does_not_panic_on_oversized_local_retention() {
+        let e = entry(Utc::now());
+        assert_eq!(effective_expiration(&e, u32::MAX), None);
     }
 
     #[test]

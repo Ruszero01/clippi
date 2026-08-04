@@ -2606,13 +2606,18 @@ impl RootView {
                     .update(cx, |state, _cx| state.toggle_transfer_filter());
                 self.transfer_return_view = None;
             }
-            // Settings page, station off: remember the return page, switch to
-            // the list and open the station there.
+            // Settings page, station off: switch to the list and open the
+            // station there — but only when activation actually succeeded.
+            // Without an enabled backend the station stays off and the user
+            // must not be pulled away from the settings page.
             ("settings", false, _) => {
-                self.transfer_return_view = Some("settings".to_string());
-                self.state
+                let activated = self
+                    .state
                     .update(cx, |state, _cx| state.toggle_transfer_filter());
-                self.switch_view("clipboard");
+                if activated {
+                    self.transfer_return_view = Some("settings".to_string());
+                    self.switch_view("clipboard");
+                }
             }
             // List page with a recorded return page: close and go back.
             ("clipboard", true, Some(return_view)) => {
