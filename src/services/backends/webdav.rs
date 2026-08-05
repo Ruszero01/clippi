@@ -680,7 +680,10 @@ impl SyncBackend for WebDAVBackend {
 }
 
 impl crate::services::backends::ConfigSnapshotBackend for WebDAVBackend {
-    fn download_config_snapshot(&self, max_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+    fn download_config_snapshot(
+        &self,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>, crate::core::config_sync::ConfigSyncError> {
         let url = self.config_sync_url();
         let auth = self.auth_header();
 
@@ -688,19 +691,25 @@ impl crate::services::backends::ConfigSnapshotBackend for WebDAVBackend {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) => return Ok(None),
             Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
-                return Err(format!("auth failed ({code})"));
+                return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                    format!("auth failed ({code})"),
+                ))
             }
-            Err(e) => return Err(format!("download config snapshot: {e}")),
+            Err(e) => {
+                return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                    format!("download config snapshot: {e}"),
+                ))
+            }
         };
 
         if let Some(len) = response.header("Content-Length") {
-            let len: u64 = len
-                .parse()
-                .map_err(|_| format!("invalid Content-Length: {len}"))?;
+            let len: u64 = len.parse().map_err(|_| {
+                crate::core::config_sync::ConfigSyncError::Transport(format!(
+                    "invalid Content-Length: {len}"
+                ))
+            })?;
             if len > max_bytes {
-                return Err(format!(
-                    "config snapshot too large: {len} bytes (limit {max_bytes})"
-                ));
+                return Err(crate::core::config_sync::ConfigSyncError::TooLarge);
             }
         }
 
@@ -709,19 +718,23 @@ impl crate::services::backends::ConfigSnapshotBackend for WebDAVBackend {
             .into_reader()
             .take(max_bytes + 1)
             .read_to_end(&mut body)
-            .map_err(|e| format!("read config snapshot body: {e}"))?;
+            .map_err(|e| {
+                crate::core::config_sync::ConfigSyncError::Transport(format!(
+                    "read config snapshot body: {e}"
+                ))
+            })?;
 
         if body.len() as u64 > max_bytes {
-            return Err(format!(
-                "config snapshot too large: {} bytes (limit {max_bytes})",
-                body.len()
-            ));
+            return Err(crate::core::config_sync::ConfigSyncError::TooLarge);
         }
 
         Ok(Some(body))
     }
 
-    fn upload_config_snapshot(&self, data: &[u8]) -> Result<(), String> {
+    fn upload_config_snapshot(
+        &self,
+        data: &[u8],
+    ) -> Result<(), crate::core::config_sync::ConfigSyncError> {
         let url = self.config_sync_url();
         let auth = self.auth_header();
 
@@ -734,14 +747,22 @@ impl crate::services::backends::ConfigSnapshotBackend for WebDAVBackend {
         {
             Ok(r) => r,
             Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
-                return Err(format!("auth failed ({code})"));
+                return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                    format!("auth failed ({code})"),
+                ))
             }
-            Err(e) => return Err(format!("upload config snapshot: {e}")),
+            Err(e) => {
+                return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                    format!("upload config snapshot: {e}"),
+                ))
+            }
         };
 
         let status = response.status();
         if !(200..300).contains(&status) {
-            return Err(format!("upload config snapshot: HTTP {status}"));
+            return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                format!("upload config snapshot: HTTP {status}"),
+            ));
         }
 
         Ok(())
@@ -794,6 +815,47 @@ fn extract_href_filename(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config_sync::{ConfigSyncError, MAX_CONFIG_SNAPSHOT_BYTES};
+    use crate::services::backends::ConfigSnapshotBackend;
+
+    fn webdav_backend(address: &str) -> WebDAVBackend {
+        WebDAVBackend::new(BackendConfig {
+            id: "test".into(),
+            enabled: true,
+            backend_type: "webdav".into(),
+            name: "test".into(),
+            folder_path: String::new(),
+            device_name: String::new(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: format!("http://{address}"),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        })
+    }
+
+    /// Accept a single connection, assert the request method, and reply with
+    /// the given raw response bytes.
+    fn serve_once(
+        expect_method: &'static str,
+        response: Vec<u8>,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let read = std::io::Read::read(&mut stream, &mut request).unwrap();
+            let request_text = String::from_utf8_lossy(&request[..read]);
+            assert!(request_text.starts_with(expect_method));
+            std::io::Write::write_all(&mut stream, &response).unwrap();
+        });
+        (address, server)
+    }
 
     #[test]
     fn split_url_path_keeps_webdav_segments() {
@@ -883,5 +945,52 @@ mod tests {
         assert!(require_committed_write(201, "payload").is_ok());
         assert!(require_committed_write(204, "payload").is_ok());
         assert!(require_committed_write(202, "payload").is_err());
+    }
+
+    #[test]
+    fn config_snapshot_download_content_length_over_limit_reports_too_large() {
+        let (address, server) = serve_once(
+            "GET",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 99999999\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        let backend = webdav_backend(&address.to_string());
+        let result = backend.download_config_snapshot(1024);
+        server.join().unwrap();
+        assert!(matches!(result, Err(ConfigSyncError::TooLarge)));
+    }
+
+    #[test]
+    fn config_snapshot_download_body_over_limit_reports_too_large() {
+        let mut response = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+        response.extend_from_slice(&vec![b'x'; (MAX_CONFIG_SNAPSHOT_BYTES as usize) + 1]);
+        let (address, server) = serve_once("GET", response);
+        let backend = webdav_backend(&address.to_string());
+        let result = backend.download_config_snapshot(MAX_CONFIG_SNAPSHOT_BYTES);
+        server.join().unwrap();
+        assert!(matches!(result, Err(ConfigSyncError::TooLarge)));
+    }
+
+    #[test]
+    fn config_snapshot_download_missing_reports_none() {
+        let (address, server) = serve_once(
+            "GET",
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        let backend = webdav_backend(&address.to_string());
+        let result = backend.download_config_snapshot(1024);
+        server.join().unwrap();
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn config_snapshot_upload_accepts_created_response() {
+        let (address, server) = serve_once(
+            "PUT",
+            b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        let backend = webdav_backend(&address.to_string());
+        let result = backend.upload_config_snapshot(b"{}");
+        server.join().unwrap();
+        assert!(result.is_ok());
     }
 }

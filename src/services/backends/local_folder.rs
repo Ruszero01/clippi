@@ -812,43 +812,61 @@ impl LocalFolderBackend {
 }
 
 impl crate::services::backends::ConfigSnapshotBackend for LocalFolderBackend {
-    fn download_config_snapshot(&self, max_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+    fn download_config_snapshot(
+        &self,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>, crate::core::config_sync::ConfigSyncError> {
         let path = self.config_sync_path();
         let file = match std::fs::File::open(&path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(format!("open {}: {e}", path.display())),
+            Err(e) => {
+                return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                    format!("open {}: {e}", path.display()),
+                ))
+            }
         };
         // Bound the read at the source so a file that grows or is replaced
         // between open and read cannot exceed the limit.
         let mut body = Vec::new();
         file.take(max_bytes + 1)
             .read_to_end(&mut body)
-            .map_err(|e| format!("read {}: {e}", path.display()))?;
+            .map_err(|e| {
+                crate::core::config_sync::ConfigSyncError::Transport(format!(
+                    "read {}: {e}",
+                    path.display()
+                ))
+            })?;
         if body.len() as u64 > max_bytes {
-            return Err(format!(
-                "config snapshot too large: {} bytes (limit {})",
-                body.len(),
-                max_bytes
-            ));
+            return Err(crate::core::config_sync::ConfigSyncError::TooLarge);
         }
         Ok(Some(body))
     }
 
-    fn upload_config_snapshot(&self, data: &[u8]) -> Result<(), String> {
+    fn upload_config_snapshot(
+        &self,
+        data: &[u8],
+    ) -> Result<(), crate::core::config_sync::ConfigSyncError> {
         let path = self.config_sync_path();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                crate::core::config_sync::ConfigSyncError::Transport(format!(
+                    "create dir {}: {e}",
+                    parent.display()
+                ))
+            })?;
         }
         let tmp = path.with_extension(format!("json.tmp.{}", crate::core::settings::generate_id()));
-        std::fs::write(&tmp, data).map_err(|e| format!("write temp {}: {e}", tmp.display()))?;
+        std::fs::write(&tmp, data).map_err(|e| {
+            crate::core::config_sync::ConfigSyncError::Transport(format!(
+                "write temp {}: {e}",
+                tmp.display()
+            ))
+        })?;
         if let Err(e) = crate::services::file_ops::replace_file(&tmp, &path) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(format!(
-                "replace {} -> {}: {e}",
-                tmp.display(),
-                path.display()
+            return Err(crate::core::config_sync::ConfigSyncError::Transport(
+                format!("replace {} -> {}: {e}", tmp.display(), path.display()),
             ));
         }
         Ok(())
@@ -1357,5 +1375,76 @@ mod transfer_tests {
             .find(|existing| existing.hash == newer.hash)
             .unwrap();
         assert!(!stored.pinned);
+    }
+}
+
+#[cfg(test)]
+mod config_sync_tests {
+    use super::*;
+    use crate::core::config_sync::{ConfigSyncError, MAX_CONFIG_SNAPSHOT_BYTES};
+    use crate::services::backends::ConfigSnapshotBackend;
+
+    fn temp_backend(label: &str) -> (PathBuf, LocalFolderBackend) {
+        let root = std::env::temp_dir().join(format!(
+            "clippi-local-config-sync-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let backend = LocalFolderBackend::new(BackendConfig {
+            id: label.into(),
+            enabled: true,
+            backend_type: "local_folder".into(),
+            name: label.into(),
+            folder_path: root.to_string_lossy().into_owned(),
+            device_name: label.into(),
+            last_sync_at: String::new(),
+            last_item_count: 0,
+            last_tag_count: 0,
+            sync_interval_secs: None,
+            webdav_url: String::new(),
+            webdav_root_url: String::new(),
+            webdav_path: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+        });
+        (root, backend)
+    }
+
+    #[test]
+    fn config_snapshot_upload_then_download_roundtrips_bytes() {
+        let (_root, backend) = temp_backend("roundtrip");
+        let data = br#"{"schema_version":1}"#.to_vec();
+        backend.upload_config_snapshot(&data).unwrap();
+        assert_eq!(backend.download_config_snapshot(1024).unwrap(), Some(data));
+    }
+
+    #[test]
+    fn config_snapshot_download_missing_reports_none() {
+        let (_root, backend) = temp_backend("missing");
+        assert!(backend.download_config_snapshot(1024).unwrap().is_none());
+    }
+
+    #[test]
+    fn config_snapshot_download_over_limit_reports_too_large() {
+        let (_root, backend) = temp_backend("oversized");
+        let big = vec![b'x'; (MAX_CONFIG_SNAPSHOT_BYTES as usize) + 1];
+        std::fs::write(backend.config_sync_path(), &big).unwrap();
+        assert!(matches!(
+            backend.download_config_snapshot(MAX_CONFIG_SNAPSHOT_BYTES),
+            Err(ConfigSyncError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn config_snapshot_download_unreadable_file_reports_transport() {
+        // A directory cannot be read as a file; must surface as Transport,
+        // not TooLarge or a panic.
+        let (_root, backend) = temp_backend("unreadable");
+        std::fs::create_dir_all(backend.config_sync_path()).unwrap();
+        assert!(matches!(
+            backend.download_config_snapshot(1024),
+            Err(ConfigSyncError::Transport(_))
+        ));
     }
 }

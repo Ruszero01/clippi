@@ -142,7 +142,7 @@ fn do_upload(settings: &AppSettings, backend: &dyn ConfigSnapshotBackend) -> Con
 
     match backend.upload_config_snapshot(&json) {
         Ok(()) => ConfigSyncResult::Uploaded,
-        Err(msg) => ConfigSyncResult::Error(ConfigSyncError::Transport(msg)),
+        Err(e) => ConfigSyncResult::Error(e),
     }
 }
 
@@ -150,11 +150,118 @@ fn do_download(backend: &dyn ConfigSnapshotBackend) -> ConfigSyncResult {
     let raw = match backend.download_config_snapshot(MAX_CONFIG_SNAPSHOT_BYTES) {
         Ok(Some(data)) => data,
         Ok(None) => return ConfigSyncResult::Error(ConfigSyncError::RemoteNotFound),
-        Err(msg) => return ConfigSyncResult::Error(ConfigSyncError::Transport(msg)),
+        Err(e) => return ConfigSyncResult::Error(e),
     };
 
     match ConfigSnapshot::from_slice(&raw) {
         Ok(snapshot) => ConfigSyncResult::Downloaded(Box::new(snapshot)),
         Err(e) => ConfigSyncResult::Error(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Scripted backend that returns pre-configured results without touching
+    /// the filesystem or network.
+    struct FakeBackend {
+        download: Result<Option<Vec<u8>>, ConfigSyncError>,
+        upload: Result<(), ConfigSyncError>,
+    }
+
+    impl ConfigSnapshotBackend for FakeBackend {
+        fn download_config_snapshot(
+            &self,
+            _max_bytes: u64,
+        ) -> Result<Option<Vec<u8>>, ConfigSyncError> {
+            self.download.clone()
+        }
+
+        fn upload_config_snapshot(&self, _data: &[u8]) -> Result<(), ConfigSyncError> {
+            self.upload.clone()
+        }
+
+        fn backend_name(&self) -> String {
+            "fake".into()
+        }
+    }
+
+    fn valid_snapshot_bytes() -> Vec<u8> {
+        ConfigSnapshot::from_local(&AppSettings::default(), "test")
+            .to_vec()
+            .unwrap()
+    }
+
+    #[test]
+    fn download_backend_oversized_error_is_not_remapped_to_transport() {
+        let backend = FakeBackend {
+            download: Err(ConfigSyncError::TooLarge),
+            upload: Ok(()),
+        };
+        assert!(matches!(
+            do_download(&backend),
+            ConfigSyncResult::Error(ConfigSyncError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn download_missing_snapshot_reports_remote_not_found() {
+        let backend = FakeBackend {
+            download: Ok(None),
+            upload: Ok(()),
+        };
+        assert!(matches!(
+            do_download(&backend),
+            ConfigSyncResult::Error(ConfigSyncError::RemoteNotFound)
+        ));
+    }
+
+    #[test]
+    fn download_valid_snapshot_is_delivered() {
+        let backend = FakeBackend {
+            download: Ok(Some(valid_snapshot_bytes())),
+            upload: Ok(()),
+        };
+        assert!(matches!(
+            do_download(&backend),
+            ConfigSyncResult::Downloaded(_)
+        ));
+    }
+
+    #[test]
+    fn download_invalid_json_reports_invalid_snapshot() {
+        let backend = FakeBackend {
+            download: Ok(Some(b"not json".to_vec())),
+            upload: Ok(()),
+        };
+        assert!(matches!(
+            do_download(&backend),
+            ConfigSyncResult::Error(ConfigSyncError::InvalidSnapshot(_))
+        ));
+    }
+
+    #[test]
+    fn upload_success_reports_uploaded() {
+        let backend = FakeBackend {
+            download: Ok(None),
+            upload: Ok(()),
+        };
+        assert!(matches!(
+            do_upload(&AppSettings::default(), &backend),
+            ConfigSyncResult::Uploaded
+        ));
+    }
+
+    #[test]
+    fn upload_backend_error_preserves_error_kind() {
+        let backend = FakeBackend {
+            download: Ok(None),
+            upload: Err(ConfigSyncError::Transport("boom".into())),
+        };
+        assert!(matches!(
+            do_upload(&AppSettings::default(), &backend),
+            ConfigSyncResult::Error(ConfigSyncError::Transport(msg)) if msg == "boom"
+        ));
     }
 }
