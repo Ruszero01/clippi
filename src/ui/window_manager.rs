@@ -332,6 +332,30 @@ pub enum WinVTakeoverStatus {
     RegistryError,
 }
 
+/// Master switch for macOS hidden-surface compaction (doc §8.3 rollback).
+/// When enabled, hidden windows are resized to 1×1 so GPUI's MetalRenderer
+/// drops its large drawable-sized intermediate textures; when disabled, the
+/// previous `orderOut + release_memory` behavior is kept unchanged.
+#[cfg(target_os = "macos")]
+const MACOS_SURFACE_COMPACTION_ENABLED: bool = true;
+
+/// Saved state needed to restore a macOS window after hidden-surface
+/// compaction (doc §3.1). Pure data — no Objective-C objects.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct MacosCompactedWindowState {
+    /// Logical content size captured before compaction, in points.
+    content_size: (f64, f64),
+    /// Original content minimum size, restored before un-compacting.
+    content_min_size: (f64, f64),
+    /// Geometry confirmed before compaction, for shutdown persistence (doc §4.4).
+    saved_geometry: (i32, i32, f32, f32),
+    /// Generation of the latest compact/restore operation for this window.
+    /// Async tasks compare it with `WindowManager::surface_generation` so a
+    /// stale operation cannot mutate a newer window state (doc §4.1).
+    generation: u64,
+}
+
 /// Unified window manager entity.
 ///
 /// Owns the window lifecycle and all cross-service polling. Created once
@@ -390,6 +414,33 @@ pub struct WindowManager {
     last_system_dpi: u32,
     #[cfg(target_os = "macos")]
     ns_window: isize,
+    /// GPUI handle for the main window — needed to resize through the GPUI
+    /// path so the MetalRenderer rebuilds its drawable-sized resources.
+    #[cfg(target_os = "macos")]
+    main_window: Option<AnyWindowHandle>,
+    /// Non-None while the main window is hidden and compacted to 1×1.
+    #[cfg(target_os = "macos")]
+    main_compacted_state: Option<MacosCompactedWindowState>,
+    /// Non-None while the Quick Paste window is hidden and compacted to 1×1.
+    #[cfg(target_os = "macos")]
+    quick_compacted_state: Option<MacosCompactedWindowState>,
+    /// Bumped on every compact/restore so stale async surface tasks abort.
+    #[cfg(target_os = "macos")]
+    surface_generation: u64,
+    /// Set once when a restore poll times out; disables further compaction so
+    /// a broken restore path can never lock the user out of the window.
+    #[cfg(target_os = "macos")]
+    macos_compaction_disabled: bool,
+    /// Keeps the pending compaction confirmation tasks alive (dropping a
+    /// `Task` cancels it).
+    #[cfg(target_os = "macos")]
+    _main_compact_task: Option<Task<()>>,
+    #[cfg(target_os = "macos")]
+    _quick_compact_task: Option<Task<()>>,
+    #[cfg(target_os = "macos")]
+    _main_restore_task: Option<Task<()>>,
+    #[cfg(target_os = "macos")]
+    _quick_restore_task: Option<Task<()>>,
     quick_window: Option<AnyWindowHandle>,
     quick_view: Option<Entity<QuickPasteView>>,
     quick_visible: bool,
@@ -511,6 +562,24 @@ impl WindowManager {
             last_system_dpi: 0,
             #[cfg(target_os = "macos")]
             ns_window: 0,
+            #[cfg(target_os = "macos")]
+            main_window: None,
+            #[cfg(target_os = "macos")]
+            main_compacted_state: None,
+            #[cfg(target_os = "macos")]
+            quick_compacted_state: None,
+            #[cfg(target_os = "macos")]
+            surface_generation: 0,
+            #[cfg(target_os = "macos")]
+            macos_compaction_disabled: false,
+            #[cfg(target_os = "macos")]
+            _main_compact_task: None,
+            #[cfg(target_os = "macos")]
+            _quick_compact_task: None,
+            #[cfg(target_os = "macos")]
+            _main_restore_task: None,
+            #[cfg(target_os = "macos")]
+            _quick_restore_task: None,
             quick_window: None,
             quick_view: None,
             quick_visible: false,
@@ -1638,7 +1707,10 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            if self.ns_window == 0 {
+            // Never read geometry from a compacted (1×1) window — persist only
+            // pre-compaction geometry (doc §4.2). `prepare_shutdown` restores
+            // the saved values when exiting in compacted state.
+            if self.ns_window == 0 || self.main_compacted_state.is_some() {
                 return;
             }
             let Some(mtm) = objc2::MainThreadMarker::new() else {
@@ -1681,7 +1753,22 @@ impl WindowManager {
     /// Prepare for graceful shutdown: save geometry, flush WAL,
     /// release platform resources.
     fn prepare_shutdown(&mut self, cx: &mut Context<Self>) {
-        self.capture_window_geometry(cx);
+        #[cfg(target_os = "macos")]
+        if let Some(state) = &self.main_compacted_state {
+            // doc §4.4: never persist the compacted 1×1 geometry — reuse the
+            // pre-compaction capture instead of re-reading the window.
+            let (x, y, w, h) = state.saved_geometry;
+            self.saved_x = x;
+            self.saved_y = y;
+            self.saved_w = w;
+            self.saved_h = h;
+        } else {
+            self.capture_window_geometry(cx);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.capture_window_geometry(cx);
+        }
         let (sx, sy, sw, sh) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
         self.state.update(cx, |state, _cx| {
             if let Err(e) = state.db.checkpoint() {
@@ -1966,11 +2053,17 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            if let Some((x, y)) = self.calculate_position() {
-                self.position_macos_window(x, y);
+            if self.main_compacted_state.is_some() {
+                // Restore the full size before making the window visible to
+                // avoid a 1×1 flash (doc §3.3).
+                self.restore_main_macos_window(cx);
+            } else {
+                if let Some((x, y)) = self.calculate_position() {
+                    self.position_macos_window(x, y);
+                }
+                cx.activate(true);
+                self.activate_macos_window();
             }
-            cx.activate(true);
-            self.activate_macos_window();
         }
 
         cx.notify();
@@ -2333,6 +2426,14 @@ impl WindowManager {
     /// objects synchronously on `ReleaseUiResources`, and the pressure
     /// relief is deferred to the next app update to also cover any
     /// render-side drops.
+    ///
+    /// With macOS surface compaction the compaction confirmation task runs a
+    /// *second* trim strictly after the hidden window's renderer has
+    /// processed the 1×1 resize (doc §3.5, `compact_main_macos_window` /
+    /// `compact_quick_macos_window`). The deferred trim here stays as a
+    /// fallback so paths that never compact (silent start, compaction
+    /// disabled) still release allocator pages. The two calls are not in the
+    /// same call stack and both are idempotent hints.
     pub fn release_memory(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _cx| state.clear_items());
         // Synchronously release list items + image caches in subscribers.
@@ -2389,8 +2490,14 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
+            // Cancel any in-flight restore so it cannot order the window
+            // front after this hide (doc §4.1).
+            self._main_restore_task = None;
             self.capture_window_geometry(cx);
             self.hide_macos_window();
+            if MACOS_SURFACE_COMPACTION_ENABLED && !self.macos_compaction_disabled {
+                self.compact_main_macos_window(cx);
+            }
         }
 
         self.visible = false;
@@ -2457,8 +2564,14 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            self.position_quick_macos_window(x, y, quick_h);
-            self.show_quick_macos_window();
+            if self.quick_compacted_state.is_some() {
+                // Restore the minimum size and dynamic height, then confirm
+                // the resize before ordering front (doc §3.4).
+                self.restore_quick_macos_window(x, y, quick_h, cx);
+            } else {
+                self.position_quick_macos_window(x, y, quick_h);
+                self.show_quick_macos_window();
+            }
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -2562,7 +2675,13 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
+            // A defensive Quick Paste restore poll may still be pending when
+            // the user dismisses and immediately reopens the popup.
+            self._quick_restore_task = None;
             self.hide_quick_macos_window();
+            if MACOS_SURFACE_COMPACTION_ENABLED && !self.macos_compaction_disabled {
+                self.compact_quick_macos_window(cx);
+            }
         }
     }
 
@@ -2953,6 +3072,467 @@ impl WindowManager {
                 layer.setMasksToBounds(true);
             }
         }
+    }
+
+    /// Store the GPUI handle for the main window so hidden-surface compaction
+    /// can resize through the GPUI path (doc §3.2).
+    #[cfg(target_os = "macos")]
+    pub fn set_main_window(&mut self, handle: AnyWindowHandle) {
+        self.main_window = Some(handle);
+    }
+
+    /// Read the current content size (in logical points) of a macOS window.
+    /// Mirrors GPUI's own `content_size()` implementation
+    /// (`NSView::frame(contentView()).size`), so polling this is equivalent to
+    /// asking GPUI whether its resize landed.
+    #[cfg(target_os = "macos")]
+    fn macos_window_content_size(&self, ns_window: isize) -> Option<(f64, f64)> {
+        if ns_window == 0 {
+            return None;
+        }
+        let _mtm = objc2::MainThreadMarker::new()?;
+        // SAFETY: `ns_window` is one of our own NSWindow pointers, alive for
+        // the process lifetime; the pointer is only used on the main thread.
+        let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
+        let content_view = window.contentView()?;
+        let size = objc2_app_kit::NSView::frame(&content_view).size;
+        Some((size.width, size.height))
+    }
+
+    /// True when the window content size matches `(w, h)` within 1 logical
+    /// pixel (doc §3.3 tolerance).
+    #[cfg(target_os = "macos")]
+    fn macos_window_content_size_is(&self, ns_window: isize, w: f64, h: f64) -> bool {
+        self.macos_window_content_size(ns_window)
+            .is_some_and(|(cw, ch)| (cw - w).abs() <= 1.0 && (ch - h).abs() <= 1.0)
+    }
+
+    /// Compact the hidden main window to 1×1 so GPUI's MetalRenderer drops its
+    /// large drawable-sized intermediate textures (doc §3.2). The resize is
+    /// requested through the GPUI path; a background task confirms it reached
+    /// the renderer and only then runs the allocator pressure relief (doc §3.5).
+    #[cfg(target_os = "macos")]
+    fn compact_main_macos_window(&mut self, cx: &mut Context<Self>) {
+        let Some(window_handle) = self.main_window else {
+            return;
+        };
+        if self.ns_window == 0 {
+            return;
+        }
+        let Some(_mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        // SAFETY: `self.ns_window` is our own NSWindow, alive for the process
+        // lifetime; used only on the main thread.
+        let window = unsafe { &*(self.ns_window as *const objc2_app_kit::NSWindow) };
+
+        // Keep the original restore target while re-compacting a window whose
+        // asynchronous restore was interrupted by another hide. Reading the
+        // current frame in that state could capture 1×1 or a partially restored
+        // size and corrupt both the next show and shutdown persistence.
+        let previous_state = self.main_compacted_state;
+        let (content_w, content_h, min_size, saved_geometry) = if let Some(state) = previous_state {
+            (
+                state.content_size.0,
+                state.content_size.1,
+                objc2_foundation::NSSize::new(state.content_min_size.0, state.content_min_size.1),
+                state.saved_geometry,
+            )
+        } else {
+            let Some((content_w, content_h)) = self.macos_window_content_size(self.ns_window)
+            else {
+                return;
+            };
+            if content_w <= 1.0 && content_h <= 1.0 {
+                return;
+            }
+            (
+                content_w,
+                content_h,
+                window.contentMinSize(),
+                (self.saved_x, self.saved_y, self.saved_w, self.saved_h),
+            )
+        };
+
+        self.surface_generation = self.surface_generation.wrapping_add(1);
+        let generation = self.surface_generation;
+        self.main_compacted_state = Some(MacosCompactedWindowState {
+            content_size: (content_w, content_h),
+            content_min_size: (min_size.width, min_size.height),
+            saved_geometry,
+            generation,
+        });
+
+        // Temporarily relax the minimum size so AppKit doesn't clamp the
+        // shrink (doc §4.3).
+        window.setContentMinSize(objc2_foundation::NSSize::new(1.0, 1.0));
+        if cx
+            .update_window(window_handle, |_view, window, _cx| {
+                window.resize(size(px(1.0), px(1.0)));
+            })
+            .is_err()
+        {
+            // Resize request failed — restore the minimum size and drop the
+            // new state. Preserve an older state if this was a re-compaction
+            // of an interrupted restore; it still contains the only safe
+            // full-size geometry and restore target.
+            window.setContentMinSize(min_size);
+            self.main_compacted_state = previous_state;
+            return;
+        }
+
+        log::debug!("surface compact: main {content_w:.0}×{content_h:.0} → 1×1 (gen {generation})");
+        let ns_window_ptr = self.ns_window;
+        self._main_compact_task = Some(cx.spawn(async move |weak_self, cx| {
+            let deadline = Instant::now() + Duration::from_millis(100);
+            loop {
+                Timer::after(Duration::from_millis(10)).await;
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let (alive, still_hidden, reached) = this
+                    .update(cx, |wm, _cx| {
+                        let alive = wm
+                            .main_compacted_state
+                            .as_ref()
+                            .is_some_and(|s| s.generation == generation)
+                            && wm.surface_generation == generation;
+                        let reached = wm.macos_window_content_size_is(ns_window_ptr, 1.0, 1.0);
+                        (alive, !wm.visible, reached)
+                    })
+                    .unwrap_or((false, false, false));
+                if !alive || !still_hidden {
+                    return; // superseded or re-shown before the shrink landed
+                }
+                if reached {
+                    log::debug!("surface compact: main 1×1 resize confirmed (gen {generation})");
+                    crate::platform::util::trim_process_working_set();
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    log::warn!("surface compact: main resize to 1×1 not confirmed within 100ms");
+                    return;
+                }
+            }
+        }));
+    }
+
+    /// Restore the main window from its compacted 1×1 surface before it is
+    /// shown again (doc §3.3). The restore is confirmed by polling the native
+    /// content size — the GPUI resize has no completion callback — and the
+    /// window is only ordered front afterwards.
+    #[cfg(target_os = "macos")]
+    fn restore_main_macos_window(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.main_compacted_state else {
+            return;
+        };
+        // Cancel and invalidate the shrink confirmation, but retain the saved
+        // compacted state until the resize is confirmed and the window is
+        // ordered front. Geometry polling and shutdown must continue to ignore
+        // the native frame while this asynchronous restore is in flight.
+        self._main_compact_task = None;
+        self.surface_generation = self.surface_generation.wrapping_add(1);
+        let restore_generation = self.surface_generation;
+        if let Some(compacted) = self.main_compacted_state.as_mut() {
+            compacted.generation = restore_generation;
+        }
+
+        let ns_window = self.ns_window;
+        if ns_window == 0 {
+            self.macos_compaction_disabled = true;
+            log::warn!("surface restore: main NSWindow unavailable; compaction disabled");
+            return;
+        }
+        let Some(_mtm) = objc2::MainThreadMarker::new() else {
+            self.macos_compaction_disabled = true;
+            log::warn!("surface restore: main-thread marker unavailable; compaction disabled");
+            return;
+        };
+        // SAFETY: our own NSWindow pointer, main thread only.
+        let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
+        // Restore the minimum size first so the resize below isn't clamped
+        // (doc §4.3).
+        window.setContentMinSize(objc2_foundation::NSSize::new(
+            state.content_min_size.0,
+            state.content_min_size.1,
+        ));
+
+        let target = state.content_size;
+        let target_w = target.0;
+        let target_h = target.1;
+        // Request the restore through the GPUI resize path so the renderer
+        // rebuilds drawable-sized resources (doc §2.3).
+        let requested = self.main_window.is_some_and(|handle| {
+            cx.update_window(handle, |_view, window, _cx| {
+                window.resize(size(px(target_w as f32), px(target_h as f32)));
+            })
+            .is_ok()
+        });
+        if !requested {
+            // Fallback: set the content size synchronously via AppKit.
+            window.setContentSize(objc2_foundation::NSSize::new(target_w, target_h));
+        }
+        log::debug!("surface restore: main → {target_w:.0}×{target_h:.0}");
+
+        self._main_restore_task = Some(cx.spawn(async move |weak_self, cx| {
+            let deadline = Instant::now() + Duration::from_millis(100);
+            loop {
+                Timer::after(Duration::from_millis(10)).await;
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let (active, still_visible, reached) = this
+                    .update(cx, |wm, _cx| {
+                        (
+                            wm.surface_generation == restore_generation
+                                && wm
+                                    .main_compacted_state
+                                    .as_ref()
+                                    .is_some_and(|s| s.generation == restore_generation),
+                            wm.visible,
+                            wm.macos_window_content_size_is(ns_window, target_w, target_h),
+                        )
+                    })
+                    .unwrap_or((false, false, false));
+                if !active || !still_visible {
+                    return; // superseded or hidden again while restoring
+                }
+                if reached {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    // Never leave the user unable to open the window: force
+                    // the size synchronously and disable further compaction.
+                    let _ = this.update(cx, |wm, _cx| {
+                        if wm.surface_generation != restore_generation
+                            || wm
+                                .main_compacted_state
+                                .as_ref()
+                                .is_none_or(|s| s.generation != restore_generation)
+                        {
+                            return;
+                        }
+                        wm.macos_compaction_disabled = true;
+                        let Some(_mtm) = objc2::MainThreadMarker::new() else {
+                            return;
+                        };
+                        // SAFETY: our own NSWindow pointer, main thread only.
+                        let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
+                        window.setContentSize(objc2_foundation::NSSize::new(target_w, target_h));
+                    });
+                    log::warn!(
+                        "surface restore: main resize not confirmed within 100ms; \
+                         compaction disabled (gen {restore_generation})"
+                    );
+                    break;
+                }
+            }
+
+            // Size reached (or was forced) — show the window now.
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let shown = this
+                .update(cx, |wm, cx| {
+                    if !wm.visible
+                        || wm.surface_generation != restore_generation
+                        || wm
+                            .main_compacted_state
+                            .as_ref()
+                            .is_none_or(|s| s.generation != restore_generation)
+                    {
+                        return false;
+                    }
+                    // Clear the guard only in the same update that positions
+                    // and shows the confirmed full-size window. This prevents
+                    // the 200 ms geometry poll from ever observing an in-flight
+                    // 1×1 restore as a normal visible window.
+                    wm.main_compacted_state = None;
+                    if let Some((x, y)) = wm.calculate_position() {
+                        wm.position_macos_window(x, y);
+                    }
+                    // Keep the existing activation semantics of `show_and_focus`
+                    // (doc §3.3): the app must be active before ordering front,
+                    // otherwise keyboard events keep going to the previous app.
+                    cx.activate(true);
+                    wm.activate_macos_window();
+                    true
+                })
+                .unwrap_or(false);
+            if shown {
+                log::debug!("surface restore: main window shown");
+            }
+        }));
+    }
+
+    /// Compact the hidden Quick Paste window to 1×1 (doc §3.4), mirroring
+    /// `compact_main_macos_window`. The dynamic height is always re-applied by
+    /// `position_quick_macos_window` on the next show, so only the minimum
+    /// size needs to be restored then.
+    #[cfg(target_os = "macos")]
+    fn compact_quick_macos_window(&mut self, cx: &mut Context<Self>) {
+        let Some(window_handle) = self.quick_window else {
+            return;
+        };
+        if self.quick_ns_window == 0 || self.quick_compacted_state.is_some() {
+            return;
+        }
+        let Some((content_w, content_h)) = self.macos_window_content_size(self.quick_ns_window)
+        else {
+            return;
+        };
+        if content_w <= 1.0 && content_h <= 1.0 {
+            return; // already minimal
+        }
+        let Some(_mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        // SAFETY: our own NSWindow pointer, main thread only.
+        let window = unsafe { &*(self.quick_ns_window as *const objc2_app_kit::NSWindow) };
+        let min_size = window.contentMinSize();
+
+        self.surface_generation = self.surface_generation.wrapping_add(1);
+        let generation = self.surface_generation;
+        self.quick_compacted_state = Some(MacosCompactedWindowState {
+            content_size: (content_w, content_h),
+            content_min_size: (min_size.width, min_size.height),
+            // Quick Paste geometry is never persisted.
+            saved_geometry: (0, 0, 0.0, 0.0),
+            generation,
+        });
+        window.setContentMinSize(objc2_foundation::NSSize::new(1.0, 1.0));
+        if cx
+            .update_window(window_handle, |_view, window, _cx| {
+                window.resize(size(px(1.0), px(1.0)));
+            })
+            .is_err()
+        {
+            window.setContentMinSize(min_size);
+            self.quick_compacted_state = None;
+            return;
+        }
+
+        log::debug!(
+            "surface compact: quick {content_w:.0}×{content_h:.0} → 1×1 (gen {generation})"
+        );
+        let ns_window_ptr = self.quick_ns_window;
+        self._quick_compact_task = Some(cx.spawn(async move |weak_self, cx| {
+            let deadline = Instant::now() + Duration::from_millis(100);
+            loop {
+                Timer::after(Duration::from_millis(10)).await;
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let (alive, still_hidden, reached) = this
+                    .update(cx, |wm, _cx| {
+                        let alive = wm
+                            .quick_compacted_state
+                            .as_ref()
+                            .is_some_and(|s| s.generation == generation)
+                            && wm.surface_generation == generation;
+                        let reached = wm.macos_window_content_size_is(ns_window_ptr, 1.0, 1.0);
+                        (alive, !wm.quick_visible, reached)
+                    })
+                    .unwrap_or((false, false, false));
+                if !alive || !still_hidden {
+                    return; // superseded or re-shown before the shrink landed
+                }
+                if reached {
+                    log::debug!("surface compact: quick 1×1 resize confirmed (gen {generation})");
+                    crate::platform::util::trim_process_working_set();
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    log::warn!("surface compact: quick resize to 1×1 not confirmed within 100ms");
+                    return;
+                }
+            }
+        }));
+    }
+
+    /// Restore the Quick Paste window before showing it (doc §3.4).
+    /// `position_quick_macos_window` applies the size synchronously via
+    /// AppKit, so the confirmation is usually immediate; only a pathological
+    /// case falls back to a short poll.
+    #[cfg(target_os = "macos")]
+    fn restore_quick_macos_window(&mut self, x: i32, y: i32, height: f32, cx: &mut Context<Self>) {
+        if self.quick_ns_window == 0 {
+            // Window unavailable — drop the state so the next show uses the
+            // normal positioning path.
+            self.quick_compacted_state = None;
+            return;
+        }
+        let Some(state) = self.quick_compacted_state.take() else {
+            return;
+        };
+        // Invalidate stale compaction tasks.
+        self._quick_compact_task = None;
+        self.surface_generation = self.surface_generation.wrapping_add(1);
+        let restore_generation = self.surface_generation;
+
+        if let Some(_mtm) = objc2::MainThreadMarker::new() {
+            // SAFETY: our own NSWindow pointer, main thread only.
+            let window = unsafe { &*(self.quick_ns_window as *const objc2_app_kit::NSWindow) };
+            window.setContentMinSize(objc2_foundation::NSSize::new(
+                state.content_min_size.0,
+                state.content_min_size.1,
+            ));
+        }
+        self.position_quick_macos_window(x, y, height);
+
+        let target_w = QUICK_WINDOW_WIDTH as f64;
+        let target_h = height as f64;
+        if self.macos_window_content_size_is(self.quick_ns_window, target_w, target_h) {
+            // Synchronous restore confirmed — show immediately.
+            log::debug!("surface restore: quick size confirmed synchronously");
+            self.show_quick_macos_window();
+            return;
+        }
+
+        // Defensive path: poll briefly, then show regardless so the popup can
+        // never be stuck hidden.
+        log::warn!("surface restore: quick size not confirmed synchronously; polling");
+        let ns_window = self.quick_ns_window;
+        self._quick_restore_task = Some(cx.spawn(async move |weak_self, cx| {
+            let deadline = Instant::now() + Duration::from_millis(50);
+            loop {
+                Timer::after(Duration::from_millis(5)).await;
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let decision = this
+                    .update(cx, |wm, _cx| {
+                        if !wm.quick_visible || wm.surface_generation != restore_generation {
+                            return Some(false);
+                        }
+                        if wm.macos_window_content_size_is(ns_window, target_w, target_h) {
+                            Some(true)
+                        } else if Instant::now() >= deadline {
+                            wm.macos_compaction_disabled = true;
+                            log::warn!(
+                                "surface restore: quick resize not confirmed within 50ms; \
+                                 compaction disabled (gen {restore_generation})"
+                            );
+                            Some(true)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(Some(false));
+                match decision {
+                    Some(true) => {
+                        let _ = this.update(cx, |wm, _cx| {
+                            if wm.quick_visible && wm.surface_generation == restore_generation {
+                                wm.show_quick_macos_window();
+                            }
+                        });
+                        return;
+                    }
+                    Some(false) => return,
+                    None => {}
+                }
+            }
+        }));
     }
 
     #[cfg(target_os = "macos")]
@@ -4046,7 +4626,22 @@ impl WindowManager {
 
     /// Release platform resources on shutdown.
     pub fn shutdown(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            // Do not create new compaction tasks while quitting. The existing
+            // tasks capture raw NSWindow pointers and must be cancelled before
+            // GPUI/AppKit starts destroying those windows.
+            self.macos_compaction_disabled = true;
+            self.surface_generation = self.surface_generation.wrapping_add(1);
+        }
         self.hide_quick_window(cx);
+        #[cfg(target_os = "macos")]
+        {
+            self._main_compact_task = None;
+            self._quick_compact_task = None;
+            self._main_restore_task = None;
+            self._quick_restore_task = None;
+        }
         if let Some(ref mut hk) = self.hotkey {
             hk.stop();
         }

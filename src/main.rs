@@ -461,6 +461,14 @@ fn main() {
                             });
                         }
                     }
+                    // GPUI handle for hidden-surface compaction (doc §3.2):
+                    // the compact/restore resize must go through the GPUI path
+                    // so the MetalRenderer rebuilds its drawable-sized
+                    // intermediate textures.
+                    let main_handle = gpui::Window::window_handle(window);
+                    window_manager.update(cx, |wm, _cx| {
+                        wm.set_main_window(main_handle)
+                    });
                 }
 
                 // --- Apply taskbar icon visibility based on settings ---
