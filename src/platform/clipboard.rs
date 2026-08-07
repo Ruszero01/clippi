@@ -12,6 +12,7 @@ use crate::core::types::{
 };
 use crate::platform::source;
 use crate::services::favicon;
+use chrono::Utc;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::collections::hash_map::DefaultHasher;
@@ -258,6 +259,12 @@ fn detect_files(
                     mark_recent_image_file_reference();
                     let mut item =
                         ClipboardItem::new_image(0, &path, hash, iw, ih, source_info.as_ref());
+                    // Capture-time existence evidence: the screenshot tool's
+                    // temp file was observed existing right now. This is the
+                    // basis for later stale cleanup (design §9.2 / Phase 0).
+                    if !is_remote && std::path::Path::new(&path).exists() {
+                        item.existence_observed_at = Utc::now().to_rfc3339();
+                    }
                     if remote_host.is_some() {
                         item.rich_data = RichData {
                             remote_host,
@@ -281,6 +288,16 @@ fn detect_files(
 
                 let mut item =
                     ClipboardItem::new_file(0, &file_data, hash, source_info.as_ref(), total_size);
+                // Capture-time existence evidence: every local path in the
+                // list was observed existing (remote entries are never
+                // probed — those items are protected anyway).
+                let all_local_paths_exist =
+                    entries_with_remote.iter().all(|(entry, remote_host)| {
+                        remote_host.is_some() || std::path::Path::new(&entry.path).exists()
+                    });
+                if all_local_paths_exist {
+                    item.existence_observed_at = Utc::now().to_rfc3339();
+                }
                 if common_remote_host.is_some() {
                     item.rich_data = RichData {
                         remote_host: common_remote_host,
@@ -340,14 +357,19 @@ fn detect_image(
 
             ensure_thumbnail_for_image(file_path.to_str().unwrap_or(""), hash);
 
-            return Some(ClipboardItem::new_image(
+            let mut item = ClipboardItem::new_image(
                 0,
                 file_path.to_str().unwrap_or(""),
                 hash,
                 iw,
                 ih,
                 source_info.as_ref(),
-            ));
+            );
+            // The managed bitmap cache file was just written — this is the
+            // capture-time existence evidence for stale cleanup.
+            item.existence_observed_at = Utc::now().to_rfc3339();
+
+            return Some(item);
         }
     }
     None
@@ -407,6 +429,14 @@ fn detect_text_content(
                 rich.as_ref(),
             );
             item.meta_type = "path".to_string();
+            // Capture-time existence evidence for text path references
+            // (design §5.2 / §9.4): without this, the item can never be
+            // auto-deleted. Remote and foreign paths are never probed.
+            if crate::platform::remote_path::remote_host_label(&text).is_none()
+                && std::path::Path::new(&text).exists()
+            {
+                item.existence_observed_at = Utc::now().to_rfc3339();
+            }
             return Some(item);
         }
 

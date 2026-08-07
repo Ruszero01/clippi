@@ -178,6 +178,84 @@ pub struct ClipboardItem {
     pub meta_type: String, // subtype: "" | "email" | "phone" | "markdown" | "html" | "link" | "path" | "color" | "secret" | "transfer"
     pub custom_hotkey: String,
     pub custom_hotkey_format: String,
+    /// RFC3339 timestamp of the first time this item's source path(s) were
+    /// observed existing at capture time. Empty means "no existence evidence"
+    /// (legacy or never-observed) — such items are never auto-deleted by the
+    /// stale-item cleanup. Local-only field, not part of the sync payload.
+    pub existence_observed_at: String,
+}
+
+/// Four-state classification of a single filesystem path, replacing the old
+/// `bool` ("missing or not") with an explainable result that distinguishes
+/// "definitely missing" from "currently unverifiable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathStatus {
+    /// The path object exists (via `symlink_metadata` — a symlink whose target
+    /// is unavailable still counts as existing).
+    Present { kind: PathObjectKind },
+    /// Platform APIs clearly report the object itself does not exist.
+    DefinitelyMissing,
+    /// Currently unverifiable (I/O error, permission, timeout, ...).
+    Unknown { reason: PathStatusReason },
+    /// Known safe reason that the path must not be auto-deleted.
+    Protected { reason: PathStatusReason },
+}
+
+/// Kind of the filesystem object found at a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathObjectKind {
+    File,
+    Directory,
+    Symlink,
+}
+
+/// Explainable reason behind an `Unknown` or `Protected` status.
+///
+/// The full reason list is defined by the cleanup design (docs/
+/// stale-item-cleanup-design.md §8). Some variants are reserved for later
+/// phases (volume identity, cloud providers, probe budgets, platform path
+/// status modules) and are not yet constructed on every platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum PathStatusReason {
+    /// Path belongs to a foreign platform (e.g. macOS path on Windows).
+    ForeignPlatform,
+    /// No provenance information for the item (legacy or synced record).
+    OriginUnknown,
+    /// The path text was never observed existing at capture time.
+    NeverObservedExisting,
+    /// UNC / mapped drive / NAS / non-local mount.
+    RemotePath,
+    /// Image blob is expected from sync and may be downloaded later.
+    PendingSync,
+    /// Favorite item — never auto-deleted.
+    Favorite,
+    /// Transfer-station item — managed by its own expiry policy.
+    TransferItem,
+    /// Removable / optical / RAM-disk volume. Volume identity is not tracked.
+    RemovableVolume,
+    /// Volume identity changed since capture.
+    VolumeChanged,
+    /// Volume root exists but is currently unreachable (unmounted, offline).
+    VolumeOffline,
+    /// Cloud provider / virtual file provider unavailable.
+    CloudProviderUnavailable,
+    /// Permission denied while probing.
+    PermissionDenied,
+    /// Generic I/O error while probing.
+    IoError,
+    /// Probe exceeded its time budget.
+    ProbeTimeout,
+    /// The symlink object itself still exists (target may be missing).
+    SymlinkExists,
+    /// Unsupported reparse point / unknown tag.
+    UnsupportedReparsePoint,
+    /// Parent directory or trusted source root is unavailable.
+    ParentUnavailable,
+    /// Record-level metadata is malformed (unparseable timestamp, corrupt JSON).
+    InvalidMetadata,
+    /// Auto stale-cleanup is disabled for this platform (e.g. Linux stubs).
+    UnknownPlatform,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -319,6 +397,7 @@ impl ClipboardItem {
             meta_type: String::new(),
             custom_hotkey: String::new(),
             custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
         }
     }
 
@@ -355,6 +434,7 @@ impl ClipboardItem {
             meta_type: String::new(),
             custom_hotkey: String::new(),
             custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
         }
     }
 
@@ -391,6 +471,7 @@ impl ClipboardItem {
             meta_type: String::new(),
             custom_hotkey: String::new(),
             custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
         }
     }
 

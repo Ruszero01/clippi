@@ -39,6 +39,11 @@ const LIST_RICH_HTML_LIMIT: usize = 4096;
 const LIST_RICH_AUX_LIMIT: usize = 2048;
 const LIST_NOTE_LIMIT: usize = 2048;
 
+/// Upper bound for a sane consecutive-missing observation count. Values
+/// outside `0..=MAX` (e.g. a corrupt negative i64 cast to u32) are treated
+/// as no history at all so they can never satisfy the delete threshold.
+const STALE_OBSERVATION_COUNT_MAX: i64 = 1_000;
+
 pub fn legacy_tag_uid(name: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_OID,
@@ -86,7 +91,7 @@ fn file_icon_cache_key(file_path: &str, is_dir: bool) -> String {
 
 fn item_select_columns() -> String {
     format!(
-        "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format"
+        "id, content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, is_favorite, note, source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format, existence_observed_at"
     )
 }
 
@@ -105,7 +110,7 @@ fn list_item_select_columns() -> String {
                  'remote_host', NULLIF(substr(coalesce(json_extract(rich_data, '$.remote_host'), ''), 1, {LIST_RICH_AUX_LIMIT}), '')
              )
          END,
-         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format"
+         file_data, is_favorite, substr(note, 1, {LIST_NOTE_LIMIT}), source_app_name, CASE WHEN length(source_app_icon) <= {SOURCE_APP_ICON_INLINE_LIMIT} THEN source_app_icon ELSE '' END, image_width, image_height, size, meta_type, custom_hotkey, custom_hotkey_format, existence_observed_at"
     )
 }
 
@@ -197,6 +202,20 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_uf_items_at ON unfavorited_items(unfavorited_at);",
         )?;
 
+        // Local-only stale-item observation state (never synced).
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS stale_item_observations (
+                item_id INTEGER PRIMARY KEY REFERENCES clipboard_items(id) ON DELETE CASCADE,
+                content_hash INTEGER NOT NULL,
+                item_updated_at TEXT NOT NULL,
+                first_missing_at TEXT NOT NULL DEFAULT '',
+                last_checked_at TEXT NOT NULL DEFAULT '',
+                consecutive_missing_count INTEGER NOT NULL DEFAULT 0,
+                last_status TEXT NOT NULL DEFAULT '',
+                last_reason TEXT NOT NULL DEFAULT ''
+            );",
+        )?;
+
         crate::core::migration::run_db_migrations(&self.conn)?;
         Ok(())
     }
@@ -214,14 +233,17 @@ impl Database {
     }
 
     pub fn upsert(&self, item: &ClipboardItem) -> SqlResult<()> {
+        // A local clipboard capture always ends any sync-pending state: the
+        // item now exists locally with a real captured path. (Sync merge uses
+        // insert_sync_item_raw / update_sync_item instead and is unaffected.)
         let changed = self.conn.execute(
-            "UPDATE clipboard_items SET updated_at = ?1, content_type = ?3, image_path = ?4, rich_data = ?5, file_data = ?6, image_width = ?7, image_height = ?8, size = ?9, meta_type = ?10 WHERE content_hash = ?2",
-            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.content_type.as_str(), item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64, item.size, item.meta_type],
+            "UPDATE clipboard_items SET updated_at = ?1, content_type = ?3, image_path = ?4, rich_data = ?5, file_data = ?6, image_width = ?7, image_height = ?8, size = ?9, meta_type = ?10, existence_observed_at = CASE WHEN ?11 = '' THEN existence_observed_at ELSE ?11 END, sync_pending = 0 WHERE content_hash = ?2",
+            params![item.updated_at.to_rfc3339(), item.content_hash as i64, item.content_type.as_str(), item.image_path, item.rich_data, item.file_data, item.image_width as i64, item.image_height as i64, item.size, item.meta_type, item.existence_observed_at],
         )?;
         if changed == 0 {
             self.conn.execute(
-                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, source_app_name, source_app_icon, image_width, image_height, size, meta_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, image_path, rich_data, file_data, source_app_name, source_app_icon, image_width, image_height, size, meta_type, existence_observed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     item.content_type.as_str(),
                     item.full_text,
@@ -237,6 +259,7 @@ impl Database {
                     item.image_height as i64,
                     item.size,
                     item.meta_type,
+                    item.existence_observed_at,
                 ],
             )?;
         }
@@ -399,8 +422,13 @@ impl Database {
     }
 
     pub fn delete_item(&self, id: i64) -> SqlResult<()> {
-        self.conn
-            .execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM stale_item_observations WHERE item_id = ?1",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -836,8 +864,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at,
              rich_data, is_favorite, note, source_app_name, size, meta_type,
-             image_path, image_width, image_height, file_data)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             image_path, image_width, image_height, file_data, sync_pending)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 content_type,
                 item.full_text,
@@ -854,6 +882,7 @@ impl Database {
                 item.image_width,
                 item.image_height,
                 "", // file_data — not synced yet
+                is_image as i32, // sync-owned image: blob may not be downloaded yet
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -879,7 +908,8 @@ impl Database {
         self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_type = ?2, updated_at = ?3,
              rich_data = ?4, is_favorite = ?5, note = ?6, size = ?7, meta_type = ?8,
-             image_path = ?9, image_width = ?10, image_height = ?11
+             image_path = ?9, image_width = ?10, image_height = ?11,
+             sync_pending = CASE WHEN ?13 = 'image' THEN 1 ELSE sync_pending END
              WHERE id = ?12",
             rusqlite::params![
                 item.full_text,
@@ -894,6 +924,7 @@ impl Database {
                 item.image_width,
                 item.image_height,
                 id,
+                item.content_type,
             ],
         )?;
         Ok(())
@@ -1097,13 +1128,29 @@ impl Database {
     }
 
     /// Update image_path for an item identified by content_hash.
-    /// Used after downloading a synced image blob to redirect the path.
+    /// Used after a synced image blob has been confirmed present/downloaded:
+    /// clears the sync-pending flag so the image returns to normal managed
+    /// cleanup rules (design §9.5).
     pub fn set_item_image_path(&self, content_hash: u64, image_path: &str) -> SqlResult<()> {
         self.conn.execute(
-            "UPDATE clipboard_items SET image_path = ?1 WHERE content_hash = ?2",
+            "UPDATE clipboard_items SET image_path = ?1, sync_pending = 0 WHERE content_hash = ?2",
             rusqlite::params![image_path, content_hash as i64],
         )?;
         Ok(())
+    }
+
+    /// Test-only helper: total number of clipboard item rows.
+    #[cfg(test)]
+    pub(crate) fn count_all_items_for_test(&self) -> i64 {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
+            .unwrap_or(0)
+    }
+
+    /// Test-only helper: run an arbitrary SQL batch (e.g. trigger setup).
+    #[cfg(test)]
+    pub(crate) fn execute_batch_for_test(&self, sql: &str) -> rusqlite::Result<()> {
+        self.conn.execute_batch(sql)
     }
 
     /// Collect icon cache filenames referenced by any clipboard item.
@@ -1189,6 +1236,13 @@ impl Database {
             let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
             let ph = placeholders.join(",");
             let params: Vec<rusqlite::types::Value> = chunk.iter().map(|&id| (id).into()).collect();
+            tx.execute(
+                &format!(
+                    "DELETE FROM stale_item_observations WHERE item_id IN ({})",
+                    ph
+                ),
+                rusqlite::params_from_iter(params.iter()),
+            )?;
             tx.execute(
                 &format!("DELETE FROM item_tags WHERE item_id IN ({})", ph),
                 rusqlite::params_from_iter(params.iter()),
@@ -1301,6 +1355,10 @@ impl Database {
             let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
                 .join(",");
+            tx.execute(
+                &format!("DELETE FROM stale_item_observations WHERE item_id IN ({placeholders})"),
+                rusqlite::params_from_iter(chunk.iter()),
+            )?;
             tx.execute(
                 &format!("DELETE FROM item_tags WHERE item_id IN ({placeholders})"),
                 rusqlite::params_from_iter(chunk.iter()),
@@ -1577,10 +1635,17 @@ impl Database {
 
     /// Delete a local item by content_hash (triggered by remote tombstone).
     pub fn delete_item_by_hash(&self, content_hash: u64) -> SqlResult<bool> {
-        let affected = self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM stale_item_observations WHERE item_id IN \
+             (SELECT id FROM clipboard_items WHERE content_hash = ?1)",
+            params![content_hash as i64],
+        )?;
+        let affected = tx.execute(
             "DELETE FROM clipboard_items WHERE content_hash = ?1",
             params![content_hash as i64],
         )?;
+        tx.commit()?;
         Ok(affected > 0)
     }
 
@@ -1838,22 +1903,71 @@ impl Database {
 
     /// Find clipboard items that are candidates for stale-item cleanup.
     /// Returns non-favorite, non-transfer file, native-path, and locally
-    /// captured image items.
-    pub fn find_stale_item_candidates(&self) -> SqlResult<Vec<StaleItemCandidate>> {
+    /// captured image items, together with their current observation state.
+    ///
+    /// Rows whose `updated_at` cannot be parsed are counted and skipped
+    /// instead of failing the whole batch, so one corrupt row cannot disable
+    /// stale cleanup for every other item (see design §5.11).
+    pub fn find_stale_item_candidates(&self) -> SqlResult<(Vec<StaleItemCandidate>, u32)> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content_hash, updated_at, content_type, full_text, image_path, file_data, \
-                    meta_type, source_app_name, source_app_icon, is_favorite \
-             FROM clipboard_items \
-             WHERE is_favorite = 0 \
-               AND meta_type != 'transfer' \
-               AND (content_type = 'file' OR content_type = 'image' OR meta_type = 'path') \
-             ORDER BY id",
+            "SELECT ci.id, ci.content_hash, ci.updated_at, ci.content_type, ci.full_text, \
+                    ci.image_path, ci.file_data, ci.meta_type, ci.is_favorite, \
+                    ci.existence_observed_at, ci.sync_pending, \
+                    obs.content_hash, obs.item_updated_at, obs.first_missing_at, \
+                    obs.last_checked_at, obs.consecutive_missing_count, obs.last_status, \
+                    obs.last_reason \
+             FROM clipboard_items ci \
+             LEFT JOIN stale_item_observations obs ON obs.item_id = ci.id \
+             WHERE ci.is_favorite = 0 \
+               AND ci.meta_type != 'transfer' \
+               AND (ci.content_type = 'file' OR ci.content_type = 'image' OR ci.meta_type = 'path') \
+             ORDER BY ci.id",
         )?;
 
+        let mut skipped: u32 = 0;
         let candidates: Vec<StaleItemCandidate> = stmt
             .query_map([], |row| {
                 let content_type_str: String = row.get(3)?;
-                let is_favorite_int: i32 = row.get(10)?;
+                let is_favorite_int: i32 = row.get(8)?;
+                let observation = match row.get::<_, Option<String>>(13)? {
+                    Some(first_missing_raw) => {
+                        // A corrupt timestamp or an out-of-range missing count
+                        // must not be treated as "long ago / huge count" (that
+                        // would bypass the grace period). Treat the whole
+                        // observation as absent so the counter restarts.
+                        let first_missing_at = first_missing_raw
+                            .parse::<chrono::DateTime<chrono::Utc>>()
+                            .ok();
+                        let item_updated_at = row
+                            .get::<_, Option<String>>(12)?
+                            .unwrap_or_default()
+                            .parse::<chrono::DateTime<chrono::Utc>>()
+                            .ok();
+                        let count_raw = row.get::<_, Option<i64>>(15)?.unwrap_or(0);
+                        let count_ok = (0..=STALE_OBSERVATION_COUNT_MAX).contains(&count_raw);
+                        match (first_missing_at, item_updated_at, count_ok) {
+                            (Some(first_missing_at), Some(item_updated_at), true) => {
+                                Some(crate::core::cache_cleanup::StaleObservation {
+                                    item_id: row.get(0)?,
+                                    content_hash: row.get::<_, Option<i64>>(11)?.unwrap_or(0)
+                                        as u64,
+                                    item_updated_at,
+                                    first_missing_at,
+                                    last_checked_at: row
+                                        .get::<_, Option<String>>(14)?
+                                        .unwrap_or_default()
+                                        .parse::<chrono::DateTime<chrono::Utc>>()
+                                        .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+                                    consecutive_missing_count: count_raw as u32,
+                                    last_status: row.get(16).unwrap_or_default(),
+                                    last_reason: row.get(17).unwrap_or_default(),
+                                })
+                            }
+                            _ => None,
+                        }
+                    }
+                    None => None,
+                };
                 Ok(StaleItemCandidate {
                     id: row.get(0)?,
                     content_hash: row.get::<_, i64>(1)? as u64,
@@ -1873,14 +1987,57 @@ impl Database {
                     image_path: row.get(5).unwrap_or_default(),
                     file_data: row.get(6).unwrap_or_default(),
                     meta_type: row.get(7).unwrap_or_default(),
-                    source_app_name: row.get(8).unwrap_or_default(),
-                    source_app_icon: row.get(9).unwrap_or_default(),
                     is_favorite: is_favorite_int != 0,
+                    existence_observed_at: row.get(9).unwrap_or_default(),
+                    sync_pending: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+                    observation,
                 })
             })?
-            .collect::<SqlResult<Vec<_>>>()?;
+            .filter_map(|result| match result {
+                Ok(candidate) => Some(candidate),
+                Err(error) => {
+                    log::warn!("find_stale_item_candidates: skipping row: {error}");
+                    skipped += 1;
+                    None
+                }
+            })
+            .collect();
 
-        Ok(candidates)
+        Ok((candidates, skipped))
+    }
+
+    /// Insert or replace the persisted stale-item observation for an item.
+    pub fn save_stale_observation(
+        &self,
+        observation: &crate::core::cache_cleanup::StaleObservation,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO stale_item_observations \
+             (item_id, content_hash, item_updated_at, first_missing_at, last_checked_at, \
+              consecutive_missing_count, last_status, last_reason) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                observation.item_id,
+                observation.content_hash as i64,
+                observation.item_updated_at.to_rfc3339(),
+                observation.first_missing_at.to_rfc3339(),
+                observation.last_checked_at.to_rfc3339(),
+                observation.consecutive_missing_count as i64,
+                observation.last_status,
+                observation.last_reason,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove the persisted stale-item observation for an item (present
+    /// again, identity changed, or item deleted).
+    pub fn clear_stale_observation(&self, item_id: i64) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM stale_item_observations WHERE item_id = ?1",
+            params![item_id],
+        )?;
+        Ok(())
     }
 
     /// Count all non-transfer clipboard rows affected by "clear data".
@@ -1922,10 +2079,10 @@ impl Database {
             String,
             String,
             String,
-            String,
-            String,
             i32,
             String,
+            String,
+            bool,
         );
 
         if confirmed.is_empty() {
@@ -1947,7 +2104,7 @@ impl Database {
                 // Re-check identity + safety guards and read fields in one query.
                 let mut stmt = tx.prepare(
                     "SELECT updated_at, content_type, full_text, image_path, file_data, meta_type, \
-                            source_app_name, source_app_icon, is_favorite, custom_hotkey \
+                            is_favorite, custom_hotkey, existence_observed_at, sync_pending \
                      FROM clipboard_items \
                      WHERE id = ?1 AND content_hash = ?2 \
                        AND is_favorite = 0 AND meta_type != 'transfer'",
@@ -1965,7 +2122,7 @@ impl Database {
                             row.get(6).unwrap_or_default(),
                             row.get(7).unwrap_or_default(),
                             row.get(8).unwrap_or_default(),
-                            row.get(9).unwrap_or_default(),
+                            row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                         ))
                     })
                     .optional()?;
@@ -1977,10 +2134,10 @@ impl Database {
                     image_path,
                     file_data,
                     meta_type,
-                    source_app_name,
-                    source_app_icon,
                     is_favorite,
                     custom_hotkey,
+                    existence_observed_at,
+                    sync_pending,
                 )) = row
                 else {
                     continue; // Record changed — skip this item.
@@ -2004,11 +2161,17 @@ impl Database {
                     image_path,
                     file_data: file_data.clone(),
                     meta_type,
-                    source_app_name,
-                    source_app_icon,
                     is_favorite: is_favorite != 0,
+                    existence_observed_at,
+                    sync_pending,
+                    observation: None,
                 };
-                if !crate::core::cache_cleanup::check_candidate_stale(&candidate) {
+                // The filesystem re-check must still classify the item as
+                // definitely missing before the delete is committed.
+                if !matches!(
+                    crate::core::cache_cleanup::classify_item_status(&candidate),
+                    crate::core::cache_cleanup::ItemStatus::DefinitelyMissing
+                ) {
                     continue;
                 }
 
@@ -2045,7 +2208,11 @@ impl Database {
                     );
                 }
 
-                // Delete item_tags and the item itself.
+                // Delete observation, item_tags and the item itself.
+                tx.execute(
+                    "DELETE FROM stale_item_observations WHERE item_id = ?1",
+                    params![item.id],
+                )?;
                 tx.execute("DELETE FROM item_tags WHERE item_id = ?1", params![item.id])?;
                 tx.execute(
                     "DELETE FROM clipboard_items WHERE id = ?1",
@@ -2157,7 +2324,7 @@ impl Database {
             deleted_items += 1;
         }
 
-        // Delete all item_tags for these items.
+        // Delete all item_tags and stale observations for these items.
         let item_ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         for chunk in item_ids.chunks(100) {
             let placeholders: Vec<String> = chunk
@@ -2167,6 +2334,22 @@ impl Database {
                 .collect();
             let sql = format!(
                 "DELETE FROM item_tags WHERE item_id IN ({})",
+                placeholders.join(",")
+            );
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
+            tx.execute(&sql, params_refs.as_slice())?;
+        }
+        for chunk in item_ids.chunks(100) {
+            let placeholders: Vec<String> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect();
+            let sql = format!(
+                "DELETE FROM stale_item_observations WHERE item_id IN ({})",
                 placeholders.join(",")
             );
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
@@ -2282,6 +2465,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
         meta_type,
         custom_hotkey: row.get(17).unwrap_or_default(),
         custom_hotkey_format: row.get(18).unwrap_or_default(),
+        existence_observed_at: row.get(19).unwrap_or_default(),
     })
 }
 
@@ -2984,16 +3168,30 @@ mod tests {
         db.conn
             .execute(
                 "INSERT INTO clipboard_items \
-                 (content_type, full_text, content_hash, created_at, updated_at, file_data, meta_type) \
-                 VALUES ('file', 'missing.txt', 201, ?1, ?1, ?2, '')",
-                params!["2026-07-28T00:00:00Z", file_data],
+                 (content_type, full_text, content_hash, created_at, updated_at, file_data, \
+                  meta_type, existence_observed_at) \
+                 VALUES ('file', 'missing.txt', 201, ?1, ?1, ?2, '', ?3)",
+                params!["2026-07-28T00:00:00Z", file_data, "2026-07-28T00:00:00Z"],
             )
             .unwrap();
 
-        let candidates = db.find_stale_item_candidates().unwrap();
-        let confirmed = crate::core::cache_cleanup::verify_stale_candidates(&candidates);
-        assert_eq!(confirmed.len(), 1);
+        let t0 = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
 
+        // Observation phase 1: missing but not eligible.
+        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
+        crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
+        assert_eq!(stats.stale_items, 0);
+        assert_eq!(count_items(&db), 1);
+
+        // The record changes between the scan and the delete: the
+        // in-transaction identity re-check must skip it.
+        let confirmed = vec![crate::core::cache_cleanup::ConfirmedStaleItem {
+            id: db.get_by_hash(201).unwrap().unwrap().id,
+            content_hash: 201,
+            expected_updated_at: t0,
+        }];
         db.conn
             .execute(
                 "UPDATE clipboard_items SET updated_at = ?1 WHERE content_hash = 201",
@@ -3004,12 +3202,31 @@ mod tests {
         assert_eq!(skipped.deleted_items, 0);
         assert_eq!(count_items(&db), 1);
 
-        let candidates = db.find_stale_item_candidates().unwrap();
-        let confirmed = crate::core::cache_cleanup::verify_stale_candidates(&candidates);
-        let deleted = db.delete_stale_items(&confirmed, None).unwrap();
-        assert_eq!(deleted.deleted_items, 1);
+        // The identity change restarts the observation: the next scan is a
+        // fresh first-missing observation again.
+        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
+        crate::core::cache_cleanup::run_stale_scan(
+            &db,
+            t0 + chrono::Duration::hours(25),
+            None,
+            &mut stats,
+        );
+        assert_eq!(stats.stale_first_missing, 1);
+        assert_eq!(stats.stale_items, 0);
+
+        // A further scan beyond the (restarted) grace period deletes the
+        // item, with the deleted file paths reported for transfer refresh.
+        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
+        crate::core::cache_cleanup::run_stale_scan(
+            &db,
+            t0 + chrono::Duration::hours(49),
+            None,
+            &mut stats,
+        );
+        assert_eq!(stats.stale_eligible, 1);
+        assert_eq!(stats.stale_items, 1);
         assert_eq!(
-            deleted.deleted_file_paths,
+            stats.deleted_file_paths,
             vec![missing_file.to_string_lossy().into_owned()]
         );
         assert_eq!(count_items(&db), 0);
@@ -3034,6 +3251,260 @@ mod tests {
         assert_eq!(result.deleted_favorites, 0);
         assert!(db.get_by_hash(401).unwrap().is_none());
         assert!(db.get_by_hash(402).unwrap().is_some());
+    }
+
+    #[test]
+    fn update_sync_item_image_marks_sync_pending_and_keeps_source_metadata() {
+        let (_path, db) = temp_db("sync-item-pending");
+        let images_dir = crate::core::paths::images_dir();
+        let local_path = images_dir.join(format!(
+            "local-captured-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, source_app_icon, existence_observed_at) \
+                 VALUES ('image', '', 601, ?1, ?1, ?2, 'Local App', 'icon', ?3)",
+                params![
+                    "2026-07-28T00:00:00Z",
+                    local_path.to_string_lossy(),
+                    "2026-07-28T00:00:00Z"
+                ],
+            )
+            .unwrap();
+
+        // A newer remote version points at a sync blob that may not be
+        // downloaded yet (e.g. failed download).
+        let remote = crate::core::sync::SyncItem {
+            content_type: "image".to_string(),
+            full_text: String::new(),
+            content_hash: 601,
+            created_at: "2026-07-28T00:00:00Z".to_string(),
+            updated_at: "2026-07-28T01:00:00Z".to_string(),
+            rich_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            size: 0,
+            tags: Vec::new(),
+            meta_type: String::new(),
+            image_width: 100,
+            image_height: 100,
+            image_blob: "0000000000000259.jpg".to_string(),
+        };
+        let id = db.get_by_hash(601).unwrap().unwrap().id;
+        db.update_sync_item(id, &remote).unwrap();
+
+        // Local display metadata is preserved; the sync-pending flag marks
+        // the item as sync-owned so the classifier protects it while the
+        // blob is missing.
+        let item = db.get_by_hash(601).unwrap().unwrap();
+        assert_eq!(item.source_app_name, "Local App");
+        assert_eq!(item.source_app_icon, "icon");
+        assert!(item.image_path.ends_with("0000000000000259.jpg"));
+
+        let candidates = db.find_stale_item_candidates().unwrap().0;
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].sync_pending);
+        assert_eq!(
+            crate::core::cache_cleanup::classify_item_status(&candidates[0]),
+            crate::core::cache_cleanup::ItemStatus::Protected {
+                reason: crate::core::types::PathStatusReason::PendingSync
+            }
+        );
+
+        // Blob download completes → path recorded and pending cleared.
+        let blob = images_dir.join("0000000000000259.jpg");
+        std::fs::write(&blob, b"jpg").unwrap();
+        db.set_item_image_path(601, &blob.to_string_lossy())
+            .unwrap();
+        let candidates = db.find_stale_item_candidates().unwrap().0;
+        assert!(!candidates[0].sync_pending);
+        assert_eq!(
+            crate::core::cache_cleanup::classify_item_status(&candidates[0]),
+            crate::core::cache_cleanup::ItemStatus::Present
+        );
+        std::fs::remove_file(&blob).unwrap();
+    }
+
+    #[test]
+    fn corrupt_observation_timestamps_are_treated_as_no_history() {
+        let (_path, db) = temp_db("stale-corrupt-obs");
+        let images_dir = crate::core::paths::images_dir();
+        let missing = images_dir.join(format!(
+            "missing-local-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name) \
+                 VALUES ('image', '', 701, ?1, ?1, ?2, 'Local App')",
+                params!["2026-07-28T00:00:00Z", missing.to_string_lossy()],
+            )
+            .unwrap();
+        // A corrupt observation: count already at 1, but timestamps are
+        // garbage. If parsed as UNIX_EPOCH the grace period would appear
+        // satisfied and one more scan would delete the item.
+        db.conn
+            .execute(
+                "INSERT INTO stale_item_observations \
+                 (item_id, content_hash, item_updated_at, first_missing_at, last_checked_at, \
+                  consecutive_missing_count, last_status, last_reason) \
+                 SELECT id, content_hash, 'garbage', 'garbage', 'garbage', 1, 'missing', '' \
+                 FROM clipboard_items WHERE content_hash = 701",
+                [],
+            )
+            .unwrap();
+
+        // The corrupt observation is treated as absent: the next scan
+        // restarts the counter instead of deleting the item.
+        let candidates = db.find_stale_item_candidates().unwrap().0;
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].observation.is_none());
+
+        let t0 = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let mut stats = crate::core::cache_cleanup::CleanupStats {
+            scan_complete: true,
+            ..crate::core::cache_cleanup::CleanupStats::default()
+        };
+        crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
+        assert_eq!(stats.stale_first_missing, 1);
+        assert_eq!(stats.stale_eligible, 0);
+        assert_eq!(stats.stale_items, 0);
+        assert_eq!(count_items(&db), 1);
+    }
+
+    #[test]
+    fn corrupt_observation_count_is_treated_as_no_history() {
+        let (_path, db) = temp_db("stale-corrupt-count");
+        let images_dir = crate::core::paths::images_dir();
+        let missing = images_dir.join(format!(
+            "missing-local-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name) \
+                 VALUES ('image', '', 702, ?1, ?1, ?2, 'Local App')",
+                params!["2026-07-28T00:00:00Z", missing.to_string_lossy()],
+            )
+            .unwrap();
+        // Valid timestamps (already past the grace period) but a corrupt
+        // negative count. Cast to u32 would make it huge and instantly
+        // satisfy the delete threshold.
+        db.conn
+            .execute(
+                "INSERT INTO stale_item_observations \
+                 (item_id, content_hash, item_updated_at, first_missing_at, last_checked_at, \
+                  consecutive_missing_count, last_status, last_reason) \
+                 SELECT id, content_hash, '2026-07-20T00:00:00Z', '2026-07-20T00:00:00Z', \
+                        '2026-07-28T00:00:00Z', -5, 'missing', '' \
+                 FROM clipboard_items WHERE content_hash = 702",
+                [],
+            )
+            .unwrap();
+
+        // Out-of-range count → observation treated as absent.
+        let candidates = db.find_stale_item_candidates().unwrap().0;
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].observation.is_none());
+
+        let t0 = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let mut stats = crate::core::cache_cleanup::CleanupStats {
+            scan_complete: true,
+            ..crate::core::cache_cleanup::CleanupStats::default()
+        };
+        crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
+        assert_eq!(stats.stale_first_missing, 1);
+        assert_eq!(stats.stale_eligible, 0);
+        assert_eq!(stats.stale_items, 0);
+        assert_eq!(count_items(&db), 1);
+    }
+
+    #[test]
+    fn local_upsert_clears_sync_pending() {
+        let (_path, db) = temp_db("upsert-clears-pending");
+        let images_dir = crate::core::paths::images_dir();
+        let blob = images_dir.join("0000000000000259.jpg");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, sync_pending) \
+                 VALUES ('image', '', 801, ?1, ?1, ?2, 'Local App', 1)",
+                params!["2026-07-28T00:00:00Z", blob.to_string_lossy()],
+            )
+            .unwrap();
+
+        // A local clipboard capture of the same content (same hash) ends the
+        // sync-pending state: the item is locally managed again.
+        let mut item = ClipboardItem::new_image(0, &blob.to_string_lossy(), 801, 100, 100, None);
+        item.source_app_name = "Local App".to_string();
+        item.existence_observed_at = "2026-07-28T01:00:00Z".to_string();
+        item.updated_at = "2026-07-28T01:00:00Z".parse().unwrap();
+        db.upsert(&item).unwrap();
+
+        let pending: i64 = db
+            .conn
+            .query_row(
+                "SELECT sync_pending FROM clipboard_items WHERE content_hash = 801",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn stale_candidates_skip_rows_with_unparseable_timestamps() {
+        let (_path, db) = temp_db("stale-tolerant");
+        let images_dir = crate::core::paths::images_dir();
+        let missing = images_dir.join(format!(
+            "missing-local-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        // A normal candidate with evidence.
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, existence_observed_at) \
+                 VALUES ('image', '', 401, ?1, ?1, ?2, 'Local App', ?3)",
+                params![
+                    "2026-07-28T00:00:00Z",
+                    missing.to_string_lossy(),
+                    "2026-07-28T00:00:00Z"
+                ],
+            )
+            .unwrap();
+        // A corrupt row whose updated_at cannot be parsed.
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name) \
+                 VALUES ('image', '', 402, ?1, 'not-a-timestamp', ?2, 'Local App')",
+                params!["2026-07-28T00:00:00Z", missing.to_string_lossy()],
+            )
+            .unwrap();
+
+        let (candidates, skipped) = db.find_stale_item_candidates().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(skipped, 1);
+        assert_eq!(candidates[0].content_hash, 401);
     }
 
     #[test]
@@ -3069,8 +3540,8 @@ mod tests {
             .execute(
                 "INSERT INTO clipboard_items \
                  (content_type, full_text, content_hash, created_at, updated_at, image_path, \
-                  source_app_name, meta_type) \
-                 VALUES ('image', '', 302, ?1, ?1, ?2, '', '')",
+                  source_app_name, meta_type, sync_pending) \
+                 VALUES ('image', '', 302, ?1, ?1, ?2, '', '', 1)",
                 params![
                     "2026-07-28T00:00:00Z",
                     synced_image.to_string_lossy().as_ref()
@@ -3078,14 +3549,33 @@ mod tests {
             )
             .unwrap();
 
-        let candidates = db.find_stale_item_candidates().unwrap();
+        let (candidates, skipped) = db.find_stale_item_candidates().unwrap();
         assert_eq!(candidates.len(), 2);
-        let confirmed = crate::core::cache_cleanup::verify_stale_candidates(&candidates);
-        assert_eq!(confirmed.len(), 1);
-        assert_eq!(confirmed[0].content_hash, 301);
+        assert_eq!(skipped, 0);
 
-        let deleted = db.delete_stale_items(&confirmed, None).unwrap();
-        assert_eq!(deleted.deleted_items, 1);
+        let t0 = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+
+        // Observation phase 1: the local image is first-missing; the synced
+        // image is protected (PendingSync) and never counted as missing.
+        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
+        crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
+        assert_eq!(stats.stale_scanned, 2);
+        assert_eq!(stats.stale_first_missing, 1);
+        assert_eq!(stats.stale_protected, 1);
+        assert_eq!(stats.stale_items, 0);
+
+        // Observation phase 2 beyond grace: the local image is deleted;
+        // the pending-sync image survives.
+        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
+        crate::core::cache_cleanup::run_stale_scan(
+            &db,
+            t0 + chrono::Duration::hours(25),
+            None,
+            &mut stats,
+        );
+        assert_eq!(stats.stale_items, 1);
         assert!(db.get_by_hash(301).unwrap().is_none());
         assert!(db.get_by_hash(302).unwrap().is_some());
     }

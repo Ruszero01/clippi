@@ -714,10 +714,11 @@ fn download_missing_images(
         let dest_text = dest.to_string_lossy().to_string();
 
         if dest.exists() {
-            if current_image_path != &dest_text {
-                if let Ok(db) = db.lock() {
-                    let _ = db.set_item_image_path(*content_hash, &dest_text);
-                }
+            // Blob already present: record the path and clear the
+            // sync-pending flag (idempotent — also covers the case where a
+            // previous download finished but the flag was never cleared).
+            if let Ok(db) = db.lock() {
+                let _ = db.set_item_image_path(*content_hash, &dest_text);
             }
             crate::platform::clipboard::ensure_thumbnail_for_image(&dest_text, *content_hash);
             continue;

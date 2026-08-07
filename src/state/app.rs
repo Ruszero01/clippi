@@ -1749,6 +1749,7 @@ impl AppState {
             tags: vec![],
             custom_hotkey: String::new(),
             custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
         };
 
         // Write to DB.
@@ -2570,6 +2571,7 @@ impl AppState {
                         meta_type: "transfer".to_string(),
                         custom_hotkey: String::new(),
                         custom_hotkey_format: String::new(),
+                        existence_observed_at: String::new(),
                     }
                 })
                 .collect()
@@ -2632,6 +2634,7 @@ mod tests {
             meta_type: String::new(),
             custom_hotkey: String::new(),
             custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
         }
     }
 

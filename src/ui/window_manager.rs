@@ -52,10 +52,15 @@ pub enum DataMaintenanceResult {
     },
     ClearClipboard {
         stats: crate::core::cache_cleanup::ClearClipboardStats,
-        cache_marker: String,
+        cache_marker: Option<String>,
     },
     Failed(String),
 }
+
+/// Backoff applied after a partially failed maintenance job. The 200ms poll
+/// loop would otherwise re-trigger the job immediately because the success
+/// markers are not advanced.
+const MAINTENANCE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(3600);
 
 pub struct WebDavBackendForm {
     pub name: String,
@@ -493,6 +498,10 @@ pub struct WindowManager {
     maintenance_job_running: bool,
     /// Pending result from a completed maintenance job.
     pending_maintenance_result: Arc<Mutex<Option<DataMaintenanceResult>>>,
+    /// When a maintenance job partially failed, retry no earlier than this
+    /// instant (markers are not advanced on failure, so without a backoff
+    /// the 200ms poll loop would re-trigger the job immediately).
+    maintenance_retry_after: Option<Instant>,
 
     // ── Config sync ──
     config_sync_service: ConfigSyncService,
@@ -605,6 +614,7 @@ impl WindowManager {
             pending_cleanup_hotkey_unregister: Arc::new(Mutex::new(Vec::new())),
             maintenance_job_running: false,
             pending_maintenance_result: Arc::new(Mutex::new(None)),
+            maintenance_retry_after: None,
             config_sync_service,
             config_sync_pending_snapshot: None,
         };
@@ -789,6 +799,17 @@ impl WindowManager {
                 show_toast,
             } => {
                 let deleted_file_paths = std::mem::take(&mut stats.deleted_file_paths);
+                // Success markers only advance for phases that completed
+                // without failure (design §11 stage G / §16 Phase 0 #8).
+                let cache_ok = stats.scan_complete && stats.cache_remove_failed == 0;
+                let retention_ok = !stats.retention_failed;
+                let need_retry = (cache_marker.is_some() && !cache_ok)
+                    || (retention_marker.is_some() && !retention_ok);
+                self.maintenance_retry_after = if need_retry {
+                    Some(Instant::now() + MAINTENANCE_RETRY_BACKOFF)
+                } else {
+                    None
+                };
                 self.state.update(cx, |state, _cx| {
                     if stats.sync_dirty {
                         state.sync_dirty.store(true, Ordering::SeqCst);
@@ -796,11 +817,15 @@ impl WindowManager {
                     if !deleted_file_paths.is_empty() {
                         state.clear_deleted_file_transfer_associations(deleted_file_paths);
                     }
-                    if let Some(marker) = cache_marker {
-                        state.settings.cleanup_last_date = marker;
+                    if cache_ok {
+                        if let Some(marker) = cache_marker {
+                            state.settings.cleanup_last_date = marker;
+                        }
                     }
-                    if let Some(marker) = retention_marker {
-                        state.settings.retention_cleanup_last_date = marker;
+                    if retention_ok {
+                        if let Some(marker) = retention_marker {
+                            state.settings.retention_cleanup_last_date = marker;
+                        }
                     }
                     state.settings.save();
                 });
@@ -812,14 +837,21 @@ impl WindowManager {
                         ids.extend(stats.deleted_hotkey_item_ids.iter().copied());
                     }
                 }
-                if !stats.is_empty() {
+                if !stats.is_empty() || need_retry {
                     log::info!(
-                        "cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items, {} stale items",
+                        "cleanup: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items, {} stale items ({} scanned, {} pending, {} protected, {} unknown, {} invalid metadata, {} removal failures; complete: {})",
                         stats.orphan_images,
                         stats.unreferenced_icons,
                         stats.expired_tombstones,
                         stats.expired_items,
                         stats.stale_items,
+                        stats.stale_scanned,
+                        stats.stale_pending_confirmation,
+                        stats.stale_protected,
+                        stats.stale_unknown,
+                        stats.invalid_metadata,
+                        stats.cache_remove_failed,
+                        stats.scan_complete,
                     );
                 }
                 let message = if stats.is_empty() {
@@ -836,6 +868,14 @@ impl WindowManager {
                 cache_marker,
             } => {
                 let deleted_file_paths = std::mem::take(&mut stats.deleted_file_paths);
+                // Post-clear cache maintenance failure must not advance the
+                // cache marker either.
+                let cache_ok = stats.scan_complete && stats.cache_remove_failed == 0;
+                self.maintenance_retry_after = if !cache_ok {
+                    Some(Instant::now() + MAINTENANCE_RETRY_BACKOFF)
+                } else {
+                    None
+                };
                 self.state.update(cx, |state, _cx| {
                     if stats.sync_dirty {
                         state.sync_dirty.store(true, Ordering::SeqCst);
@@ -843,7 +883,11 @@ impl WindowManager {
                     if !deleted_file_paths.is_empty() {
                         state.clear_deleted_file_transfer_associations(deleted_file_paths);
                     }
-                    state.settings.cleanup_last_date = cache_marker;
+                    if cache_ok {
+                        if let Some(marker) = cache_marker {
+                            state.settings.cleanup_last_date = marker;
+                        }
+                    }
                     state.settings.save();
                 });
                 if stats.deleted_items > 0 {
@@ -855,11 +899,13 @@ impl WindowManager {
                     }
                 }
                 log::info!(
-                    "clear clipboard: {} items ({} favorites), {} orphan images, {} unreferenced icons",
+                    "clear clipboard: {} items ({} favorites), {} orphan images, {} unreferenced icons ({} removal failures; complete: {})",
                     stats.deleted_items,
                     stats.deleted_favorites,
                     stats.orphan_images,
                     stats.unreferenced_icons,
+                    stats.cache_remove_failed,
+                    stats.scan_complete,
                 );
                 let message = if stats.deleted_items == 0 {
                     I18nKey::ToastClearDataEmpty.text().to_string()
@@ -870,6 +916,7 @@ impl WindowManager {
             }
             DataMaintenanceResult::Failed(e) => {
                 log::error!("data maintenance failed: {e}");
+                self.maintenance_retry_after = Some(Instant::now() + MAINTENANCE_RETRY_BACKOFF);
                 cx.emit(WindowManagerEvent::DataMaintenanceToast(
                     I18nKey::ToastDataMaintenanceFailed.text().to_string(),
                 ));
@@ -971,21 +1018,26 @@ impl WindowManager {
                         };
 
                     // Post-clear cache maintenance.
-                    let (orphan_images, unreferenced_icons, _) =
-                        crate::core::cache_cleanup::run_cache_maintenance(&db);
+                    let maintenance = crate::core::cache_cleanup::run_cache_maintenance(&db);
 
                     let stats = crate::core::cache_cleanup::ClearClipboardStats {
                         deleted_items: clear_result.deleted_items,
                         deleted_favorites: clear_result.deleted_favorites,
                         deleted_hotkey_item_ids: clear_result.deleted_hotkey_item_ids,
                         deleted_file_paths: clear_result.deleted_file_paths,
-                        orphan_images,
-                        unreferenced_icons,
+                        orphan_images: maintenance.orphan_images,
+                        unreferenced_icons: maintenance.unreferenced_icons,
                         sync_dirty: clear_result.tombstones_written > 0,
+                        cache_remove_failed: maintenance.cache_remove_failed,
+                        scan_complete: maintenance.scan_complete,
                     };
+                    // Only advance the cache marker when maintenance finished
+                    // without failure; otherwise retry on a later cycle.
+                    let cache_ok =
+                        maintenance.scan_complete && maintenance.cache_remove_failed == 0;
                     DataMaintenanceResult::ClearClipboard {
                         stats,
-                        cache_marker,
+                        cache_marker: cache_ok.then_some(cache_marker),
                     }
                 }
                 Err(e) => {
@@ -4654,6 +4706,12 @@ impl WindowManager {
     fn poll_cleanup(&mut self, cx: &mut Context<Self>) {
         if self.maintenance_job_running {
             return; // A job is already in progress.
+        }
+        if let Some(retry_after) = self.maintenance_retry_after {
+            if Instant::now() < retry_after {
+                return; // A failed job is in its retry backoff window.
+            }
+            self.maintenance_retry_after = None;
         }
 
         let settings = self.state.read(cx).settings.clone();

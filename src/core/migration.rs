@@ -96,6 +96,16 @@ const DB_MIGRATIONS: &[DbMigration] = &[
         description: "Add custom_hotkey and custom_hotkey_format columns for per-item hotkeys",
         sql: "",
     },
+    DbMigration {
+        version: 8,
+        description: "Add existence_observed_at column for stale-item cleanup provenance",
+        sql: "ALTER TABLE clipboard_items ADD COLUMN existence_observed_at TEXT NOT NULL DEFAULT ''",
+    },
+    DbMigration {
+        version: 9,
+        description: "Add sync_pending flag for sync-owned images awaiting blob download",
+        sql: "",
+    },
 ];
 
 /// Run all pending database migrations, updating `PRAGMA user_version`.
@@ -129,6 +139,12 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
             if migration.version == 7 {
                 migrate_item_hotkey_columns(conn)?;
             }
+            if migration.version == 8 {
+                migrate_existence_observed_at(conn)?;
+            }
+            if migration.version == 9 {
+                migrate_sync_pending(conn)?;
+            }
             conn.pragma_update(None, "user_version", migration.version)?;
         }
     }
@@ -139,7 +155,68 @@ pub fn run_db_migrations(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 fn repair_db_schema(conn: &Connection) -> rusqlite::Result<()> {
-    migrate_item_hotkey_columns(conn)
+    migrate_item_hotkey_columns(conn)?;
+    migrate_existence_observed_at(conn)?;
+    // Schema repair only guarantees the column exists. If it was missing
+    // entirely (partial migration / corrupted schema), the rows predate the
+    // column and need the same one-time conservative backfill as the v9
+    // migration — but only when the column was actually added, never on a
+    // plain reopen.
+    if ensure_sync_pending_column(conn)? {
+        backfill_sync_pending(conn)?;
+    }
+    Ok(())
+}
+
+fn migrate_existence_observed_at(conn: &Connection) -> rusqlite::Result<()> {
+    if !column_exists(conn, "clipboard_items", "existence_observed_at")? {
+        conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN existence_observed_at TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// One-time v9 migration: add the column and conservatively backfill legacy
+/// sync-looking image rows. Only called when `user_version` advances to 9,
+/// or by the schema repair when the column was missing entirely.
+fn migrate_sync_pending(conn: &Connection) -> rusqlite::Result<()> {
+    ensure_sync_pending_column(conn)?;
+    backfill_sync_pending(conn)?;
+    Ok(())
+}
+
+/// Ensure the `sync_pending` column exists. Returns `true` when the column
+/// was actually added (callers should then run the one-time backfill).
+fn ensure_sync_pending_column(conn: &Connection) -> rusqlite::Result<bool> {
+    if !column_exists(conn, "clipboard_items", "sync_pending")? {
+        conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN sync_pending INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Conservatively mark legacy rows that look like sync-owned images (managed
+/// path + no local source metadata): their blob may not be downloaded yet,
+/// and the old heuristic (empty source fields) must not turn them into
+/// deletable local images.
+fn backfill_sync_pending(conn: &Connection) -> rusqlite::Result<()> {
+    let images_prefix = crate::core::paths::images_dir()
+        .to_string_lossy()
+        .into_owned();
+    conn.execute(
+        "UPDATE clipboard_items SET sync_pending = 1 \
+         WHERE content_type = 'image' AND image_path != '' \
+           AND substr(image_path, 1, ?1) = ?2 \
+           AND source_app_name = '' AND source_app_icon = ''",
+        rusqlite::params![images_prefix.len() as i64, images_prefix],
+    )?;
+    Ok(())
 }
 
 fn migrate_item_hotkey_columns(conn: &Connection) -> rusqlite::Result<()> {
@@ -312,6 +389,144 @@ pub fn migrate_file_manifest(manifest: &mut crate::core::transfer_types::FileMan
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Create a clipboard_items table with the pre-v9 shape and one
+    /// sync-looking image row (managed path + empty source metadata).
+    fn legacy_sync_image_db(conn: &Connection, user_version: i64, sync_pending: i64) {
+        conn.execute_batch(
+            "CREATE TABLE clipboard_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_type TEXT NOT NULL,
+                full_text TEXT NOT NULL,
+                content_hash INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                image_path TEXT NOT NULL DEFAULT '',
+                rich_data TEXT NOT NULL DEFAULT '',
+                file_data TEXT NOT NULL DEFAULT '',
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                source_app_name TEXT NOT NULL DEFAULT '',
+                source_app_icon TEXT NOT NULL DEFAULT '',
+                image_width INTEGER NOT NULL DEFAULT 0,
+                image_height INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0,
+                meta_type TEXT NOT NULL DEFAULT '',
+                existence_observed_at TEXT NOT NULL DEFAULT '',
+                sync_pending INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        let image_path = crate::core::paths::images_dir()
+            .join("legacy-sync-image.png")
+            .to_string_lossy()
+            .into_owned();
+        conn.execute(
+            "INSERT INTO clipboard_items \
+             (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+              source_app_name, source_app_icon, sync_pending) \
+             VALUES ('image', '', 901, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?1, '', '', ?2)",
+            rusqlite::params![image_path, sync_pending],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", user_version)
+            .unwrap();
+    }
+
+    #[test]
+    fn v9_backfill_marks_legacy_sync_looking_images() {
+        let conn = Connection::open_in_memory().unwrap();
+        legacy_sync_image_db(&conn, 8, 0);
+
+        // The v8 → v9 migration runs the one-time backfill.
+        run_db_migrations(&conn).unwrap();
+
+        let pending: i64 = conn
+            .query_row(
+                "SELECT sync_pending FROM clipboard_items WHERE content_hash = 901",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn schema_repair_does_not_repeat_v9_backfill() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A database that already went through v9: the download flow cleared
+        // the pending flag to 0. A plain reopen (repair only) must NOT flip
+        // it back to 1.
+        legacy_sync_image_db(&conn, 9, 0);
+
+        run_db_migrations(&conn).unwrap();
+
+        let pending: i64 = conn
+            .query_row(
+                "SELECT sync_pending FROM clipboard_items WHERE content_hash = 901",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn schema_repair_backfills_when_column_was_missing() {
+        // A database at user_version 9 whose sync_pending column is missing
+        // (partial migration / corrupted schema): repair must add the column
+        // AND run the conservative backfill once, so legacy sync-looking
+        // images keep their PendingSync protection.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clipboard_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_type TEXT NOT NULL,
+                full_text TEXT NOT NULL,
+                content_hash INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                image_path TEXT NOT NULL DEFAULT '',
+                rich_data TEXT NOT NULL DEFAULT '',
+                file_data TEXT NOT NULL DEFAULT '',
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                source_app_name TEXT NOT NULL DEFAULT '',
+                source_app_icon TEXT NOT NULL DEFAULT '',
+                image_width INTEGER NOT NULL DEFAULT 0,
+                image_height INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0,
+                meta_type TEXT NOT NULL DEFAULT '',
+                existence_observed_at TEXT NOT NULL DEFAULT ''
+            );
+            PRAGMA user_version = 9;",
+        )
+        .unwrap();
+        let image_path = crate::core::paths::images_dir()
+            .join("legacy-sync-image.png")
+            .to_string_lossy()
+            .into_owned();
+        conn.execute(
+            "INSERT INTO clipboard_items \
+             (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+              source_app_name, source_app_icon) \
+             VALUES ('image', '', 902, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?1, '', '')",
+            rusqlite::params![image_path],
+        )
+        .unwrap();
+
+        run_db_migrations(&conn).unwrap();
+
+        assert!(column_exists(&conn, "clipboard_items", "sync_pending").unwrap());
+        let pending: i64 = conn
+            .query_row(
+                "SELECT sync_pending FROM clipboard_items WHERE content_hash = 902",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 1);
+    }
 
     #[test]
     fn repairs_v7_database_missing_hotkey_columns() {

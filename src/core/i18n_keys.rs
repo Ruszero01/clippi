@@ -229,7 +229,7 @@ define_i18n! {
     // ─── Data cleanup (stale items / clear data) ───
     SettingHistoryRetention: ("历史保留", "History retention"),
     SettingCleanupStaleItems: ("清理已失效条目", "Clean stale items"),
-    DescCleanupStaleItems:   ("自动清理源文件或路径已不存在的条目，收藏内容受保护", "Auto-remove items whose source files/paths are gone; favorites are protected"),
+    DescCleanupStaleItems:   ("自动清理已确认失效的本地非收藏条目", "Auto-remove local non-favorite items confirmed stale"),
     SettingClearData:       ("清空数据", "Clear data"),
     DescClearData:          ("永久清空剪贴板历史", "Permanently clear clipboard history; source files are not deleted"),
     BtnClearData:           ("清空数据", "Clear data"),
