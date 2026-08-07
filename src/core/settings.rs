@@ -89,6 +89,8 @@ pub struct AppSettings {
     pub auto_hide: bool,
     pub db_path: String,
     pub sort_by_created: bool, // true=sort by creation time, false=sort by update time
+    #[serde(default)]
+    pub search_favorites_first: bool, // prioritize favorite items in keyword search results
     pub window_position_mode: String, // "center" | "follow" | "remember"
     pub saved_window_x: i32,
     pub saved_window_y: i32,
@@ -259,6 +261,7 @@ impl Default for AppSettings {
             auto_hide: true,
             db_path: String::new(),
             sort_by_created: false,
+            search_favorites_first: false,
             window_position_mode: "center".to_string(),
             saved_window_x: -1,
             saved_window_y: -1,
@@ -1216,6 +1219,48 @@ mod tests {
         let parsed: AppSettings = toml::from_str(&legacy_config).unwrap();
 
         assert!(!parsed.cleanup_stale_items);
+    }
+
+    #[test]
+    fn missing_search_favorites_first_defaults_to_disabled() {
+        let serialized = toml::to_string(&AppSettings::default()).unwrap();
+        let legacy_config = serialized
+            .lines()
+            .filter(|line| !line.starts_with("search_favorites_first ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed: AppSettings = toml::from_str(&legacy_config).unwrap();
+
+        assert!(!parsed.search_favorites_first);
+    }
+
+    #[test]
+    fn search_favorites_first_roundtrips_through_toml() {
+        let settings = AppSettings {
+            search_favorites_first: true,
+            ..Default::default()
+        };
+        let serialized = toml::to_string(&settings).unwrap();
+        let loaded: AppSettings = toml::from_str(&serialized).unwrap();
+
+        assert!(loaded.search_favorites_first);
+    }
+
+    #[test]
+    fn merge_configs_keeps_search_favorites_first_from_source() {
+        let source = AppSettings {
+            search_favorites_first: true,
+            ..Default::default()
+        };
+        let target = AppSettings {
+            search_favorites_first: false,
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "/new/path/clippi.db");
+
+        assert!(merged.search_favorites_first); // scalar fields follow source
     }
 
     #[test]

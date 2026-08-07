@@ -18,6 +18,7 @@ impl SettingsPanel {
         // --- Snapshot current values from AppState ---
         let app = self.state.read(cx);
         let sort_by_created = app.settings.sort_by_created;
+        let search_favorites_first = app.settings.search_favorites_first;
         let card_height_mode = app.settings.card_height_mode.clone();
         let show_source_app = app.settings.show_source_app;
         let auto_scroll_to_top = app.settings.auto_scroll_to_top;
@@ -315,6 +316,27 @@ impl SettingsPanel {
                 |state, this, _window, _cx| {
                     state.update(_cx, |s, _cx| {
                         s.settings.sort_by_created = !s.settings.sort_by_created;
+                        s.settings.save();
+                    });
+                    this.update(_cx, |_panel, cx| {
+                        cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                            reload_items: true,
+                            scroll_to_top: false,
+                        });
+                    });
+                },
+            ))
+            // --- Search favorites first ---
+            .child(self.render_toggle_row(
+                I18nKey::SettingSearchFavoritesFirst,
+                I18nKey::DescSearchFavoritesFirstOn,
+                I18nKey::DescSearchFavoritesFirstOff,
+                search_favorites_first,
+                window,
+                cx,
+                |state, this, _window, _cx| {
+                    state.update(_cx, |s, _cx| {
+                        s.settings.search_favorites_first = !s.settings.search_favorites_first;
                         s.settings.save();
                     });
                     this.update(_cx, |_panel, cx| {

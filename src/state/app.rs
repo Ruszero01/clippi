@@ -35,6 +35,18 @@ const LIST_RICH_HTML_LIMIT: usize = 4096;
 const LIST_RICH_AUX_LIMIT: usize = 2048;
 const LIST_NOTE_LIMIT: usize = 2048;
 
+/// One page of keyword candidates. `exhausted` tracks the raw database page
+/// independently of the filtered `matches`, so a page whose candidates were
+/// all filtered out still advances the scan instead of being mistaken for
+/// the end of data.
+struct KeywordPage {
+    /// Whether the raw database candidate page was empty (candidate data
+    /// exhausted).
+    exhausted: bool,
+    /// Items that passed foreign-path and keyword filtering, in page order.
+    matches: Vec<ClipboardItem>,
+}
+
 /// Root application state entity.
 ///
 /// Held in an `Entity<AppState>` by the root view. Child views access it
@@ -426,35 +438,62 @@ impl AppState {
         let scan_limit = result_limit
             .saturating_mul(KEYWORD_SEARCH_SCAN_MULTIPLIER)
             .clamp(KEYWORD_SEARCH_MIN_SCAN_LIMIT, KEYWORD_SEARCH_MAX_SCAN_LIMIT);
-        let mut matches = Vec::new();
+
+        // Favorites-first only reorders keyword searches. With the favorites-only
+        // filter every result is already a favorite, so the single-bucket path
+        // below stays active and unchanged.
+        let prioritize =
+            self.settings.search_favorites_first && !self.filters.is_favorites_active();
+
+        if !prioritize {
+            // Single-bucket path (existing behavior): stop as soon as the result
+            // limit is reached, so disabled mode has no performance regression.
+            let mut matches = Vec::new();
+            let mut offset = 0;
+
+            while offset < scan_limit && matches.len() < result_limit {
+                let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
+                let page = self.load_keyword_page(&keywords, page_limit, offset)?;
+                if page.exhausted {
+                    break;
+                }
+                matches.extend(page.matches.into_iter().take(result_limit - matches.len()));
+                if page_limit < KEYWORD_SEARCH_PAGE_SIZE {
+                    break;
+                }
+                offset += page_limit;
+            }
+
+            return Ok(matches);
+        }
+
+        // Favorites-first path: keep scanning until the favorite bucket is full,
+        // so older favorite matches are still discovered after the regular bucket
+        // reaches its limit. Both buckets preserve the database time order.
+        let mut favorite_matches = Vec::new();
+        let mut regular_matches = Vec::new();
         let mut offset = 0;
 
-        while offset < scan_limit && matches.len() < result_limit {
+        'pages: while offset < scan_limit && favorite_matches.len() < result_limit {
             let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
-            let mut page = self.db.load_filtered_page_with_tags(
-                &self.filters,
-                page_limit,
-                offset,
-                self.order_by(),
-            )?;
-            if page.is_empty() {
+            let page = self.load_keyword_page(&keywords, page_limit, offset)?;
+            if page.exhausted {
                 break;
             }
 
-            for item in page.drain(..) {
-                if self.settings.filter_foreign_paths
-                    && item.meta_type == "path"
-                    && !crate::core::types::path_is_native(&item.full_text)
-                {
-                    continue;
-                }
-                if item_matches_keywords(&item, &keywords) {
-                    let mut item = item;
-                    shrink_item_for_list(&mut item);
-                    matches.push(item);
-                    if matches.len() >= result_limit {
-                        break;
+            for item in page.matches {
+                if item.is_favorite {
+                    if favorite_matches.len() < result_limit {
+                        favorite_matches.push(item);
                     }
+                } else if regular_matches.len() < result_limit {
+                    regular_matches.push(item);
+                }
+
+                // Later candidates are older, so once favorites fill the result
+                // limit no later item can enter the final list.
+                if favorite_matches.len() >= result_limit {
+                    break 'pages;
                 }
             }
 
@@ -464,7 +503,45 @@ impl AppState {
             offset += page_limit;
         }
 
-        Ok(matches)
+        favorite_matches.extend(regular_matches);
+        favorite_matches.truncate(result_limit);
+        Ok(favorite_matches)
+    }
+
+    /// Load one page of keyword candidates with the shared pagination, foreign
+    /// path filtering, in-memory keyword matching and list preview shrinking
+    /// rules. Both the single-bucket and the favorites-first search paths reuse
+    /// this so their candidate semantics stay in lockstep.
+    ///
+    /// `KeywordPage::exhausted` reflects the raw database page, so an
+    /// all-non-matching page advances the scan instead of being mistaken for
+    /// the end of data.
+    fn load_keyword_page(
+        &self,
+        keywords: &[String],
+        page_limit: usize,
+        offset: usize,
+    ) -> rusqlite::Result<KeywordPage> {
+        let mut page = self.db.load_filtered_page_with_tags(
+            &self.filters,
+            page_limit,
+            offset,
+            self.order_by(),
+        )?;
+        let exhausted = page.is_empty();
+        if self.settings.filter_foreign_paths {
+            page.retain(|item| {
+                item.meta_type != "path" || crate::core::types::path_is_native(&item.full_text)
+            });
+        }
+        page.retain(|item| item_matches_keywords(item, keywords));
+        for item in &mut page {
+            shrink_item_for_list(item);
+        }
+        Ok(KeywordPage {
+            exhausted,
+            matches: page,
+        })
     }
 
     /// Clear all items from memory to free resources while window is hidden.
@@ -1821,9 +1898,11 @@ impl AppState {
     ///
     /// # Incremental update
     /// Updates `item.is_favorite` and `item.updated_at` in `self.items` directly,
-    /// unless the favorites filter is active (needs full reload for accuracy).
+    /// unless the favorites filter is active or favorites-first search reordering
+    /// applies (both need a full reload for accurate results).
     pub fn toggle_favorite(&mut self, id: i64) {
-        let needs_full_refresh = self.filters.is_favorites_active();
+        let needs_full_refresh = self.filters.is_favorites_active()
+            || (self.settings.search_favorites_first && self.filters.has_keyword());
 
         // Read current state before toggling (needed for tombstone direction)
         let item = match self.db.get_by_id(id) {
@@ -1925,7 +2004,8 @@ impl AppState {
     /// Batch toggle favorite on all selected items.
     /// Loops selected_ids, applies the same toggle + tombstone logic per item.
     pub fn batch_toggle_favorite(&mut self) {
-        let needs_full_refresh = self.filters.is_favorites_active();
+        let needs_full_refresh = self.filters.is_favorites_active()
+            || (self.settings.search_favorites_first && self.filters.has_keyword());
         let now = chrono::Utc::now().to_rfc3339();
         let device = crate::services::backends::local_folder::hostname();
         let updated_at = chrono::Utc::now();
@@ -2616,6 +2696,367 @@ mod tests {
             update_phase: UpdatePhase::Idle,
         };
         (state, dirty)
+    }
+
+    /// Insert a plain-text item with a controlled timestamp offset (seconds in
+    /// the past) and return its real database id.
+    ///
+    /// `upsert` intentionally never writes `is_favorite` (captured items start
+    /// as non-favorites), so favorite items are set via `toggle_favorite` and
+    /// then re-upserted to restore the controlled `updated_at`.
+    fn insert_item_at_age(
+        state: &mut AppState,
+        id: i64,
+        is_favorite: bool,
+        full_text: &str,
+        age_secs: i64,
+    ) -> i64 {
+        let mut item = make_item(id, ContentType::PlainText, is_favorite, full_text);
+        let ts = chrono::Utc::now() - chrono::Duration::seconds(age_secs);
+        item.created_at = ts;
+        item.updated_at = ts;
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+        let real_id = state.db.get_by_hash(hash).unwrap().unwrap().id;
+        if is_favorite {
+            state.db.toggle_favorite(real_id).unwrap();
+            state.db.upsert(&item).unwrap(); // restore updated_at, keep is_favorite
+        }
+        real_id
+    }
+
+    fn item_texts(state: &AppState) -> Vec<&str> {
+        state.items.iter().map(|i| i.full_text.as_str()).collect()
+    }
+
+    /// Insert a path-type item; used with `filter_foreign_paths` tests.
+    fn insert_path_item_at_age(
+        state: &mut AppState,
+        id: i64,
+        full_path: &str,
+        age_secs: i64,
+    ) -> i64 {
+        let mut item = make_item(id, ContentType::PlainText, false, full_path);
+        item.meta_type = "path".to_string();
+        let ts = chrono::Utc::now() - chrono::Duration::seconds(age_secs);
+        item.created_at = ts;
+        item.updated_at = ts;
+        let hash = item.content_hash;
+        state.db.upsert(&item).unwrap();
+        state.db.get_by_hash(hash).unwrap().unwrap().id
+    }
+
+    #[test]
+    fn keyword_search_skips_non_matching_pages_when_disabled() {
+        let (mut state, _dirty) = test_state();
+        // The first 128 candidates (one full page) contain no match; the match
+        // sits on the next page. An empty filtered page must not end the scan.
+        for i in 0..128 {
+            insert_item_at_age(&mut state, 1000 + i, false, "filler", 1 + i);
+        }
+        insert_item_at_age(&mut state, 2000, false, "needle late", 1000);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(item_texts(&state), vec!["needle late"]);
+    }
+
+    #[test]
+    fn keyword_search_skips_non_matching_pages_when_enabled() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        // Same one-page gap; the later favorite and regular matches must both
+        // be found and grouped correctly.
+        for i in 0..128 {
+            insert_item_at_age(&mut state, 1000 + i, false, "filler", 1 + i);
+        }
+        let fav_id = insert_item_at_age(&mut state, 2000, true, "needle fav late", 1000);
+        insert_item_at_age(&mut state, 2001, false, "needle reg late", 1001);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.items[0].id, fav_id);
+        assert!(state.items[0].is_favorite);
+        assert!(!state.items[1].is_favorite);
+    }
+
+    #[test]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    fn keyword_search_continues_after_fully_filtered_foreign_path_page() {
+        let (mut state, _dirty) = test_state();
+        state.settings.filter_foreign_paths = true;
+        // One full page of foreign paths is filtered out entirely; the scan
+        // must continue to the native path match on the next page.
+        // The foreign path is chosen per platform: Unix absolute paths are
+        // foreign on Windows, Windows-style paths are foreign on macOS.
+        // Linux is excluded because its path_is_native() stub accepts all
+        // paths, so the path filter can never remove a page there.
+        #[cfg(target_os = "windows")]
+        let foreign_path = "/usr/share/lib/file.txt";
+        #[cfg(target_os = "macos")]
+        let foreign_path = "C:\\share\\lib\\file.txt";
+        #[cfg(target_os = "windows")]
+        let native_path = "C:\\needle\\file.txt";
+        #[cfg(target_os = "macos")]
+        let native_path = "/Users/needle/file.txt";
+
+        for i in 0..128 {
+            insert_path_item_at_age(&mut state, 1000 + i, foreign_path, 1 + i);
+        }
+        insert_path_item_at_age(&mut state, 2000, native_path, 1000);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(item_texts(&state), vec![native_path]);
+    }
+
+    #[test]
+    fn keyword_search_keeps_time_order_when_favorites_first_disabled() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "needle reg-new", 1);
+        insert_item_at_age(&mut state, 2, false, "needle reg-mid", 2);
+        insert_item_at_age(&mut state, 3, true, "needle fav-old", 3);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(
+            item_texts(&state),
+            vec!["needle reg-new", "needle reg-mid", "needle fav-old"]
+        );
+    }
+
+    #[test]
+    fn keyword_search_prioritizes_favorites_when_enabled() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        insert_item_at_age(&mut state, 1, false, "needle reg-new", 1);
+        insert_item_at_age(&mut state, 2, false, "needle reg-mid", 2);
+        insert_item_at_age(&mut state, 3, true, "needle fav-old", 3);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(
+            item_texts(&state),
+            vec!["needle fav-old", "needle reg-new", "needle reg-mid"]
+        );
+    }
+
+    #[test]
+    fn keyword_search_keeps_time_order_within_groups() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        insert_item_at_age(&mut state, 1, true, "needle fav-newer", 1);
+        insert_item_at_age(&mut state, 2, false, "needle reg-newer", 2);
+        insert_item_at_age(&mut state, 3, true, "needle fav-older", 3);
+        insert_item_at_age(&mut state, 4, false, "needle reg-older", 4);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(
+            item_texts(&state),
+            vec![
+                "needle fav-newer",
+                "needle fav-older",
+                "needle reg-newer",
+                "needle reg-older"
+            ]
+        );
+    }
+
+    #[test]
+    fn keyword_search_groups_respect_sort_by_created() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        state.settings.sort_by_created = true;
+        insert_item_at_age(&mut state, 1, false, "needle reg-newer", 1);
+        insert_item_at_age(&mut state, 2, true, "needle fav-newer", 2);
+        insert_item_at_age(&mut state, 3, false, "needle reg-older", 3);
+        insert_item_at_age(&mut state, 4, true, "needle fav-older", 4);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(
+            item_texts(&state),
+            vec![
+                "needle fav-newer",
+                "needle fav-older",
+                "needle reg-newer",
+                "needle reg-older"
+            ]
+        );
+    }
+
+    #[test]
+    fn favorites_first_does_not_reorder_main_list_without_keyword() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        insert_item_at_age(&mut state, 1, false, "alpha", 1);
+        insert_item_at_age(&mut state, 2, true, "beta", 2);
+        insert_item_at_age(&mut state, 3, false, "gamma", 3);
+
+        state.reload_items();
+
+        assert_eq!(item_texts(&state), vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn favorites_first_with_favorites_only_filter_matches_existing_behavior() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        insert_item_at_age(&mut state, 1, false, "needle reg", 1);
+        insert_item_at_age(&mut state, 2, true, "needle fav-a", 2);
+        insert_item_at_age(&mut state, 3, true, "needle fav-b", 3);
+
+        state.filters.set_keyword("needle");
+        state.filters.toggle_favorites_only();
+        state.reload_items();
+
+        assert_eq!(item_texts(&state), vec!["needle fav-a", "needle fav-b"]);
+    }
+
+    #[test]
+    fn favorites_beyond_old_stop_point_still_enter_results_when_enabled() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        // result_limit is 200 by default; the first 201 scanned candidates are
+        // regular matches, so the old path would stop before ever seeing the
+        // favorites. They are still within the 1000-row scan limit.
+        for i in 0..201 {
+            insert_item_at_age(&mut state, 1000 + i, false, "needle", 10 + i);
+        }
+        insert_item_at_age(&mut state, 3000, true, "needle fav-old-a", 1000);
+        insert_item_at_age(&mut state, 3001, true, "needle fav-old-b", 1001);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 200);
+        assert!(state.items[0].is_favorite);
+        assert!(state.items[1].is_favorite);
+        assert_eq!(state.items[0].full_text, "needle fav-old-a");
+        assert_eq!(state.items[1].full_text, "needle fav-old-b");
+        assert!(!state.items[2].is_favorite);
+    }
+
+    #[test]
+    fn favorites_beyond_stop_point_not_found_when_disabled() {
+        let (mut state, _dirty) = test_state();
+        for i in 0..201 {
+            insert_item_at_age(&mut state, 1000 + i, false, "needle", 10 + i);
+        }
+        insert_item_at_age(&mut state, 3000, true, "needle fav-old", 1000);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 200);
+        assert!(state.items.iter().all(|i| !i.is_favorite));
+    }
+
+    #[test]
+    fn favorite_bucket_fill_ends_scan_early_and_caps_result() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        for i in 0..201 {
+            insert_item_at_age(&mut state, 1000 + i, true, "needle", 10 + i);
+        }
+        insert_item_at_age(&mut state, 3000, false, "needle reg", 1000);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 200);
+        assert!(state.items.iter().all(|i| i.is_favorite));
+    }
+
+    #[test]
+    fn toggling_favorite_during_search_reorders_results() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        insert_item_at_age(&mut state, 1, false, "needle reg", 1);
+        let fav_id = insert_item_at_age(&mut state, 2, true, "needle fav", 2);
+        let reg_id = insert_item_at_age(&mut state, 3, false, "needle other", 3);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+        assert_eq!(state.items[0].id, fav_id);
+
+        // Full refresh must move the toggled item into the favorite group.
+        state.toggle_favorite(reg_id);
+        assert_eq!(state.items[0].id, reg_id);
+        assert!(state.items[0].is_favorite);
+        assert_eq!(state.items[1].id, fav_id);
+    }
+
+    #[test]
+    fn toggling_favorite_without_keyword_keeps_incremental_update() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        insert_item_at_age(&mut state, 1, false, "alpha", 1);
+        let beta_id = insert_item_at_age(&mut state, 2, false, "beta", 2);
+        insert_item_at_age(&mut state, 3, true, "gamma", 3);
+
+        state.reload_items();
+        assert_eq!(state.items[0].full_text, "alpha");
+
+        // No keyword: incremental path keeps the list order in place.
+        state.toggle_favorite(beta_id);
+        assert_eq!(state.items[0].full_text, "alpha");
+        assert!(state.items[1].is_favorite);
+    }
+
+    #[test]
+    fn batch_toggling_favorites_during_search_reorders_results() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        let reg_a = insert_item_at_age(&mut state, 1, false, "needle a", 1);
+        let reg_b = insert_item_at_age(&mut state, 2, false, "needle b", 2);
+        let fav_id = insert_item_at_age(&mut state, 3, true, "needle fav", 3);
+        let reg_c = insert_item_at_age(&mut state, 4, false, "needle c", 4);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+        assert_eq!(state.items[0].id, fav_id);
+
+        state.selected_ids = vec![reg_a, reg_b];
+        state.batch_toggle_favorite();
+
+        // Both toggled items join the favorite group; the untouched favorite
+        // stays there and the non-favorite stays at the end.
+        assert_eq!(state.items.len(), 4);
+        assert!(state.items[0].is_favorite);
+        assert!(state.items[1].is_favorite);
+        assert!(state.items[2].is_favorite);
+        assert_eq!(state.items[2].id, fav_id);
+        assert_eq!(state.items[3].id, reg_c);
+        assert!(!state.items[3].is_favorite);
+        assert!(state.selected_ids.is_empty());
+    }
+
+    #[test]
+    fn favorites_beyond_scan_limit_are_not_found() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        // scan_limit = 200 × 8 = 1600 for the default result limit of 200;
+        // the favorite below sits outside that window and must not appear.
+        for i in 0..1601 {
+            insert_item_at_age(&mut state, 2000 + i, false, "needle", 10 + i);
+        }
+        insert_item_at_age(&mut state, 3000, true, "needle fav-beyond", 5000);
+
+        state.filters.set_keyword("needle");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 200);
+        assert!(state.items.iter().all(|i| !i.is_favorite));
     }
 
     #[test]
