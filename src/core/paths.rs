@@ -222,7 +222,26 @@ pub fn init_images_dir(db_path: &str) {
     let _ = RESOLVED_TRANSFER_CACHE_DIR.set(data_dir.join("file_cache"));
 }
 
+/// In tests, pin the global images dir to a unique temporary directory so
+/// unit tests never read, write or create the real Application Support data.
+/// The first test that touches `images_dir()` triggers this once; all later
+/// access (including production helpers like `update_sync_item`) then sees
+/// the same test directory.
+#[cfg(test)]
+fn init_test_images_dir() {
+    static TEST_IMAGES_DIR_ONCE: std::sync::Once = std::sync::Once::new();
+    TEST_IMAGES_DIR_ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("clippi-test-images-{}", std::process::id()));
+        // Remove leftovers from previous runs of this test binary.
+        let _ = std::fs::remove_dir_all(&dir);
+        let db_path = dir.join("clippi-test.db");
+        init_images_dir(db_path.to_str().unwrap_or("clippi-test.db"));
+    });
+}
+
 pub fn images_dir() -> PathBuf {
+    #[cfg(test)]
+    init_test_images_dir();
     let dir = RESOLVED_IMAGES_DIR
         .get()
         .cloned()

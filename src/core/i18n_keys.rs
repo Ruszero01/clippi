@@ -225,6 +225,7 @@ define_i18n! {
     BtnCleanupNow:          ("立即清理", "Clean now"),
     ToastCleanupNone:       ("没有需要清理的数据", "No data to clean up"),
     ToastCleanupDone:       ("清理完成", "Cleanup complete"),
+    ToastCleanupFailed:     ("清理未完全完成，将自动重试", "Cleanup incomplete, will retry automatically"),
 
     // ─── Data cleanup (stale items / clear data) ───
     SettingHistoryRetention: ("历史保留", "History retention"),

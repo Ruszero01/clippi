@@ -854,11 +854,7 @@ impl WindowManager {
                         stats.scan_complete,
                     );
                 }
-                let message = if stats.is_empty() {
-                    I18nKey::ToastCleanupNone.text().to_string()
-                } else {
-                    I18nKey::ToastCleanupDone.text().to_string()
-                };
+                let message = Self::cleanup_toast_message(stats.is_empty(), need_retry);
                 if show_toast {
                     cx.emit(WindowManagerEvent::DataMaintenanceToast(message));
                 }
@@ -921,6 +917,20 @@ impl WindowManager {
                     I18nKey::ToastDataMaintenanceFailed.text().to_string(),
                 ));
             }
+        }
+    }
+
+    /// Choose the user-facing toast for a completed cleanup run. A failed
+    /// scan or removal phase (`need_retry`) always reports the cleanup as
+    /// incomplete — otherwise a silent failure would look like a successful
+    /// (or empty) cleanup.
+    fn cleanup_toast_message(stats_is_empty: bool, need_retry: bool) -> String {
+        if need_retry {
+            I18nKey::ToastCleanupFailed.text().to_string()
+        } else if stats_is_empty {
+            I18nKey::ToastCleanupNone.text().to_string()
+        } else {
+            I18nKey::ToastCleanupDone.text().to_string()
         }
     }
 
@@ -4831,6 +4841,38 @@ mod cleanup_schedule_tests {
         assert!(!transfer_cleanup_due(true, 3, "2026-07-20", today));
         assert!(!transfer_cleanup_due(false, 3, "", today));
         assert!(!transfer_cleanup_due(true, 0, "", today));
+    }
+}
+
+#[cfg(test)]
+mod cleanup_toast_tests {
+    use super::WindowManager;
+    use crate::core::i18n_keys::I18nKey;
+
+    #[test]
+    fn cleanup_toast_prefers_retry_over_empty_or_done() {
+        // A failed scan with no deletions must not report "nothing to clean"
+        // or "cleanup complete".
+        assert_eq!(
+            WindowManager::cleanup_toast_message(true, true),
+            I18nKey::ToastCleanupFailed.text()
+        );
+        assert_eq!(
+            WindowManager::cleanup_toast_message(false, true),
+            I18nKey::ToastCleanupFailed.text()
+        );
+    }
+
+    #[test]
+    fn cleanup_toast_distinguishes_empty_from_done() {
+        assert_eq!(
+            WindowManager::cleanup_toast_message(true, false),
+            I18nKey::ToastCleanupNone.text()
+        );
+        assert_eq!(
+            WindowManager::cleanup_toast_message(false, false),
+            I18nKey::ToastCleanupDone.text()
+        );
     }
 }
 

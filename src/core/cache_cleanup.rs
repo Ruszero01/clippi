@@ -633,6 +633,12 @@ fn local_volume_status(path_str: &str) -> Result<(), PathStatusReason> {
     #[cfg(target_os = "macos")]
     {
         let path = Path::new(path_str);
+        // External volumes live under /Volumes. No stable volume identity
+        // (UUID / filesystem ID) is captured or compared yet, so a mounted
+        // USB drive, external disk or network share cannot be told apart
+        // from the volume that was present at capture time — treat every
+        // /Volumes path as a removable volume that must never be
+        // auto-deleted (design §11 stage C, conservative phase 1).
         if let Ok(relative) = path.strip_prefix("/Volumes") {
             let volume = relative
                 .components()
@@ -646,7 +652,17 @@ fn local_volume_status(path_str: &str) -> Result<(), PathStatusReason> {
             if std::fs::metadata(&anchor).is_err() {
                 return Err(PathStatusReason::VolumeOffline);
             }
-            return Ok(());
+            return Err(PathStatusReason::RemovableVolume);
+        }
+        // Cloud provider subtrees (iCloud Drive, File Provider, ...) cannot
+        // certify a child as missing while the provider is offline — stay
+        // conservative until provider state can be queried.
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            if path.starts_with(home.join("Library/Mobile Documents"))
+                || path.starts_with(home.join("Library/CloudStorage"))
+            {
+                return Err(PathStatusReason::CloudProviderUnavailable);
+            }
         }
         if std::fs::metadata("/").is_err() {
             return Err(PathStatusReason::VolumeOffline);
@@ -1475,6 +1491,66 @@ mod tests {
             probe_path_status(&path),
             PathStatus::DefinitelyMissing
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_mounted_external_volume_is_removable_protected() {
+        // A reachable /Volumes entry has no verified volume identity, so it
+        // must be protected as a removable volume, never auto-deleted.
+        let mut entries = match std::fs::read_dir("/Volumes") {
+            Ok(entries) => entries,
+            Err(_) => return, // No volumes at all — nothing to assert.
+        };
+        if let Some(Ok(entry)) = entries.next() {
+            let path = entry
+                .path()
+                .join("any-file.png")
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(
+                local_volume_status(&path),
+                Err(PathStatusReason::RemovableVolume)
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_offline_external_volume_is_volume_offline() {
+        let path = format!(
+            "/Volumes/clippi-never-mounted-{}/missing.txt",
+            std::process::id()
+        );
+        assert_eq!(
+            local_volume_status(&path),
+            Err(PathStatusReason::VolumeOffline)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_cloud_provider_subtrees_are_protected() {
+        let home = std::env::var_os("HOME").expect("HOME set in test");
+        let cloud = std::path::Path::new(&home)
+            .join("Library/CloudStorage/GoogleDrive/photo.png")
+            .to_string_lossy()
+            .into_owned();
+        let icloud = std::path::Path::new(&home)
+            .join("Library/Mobile Documents/com~apple~CloudDocs/doc.txt")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            local_volume_status(&cloud),
+            Err(PathStatusReason::CloudProviderUnavailable)
+        );
+        assert_eq!(
+            local_volume_status(&icloud),
+            Err(PathStatusReason::CloudProviderUnavailable)
+        );
+        // Ordinary home-directory paths remain verifiable local volumes.
+        let local = std::path::Path::new(&home).join("Desktop/photo.png");
+        assert_eq!(local_volume_status(&local.to_string_lossy()), Ok(()));
     }
 
     #[test]

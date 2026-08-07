@@ -1798,15 +1798,20 @@ impl Database {
     /// Inner merge logic — assumes `source` is already attached.
     fn merge_from_attached(&self) -> SqlResult<MergeStats> {
         // ── 1. Items: insert rows whose content_hash doesn't exist locally ──
+        // Stale-cleanup protection fields (`existence_observed_at`,
+        // `sync_pending`) are copied along: dropping them would either
+        // permanently lose the capture-time existence evidence or turn a
+        // not-yet-downloaded sync image into a deletable local image.
         let items_added = self.conn.execute(
             "INSERT INTO main.clipboard_items
              (content_type, full_text, content_hash, created_at, updated_at,
               image_path, rich_data, file_data, is_favorite, note,
-              source_app_name, source_app_icon, image_width, image_height, size, meta_type)
+              source_app_name, source_app_icon, image_width, image_height, size, meta_type,
+              existence_observed_at, sync_pending)
              SELECT content_type, full_text, content_hash, created_at, updated_at,
                     image_path, rich_data, file_data, is_favorite, note,
                     source_app_name, source_app_icon, image_width, image_height, size,
-                    COALESCE(meta_type, '')
+                    COALESCE(meta_type, ''), existence_observed_at, sync_pending
              FROM source.clipboard_items s
              WHERE s.content_hash NOT IN (
                  SELECT content_hash FROM main.clipboard_items
@@ -1815,6 +1820,9 @@ impl Database {
         )?;
 
         // ── 2. Items: update existing rows when source has a newer updated_at ──
+        // The winning (newer) source record also wins on `sync_pending`, but
+        // `existence_observed_at` follows the same non-empty-evidence rule as
+        // `upsert`: an empty source value must not erase target evidence.
         let items_updated = self.conn.execute(
             "UPDATE main.clipboard_items
              SET content_type   = (SELECT s.content_type    FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
@@ -1830,7 +1838,9 @@ impl Database {
                  image_width    = (SELECT s.image_width     FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
                  image_height   = (SELECT s.image_height    FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
                  size           = (SELECT s.size            FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
-                 meta_type      = (SELECT COALESCE(s.meta_type, '') FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash)
+                 meta_type      = (SELECT COALESCE(s.meta_type, '') FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 existence_observed_at = (SELECT CASE WHEN s.existence_observed_at = '' THEN main.clipboard_items.existence_observed_at ELSE s.existence_observed_at END FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash),
+                 sync_pending   = (SELECT s.sync_pending    FROM source.clipboard_items s WHERE s.content_hash = main.clipboard_items.content_hash)
              WHERE EXISTS (
                  SELECT 1 FROM source.clipboard_items s
                  WHERE s.content_hash = main.clipboard_items.content_hash
@@ -2617,6 +2627,97 @@ mod tests {
             )
             .unwrap();
         assert_eq!(text, "hello-new");
+    }
+
+    #[test]
+    fn merge_preserves_cleanup_protection_fields() {
+        // Stale-cleanup protection fields must survive a database merge:
+        // 100 is a new row (INSERT path), 101 is updated by a newer source
+        // row, 102 is updated by a source row without existence evidence.
+        let (src_path, src) = temp_db("src-protect");
+        let (_tgt_path, tgt) = temp_db("tgt-protect");
+
+        // 100: only in source — carry over evidence + pending flag.
+        src.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, source_app_icon, existence_observed_at, sync_pending) \
+                 VALUES ('image', '', 100, '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z', \
+                         '/tmp/src/100.png', 'Sync', 'icon', '2025-01-01T00:00:00Z', 1)",
+                [],
+            )
+            .unwrap();
+
+        // 101: target is older and locally captured (pending=0); the newer
+        // source row points at a not-yet-downloaded sync blob (pending=1).
+        // The winning source record must win on sync_pending, otherwise the
+        // merged row pairs a missing blob path with an unprotected state.
+        tgt.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, source_app_icon, existence_observed_at, sync_pending) \
+                 VALUES ('image', '', 101, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', \
+                         '/tmp/tgt/101.png', 'Local App', 'icon', '2024-01-01T00:00:00Z', 0)",
+                [],
+            )
+            .unwrap();
+        src.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, source_app_icon, existence_observed_at, sync_pending) \
+                 VALUES ('image', '', 101, '2024-01-01T00:00:00Z', '2025-01-01T00:00:00Z', \
+                         '/tmp/src/101.png', '', '', '2025-01-01T00:00:00Z', 1)",
+                [],
+            )
+            .unwrap();
+
+        // 102: target has capture evidence, the newer source row has none —
+        // the non-empty evidence rule must keep the target value.
+        tgt.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, source_app_icon, existence_observed_at, sync_pending) \
+                 VALUES ('image', '', 102, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', \
+                         '/tmp/tgt/102.png', 'Local App', 'icon', '2024-01-01T00:00:00Z', 0)",
+                [],
+            )
+            .unwrap();
+        src.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                  source_app_name, source_app_icon, existence_observed_at, sync_pending) \
+                 VALUES ('image', '', 102, '2024-01-01T00:00:00Z', '2025-01-01T00:00:00Z', \
+                         '/tmp/src/102.png', '', '', '', 0)",
+                [],
+            )
+            .unwrap();
+
+        let stats = tgt.merge_from(&src_path).unwrap();
+        assert_eq!(stats.items_added, 1);
+        assert_eq!(stats.items_updated, 2);
+
+        let row = |hash: i64| -> (String, i64) {
+            tgt.conn
+                .query_row(
+                    "SELECT existence_observed_at, sync_pending FROM clipboard_items \
+                     WHERE content_hash = ?1",
+                    [hash],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+
+        // 100: new row keeps both protection fields.
+        assert_eq!(row(100), ("2025-01-01T00:00:00Z".to_string(), 1));
+        // 101: newer source record wins on sync_pending and evidence.
+        assert_eq!(row(101), ("2025-01-01T00:00:00Z".to_string(), 1));
+        // 102: empty source evidence must not erase target evidence.
+        assert_eq!(row(102), ("2024-01-01T00:00:00Z".to_string(), 0));
     }
 
     #[test]

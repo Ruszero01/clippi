@@ -163,7 +163,7 @@ fn repair_db_schema(conn: &Connection) -> rusqlite::Result<()> {
     // migration — but only when the column was actually added, never on a
     // plain reopen.
     if ensure_sync_pending_column(conn)? {
-        backfill_sync_pending(conn)?;
+        backfill_sync_pending(conn, &images_prefix())?;
     }
     Ok(())
 }
@@ -183,8 +183,15 @@ fn migrate_existence_observed_at(conn: &Connection) -> rusqlite::Result<()> {
 /// or by the schema repair when the column was missing entirely.
 fn migrate_sync_pending(conn: &Connection) -> rusqlite::Result<()> {
     ensure_sync_pending_column(conn)?;
-    backfill_sync_pending(conn)?;
+    backfill_sync_pending(conn, &images_prefix())?;
     Ok(())
+}
+
+/// The managed image directory prefix used by the v9 backfill.
+fn images_prefix() -> String {
+    crate::core::paths::images_dir()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Ensure the `sync_pending` column exists. Returns `true` when the column
@@ -205,16 +212,21 @@ fn ensure_sync_pending_column(conn: &Connection) -> rusqlite::Result<bool> {
 /// path + no local source metadata): their blob may not be downloaded yet,
 /// and the old heuristic (empty source fields) must not turn them into
 /// deletable local images.
-fn backfill_sync_pending(conn: &Connection) -> rusqlite::Result<()> {
-    let images_prefix = crate::core::paths::images_dir()
-        .to_string_lossy()
-        .into_owned();
+///
+/// The match is a directory-boundary prefix test: the images prefix is
+/// compared with a trailing path separator, so sibling directories that
+/// merely share the `images` character prefix (e.g. `images-backup`) are
+/// never treated as managed image dirs. SQLite `substr` counts characters,
+/// so the character length of the prefix is passed, never its UTF-8 byte
+/// length (a non-ASCII data directory would otherwise never match).
+fn backfill_sync_pending(conn: &Connection, images_prefix: &str) -> rusqlite::Result<()> {
+    let boundary_prefix = format!("{}{}", images_prefix, std::path::MAIN_SEPARATOR);
     conn.execute(
         "UPDATE clipboard_items SET sync_pending = 1 \
          WHERE content_type = 'image' AND image_path != '' \
            AND substr(image_path, 1, ?1) = ?2 \
            AND source_app_name = '' AND source_app_icon = ''",
-        rusqlite::params![images_prefix.len() as i64, images_prefix],
+        rusqlite::params![boundary_prefix.chars().count() as i64, boundary_prefix],
     )?;
     Ok(())
 }
@@ -393,6 +405,21 @@ mod tests {
     /// Create a clipboard_items table with the pre-v9 shape and one
     /// sync-looking image row (managed path + empty source metadata).
     fn legacy_sync_image_db(conn: &Connection, user_version: i64, sync_pending: i64) {
+        let image_path = crate::core::paths::images_dir()
+            .join("legacy-sync-image.png")
+            .to_string_lossy()
+            .into_owned();
+        legacy_sync_image_db_with_path(conn, user_version, sync_pending, &image_path);
+    }
+
+    /// Like `legacy_sync_image_db`, but with an explicit managed image path
+    /// (used to exercise non-ASCII data directories).
+    fn legacy_sync_image_db_with_path(
+        conn: &Connection,
+        user_version: i64,
+        sync_pending: i64,
+        image_path: &str,
+    ) {
         conn.execute_batch(
             "CREATE TABLE clipboard_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -417,10 +444,6 @@ mod tests {
             );",
         )
         .unwrap();
-        let image_path = crate::core::paths::images_dir()
-            .join("legacy-sync-image.png")
-            .to_string_lossy()
-            .into_owned();
         conn.execute(
             "INSERT INTO clipboard_items \
              (content_type, full_text, content_hash, created_at, updated_at, image_path, \
@@ -449,6 +472,68 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn v9_backfill_matches_chinese_data_dir() {
+        // A managed image path under a non-ASCII (Chinese) data directory:
+        // the prefix match must count characters, not UTF-8 bytes, otherwise
+        // the row is never marked pending and can be deleted by the stale
+        // cleanup while the sync blob is still missing. The prefix and the
+        // image path are built with the same `PathBuf` operations so they
+        // share the platform separator — on Windows the implementation's
+        // boundary prefix ends in `\`, on Unix in `/`.
+        let conn = Connection::open_in_memory().unwrap();
+        let data_dir = std::path::PathBuf::from("C:\\Users\\测试用户")
+            .join("Library")
+            .join("Application Support")
+            .join("Clippi");
+        let images_dir = data_dir.join("images");
+        let image_path = images_dir.join("legacy-sync-image.png");
+        let prefix = images_dir.to_string_lossy();
+        legacy_sync_image_db_with_path(&conn, 8, 0, &image_path.to_string_lossy());
+
+        backfill_sync_pending(&conn, &prefix).unwrap();
+
+        let pending: i64 = conn
+            .query_row(
+                "SELECT sync_pending FROM clipboard_items WHERE content_hash = 901",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn v9_backfill_skips_paths_outside_images_dir() {
+        // A sibling directory that merely shares the `images` character
+        // prefix (e.g. an old `images-backup` folder) must not be backfilled:
+        // the match requires a real directory boundary after the prefix.
+        let conn = Connection::open_in_memory().unwrap();
+        let images_dir = crate::core::paths::images_dir();
+        let sibling = images_dir
+            .with_file_name(format!(
+                "{}-backup",
+                images_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "images".to_string())
+            ))
+            .join("legacy-sync-image.png");
+        let prefix = images_dir.to_string_lossy();
+        legacy_sync_image_db_with_path(&conn, 8, 0, &sibling.to_string_lossy());
+
+        backfill_sync_pending(&conn, &prefix).unwrap();
+
+        let pending: i64 = conn
+            .query_row(
+                "SELECT sync_pending FROM clipboard_items WHERE content_hash = 901",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0);
     }
 
     #[test]
