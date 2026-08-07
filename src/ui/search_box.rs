@@ -51,7 +51,12 @@ impl SearchBox {
                 state.set_keyword(&keyword);
                 state.visible_items()
             });
-            list_for_input.update(cx, |list, cx| list.set_items(items, cx));
+            list_for_input.update(cx, |list, cx| {
+                list.set_items(items, cx);
+                // Typing a keyword is an explicit reorder intent: when
+                // favorites-first applies, follow the reorder to the top.
+                list.select_and_scroll_to_top_if_favorites_first(cx);
+            });
             cx.notify();
         })];
 

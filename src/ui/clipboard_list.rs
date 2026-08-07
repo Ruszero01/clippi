@@ -255,6 +255,45 @@ impl ClipboardListView {
         cx.notify();
     }
 
+    /// Whether the current search applies favorites-first reordering.
+    fn favorites_first_active(&self, cx: &Context<Self>) -> bool {
+        let app = self.state.read(cx);
+        app.settings.search_favorites_first && app.filters.has_keyword()
+    }
+
+    /// Explicit event: a favorites-first search was re-typed or batch-toggled.
+    /// Bring the top of the reordered result into view and make the first
+    /// result the active item. Only called from user-intent paths (search box
+    /// input, batch favorite toggles) — generic refreshes must not jump.
+    pub(crate) fn select_and_scroll_to_top_if_favorites_first(&mut self, cx: &mut Context<Self>) {
+        if self.favorites_first_active(cx) && !self.items.is_empty() {
+            // The hover toolbar is index-based; the reorder invalidates it, so
+            // drop it and let the next mouse move recompute the hovered row.
+            self.hovered_index = None;
+            self.select_index_without_scroll(0, cx);
+            self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        }
+    }
+
+    /// Explicit event: a single favorite toggle reordered the result.
+    /// Keep the toggled item as the active target — reselect it by id and
+    /// bring it into view at its new group position, so a following Enter or
+    /// copy acts on the same item the user just toggled. Falls back to the
+    /// top of the list if the item left the result set.
+    fn reselect_toggled_item_if_favorites_first(&mut self, item_id: i64, cx: &mut Context<Self>) {
+        if !self.favorites_first_active(cx) || self.items.is_empty() {
+            return;
+        }
+        // The hover toolbar is index-based; the reorder invalidates it.
+        self.hovered_index = None;
+        if let Some(idx) = self.items.iter().position(|item| item.id == item_id) {
+            self.select_index_without_scroll(idx, cx);
+            self.scroll_handle.scroll_to_item(idx, ScrollStrategy::Top);
+        } else {
+            self.select_and_scroll_to_top_if_favorites_first(cx);
+        }
+    }
+
     /// Drop the list's own item copies while the main window is hidden.
     ///
     /// AppState also clears its item list, but ClipboardListView keeps a
@@ -675,15 +714,21 @@ impl ClipboardListView {
 
     /// Toggle favorite on selected item(s).
     pub(crate) fn action_toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        let mut toggled_id: Option<i64> = None;
         if self.selected_count > 1 {
             self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
         } else if let Some(idx) = self.selected_index {
             if let Some(item) = self.items.get(idx) {
                 let id = item.id;
+                toggled_id = Some(id);
                 self.state.update(cx, |s, _cx| s.toggle_favorite(id));
             }
         }
         self.sync_items_from_state(cx);
+        match toggled_id {
+            Some(id) => self.reselect_toggled_item_if_favorites_first(id, cx),
+            None => self.select_and_scroll_to_top_if_favorites_first(cx),
+        }
     }
 
     /// Open the edit panel for the selected item.
@@ -1309,6 +1354,7 @@ impl ClipboardListView {
                     let id = item.id;
                     self.state.update(cx, |s, _cx| s.toggle_favorite(id));
                     self.sync_items_from_state(cx);
+                    self.reselect_toggled_item_if_favorites_first(id, cx);
                 }
             }
             "delete" => {
@@ -1322,6 +1368,7 @@ impl ClipboardListView {
             "batch_favorite" => {
                 self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
                 self.sync_items_from_state(cx);
+                self.select_and_scroll_to_top_if_favorites_first(cx);
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
@@ -1550,8 +1597,10 @@ impl ClipboardListView {
             "toggle_favorite" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
-                        self.state.update(cx, |s, _cx| s.toggle_favorite(item.id));
+                        let id = item.id;
+                        self.state.update(cx, |s, _cx| s.toggle_favorite(id));
                         self.sync_items_from_state(cx);
+                        self.reselect_toggled_item_if_favorites_first(id, cx);
                     }
                 }
             }
@@ -1566,6 +1615,7 @@ impl ClipboardListView {
             "batch_favorite" => {
                 self.state.update(cx, |s, _cx| s.batch_toggle_favorite());
                 self.sync_items_from_state(cx);
+                self.select_and_scroll_to_top_if_favorites_first(cx);
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
