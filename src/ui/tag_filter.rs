@@ -23,6 +23,24 @@ use super::clipboard_list::ClipboardListView;
 use super::filter_bar::FilterBar;
 use super::theme::ClippiTheme;
 
+/// Pending tag-deletion target, emitted as a user intent and confirmed at the
+/// root level before any database mutation happens.
+#[derive(Clone, Debug)]
+pub(crate) struct TagDeleteTarget {
+    pub id: i64,
+    pub name: String,
+}
+
+/// Events emitted by the tag filter panel.
+#[derive(Clone, Debug)]
+pub(crate) enum TagFilterEvent {
+    /// The user clicked a tag's trash button — root should show the
+    /// confirmation dialog instead of deleting immediately.
+    RequestDeleteTag(TagDeleteTarget),
+}
+
+impl EventEmitter<TagFilterEvent> for TagFilterPanel {}
+
 pub struct TagFilterPanel {
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
@@ -138,11 +156,6 @@ impl TagFilterPanel {
 
     pub fn edit_name_input(&self) -> &Entity<InputState> {
         &self.edit_name_input
-    }
-
-    fn delete_tag(&self, tag_id: i64, cx: &mut App) {
-        self.state.update(cx, |s, _cx| s.delete_tag(tag_id));
-        self.refresh_list(cx);
     }
 }
 
@@ -367,6 +380,7 @@ impl Render for TagFilterPanel {
                                     let tag_id = tag.id;
                                     let tag_color = parse_hex_to_rgba(&tag.color);
                                     let tag_name = tag.name.clone();
+                                    let tag_name_for_delete = tag.name.clone();
                                     let tag_name_edit = tag.name.clone();
                                     let tag_color_hex = tag.color.clone();
                                     let this = this.clone();
@@ -473,9 +487,15 @@ impl Render for TagFilterPanel {
                                             danger_hover_bg,
                                             {
                                                 let this = this.clone();
+                                                let target = TagDeleteTarget {
+                                                    id: tag_id,
+                                                    name: tag_name_for_delete,
+                                                };
                                                 move |_w, cx| {
-                                                    this.update(cx, |panel, cx| {
-                                                        panel.delete_tag(tag_id, cx);
+                                                    this.update(cx, |_panel, cx| {
+                                                        cx.emit(TagFilterEvent::RequestDeleteTag(
+                                                            target.clone(),
+                                                        ));
                                                         cx.notify();
                                                     })
                                                 }

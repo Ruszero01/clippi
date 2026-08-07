@@ -120,10 +120,11 @@ pub struct SettingsPanel {
     pub config_sync_backend_id: Option<String>,
     /// Upload confirmation dialog state.
     pub config_sync_upload_confirm: Option<String>,
+    /// Upload confirmation dialog generation (incremented on each new dialog).
+    pub config_sync_upload_confirm_gen: u64,
     /// Apply confirmation dialog generation (incremented on each new dialog).
     pub config_sync_apply_confirm_gen: u64,
     /// When the apply confirmation was shown.
-    #[allow(dead_code)]
     pub config_sync_apply_confirm_started: Option<Instant>,
     /// Whether the config-sync backend selector dropdown is open.
     pub config_sync_menu_open: bool,
@@ -229,6 +230,7 @@ impl SettingsPanel {
             copy_sound_anim_gen: 0,
             config_sync_backend_id: None,
             config_sync_upload_confirm: None,
+            config_sync_upload_confirm_gen: 0,
             config_sync_apply_confirm_gen: 0,
             config_sync_apply_confirm_started: None,
             config_sync_menu_open: false,
@@ -300,9 +302,22 @@ impl SettingsPanel {
 
         let show_upload = self.config_sync_upload_confirm.is_some();
         let show_apply = wm.read(cx).config_sync_pending_snapshot().is_some();
+        // Bump the animation generation when the apply dialog appears so it
+        // plays the same enter animation as the other confirm dialogs.
+        if show_apply {
+            if self.config_sync_apply_confirm_started.is_none() {
+                self.config_sync_apply_confirm_gen =
+                    self.config_sync_apply_confirm_gen.wrapping_add(1);
+                self.config_sync_apply_confirm_started = Some(Instant::now());
+            }
+        } else {
+            self.config_sync_apply_confirm_started = None;
+        }
 
         div()
             .when(show_upload || show_apply, |root| {
+                // Positioning context only — ConfirmDialog provides its own
+                // backdrop, so no second dimming layer is drawn here.
                 root.absolute().size_full().top_0().left_0()
             })
             .when(show_upload, |root| {
@@ -314,54 +329,43 @@ impl SettingsPanel {
                 let theme = theme.clone();
 
                 root.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .top_0()
-                        .left_0()
-                        .bg(rgba(0x00000055))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            ConfirmDialog::new()
-                                .title(I18nKey::ConfigSyncConfirmUploadTitle.text())
-                                .message(msg)
-                                .confirm_label(I18nKey::BtnApply.text())
-                                .danger(false)
-                                .theme(theme)
-                                .on_confirm({
-                                    let wm = wm.clone();
-                                    let this = this.clone();
-                                    let bid = backend_id.clone();
-                                    move |_window, app| {
-                                        let backends = this.read(app).state.read(app).settings.sync_backends.clone();
-                                        if let Some(ref id) = bid {
-                                            if let Some(cfg) = backends.iter().find(|b| &b.id == id) {
-                                                if let Some(backend) = crate::services::backends::create_config_snapshot_backend(cfg) {
-                                                    wm.update(app, |wm, cx| {
-                                                        wm.start_config_upload(backend, cx);
-                                                    });
-                                                }
-                                            }
+                    ConfirmDialog::new()
+                        .title(I18nKey::ConfigSyncConfirmUploadTitle.text())
+                        .message(msg)
+                        .confirm_label(I18nKey::BtnApply.text())
+                        .danger(false)
+                        .theme(theme)
+                        .on_confirm({
+                            let wm = wm.clone();
+                            let this = this.clone();
+                            let bid = backend_id.clone();
+                            move |_window, app| {
+                                let backends = this.read(app).state.read(app).settings.sync_backends.clone();
+                                if let Some(ref id) = bid {
+                                    if let Some(cfg) = backends.iter().find(|b| &b.id == id) {
+                                        if let Some(backend) = crate::services::backends::create_config_snapshot_backend(cfg) {
+                                            wm.update(app, |wm, cx| {
+                                                wm.start_config_upload(backend, cx);
+                                            });
                                         }
-                                        this.update(app, |panel, cx| {
-                                            panel.config_sync_upload_confirm = None;
-                                            cx.notify();
-                                        });
                                     }
-                                })
-                                .on_cancel({
-                                    let this = this.clone();
-                                    move |_window, app| {
-                                        this.update(app, |panel, cx| {
-                                            panel.config_sync_upload_confirm = None;
-                                            cx.notify();
-                                        });
-                                    }
-                                })
-                                .render_animated(window, cx, 0),
-                        ),
+                                }
+                                this.update(app, |panel, cx| {
+                                    panel.config_sync_upload_confirm = None;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .on_cancel({
+                            let this = this.clone();
+                            move |_window, app| {
+                                this.update(app, |panel, cx| {
+                                    panel.config_sync_upload_confirm = None;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render_animated(window, cx, self.config_sync_upload_confirm_gen),
                 )
             })
             .when(show_apply, |root| {
@@ -378,44 +382,33 @@ impl SettingsPanel {
                     let gen = self.config_sync_apply_confirm_gen;
 
                     root.child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .top_0()
-                            .left_0()
-                            .bg(rgba(0x00000055))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                ConfirmDialog::new()
-                                    .title(I18nKey::ConfigSyncConfirmApplyTitle.text())
-                                    .message(msg)
-                                    .confirm_label(I18nKey::BtnRestartNow.text())
-                                    .danger(false)
-                                    .theme(theme)
-                                    .on_confirm({
-                                        let wm = wm.clone();
-                                        move |_window, app| {
-                                            wm.update(app, |wm, cx| {
-                                                wm.apply_config_snapshot(cx);
-                                            });
-                                        }
-                                    })
-                                    .on_cancel({
-                                        let wm = wm.clone();
-                                        let this = this.clone();
-                                        move |_window, app| {
-                                            wm.update(app, |wm, _cx| {
-                                                wm.clear_config_sync_pending_snapshot();
-                                            });
-                                            this.update(app, |_panel, cx| {
-                                                cx.notify();
-                                            });
-                                        }
-                                    })
-                                    .render_animated(window, cx, gen),
-                            ),
+                        ConfirmDialog::new()
+                            .title(I18nKey::ConfigSyncConfirmApplyTitle.text())
+                            .message(msg)
+                            .confirm_label(I18nKey::BtnRestartNow.text())
+                            .danger(false)
+                            .theme(theme)
+                            .on_confirm({
+                                let wm = wm.clone();
+                                move |_window, app| {
+                                    wm.update(app, |wm, cx| {
+                                        wm.apply_config_snapshot(cx);
+                                    });
+                                }
+                            })
+                            .on_cancel({
+                                let wm = wm.clone();
+                                let this = this.clone();
+                                move |_window, app| {
+                                    wm.update(app, |wm, _cx| {
+                                        wm.clear_config_sync_pending_snapshot();
+                                    });
+                                    this.update(app, |_panel, cx| {
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .render_animated(window, cx, gen),
                     )
                 } else {
                     root.child(div())
@@ -441,47 +434,34 @@ impl SettingsPanel {
 
         div().when(show, |root| {
             let id = self.delete_backend_confirm.clone().unwrap_or_default();
+            // Positioning context only — ConfirmDialog provides its own
+            // backdrop, so no second dimming layer is drawn here.
             root.absolute().size_full().top_0().left_0().child(
-                div()
-                    .absolute()
-                    .size_full()
-                    .top_0()
-                    .left_0()
-                    .bg(rgba(0x00000055))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        ConfirmDialog::new()
-                            .title(I18nKey::ConfirmDeleteSingleTitle.text())
-                            .message(I18nKey::BackendDeleteConfirmMsg.text())
-                            .confirm_label(I18nKey::ConfirmDeleteLabel.text())
-                            .danger(true)
-                            .theme(theme)
-                            .on_confirm({
-                                let wm = wm.clone();
-                                let this = this.clone();
-                                move |_window, app| {
-                                    wm.update(app, |wm, cx| {
-                                        wm.remove_sync_backend(&id, cx);
-                                    });
-                                    this.update(app, |panel, cx| {
-                                        panel.delete_backend_confirm = None;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .on_cancel({
-                                let this = this.clone();
-                                move |_window, app| {
-                                    this.update(app, |panel, cx| {
-                                        panel.delete_backend_confirm = None;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .render_animated(window, cx, gen),
-                    ),
+                ConfirmDialog::delete_backend()
+                    .theme(theme)
+                    .on_confirm({
+                        let wm = wm.clone();
+                        let this = this.clone();
+                        move |_window, app| {
+                            wm.update(app, |wm, cx| {
+                                wm.remove_sync_backend(&id, cx);
+                            });
+                            this.update(app, |panel, cx| {
+                                panel.delete_backend_confirm = None;
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .on_cancel({
+                        let this = this.clone();
+                        move |_window, app| {
+                            this.update(app, |panel, cx| {
+                                panel.delete_backend_confirm = None;
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .render_animated(window, cx, gen),
             )
         })
     }

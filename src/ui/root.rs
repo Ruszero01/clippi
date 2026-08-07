@@ -40,7 +40,7 @@ use super::search_box::SearchBox;
 use super::settings::hotkey;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
-use super::tag_filter::{render_edit_panel, TagFilterPanel};
+use super::tag_filter::{render_edit_panel, TagDeleteTarget, TagFilterEvent, TagFilterPanel};
 use super::tag_picker::TagPickerPanel;
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
@@ -71,6 +71,8 @@ pub struct RootView {
     /// has access to `&mut App`) can resolve the "system" theme correctly.
     window_appearance: WindowAppearance,
     last_edit_tag_id: i64,
+    /// Tag awaiting deletion confirmation; rendered as a root-level dialog.
+    pending_tag_delete: Option<TagDeleteTarget>,
     /// Timer that auto-dismisses the toast notification after a duration.
     _toast_timer: Option<Task<()>>,
     /// Timer that clears the toast after the exit animation completes.
@@ -268,6 +270,9 @@ impl RootView {
                 }
                 WindowManagerEvent::WindowHidden => {
                     this.needs_auto_focus = true;
+                    // Drop any pending tag deletion so the dialog can't
+                    // reappear when the window is shown again.
+                    this.pending_tag_delete = None;
                     this.filter_bar.update(cx, |bar, cx| {
                         bar.close_tag_panel(cx);
                     });
@@ -459,6 +464,23 @@ impl RootView {
             cx.observe(&tag_filter_panel, |_this, _, cx| {
                 cx.notify();
             }),
+            cx.subscribe(
+                &tag_filter_panel,
+                move |this, _panel, event: &TagFilterEvent, cx| match event {
+                    TagFilterEvent::RequestDeleteTag(target) => {
+                        // Don't stack a second confirmation on top of an
+                        // existing one — a new request must not replace it.
+                        let blocked = this.pending_tag_delete.is_some()
+                            || this.list_view.read(cx).confirm_dialog_state().is_some()
+                            || this.settings_panel.read(cx).hotkey_confirm.is_some()
+                            || this.clear_data_confirm;
+                        if !blocked {
+                            this.pending_tag_delete = Some(target.clone());
+                        }
+                        cx.notify();
+                    }
+                },
+            ),
             cx.observe(&type_filter_config_panel, |_this, _, cx| {
                 cx.notify();
             }),
@@ -752,6 +774,7 @@ impl RootView {
             theme,
             window_appearance,
             last_edit_tag_id: -1,
+            pending_tag_delete: None,
             _toast_timer: None,
             _toast_cleanup: None,
             toast_generation: 0,
@@ -787,6 +810,13 @@ impl Render for RootView {
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
+        // A pending tag-delete confirmation only makes sense while the tag
+        // panel is open in the clipboard view. Drop stale requests (e.g. the
+        // panel was closed programmatically while the dialog was up) so an
+        // expired dialog never reappears after the window is shown again.
+        if self.pending_tag_delete.is_some() && (!is_clipboard || !tag_panel_open) {
+            self.pending_tag_delete = None;
+        }
         let theme = self.theme.clone();
         let panel_border = if theme.bg == rgb(0x191a1b) {
             rgb(0x3a3b3c)
@@ -845,6 +875,7 @@ impl Render for RootView {
         let context_menu_visible = context_menu_open && is_clipboard;
         let tag_picker_visible = tag_picker_open && is_clipboard;
         let confirm_dialog_visible = confirm_dialog_open && is_clipboard;
+        let tag_delete_confirm_visible = is_clipboard && self.pending_tag_delete.is_some();
         let hotkey_confirm_visible = !is_edit && hotkey_confirm_open;
         let clear_data_confirm_visible = is_settings && self.clear_data_confirm;
         let backend_panel_visible = is_settings && backend_panel_open;
@@ -895,6 +926,8 @@ impl Render for RootView {
         let context_menu_gen = self.overlay_generation("context-menu", context_menu_visible);
         let tag_picker_gen = self.overlay_generation("tag-picker", tag_picker_visible);
         let confirm_dialog_gen = self.overlay_generation("confirm-dialog", confirm_dialog_visible);
+        let tag_delete_confirm_gen =
+            self.overlay_generation("tag-delete-confirm", tag_delete_confirm_visible);
         let hotkey_confirm_gen = self.overlay_generation("hotkey-confirm", hotkey_confirm_visible);
         let clear_data_confirm_gen =
             self.overlay_generation("clear-data-confirm", clear_data_confirm_visible);
@@ -1730,6 +1763,84 @@ impl Render for RootView {
 
                 // Constrain to main panel bounds (left=36px offset for sidebar).
                 // ConfirmDialog fills this container and centers the modal card within it.
+                root.child(
+                    div()
+                        .absolute()
+                        .left(px(36.))
+                        .right(px(0.))
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .child(dialog_element),
+                )
+            })
+            // --- Tag deletion confirmation — rendered after the tag panel so it ---
+            // --- covers the whole main panel; delete only happens on confirm. ---
+            .when(tag_delete_confirm_visible, |root| {
+                let Some(target) = self.pending_tag_delete.clone() else {
+                    return root.child(div());
+                };
+                let dialog_focus = cx.focus_handle();
+                let app_state = self.state.clone();
+                let tag_filter = self.tag_filter_panel.clone();
+                let root_entity = cx.entity().clone();
+
+                let dialog_element = ConfirmDialog::delete_tag(&target.name)
+                    .theme(self.theme.clone())
+                    .focus_handle(dialog_focus)
+                    .on_confirm({
+                        let app_state = app_state.clone();
+                        let tag_filter = tag_filter.clone();
+                        let root_entity = root_entity.clone();
+                        let target = target.clone();
+                        move |_window, cx| {
+                            // Re-verify the target still exists — a sync refresh
+                            // may have removed it while the dialog was open.
+                            let exists = app_state
+                                .read(cx)
+                                .tags
+                                .iter()
+                                .any(|t| t.id == target.id);
+                            if !exists {
+                                root_entity.update(cx, |root, cx| {
+                                    root.pending_tag_delete = None;
+                                    cx.notify();
+                                });
+                                return;
+                            }
+                            let ok = app_state.update(cx, |s, _cx| s.delete_tag(target.id));
+                            if ok {
+                                tag_filter.update(cx, |panel, cx| {
+                                    panel.refresh_list(cx);
+                                    cx.notify();
+                                });
+                                root_entity.update(cx, |root, cx| {
+                                    root.pending_tag_delete = None;
+                                    cx.notify();
+                                });
+                            } else {
+                                // Keep the dialog open and surface the failure.
+                                // Notify so the toast state machine reliably
+                                // re-renders (matches the app-wide show_toast
+                                // convention of an explicit notify).
+                                app_state.update(cx, |s, cx| {
+                                    s.show_toast(I18nKey::TagDeleteFailedMsg.text());
+                                    cx.notify();
+                                });
+                            }
+                        }
+                    })
+                    .on_cancel({
+                        let root_entity = root_entity.clone();
+                        move |_window, cx| {
+                            root_entity.update(cx, |root, cx| {
+                                root.pending_tag_delete = None;
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .render_animated(window, cx, tag_delete_confirm_gen);
+
+                // Constrain to main panel bounds (left=36px offset for sidebar).
                 root.child(
                     div()
                         .absolute()

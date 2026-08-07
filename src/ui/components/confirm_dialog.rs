@@ -195,6 +195,25 @@ impl ConfirmDialog {
             .confirm_label(I18nKey::ConfirmRemoveLabel.text())
             .danger(false)
     }
+
+    /// Tag deletion confirmation — explains that the tag is removed from all
+    /// clipboard items while the items themselves are kept.
+    pub fn delete_tag(tag_name: &str) -> Self {
+        Self::new()
+            .title(I18nKey::ConfirmDeleteTagTitle.text())
+            .message(I18nKey::ConfirmDeleteTagMsg.fmt(&[tag_name]))
+            .confirm_label(I18nKey::ConfirmDeleteLabel.text())
+            .danger(true)
+    }
+
+    /// Sync backend deletion confirmation.
+    pub fn delete_backend() -> Self {
+        Self::new()
+            .title(I18nKey::ConfirmDeleteSingleTitle.text())
+            .message(I18nKey::BackendDeleteConfirmMsg.text())
+            .confirm_label(I18nKey::ConfirmDeleteLabel.text())
+            .danger(true)
+    }
 }
 
 impl ConfirmDialog {

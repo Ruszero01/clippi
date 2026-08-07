@@ -677,8 +677,9 @@ impl AppState {
         }
     }
 
-    /// Delete a tag by id.
-    pub fn delete_tag(&mut self, tag_id: i64) {
+    /// Delete a tag by id. Returns `true` on success so the UI can close its
+    /// confirmation dialog only after the deletion actually happened.
+    pub fn delete_tag(&mut self, tag_id: i64) -> bool {
         let tag = match self.db.get_tag_by_id(tag_id) {
             Ok(tag) => tag,
             Err(e) => {
@@ -700,10 +701,17 @@ impl AppState {
                 }
                 self.sync_dirty.store(true, Ordering::SeqCst);
                 self.filters.tag_ids.retain(|&id| id != tag_id);
+                // Remove any stale pinned sidebar entry for the deleted tag.
+                self.settings.pinned_tag_ids.retain(|&id| id != tag_id);
+                self.settings.save();
                 self.reload_tags();
                 self.reload_items();
+                true
             }
-            Err(e) => log::error!("Failed to delete tag: {e}"),
+            Err(e) => {
+                log::error!("Failed to delete tag: {e}");
+                false
+            }
         }
     }
 
@@ -3790,6 +3798,61 @@ mod tests {
     fn setup_tag(state: &mut AppState) -> i64 {
         // Create a tag
         state.db.create_tag("test-tag", "#FF0000").unwrap()
+    }
+
+    // ── delete_tag ─────────────────────────────────
+
+    #[test]
+    fn delete_tag_removes_tag_and_associations_but_keeps_items() {
+        let (mut state, _dirty) = test_state();
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, false, "tagged");
+        state.db.upsert(&item).unwrap();
+        let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
+        state.db.add_item_tag(item_id, tag_id).unwrap();
+
+        // Activate the tag filter and pin the tag in the sidebar.
+        state.filters.tag_ids.push(tag_id);
+        state.settings.pinned_tag_ids.push(tag_id);
+
+        assert!(state.delete_tag(tag_id));
+
+        // Tag is gone from the reloaded tag list.
+        assert!(state.tags.iter().all(|t| t.id != tag_id));
+        // Filter and pinned-sidebar entries were cleaned up.
+        assert!(!state.filters.tag_ids.contains(&tag_id));
+        assert!(!state.settings.pinned_tag_ids.contains(&tag_id));
+        // The clipboard item survived; its tag association is gone.
+        let item = state.db.get_by_id_with_tags(item_id).unwrap().unwrap();
+        assert!(item.tags.is_empty());
+    }
+
+    #[test]
+    fn delete_tag_writes_tombstone_and_marks_sync_dirty() {
+        let (mut state, dirty) = test_state();
+        let tag_id = state.db.create_tag("tomb-tag", "#00FF00").unwrap();
+        let tag_uid = state.db.get_tag_by_id(tag_id).unwrap().unwrap().uid;
+        assert!(!tag_uid.is_empty());
+
+        assert!(!dirty.load(Ordering::SeqCst));
+        assert!(state.delete_tag(tag_id));
+        assert!(dirty.load(Ordering::SeqCst));
+        // The tombstone is recorded under the tag's uid (local tags are not
+        // uid-less).
+        assert!(state.db.is_tag_tombstoned(&tag_uid, "tomb-tag").unwrap());
+    }
+
+    #[test]
+    fn delete_tag_nonexistent_is_safe_and_keeps_other_tags() {
+        let (mut state, _dirty) = test_state();
+        let tag_id = setup_tag(&mut state);
+
+        // Deleting a missing id is an idempotent no-op: it reports success,
+        // leaves the other tag intact and writes no tombstone.
+        assert!(state.delete_tag(9999));
+        assert_eq!(state.tags.len(), 1);
+        assert!(state.tags.iter().any(|t| t.id == tag_id));
+        assert!(!state.db.is_tag_tombstoned("", "test-tag").unwrap());
     }
 
     #[test]

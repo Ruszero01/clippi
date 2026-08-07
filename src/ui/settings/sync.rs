@@ -531,6 +531,9 @@ impl SettingsPanel {
                                         if let Some(ref _id) = selected {
                                             this.update(cx, |panel, cx| {
                                                 panel.config_sync_upload_confirm = Some(backend_name.clone());
+                                                panel.config_sync_upload_confirm_gen = panel
+                                                    .config_sync_upload_confirm_gen
+                                                    .wrapping_add(1);
                                                 cx.notify();
                                             });
                                         }

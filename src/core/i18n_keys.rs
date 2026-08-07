@@ -327,6 +327,9 @@ define_i18n! {
     ConfirmAddBlacklistTitle:("添加到黑名单", "Add to Blacklist"),
     ConfirmAddBlacklistMsg: ("在 \"{0}\" 中禁用 Clippi 快捷键？\n当此应用激活时将忽略快捷键。", "Disable Clippi hotkey in \"{0}\"?\nHotkey will be ignored while this app is active."),
     ConfirmAddLabel:        ("添加", "Add"),
+    ConfirmDeleteTagTitle:  ("确认删除标签", "Confirm Tag Deletion"),
+    ConfirmDeleteTagMsg:    ("确定要删除标签「{0}」吗？该标签将从所有剪贴板条目中移除，此操作不可撤销。", "Delete the tag \"{0}\"? It will be removed from all clipboard items. This action cannot be undone."),
+    TagDeleteFailedMsg:     ("删除标签失败，请重试", "Failed to delete tag. Please try again."),
 
     // ─── Types / Data ───
     FormatJustNow:      ("刚刚", "Just now"),
