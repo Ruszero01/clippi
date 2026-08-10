@@ -282,24 +282,10 @@ impl AppState {
         });
 
         let sync = SyncState::from_settings(&settings);
-        let has_hotkey_items = db.has_custom_hotkey_items().unwrap_or_else(|e| {
-            log::error!("Failed to load custom hotkey item availability: {e}");
-            false
+        let stats = db.load_titlebar_stats().unwrap_or_else(|e| {
+            log::error!("Failed to load titlebar stats: {e}");
+            crate::core::db::TitlebarStats::default()
         });
-        let has_favorite_items = db.has_favorite_items().unwrap_or_else(|e| {
-            log::error!("Failed to load favorite item availability: {e}");
-            false
-        });
-        let clearable_history_count = db.count_clearable_history().unwrap_or_else(|error| {
-            log::error!("Failed to count clearable clipboard history: {error}");
-            0
-        });
-        let clearable_non_favorite_history_count = db
-            .count_clearable_non_favorite_history()
-            .unwrap_or_else(|error| {
-                log::error!("Failed to count clearable non-favorite history: {error}");
-                0
-            });
 
         Self {
             settings,
@@ -307,10 +293,10 @@ impl AppState {
             items,
             tags,
             filters: ClipboardFilters::default(),
-            has_hotkey_items,
-            has_favorite_items,
-            clearable_history_count,
-            clearable_non_favorite_history_count,
+            has_hotkey_items: stats.has_hotkey_items,
+            has_favorite_items: stats.has_favorite_items,
+            clearable_history_count: stats.clearable_history_count,
+            clearable_non_favorite_history_count: stats.clearable_non_favorite_history_count,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
@@ -359,23 +345,15 @@ impl AppState {
     }
 
     fn refresh_titlebar_filter_availability(&mut self) {
-        match self.db.has_custom_hotkey_items() {
-            Ok(value) => self.has_hotkey_items = value,
-            Err(e) => log::error!("Failed to refresh custom hotkey item availability: {e}"),
-        }
-        match self.db.has_favorite_items() {
-            Ok(value) => self.has_favorite_items = value,
-            Err(e) => log::error!("Failed to refresh favorite item availability: {e}"),
-        }
-        match self.db.count_clearable_history() {
-            Ok(value) => self.clearable_history_count = value,
-            Err(error) => log::error!("Failed to refresh clearable history count: {error}"),
-        }
-        match self.db.count_clearable_non_favorite_history() {
-            Ok(value) => self.clearable_non_favorite_history_count = value,
-            Err(error) => {
-                log::error!("Failed to refresh clearable non-favorite history count: {error}")
+        match self.db.load_titlebar_stats() {
+            Ok(stats) => {
+                self.has_hotkey_items = stats.has_hotkey_items;
+                self.has_favorite_items = stats.has_favorite_items;
+                self.clearable_history_count = stats.clearable_history_count;
+                self.clearable_non_favorite_history_count =
+                    stats.clearable_non_favorite_history_count;
             }
+            Err(e) => log::error!("Failed to refresh titlebar stats: {e}"),
         }
     }
 

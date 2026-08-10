@@ -213,13 +213,19 @@ impl GpuiClipboardService {
             // --- ── Pre-upsert: carry over cached OCR/QR from existing DB record ── ---
             // --- When an image is re-copied, the existing DB record may already have ---
             // --- OCR/QR results. Carry them into the new item so they aren't lost. ---
+            // --- The existing record is fetched at most once per hash and shared ---
+            // --- by the OCR, QR and rich-text decisions below. ---
+            let content_hash = item.content_hash;
+            let mut existing_cache: Option<Option<ClipboardItem>> = None;
             let mut need_ocr = false;
             let mut need_qr = false;
             if item.content_type == ContentType::Image && !item.image_path.is_empty() {
                 let rd = RichData::from_json(&item.rich_data);
                 let allow_automatic_analysis = rd.remote_host.is_none();
                 if allow_automatic_analysis && ocr_enabled && rd.ocr_text.is_none() {
-                    if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
+                    if let Some(existing) =
+                        existing_record(&mut existing_cache, &state.db, content_hash)
+                    {
                         let erd = RichData::from_json(&existing.rich_data);
                         if let Some(ref cached) = erd.ocr_text {
                             let mut merged = rd.clone();
@@ -233,7 +239,9 @@ impl GpuiClipboardService {
                     }
                 }
                 if allow_automatic_analysis && qr_enabled && rd.qr_text.is_none() {
-                    if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
+                    if let Some(existing) =
+                        existing_record(&mut existing_cache, &state.db, content_hash)
+                    {
                         let erd = RichData::from_json(&existing.rich_data);
                         if let Some(ref cached) = erd.qr_text {
                             let mut merged = RichData::from_json(&item.rich_data);
@@ -254,7 +262,9 @@ impl GpuiClipboardService {
             // the content_hash matches an existing RichText record, carry over
             // rich_data so it isn't overwritten by the upsert below.
             if !state.settings.copy_as_plain_text && item.rich_data.is_empty() {
-                if let Ok(Some(ref existing)) = state.db.get_by_hash(item.content_hash) {
+                if let Some(existing) =
+                    existing_record(&mut existing_cache, &state.db, content_hash)
+                {
                     if !existing.rich_data.is_empty() {
                         item.rich_data = existing.rich_data.clone();
                         item.meta_type = existing.meta_type.clone();
@@ -322,7 +332,6 @@ impl GpuiClipboardService {
                 }
             }
             state.reload_items();
-            state.reload_tags();
         }
 
         changed || needs_reload
@@ -353,6 +362,20 @@ impl Drop for GpuiClipboardService {
     fn drop(&mut self) {
         self.listener.stop();
     }
+}
+
+/// Fetch the existing DB record for a hash at most once, caching the result
+/// so OCR, QR and rich-text decisions in a single capture batch share one
+/// database round trip.
+fn existing_record<'a>(
+    cache: &'a mut Option<Option<ClipboardItem>>,
+    db: &crate::core::db::Database,
+    content_hash: u64,
+) -> Option<&'a ClipboardItem> {
+    if cache.is_none() {
+        *cache = Some(db.get_by_hash(content_hash).ok().flatten());
+    }
+    cache.as_ref().unwrap().as_ref()
 }
 
 fn compute_size(item: &ClipboardItem) -> i64 {

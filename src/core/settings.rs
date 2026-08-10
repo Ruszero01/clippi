@@ -474,18 +474,26 @@ impl AppSettings {
     }
 
     pub fn save(&self) {
-        // Unit tests must never overwrite the user's real `clippi.toml`.
-        // Persistence under test is exercised via `save_atomic_to` with temp
-        // paths instead (see the settings tests).
-        if !cfg!(test) {
-            let path = Self::config_path();
-            if let Ok(content) = toml::to_string_pretty(self) {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&path, content);
-            }
+        if let Err(error) = self.save_result() {
+            log::error!("Failed to save settings: {error}");
         }
+    }
+
+    /// Atomically persist settings to the live config path.
+    ///
+    /// Returns the outcome so debounced callers (window-geometry flush) can
+    /// keep their dirty flag and retry with backoff on failure. Unit tests
+    /// must never overwrite the user's real `clippi.toml` — persistence under
+    /// test is exercised via `save_atomic_to` with temp paths instead.
+    pub fn save_result(&self) -> Result<(), String> {
+        if cfg!(test) {
+            return Ok(());
+        }
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
+        }
+        self.save_atomic_to(&path)
     }
 
     /// Atomically save settings to an arbitrary path.

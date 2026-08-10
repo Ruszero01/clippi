@@ -19,6 +19,16 @@ pub struct MergeStats {
     pub tags_updated: usize,
 }
 
+/// Titlebar filter availability + clearable counts, loaded in a single
+/// database round trip (previously two EXISTS + two COUNT queries).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TitlebarStats {
+    pub has_hotkey_items: bool,
+    pub has_favorite_items: bool,
+    pub clearable_history_count: u32,
+    pub clearable_non_favorite_history_count: u32,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -457,24 +467,26 @@ impl Database {
         Ok(())
     }
 
-    pub fn has_favorite_items(&self) -> SqlResult<bool> {
-        self.conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE is_favorite = 1 LIMIT 1)",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|value| value != 0)
-    }
-
-    pub fn has_custom_hotkey_items(&self) -> SqlResult<bool> {
-        self.conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE custom_hotkey <> '' LIMIT 1)",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|value| value != 0)
+    pub fn load_titlebar_stats(&self) -> SqlResult<TitlebarStats> {
+        self.conn.query_row(
+            "SELECT
+                COALESCE(MAX(custom_hotkey <> ''), 0),
+                COALESCE(MAX(is_favorite = 1), 0),
+                COUNT(CASE WHEN meta_type != 'transfer' THEN 1 END),
+                COUNT(CASE
+                    WHEN meta_type != 'transfer' AND is_favorite = 0 THEN 1
+                END)
+             FROM clipboard_items",
+            [],
+            |row| {
+                Ok(TitlebarStats {
+                    has_hotkey_items: row.get::<_, i64>(0)? != 0,
+                    has_favorite_items: row.get::<_, i64>(1)? != 0,
+                    clearable_history_count: row.get::<_, i64>(2)? as u32,
+                    clearable_non_favorite_history_count: row.get::<_, i64>(3)? as u32,
+                })
+            },
+        )
     }
 
     pub fn get_all_custom_item_hotkeys(&self) -> SqlResult<Vec<(i64, String)>> {
@@ -1271,13 +1283,15 @@ impl Database {
             return Ok(Vec::new());
         }
         let excess = (non_fav_count - max_items as i64) as usize;
+        // Read only the IDs that will actually be deleted instead of loading
+        // every non-favorite row and truncating in memory.
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer' ORDER BY created_at ASC",
+            "SELECT id FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer' \
+             ORDER BY created_at ASC LIMIT ?1",
         )?;
-        let all_ids: Vec<i64> = stmt
-            .query_map([], |row| row.get(0))?
+        let pruned_ids: Vec<i64> = stmt
+            .query_map([excess as i64], |row| row.get(0))?
             .collect::<SqlResult<Vec<_>>>()?;
-        let pruned_ids: Vec<i64> = all_ids.iter().take(excess).copied().collect();
         if pruned_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -2048,25 +2062,6 @@ impl Database {
             params![item_id],
         )?;
         Ok(())
-    }
-
-    /// Count all non-transfer clipboard rows affected by "clear data".
-    pub fn count_clearable_history(&self) -> SqlResult<u32> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM clipboard_items WHERE meta_type != 'transfer'",
-            [],
-            |row| row.get(0),
-        )
-    }
-
-    /// Count non-favorite, non-transfer rows affected by the default clear action.
-    pub fn count_clearable_non_favorite_history(&self) -> SqlResult<u32> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM clipboard_items \
-             WHERE meta_type != 'transfer' AND is_favorite = 0",
-            [],
-            |row| row.get(0),
-        )
     }
 
     /// Delete confirmed-stale items in a transaction with identity re-check.
@@ -3173,6 +3168,18 @@ mod tests {
     }
 
     #[test]
+    fn titlebar_stats_are_zero_for_an_empty_database() {
+        let (_path, db) = temp_db("empty-titlebar-stats");
+
+        let stats = db.load_titlebar_stats().unwrap();
+
+        assert!(!stats.has_hotkey_items);
+        assert!(!stats.has_favorite_items);
+        assert_eq!(stats.clearable_history_count, 0);
+        assert_eq!(stats.clearable_non_favorite_history_count, 0);
+    }
+
+    #[test]
     fn clear_clipboard_history_is_atomic_and_preserves_transfer_rows_and_tags() {
         let (path, db) = temp_db("clear-history");
         let missing_file = path.parent().unwrap().join("missing-file.txt");
@@ -3217,8 +3224,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(db.count_clearable_history().unwrap(), 3);
-        assert_eq!(db.count_clearable_non_favorite_history().unwrap(), 2);
+        let stats = db.load_titlebar_stats().unwrap();
+        assert_eq!(stats.clearable_history_count, 3);
+        assert_eq!(stats.clearable_non_favorite_history_count, 2);
+        assert!(stats.has_hotkey_items);
+        assert!(stats.has_favorite_items);
         let result = db.clear_clipboard_history("test-device", true).unwrap();
 
         assert_eq!(result.deleted_items, 3);

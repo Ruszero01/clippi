@@ -1279,6 +1279,18 @@ impl RenderOnce for ClipboardCard {
         };
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
+        // --- Cached source-path / image availability ---
+        // One background-probed lookup per path, shared by the content preview
+        // and the size label below (None = still unknown, not "missing").
+        let is_native_path =
+            meta_type == "path" && crate::core::types::path_is_native(&item.full_text);
+        let path_missing = is_native_path
+            && !item.full_text.trim().starts_with("\\\\")
+            && crate::services::file_status::cached_file_exists(item.full_text.trim())
+                == Some(false);
+        let image_missing = content_type == ContentType::Image
+            && !item.image_path.is_empty()
+            && crate::services::file_status::cached_file_exists(&item.image_path) == Some(false);
         let tags = item.tags.clone();
         let transfer_file_data = if content_type == ContentType::File || meta_type == "transfer" {
             FileData::from_json(&item.file_data)
@@ -1935,9 +1947,8 @@ impl RenderOnce for ClipboardCard {
                     // File system path: bold last component + dimmed full path.
                     // Non-existent paths get a red tint + reduced opacity
                     // (UNC network paths skip the existence check).
-                    let path_foreign = !crate::core::types::path_is_native(&item.full_text);
-                    let path_invalid =
-                        !path_foreign && !crate::core::types::path_exists(&item.full_text);
+                    let path_foreign = !is_native_path;
+                    let path_invalid = !path_foreign && path_missing;
                     let label_color = if path_invalid {
                         danger
                     } else if path_foreign {
@@ -1996,14 +2007,12 @@ impl RenderOnce for ClipboardCard {
             } else {
                 match content_type {
                     ContentType::Image => {
-                        let img_missing = !item.image_path.is_empty()
-                            && !std::path::Path::new(&item.image_path).exists();
-                        let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
-                        let img_stale = img_missing && !img_not_loaded;
+                        let img_not_loaded = image_missing && image_is_waiting_for_sync(&item);
+                        let img_stale = image_missing && !img_not_loaded;
                         // Show previews only when the full image exists locally. Synced images
                         // regenerate thumbnails after the blob is downloaded.
                         if let Some(preview_img_path) =
-                            preview_img_path.clone().filter(|_| !img_missing)
+                            preview_img_path.clone().filter(|_| !image_missing)
                         {
                             let object_fit = if has_qr {
                                 ObjectFit::Contain
@@ -2043,7 +2052,7 @@ impl RenderOnce for ClipboardCard {
                                         .border(px(4.))
                                         .border_color(surface),
                                 )
-                        } else if img_missing || preview_img_path.is_none() {
+                        } else if image_missing || preview_img_path.is_none() {
                             let (placeholder_color, placeholder_icon) = if img_stale {
                                 (danger, "\u{e607}")
                             } else {
@@ -2396,10 +2405,10 @@ impl RenderOnce for ClipboardCard {
                 if item.meta_type == "path" {
                     // Check foreign platform first — a Mac path on Windows
                     // will never exist here regardless of what's on disk.
-                    if !crate::core::types::path_is_native(&item.full_text) {
+                    if !is_native_path {
                         size_label_warn = true;
                         Some(foreign_path_label())
-                    } else if !crate::core::types::path_exists(&item.full_text) {
+                    } else if path_missing {
                         size_label_danger = true;
                         Some(I18nKey::CardStaleFile.text().to_string())
                     } else {
@@ -2428,12 +2437,10 @@ impl RenderOnce for ClipboardCard {
                 if let Some(host) = remote_host.clone() {
                     Some(host)
                 } else {
-                    let img_missing = !item.image_path.is_empty()
-                        && !std::path::Path::new(&item.image_path).exists();
-                    let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
+                    let img_not_loaded = image_missing && image_is_waiting_for_sync(&item);
                     if img_not_loaded {
                         Some(I18nKey::CardImageNotLoaded.text().to_string())
-                    } else if img_missing {
+                    } else if image_missing {
                         size_label_danger = true;
                         Some(I18nKey::CardStaleFile.text().to_string())
                     } else if img_w > 0 && img_h > 0 {
