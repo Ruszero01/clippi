@@ -952,6 +952,45 @@ impl Database {
         Ok(())
     }
 
+    /// Bump updated_at for multiple items in one transaction, executing
+    /// bounded `UPDATE ... WHERE id IN (...)` statements of at most 500 IDs
+    /// each. Returns the number of affected rows; an empty id list is a
+    /// no-op. The caller supplies the timestamp so the in-memory refresh
+    /// stays consistent with the database.
+    pub fn touch_items(&self, item_ids: &[i64], now: &str) -> SqlResult<usize> {
+        if item_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let mut affected = 0usize;
+        for chunk in item_ids.chunks(500) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "UPDATE clipboard_items SET updated_at = ?1 WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            let mut params: Vec<rusqlite::types::Value> =
+                vec![rusqlite::types::Value::Text(now.to_string())];
+            params.extend(chunk.iter().map(|&id| id.into()));
+            affected += tx.execute(&sql, rusqlite::params_from_iter(params))?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    /// Test-only hook: reject `UPDATE clipboard_items SET updated_at` so the
+    /// usage-touch failure path can be exercised. The trigger is permanent
+    /// for this connection (tests use in-memory databases).
+    #[cfg(test)]
+    pub fn reject_updated_at_updates_for_test(&self) {
+        self.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_touch_for_test BEFORE UPDATE OF updated_at ON clipboard_items \
+                 BEGIN SELECT RAISE(ABORT, 'reject'); END;",
+            )
+            .unwrap();
+    }
+
     /// Set updated_at to an explicit value (used after sync merge to preserve
     /// remote timestamp when tag re-application has bumped it to now).
     pub fn set_item_updated_at(&self, item_id: i64, timestamp: &str) -> SqlResult<()> {
@@ -3689,5 +3728,87 @@ mod tests {
         assert_eq!(stats.stale_items, 1);
         assert!(db.get_by_hash(301).unwrap().is_none());
         assert!(db.get_by_hash(302).unwrap().is_some());
+    }
+
+    // ── touch_items (batch usage-time updates) ──────────────────────
+
+    #[test]
+    fn touch_items_updates_all_ids_across_chunk_boundaries() {
+        let db = Database::open(":memory:").unwrap();
+        let old = "2020-01-01T00:00:00Z";
+        let mut ids = Vec::with_capacity(1001);
+        for i in 0..1001i64 {
+            db.conn
+                .execute(
+                    "INSERT INTO clipboard_items \
+                     (content_type, full_text, content_hash, created_at, updated_at, meta_type) \
+                     VALUES ('plain_text', ?1, ?2, ?3, ?3, '')",
+                    params![format!("item {i}"), i, old],
+                )
+                .unwrap();
+            ids.push(db.conn.last_insert_rowid());
+        }
+
+        let now = "2026-08-10T00:00:00Z";
+        let affected = db.touch_items(&ids, now).unwrap();
+        assert_eq!(affected, 1001);
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items WHERE updated_at = ?1",
+                params![now],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1001);
+    }
+
+    #[test]
+    fn touch_items_is_atomic_on_failure() {
+        let db = Database::open(":memory:").unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, meta_type) \
+                 VALUES ('plain_text', 'a', 1, ?1, ?1, ''), \
+                        ('plain_text', 'b', 2, ?1, ?1, '')",
+                params!["2020-01-01T00:00:00Z"],
+            )
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_touch BEFORE UPDATE OF updated_at ON clipboard_items \
+                 BEGIN SELECT RAISE(ABORT, 'reject'); END;",
+            )
+            .unwrap();
+
+        let ids: Vec<i64> = db
+            .conn
+            .prepare("SELECT id FROM clipboard_items ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(db.touch_items(&ids, "2026-08-10T00:00:00Z").is_err());
+
+        // No partial update: both rows keep the old timestamp.
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items \
+                 WHERE updated_at = '2020-01-01T00:00:00Z'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn touch_items_empty_is_noop() {
+        let db = Database::open(":memory:").unwrap();
+        assert_eq!(db.touch_items(&[], "2026-08-10T00:00:00Z").unwrap(), 0);
     }
 }
