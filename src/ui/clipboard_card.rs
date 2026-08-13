@@ -145,9 +145,135 @@ fn info_row_available_width(window: &Window) -> f32 {
 mod info_row_tests {
     use super::{
         estimate_card_height, file_name_segments, image_is_waiting_for_sync, remaining_days_ceil,
-        visible_tag_count,
+        rich_preview, visible_tag_count, RichPreview,
     };
-    use crate::core::types::{ClipboardItem, RichData};
+    use crate::core::types::{ClipboardItem, ContentType, RichData};
+
+    fn rich_item(text: &str, rich: RichData) -> ClipboardItem {
+        ClipboardItem::new_text(1, text, ContentType::RichText, None, Some(&rich))
+    }
+
+    #[test]
+    fn word_html_with_fragment_renders_styled_preview() {
+        let html = r#"<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><style>p.MsoNormal{font-family:"Times New Roman"}</style></head><body lang=ZH-CN><!--StartFragment--><p><span style='color:#ff0000'>带超链接的文字</span></p><!--EndFragment--></body></html>"#;
+        let item = rich_item(
+            "带超链接的文字",
+            RichData {
+                html: Some(html.to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::StyledHtml { visible_text, .. } => {
+                assert_eq!(visible_text, "带超链接的文字");
+            }
+            _ => panic!("expected styled html preview"),
+        }
+    }
+
+    #[test]
+    fn word_html_metadata_only_falls_back_to_full_text() {
+        let html = r#"<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><style>p.MsoNormal{font-family:"Times New Roman"}</style></head><body><!--StartFragment--><!--EndFragment--></body></html>"#;
+        let item = rich_item(
+            "与保险公司协调处理索赔并解决问题。",
+            RichData {
+                html: Some(html.to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::Plain(text) => {
+                assert_eq!(text, "与保险公司协调处理索赔并解决问题。")
+            }
+            _ => panic!("expected plain text fallback"),
+        }
+    }
+
+    #[test]
+    fn html_with_only_head_content_falls_back_to_full_text() {
+        let html = r#"<html><head><style>p.MsoNormal{font-family:"Times New Roman";}</style></head><body></body></html>"#;
+        let item = rich_item(
+            "plain fallback text",
+            RichData {
+                html: Some(html.to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::Plain(text) => assert_eq!(text, "plain fallback text"),
+            _ => panic!("expected plain text fallback"),
+        }
+    }
+
+    #[test]
+    fn rtf_without_text_falls_back_to_full_text() {
+        let item = rich_item(
+            "fallback text",
+            RichData {
+                rtf: Some("{\\rtf1\\ansi\\b\\i\\ul}".to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::Plain(text) => assert_eq!(text, "fallback text"),
+            _ => panic!("expected plain text fallback"),
+        }
+    }
+
+    #[test]
+    fn rtf_with_text_keeps_markdown_preview() {
+        let item = rich_item(
+            "Hello World",
+            RichData {
+                rtf: Some("{\\rtf1\\ansi Hello World}".to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::Markdown(text) => assert_eq!(text, "Hello World"),
+            _ => panic!("expected markdown preview"),
+        }
+    }
+
+    #[test]
+    fn html_without_visible_text_falls_back_to_rtf() {
+        let html = r#"<html><head><style>p.MsoNormal{font-family:"Times New Roman";}</style></head><body></body></html>"#;
+        let item = rich_item(
+            "富文本内容",
+            RichData {
+                html: Some(html.to_string()),
+                rtf: Some("{\\rtf1\\ansi 富文本内容}".to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::Markdown(text) => assert_eq!(text, "富文本内容"),
+            _ => panic!("expected RTF fallback preview"),
+        }
+    }
+
+    #[test]
+    fn html_and_rtf_without_text_fall_back_to_full_text() {
+        let item = rich_item(
+            "plain fallback text",
+            RichData {
+                html: Some(r#"<html><body></body></html>"#.to_string()),
+                rtf: Some("{\\rtf1\\ansi\\b\\i\\ul}".to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::Plain(text) => assert_eq!(text, "plain fallback text"),
+            _ => panic!("expected plain text fallback"),
+        }
+    }
 
     #[test]
     fn remaining_days_ceil_never_collapses_day_boundaries() {
@@ -789,12 +915,20 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
     match item.display_kind() {
         DisplayKind::Html => {
             let rich = RichData::from_json(&item.rich_data);
-            let html = rich.html.unwrap_or_else(|| item.full_text.clone());
+            let html = rich.html.clone().unwrap_or_else(|| item.full_text.clone());
             let html = rich_preview::normalize_clipboard_html_for_render(&html);
+            let visible_text = html_text::visible_text(&html);
+            // Defensive fallback chain (HTML → RTF → plain text): when the
+            // HTML fragment carries no visible text (empty fragment,
+            // metadata-only body, unparseable markup), try the same item's
+            // RTF before giving up on the reliable plain-text copy.
+            if visible_text.is_empty() {
+                return rtf_fallback_preview(&rich, item);
+            }
             if let Some(lines) = rich_preview::parse_styled_html_lines(&html) {
                 return RichPreview::StyledHtml {
                     lines,
-                    visible_text: html_text::visible_text(&html),
+                    visible_text,
                 };
             }
             RichPreview::Html(rich_preview::strip_html_links(&html))
@@ -802,16 +936,21 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
         DisplayKind::Markdown => {
             RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text))
         }
-        DisplayKind::Rtf => {
-            let rich = RichData::from_json(&item.rich_data);
-            if let Some(rtf) = rich.rtf.filter(|r| !r.trim().is_empty()) {
-                RichPreview::Markdown(rtf_to_plain_text(&rtf))
-            } else {
-                RichPreview::Plain(item.full_text.clone())
-            }
-        }
+        DisplayKind::Rtf => rtf_fallback_preview(&RichData::from_json(&item.rich_data), item),
         _ => RichPreview::Plain(item.full_text.clone()),
     }
+}
+
+/// Preview an item's RTF payload as plain text, falling back to the item's
+/// plain text when the RTF is absent or carries no readable content.
+fn rtf_fallback_preview(rich: &RichData, item: &ClipboardItem) -> RichPreview {
+    if let Some(rtf) = rich.rtf.as_deref().filter(|r| !r.trim().is_empty()) {
+        let plain = rtf_to_plain_text(rtf);
+        if !plain.is_empty() {
+            return RichPreview::Markdown(plain);
+        }
+    }
+    RichPreview::Plain(item.full_text.clone())
 }
 
 fn rtf_to_plain_text(rtf: &str) -> String {
@@ -1279,6 +1418,18 @@ impl RenderOnce for ClipboardCard {
         };
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
+        // --- Cached source-path / image availability ---
+        // One background-probed lookup per path, shared by the content preview
+        // and the size label below (None = still unknown, not "missing").
+        let is_native_path =
+            meta_type == "path" && crate::core::types::path_is_native(&item.full_text);
+        let path_missing = is_native_path
+            && !item.full_text.trim().starts_with("\\\\")
+            && crate::services::file_status::cached_file_exists(item.full_text.trim())
+                == Some(false);
+        let image_missing = content_type == ContentType::Image
+            && !item.image_path.is_empty()
+            && crate::services::file_status::cached_file_exists(&item.image_path) == Some(false);
         let tags = item.tags.clone();
         let transfer_file_data = if content_type == ContentType::File || meta_type == "transfer" {
             FileData::from_json(&item.file_data)
@@ -1935,9 +2086,8 @@ impl RenderOnce for ClipboardCard {
                     // File system path: bold last component + dimmed full path.
                     // Non-existent paths get a red tint + reduced opacity
                     // (UNC network paths skip the existence check).
-                    let path_foreign = !crate::core::types::path_is_native(&item.full_text);
-                    let path_invalid =
-                        !path_foreign && !crate::core::types::path_exists(&item.full_text);
+                    let path_foreign = !is_native_path;
+                    let path_invalid = !path_foreign && path_missing;
                     let label_color = if path_invalid {
                         danger
                     } else if path_foreign {
@@ -1996,14 +2146,12 @@ impl RenderOnce for ClipboardCard {
             } else {
                 match content_type {
                     ContentType::Image => {
-                        let img_missing = !item.image_path.is_empty()
-                            && !std::path::Path::new(&item.image_path).exists();
-                        let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
-                        let img_stale = img_missing && !img_not_loaded;
+                        let img_not_loaded = image_missing && image_is_waiting_for_sync(&item);
+                        let img_stale = image_missing && !img_not_loaded;
                         // Show previews only when the full image exists locally. Synced images
                         // regenerate thumbnails after the blob is downloaded.
                         if let Some(preview_img_path) =
-                            preview_img_path.clone().filter(|_| !img_missing)
+                            preview_img_path.clone().filter(|_| !image_missing)
                         {
                             let object_fit = if has_qr {
                                 ObjectFit::Contain
@@ -2043,7 +2191,7 @@ impl RenderOnce for ClipboardCard {
                                         .border(px(4.))
                                         .border_color(surface),
                                 )
-                        } else if img_missing || preview_img_path.is_none() {
+                        } else if image_missing || preview_img_path.is_none() {
                             let (placeholder_color, placeholder_icon) = if img_stale {
                                 (danger, "\u{e607}")
                             } else {
@@ -2396,10 +2544,10 @@ impl RenderOnce for ClipboardCard {
                 if item.meta_type == "path" {
                     // Check foreign platform first — a Mac path on Windows
                     // will never exist here regardless of what's on disk.
-                    if !crate::core::types::path_is_native(&item.full_text) {
+                    if !is_native_path {
                         size_label_warn = true;
                         Some(foreign_path_label())
-                    } else if !crate::core::types::path_exists(&item.full_text) {
+                    } else if path_missing {
                         size_label_danger = true;
                         Some(I18nKey::CardStaleFile.text().to_string())
                     } else {
@@ -2428,12 +2576,10 @@ impl RenderOnce for ClipboardCard {
                 if let Some(host) = remote_host.clone() {
                     Some(host)
                 } else {
-                    let img_missing = !item.image_path.is_empty()
-                        && !std::path::Path::new(&item.image_path).exists();
-                    let img_not_loaded = img_missing && image_is_waiting_for_sync(&item);
+                    let img_not_loaded = image_missing && image_is_waiting_for_sync(&item);
                     if img_not_loaded {
                         Some(I18nKey::CardImageNotLoaded.text().to_string())
-                    } else if img_missing {
+                    } else if image_missing {
                         size_label_danger = true;
                         Some(I18nKey::CardStaleFile.text().to_string())
                     } else if img_w > 0 && img_h > 0 {

@@ -3,7 +3,7 @@
 //! --- Uses `gpui_component::v_virtual_list` to efficiently render thousands ---
 //! --- of clipboard items with dynamic card heights (68— 28px). ---
 
-use std::rc::Rc;
+use std::{collections::HashSet, rc::Rc};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -35,6 +35,70 @@ fn additive_selection_modifier(modifiers: Modifiers) -> bool {
 
 fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
     modifiers.secondary()
+}
+
+/// Stable pairwise reorder for usage updates, mirroring the AppState usage
+/// reorder rule: created_at ordering keeps positions; favorites-first keyword
+/// searches reorder only inside each group. Items move together with their
+/// cached heights so index-based card sizes stay correct.
+fn reorder_usage_pairs(
+    pairs: &mut [(ClipboardItem, gpui::Size<gpui::Pixels>)],
+    sort_by_created: bool,
+    favorites_first: bool,
+) {
+    if sort_by_created || pairs.is_empty() {
+        return;
+    }
+    if favorites_first {
+        let split = pairs
+            .iter()
+            .position(|(item, _)| !item.is_favorite)
+            .unwrap_or(pairs.len());
+        pairs[..split].sort_by_key(|(item, _)| std::cmp::Reverse(item.updated_at));
+        pairs[split..].sort_by_key(|(item, _)| std::cmp::Reverse(item.updated_at));
+    } else {
+        pairs.sort_by_key(|(item, _)| std::cmp::Reverse(item.updated_at));
+    }
+}
+
+fn can_incrementally_sync_usage(
+    local_items: &[ClipboardItem],
+    item_sizes_len: usize,
+    app_items: &[ClipboardItem],
+    touched: &[i64],
+    transfer_filter_active: bool,
+    force_full_reload: bool,
+) -> bool {
+    if transfer_filter_active
+        || force_full_reload
+        || touched.is_empty()
+        || item_sizes_len != local_items.len()
+    {
+        return false;
+    }
+
+    let local_ids: HashSet<i64> = local_items.iter().map(|item| item.id).collect();
+    let app_visible_ids: HashSet<i64> = app_items
+        .iter()
+        .filter(|item| {
+            item.content_type != ContentType::File
+                || !FileData::from_json(&item.file_data).is_transfer()
+        })
+        .map(|item| item.id)
+        .collect();
+
+    local_ids.len() == local_items.len()
+        && app_visible_ids.len() == local_items.len()
+        && local_ids == app_visible_ids
+        && touched.iter().all(|id| local_ids.contains(id))
+}
+
+fn item_id_at(items: &[ClipboardItem], index: Option<usize>) -> Option<i64> {
+    index.and_then(|index| items.get(index)).map(|item| item.id)
+}
+
+fn item_index(items: &[ClipboardItem], id: Option<i64>) -> Option<usize> {
+    id.and_then(|id| items.iter().position(|item| item.id == id))
 }
 
 #[cfg(target_os = "macos")]
@@ -209,6 +273,8 @@ impl ClipboardListView {
     }
 
     pub fn set_items(&mut self, items: Vec<ClipboardItem>, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, _| state.clear_usage_sync_request());
         self.item_sizes = Rc::new(Self::compute_sizes(&items, &self.card_height_mode));
         // --- Persist current selection before swap (survives empty-item clears ---
         // --- during window hide, when hide() emits ClipboardChanged).         ---
@@ -331,14 +397,87 @@ impl ClipboardListView {
     /// Use after mutations (toggle_favorite, tag ops, delete) to keep the list
     /// in sync. Items retain their current order; re-sort on next window open.
     pub(crate) fn sync_items_from_state(&mut self, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, _| state.clear_usage_sync_request());
         let app_items = self.state.read(cx).visible_items();
         self.item_sizes = Rc::new(Self::compute_sizes(&app_items, &self.card_height_mode));
         self.items = app_items;
         cx.notify();
     }
 
+    /// Incremental sync after usage operations (copy/paste): only the touched
+    /// items' `updated_at` is refreshed and the list reordered, keeping card
+    /// heights and item payloads untouched. Falls back to one full sync when
+    /// incremental syncing cannot be proven safe (transfer view, ID set
+    /// mismatch, or no usage update happened).
     pub(crate) fn sync_items_from_state_for_usage(&mut self, cx: &mut Context<Self>) {
-        self.sync_items_from_state(cx);
+        let (touched, force_full_reload) = self
+            .state
+            .update(cx, |state, _| state.take_usage_sync_request());
+        let selected_id = item_id_at(&self.items, self.selected_index);
+        let anchor_id = item_id_at(&self.items, self.anchor_index);
+        let hovered_id = item_id_at(&self.items, self.hovered_index);
+        let safe = {
+            let app = self.state.read(cx);
+            can_incrementally_sync_usage(
+                &self.items,
+                self.item_sizes.len(),
+                &app.items,
+                &touched,
+                app.transfer_filter_active,
+                force_full_reload,
+            )
+        };
+        if !safe {
+            // One-time fallback: cannot prove the incremental update safe.
+            self.sync_items_from_state(cx);
+            self.selected_index = item_index(&self.items, selected_id).or_else(|| {
+                self.selected_index
+                    .filter(|index| *index < self.items.len())
+            });
+            self.anchor_index = item_index(&self.items, anchor_id)
+                .or_else(|| self.anchor_index.filter(|index| *index < self.items.len()));
+            self.hovered_index = item_index(&self.items, hovered_id);
+            cx.notify();
+        } else {
+            let (sort_by_created, favorites_first) = {
+                let app = self.state.read(cx);
+                for id in &touched {
+                    if let Some(remote) = app.items.iter().find(|item| item.id == *id) {
+                        if let Some(local) = self.items.iter_mut().find(|item| item.id == *id) {
+                            local.updated_at = remote.updated_at;
+                        }
+                    }
+                }
+                (
+                    app.settings.sort_by_created,
+                    app.settings.search_favorites_first
+                        && app.filters.has_keyword()
+                        && !app.filters.is_favorites_active(),
+                )
+            };
+            // Pairwise reorder: move cached card heights together with their
+            // items (item payloads are unchanged, so heights stay valid).
+            let sizes: Vec<gpui::Size<gpui::Pixels>> = self.item_sizes.as_ref().clone();
+            let mut pairs: Vec<(ClipboardItem, gpui::Size<gpui::Pixels>)> =
+                std::mem::take(&mut self.items)
+                    .into_iter()
+                    .zip(sizes)
+                    .collect();
+            reorder_usage_pairs(&mut pairs, sort_by_created, favorites_first);
+            let mut new_items = Vec::with_capacity(pairs.len());
+            let mut new_sizes = Vec::with_capacity(pairs.len());
+            for (item, size) in pairs {
+                new_items.push(item);
+                new_sizes.push(size);
+            }
+            self.items = new_items;
+            self.item_sizes = Rc::new(new_sizes);
+            self.selected_index = item_index(&self.items, selected_id);
+            self.anchor_index = item_index(&self.items, anchor_id);
+            self.hovered_index = item_index(&self.items, hovered_id);
+            cx.notify();
+        }
         if self.state.read(cx).settings.auto_scroll_to_top && !self.items.is_empty() {
             let latest_idx = self
                 .items
@@ -566,7 +705,9 @@ impl ClipboardListView {
                 self.state.update(cx, |s, _cx| s.paste_item(id, plain));
             }
         }
-        self.sync_items_from_state(cx);
+        // Incremental when a usage update happened; falls back to a full sync
+        // when nothing was touched (e.g. the selection no longer exists).
+        self.sync_items_from_state_for_usage(cx);
     }
 
     /// Ctrl/Cmd+Enter: paste the single selected image as bitmap; any other
@@ -2283,5 +2424,177 @@ impl Render for ClipboardListView {
                     )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_incrementally_sync_usage, item_id_at, item_index, reorder_usage_pairs};
+    use crate::core::types::{ClipboardItem, ContentType};
+    use gpui::Pixels;
+
+    fn test_item(id: i64, updated_secs: i64, favorite: bool) -> ClipboardItem {
+        let ts = chrono::Utc::now() - chrono::Duration::seconds(updated_secs);
+        ClipboardItem {
+            id,
+            content_type: ContentType::PlainText,
+            full_text: format!("item {id}"),
+            content_hash: 0x100 + id as u64,
+            created_at: ts,
+            updated_at: ts,
+            image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rich_data: String::new(),
+            file_data: String::new(),
+            is_favorite: favorite,
+            note: String::new(),
+            source_app_name: String::new(),
+            source_app_icon: String::new(),
+            size: 0,
+            tags: Vec::new(),
+            meta_type: String::new(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
+        }
+    }
+
+    fn height(px: f32) -> gpui::Size<gpui::Pixels> {
+        gpui::Size::new(Pixels::from(px), Pixels::from(px))
+    }
+
+    #[test]
+    fn usage_reorder_moves_items_together_with_their_sizes() {
+        let mut pairs = vec![
+            (test_item(1, 100, false), height(100.0)),
+            (test_item(2, 50, false), height(50.0)),
+            (test_item(3, 10, false), height(10.0)),
+        ];
+        // Touch item 1: newest now, must move to the front.
+        pairs[0].0.updated_at = chrono::Utc::now();
+        reorder_usage_pairs(&mut pairs, false, false);
+
+        let ids: Vec<i64> = pairs.iter().map(|(item, _)| item.id).collect();
+        let sizes: Vec<Pixels> = pairs.iter().map(|(_, size)| size.width).collect();
+        assert_eq!(ids, vec![1, 3, 2]);
+        // Cached heights followed their items: id 1 keeps height 100.0.
+        assert_eq!(
+            sizes,
+            vec![Pixels::from(100.0), Pixels::from(10.0), Pixels::from(50.0)]
+        );
+    }
+
+    #[test]
+    fn usage_reorder_keeps_positions_for_created_at_order() {
+        let mut pairs = vec![
+            (test_item(1, 100, false), height(100.0)),
+            (test_item(2, 50, false), height(50.0)),
+            (test_item(3, 10, false), height(10.0)),
+        ];
+        pairs[0].0.updated_at = chrono::Utc::now();
+        reorder_usage_pairs(&mut pairs, true, false);
+
+        let ids: Vec<i64> = pairs.iter().map(|(item, _)| item.id).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn usage_reorder_moves_only_within_favorites_first_groups() {
+        let mut pairs = vec![
+            (test_item(1, 100, true), height(100.0)),
+            (test_item(2, 50, true), height(50.0)),
+            (test_item(3, 10, false), height(10.0)),
+            (test_item(4, 200, false), height(200.0)),
+        ];
+        // Touch the oldest favorite: moves inside the favorite group only.
+        pairs[0].0.updated_at = chrono::Utc::now();
+        reorder_usage_pairs(&mut pairs, false, true);
+
+        let ids: Vec<i64> = pairs.iter().map(|(item, _)| item.id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4]);
+        let sizes: Vec<Pixels> = pairs.iter().map(|(_, size)| size.width).collect();
+        assert_eq!(
+            sizes,
+            vec![
+                Pixels::from(100.0),
+                Pixels::from(50.0),
+                Pixels::from(10.0),
+                Pixels::from(200.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn usage_reorder_restores_interaction_indices_by_item_id() {
+        let mut pairs = vec![
+            (test_item(1, 100, false), height(100.0)),
+            (test_item(2, 50, false), height(50.0)),
+            (test_item(3, 10, false), height(10.0)),
+        ];
+        let items_before: Vec<ClipboardItem> = pairs.iter().map(|(item, _)| item.clone()).collect();
+        let selected_id = item_id_at(&items_before, Some(1));
+        let anchor_id = item_id_at(&items_before, Some(0));
+        let hovered_id = item_id_at(&items_before, Some(2));
+
+        pairs[0].0.updated_at = chrono::Utc::now();
+        reorder_usage_pairs(&mut pairs, false, false);
+        let items_after: Vec<ClipboardItem> = pairs.into_iter().map(|(item, _)| item).collect();
+
+        assert_eq!(item_index(&items_after, selected_id), Some(2));
+        assert_eq!(item_index(&items_after, anchor_id), Some(0));
+        assert_eq!(item_index(&items_after, hovered_id), Some(1));
+    }
+
+    #[test]
+    fn usage_incremental_sync_requires_exact_ids_and_size_cache() {
+        let local = vec![test_item(1, 20, false), test_item(2, 10, false)];
+        assert!(can_incrementally_sync_usage(
+            &local,
+            2,
+            &local,
+            &[1],
+            false,
+            false
+        ));
+
+        let different_ids = vec![test_item(1, 20, false), test_item(3, 10, false)];
+        assert!(!can_incrementally_sync_usage(
+            &local,
+            2,
+            &different_ids,
+            &[1],
+            false,
+            false
+        ));
+        assert!(!can_incrementally_sync_usage(
+            &local,
+            1,
+            &local,
+            &[1],
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn usage_incremental_sync_rejects_forced_or_unmatched_updates() {
+        let items = vec![test_item(1, 20, false), test_item(2, 10, false)];
+        assert!(!can_incrementally_sync_usage(
+            &items,
+            2,
+            &items,
+            &[1],
+            false,
+            true
+        ));
+        assert!(!can_incrementally_sync_usage(
+            &items,
+            2,
+            &items,
+            &[99],
+            false,
+            false
+        ));
     }
 }

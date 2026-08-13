@@ -24,12 +24,22 @@ pub fn split_keyword_terms(keyword: &str) -> Vec<String> {
 /// Whether `text` matches a single keyword term: case-insensitive substring,
 /// full pinyin or pinyin initials.
 pub fn text_matches_term(text: &str, term: &str) -> bool {
-    find_next_match(text, &[term.to_string()], 0).is_some()
+    find_next_match(text, &[term], 0).is_some()
 }
 
 /// Whether `text` matches every keyword term (AND semantics).
+/// The text's pinyin forms are encoded once and shared by all terms.
 pub fn text_matches_all_terms(text: &str, terms: &[String]) -> bool {
-    terms.iter().all(|term| text_matches_term(text, term))
+    if terms.is_empty() {
+        return true;
+    }
+    let index = PinyinIndex::encode(text);
+    terms.iter().all(|term| {
+        let term = term.trim().to_lowercase();
+        !term.is_empty()
+            && (find_next_direct_match(text, std::slice::from_ref(&term), 0).is_some()
+                || index.matches(&term))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,10 +66,12 @@ pub fn match_ranges(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
     if text.is_empty() || terms.is_empty() {
         return Vec::new();
     }
+    let index = PinyinIndex::encode(text);
+    let lower_terms = lowercase_terms(terms);
     let mut ranges = Vec::new();
     let mut pos = 0usize;
     while pos < text.len() {
-        let Some((start, end)) = find_next_match(text, terms, pos) else {
+        let Some((start, end)) = find_next_match_with(text, &lower_terms, &index, pos) else {
             break;
         };
         ranges.push((start, end));
@@ -82,10 +94,12 @@ pub fn highlight_segments(text: &str, terms: &[String]) -> Vec<HighlightSegment>
         }];
     }
 
+    let index = PinyinIndex::encode(text);
+    let lower_terms = lowercase_terms(terms);
     let mut out = Vec::new();
     let mut pos = 0usize;
     while pos < text.len() {
-        let Some((start, end)) = find_next_match(text, terms, pos) else {
+        let Some((start, end)) = find_next_match_with(text, &lower_terms, &index, pos) else {
             out.push(HighlightSegment {
                 text: text[pos..].to_string(),
                 highlighted: false,
@@ -109,15 +123,29 @@ pub fn highlight_segments(text: &str, terms: &[String]) -> Vec<HighlightSegment>
     out
 }
 
-fn find_next_match(text: &str, terms: &[String], start: usize) -> Option<(usize, usize)> {
-    let lower_terms: Vec<String> = terms
+fn lowercase_terms<T: AsRef<str>>(terms: &[T]) -> Vec<String> {
+    terms
         .iter()
-        .map(|term| term.trim().to_lowercase())
+        .map(|term| term.as_ref().trim().to_lowercase())
         .filter(|term| !term.is_empty())
-        .collect();
+        .collect()
+}
 
-    let mut best = find_next_direct_match(text, &lower_terms, start);
-    for (span_start, span_end) in pinyin_match_spans(text, &lower_terms) {
+fn find_next_match<T: AsRef<str>>(text: &str, terms: &[T], start: usize) -> Option<(usize, usize)> {
+    let lower_terms = lowercase_terms(terms);
+    find_next_match_with(text, &lower_terms, &PinyinIndex::encode(text), start)
+}
+
+/// Core match with pre-computed lowercase terms and a pre-encoded pinyin
+/// index, so a single text is encoded once across repeated lookups.
+fn find_next_match_with(
+    text: &str,
+    lower_terms: &[String],
+    index: &PinyinIndex,
+    start: usize,
+) -> Option<(usize, usize)> {
+    let mut best = find_next_direct_match(text, lower_terms, start);
+    for (span_start, span_end) in pinyin_match_spans(index, lower_terms) {
         if span_start < start {
             continue;
         }
@@ -188,48 +216,84 @@ struct PinyinChar {
     py_end: usize,
 }
 
-fn pinyin_match_spans(text: &str, lower_terms: &[String]) -> Vec<(usize, usize)> {
-    let mut full = String::new();
-    let mut full_chars = Vec::new();
-    let mut initials = String::new();
-    let mut initial_chars = Vec::new();
+/// Pre-encoded pinyin forms of one text (full pinyin + initials), so a
+/// multi-keyword match encodes the text exactly once.
+struct PinyinIndex {
+    full: String,
+    full_chars: Vec<PinyinChar>,
+    initials: String,
+    initial_chars: Vec<PinyinChar>,
+}
 
-    for (byte_start, ch) in text.char_indices() {
-        let Some(py) = ch.to_pinyin() else {
-            continue;
-        };
-        let plain = py.plain().to_lowercase();
-        if plain.is_empty() {
-            continue;
-        }
+impl PinyinIndex {
+    fn encode(text: &str) -> Self {
+        let mut full = String::new();
+        let mut full_chars = Vec::new();
+        let mut initials = String::new();
+        let mut initial_chars = Vec::new();
 
-        let byte_end = byte_start + ch.len_utf8();
-        let py_start = full.len();
-        full.push_str(&plain);
-        let py_end = full.len();
-        full_chars.push(PinyinChar {
-            byte_start,
-            byte_end,
-            py_start,
-            py_end,
-        });
+        for (byte_start, ch) in text.char_indices() {
+            let Some(py) = ch.to_pinyin() else {
+                continue;
+            };
+            let plain = py.plain().to_lowercase();
+            if plain.is_empty() {
+                continue;
+            }
 
-        let initial_start = initials.len();
-        if let Some(initial) = plain.chars().next() {
-            initials.push(initial);
-            initial_chars.push(PinyinChar {
+            let byte_end = byte_start + ch.len_utf8();
+            let py_start = full.len();
+            full.push_str(&plain);
+            let py_end = full.len();
+            full_chars.push(PinyinChar {
                 byte_start,
                 byte_end,
-                py_start: initial_start,
-                py_end: initials.len(),
+                py_start,
+                py_end,
             });
+
+            let initial_start = initials.len();
+            if let Some(initial) = plain.chars().next() {
+                initials.push(initial);
+                initial_chars.push(PinyinChar {
+                    byte_start,
+                    byte_end,
+                    py_start: initial_start,
+                    py_end: initials.len(),
+                });
+            }
+        }
+
+        Self {
+            full,
+            full_chars,
+            initials,
+            initial_chars,
         }
     }
 
+    /// Any pinyin span (full or initials) matching `term`.
+    fn matches(&self, term: &str) -> bool {
+        self.full.contains(term) || self.initials.contains(term)
+    }
+
+    /// All pinyin spans (full + initials) matching `term`, mapped back to
+    /// byte offsets in the original text.
+    fn spans(&self, term: &str) -> Vec<(usize, usize)> {
+        let mut spans = encoded_match_spans(&self.full, &self.full_chars, term);
+        spans.extend(encoded_match_spans(
+            &self.initials,
+            &self.initial_chars,
+            term,
+        ));
+        spans
+    }
+}
+
+fn pinyin_match_spans(index: &PinyinIndex, lower_terms: &[String]) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     for term in lower_terms {
-        spans.extend(encoded_match_spans(&full, &full_chars, term));
-        spans.extend(encoded_match_spans(&initials, &initial_chars, term));
+        spans.extend(index.spans(term));
     }
     spans
 }
@@ -332,6 +396,30 @@ mod tests {
         assert_eq!(
             match_ranges("report.pdf", &["report.p".to_string()]),
             vec![(0, 8)]
+        );
+    }
+
+    #[test]
+    fn same_start_prefers_longer_match_over_shorter_candidate() {
+        // Two terms starting at the same offset: the longer match wins.
+        assert_eq!(
+            match_ranges("abcdx", &["abc".to_string(), "abcd".to_string()]),
+            vec![(0, 4)]
+        );
+        // Pinyin: initials cover all four chars (0,12); full pinyin only
+        // covers the first two (0,6). Same start -> the longer span wins.
+        assert_eq!(
+            match_ranges(
+                "工作计划.docx",
+                &["gongzuo".to_string(), "gzjh".to_string()]
+            ),
+            vec![(0, 12)]
+        );
+        // Direct substring vs pinyin hitting the same start: the longer
+        // span wins regardless of source (here the initials span is longer).
+        assert_eq!(
+            match_ranges("工作计划", &["gzjh".to_string(), "工作".to_string()]),
+            vec![(0, 12)]
         );
     }
 

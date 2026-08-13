@@ -29,6 +29,13 @@ fn is_style_container_tag(tag: &str) -> bool {
     )
 }
 
+/// Tags whose content must never become visible text. Word documents ship
+/// `<head>`/`<style>` blocks and Office XML whose text (font names, style
+/// rules) would otherwise leak into previews.
+fn is_non_visible_tag(tag: &str) -> bool {
+    matches!(tag, "head" | "style" | "script" | "title" | "xml")
+}
+
 /// Parse an HTML string and extract styled lines with color, font-weight,
 /// font-style, and background-color from inline `style` attributes as well
 /// as classic HTML `color` attributes (e.g. `<font color="red">`).
@@ -51,12 +58,17 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
     let mut style_stack: Vec<ParsedInlineStyle> = vec![ParsedInlineStyle::default()];
     let mut found_style = false;
     let mut idx = 0usize;
+    // Nesting depth of non-visible containers (`head`, `style`, `script`,
+    // `title`, `xml`). While > 0, no text, styles, or newlines are emitted.
+    let mut skip_depth = 0usize;
 
     while idx < html.len() {
         let rest = &html[idx..];
         if let Some(tag_start_rel) = rest.find('<') {
             let text = &rest[..tag_start_rel];
-            push_html_text(&mut lines, text, style_stack.last().unwrap());
+            if skip_depth == 0 {
+                push_html_text(&mut lines, text, style_stack.last().unwrap());
+            }
             idx += tag_start_rel;
 
             let Some(tag_end_rel) = html[idx..].find('>') else {
@@ -65,9 +77,45 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
             let tag = &html[idx + 1..idx + tag_end_rel];
             let tag_lower = tag.trim().to_ascii_lowercase();
 
-            if tag_lower.starts_with('/') {
+            // HTML comments (including Word's conditional comments) are
+            // skipped as a unit so their inner markup never becomes visible
+            // text. The `>` found above may belong to a conditional-comment
+            // opener (`<!--[if gte mso 9]>`), so scan for the comment's own
+            // `-->` terminator from the comment start instead of reusing it —
+            // otherwise a second comment further down would swallow the
+            // visible text between two comments.
+            if tag_lower.starts_with("!--") {
+                idx += "<!--".len();
+                if let Some(rel) = html[idx..].find("-->") {
+                    idx += rel + "-->".len();
+                }
+                continue;
+            }
+
+            let is_closing = tag_lower.starts_with('/');
+            let tag_name = tag_lower.trim_start_matches('/');
+            let tag_name = tag_name
+                .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                .next()
+                .unwrap_or("");
+
+            if is_non_visible_tag(tag_name) {
+                if is_closing {
+                    skip_depth = skip_depth.saturating_sub(1);
+                } else {
+                    skip_depth += 1;
+                }
+                idx += tag_end_rel + 1;
+                continue;
+            }
+
+            if skip_depth > 0 {
+                idx += tag_end_rel + 1;
+                continue;
+            }
+
+            if is_closing {
                 // Closing tag — pop style stack for container tags
-                let tag_name = tag_lower.trim_start_matches('/');
                 if is_style_container_tag(tag_name) && style_stack.len() > 1 {
                     style_stack.pop();
                 }
@@ -78,11 +126,7 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
                     push_newline(&mut lines);
                 }
             } else {
-                // Opening tag — extract pure tag name (first token before space / > / /)
-                let tag_name = tag_lower
-                    .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
-                    .next()
-                    .unwrap_or("");
+                // Opening tag — extract pure tag name
                 let tag_style = parse_inline_style(tag_name, tag);
                 found_style |= tag_style.has_any_style();
 
@@ -110,7 +154,9 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
 
             idx += tag_end_rel + 1;
         } else {
-            push_html_text(&mut lines, rest, style_stack.last().unwrap());
+            if skip_depth == 0 {
+                push_html_text(&mut lines, rest, style_stack.last().unwrap());
+            }
             break;
         }
     }
@@ -344,34 +390,11 @@ fn tag_is_close_a(chars: &[char], i: usize) -> bool {
 
 /// Normalize a clipboard HTML payload for rendering.
 ///
-/// Removes the CF_HTML header / fragment markers so the parser only sees
-/// the actual markup.
+/// Delegates to the shared extraction in `core::html_text` so capture and
+/// preview always agree on what the visible fragment is (CF_HTML offsets,
+/// `<!--StartFragment-->` comments, or `<body>` content).
 pub fn normalize_clipboard_html_for_render(html: &str) -> String {
-    let Some(header_end) = html.find("<html").or_else(|| html.find("<!DOCTYPE")) else {
-        return html.to_string();
-    };
-
-    let header = &html[..header_end];
-    if !header.lines().any(|line| line.starts_with("Version:")) {
-        return html.to_string();
-    }
-
-    if let (Some(start), Some(end)) = (
-        parse_cf_html_offset(header, "StartFragment:"),
-        parse_cf_html_offset(header, "EndFragment:"),
-    ) {
-        if start < end && end <= html.len() {
-            return String::from_utf8_lossy(&html.as_bytes()[start..end])
-                .trim()
-                .to_string();
-        }
-    }
-
-    html[header_end..]
-        .replace("<!--StartFragment-->", "")
-        .replace("<!--EndFragment-->", "")
-        .trim()
-        .to_string()
+    crate::core::html_text::normalize_clipboard_html(html)
 }
 
 /// Render parsed styled-HTML lines as a column of colored rows.
@@ -836,13 +859,6 @@ fn parse_css_color(value: &str) -> Option<Rgba> {
     }
 }
 
-fn parse_cf_html_offset(header: &str, key: &str) -> Option<usize> {
-    header.lines().find_map(|line| {
-        line.strip_prefix(key)
-            .and_then(|value| value.trim().parse::<usize>().ok())
-    })
-}
-
 /// Heuristic to distinguish real URLs from code patterns like `array[i](fn)`.
 ///
 /// Only treats `(...)` after `[...]` as a markdown link URL when the content
@@ -863,10 +879,66 @@ fn looks_like_url(after_paren: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        focus_styled_html_lines, highlight_styled_html_lines, parse_styled_html_lines,
-        strip_html_links,
+        focus_styled_html_lines, highlight_styled_html_lines, normalize_clipboard_html_for_render,
+        parse_styled_html_lines, strip_html_links,
     };
     use gpui::{rgb, FontStyle, FontWeight};
+
+    #[test]
+    fn styled_html_skips_head_style_and_office_xml() {
+        let html = r#"<html><head><style>p { color: red }</style><xml><w:LatentStyles>Times New Roman</w:LatentStyles></xml></head><body><p><span style="color:#ff0000">Visible</span></p></body></html>"#;
+        let lines = parse_styled_html_lines(html).unwrap();
+
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "Visible");
+    }
+
+    #[test]
+    fn styled_html_keeps_text_between_two_comments() {
+        let html = r#"<!--a--><span style="color:#ff0000">正文</span><!--b-->"#;
+        let lines = parse_styled_html_lines(html).unwrap();
+
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "正文");
+    }
+
+    #[test]
+    fn styled_html_skips_single_simple_comment() {
+        let html = r#"<!-- plain comment --><span style="color:#ff0000">Text</span>"#;
+        let lines = parse_styled_html_lines(html).unwrap();
+
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "Text");
+    }
+
+    #[test]
+    fn styled_html_skips_conditional_comments() {
+        let html = r#"<!--[if gte mso 9]><xml><w:LatentStyles>Cambria Math</w:LatentStyles></xml><![endif]--><p><span style="color:#ff0000">正文</span></p>"#;
+        let lines = parse_styled_html_lines(html).unwrap();
+
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "正文");
+    }
+
+    #[test]
+    fn styled_html_skips_title_and_script() {
+        let html = r#"<html><title>Title Text</title><script>var x = 1;</script><body><span style="color:#ff0000">Real</span></body></html>"#;
+        let lines = parse_styled_html_lines(html).unwrap();
+
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "Real");
+    }
+
+    #[test]
+    fn render_normalization_extracts_word_fragment_without_header() {
+        let html = r#"<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><style>p.MsoNormal{font-family:"Times New Roman"}</style></head><body lang=ZH-CN><!--StartFragment--><p><span style='color:#ff0000'>与保险公司协调处理索赔并解决问题。</span></p><!--EndFragment--></body></html>"#;
+
+        let out = normalize_clipboard_html_for_render(html);
+
+        assert!(out.contains("与保险公司协调处理索赔并解决问题。"));
+        assert!(!out.contains("Times New Roman"));
+        assert!(!out.contains("<head"));
+    }
 
     #[test]
     fn parses_semantic_weight_and_style_without_color() {

@@ -3,6 +3,10 @@
 //! Split out of the legacy combined `SearchBar`: this component owns only the
 //! input field and its keyboard behavior. Type/tag filters live in `FilterBar`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use gpui::InteractiveElement;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -12,6 +16,10 @@ use crate::state::app::AppState;
 
 use super::clipboard_list::{ClipboardListEvent, ClipboardListView};
 use super::theme::ClippiTheme;
+
+/// Debounce for applying search keywords: only the last stable keyword typed
+/// within this window is submitted.
+const SEARCH_DEBOUNCE_MS: u64 = 150;
 
 fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
     modifiers.secondary()
@@ -41,23 +49,39 @@ impl SearchBox {
         let list_for_input = list_view.clone();
         let input_for_read = input.clone();
 
+        // Each keystroke bumps the generation; a debounced task only applies
+        // its keyword if no newer keystroke superseded it.
+        let generation = Arc::new(AtomicU64::new(0));
         let _subscriptions = vec![cx.subscribe(&input, move |_this, _, ev: &InputEvent, cx| {
             if !matches!(ev, InputEvent::Change) {
                 return;
             }
 
+            let my_generation = generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let generation = generation.clone();
             let keyword = input_for_read.read(cx).value().to_string();
-            let items = state_for_input.update(cx, |state, _cx| {
-                state.set_keyword(&keyword);
-                state.visible_items()
-            });
-            list_for_input.update(cx, |list, cx| {
-                list.set_items(items, cx);
-                // Typing a keyword is an explicit reorder intent: when
-                // favorites-first applies, follow the reorder to the top.
-                list.select_and_scroll_to_top_if_favorites_first(cx);
-            });
-            cx.notify();
+            let state_for_input = state_for_input.clone();
+            let list_for_input = list_for_input.clone();
+            cx.spawn(async move |_this, cx| {
+                // Trailing-edge debounce: wait for the input to stabilize.
+                Timer::after(Duration::from_millis(SEARCH_DEBOUNCE_MS)).await;
+                if generation.load(Ordering::SeqCst) != my_generation {
+                    return; // superseded by a newer keystroke
+                }
+                let Ok(items) = state_for_input.update(cx, |state, _cx| {
+                    state.set_keyword(&keyword);
+                    state.visible_items()
+                }) else {
+                    return;
+                };
+                let _ = list_for_input.update(cx, |list, cx| {
+                    list.set_items(items, cx);
+                    // Typing a keyword is an explicit reorder intent: when
+                    // favorites-first applies, follow the reorder to the top.
+                    list.select_and_scroll_to_top_if_favorites_first(cx);
+                });
+            })
+            .detach();
         })];
 
         Self {

@@ -19,6 +19,16 @@ pub struct MergeStats {
     pub tags_updated: usize,
 }
 
+/// Titlebar filter availability + clearable counts, loaded in a single
+/// database round trip (previously two EXISTS + two COUNT queries).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TitlebarStats {
+    pub has_hotkey_items: bool,
+    pub has_favorite_items: bool,
+    pub clearable_history_count: u32,
+    pub clearable_non_favorite_history_count: u32,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -457,24 +467,26 @@ impl Database {
         Ok(())
     }
 
-    pub fn has_favorite_items(&self) -> SqlResult<bool> {
-        self.conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE is_favorite = 1 LIMIT 1)",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|value| value != 0)
-    }
-
-    pub fn has_custom_hotkey_items(&self) -> SqlResult<bool> {
-        self.conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE custom_hotkey <> '' LIMIT 1)",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|value| value != 0)
+    pub fn load_titlebar_stats(&self) -> SqlResult<TitlebarStats> {
+        self.conn.query_row(
+            "SELECT
+                COALESCE(MAX(custom_hotkey <> ''), 0),
+                COALESCE(MAX(is_favorite = 1), 0),
+                COUNT(CASE WHEN meta_type != 'transfer' THEN 1 END),
+                COUNT(CASE
+                    WHEN meta_type != 'transfer' AND is_favorite = 0 THEN 1
+                END)
+             FROM clipboard_items",
+            [],
+            |row| {
+                Ok(TitlebarStats {
+                    has_hotkey_items: row.get::<_, i64>(0)? != 0,
+                    has_favorite_items: row.get::<_, i64>(1)? != 0,
+                    clearable_history_count: row.get::<_, i64>(2)? as u32,
+                    clearable_non_favorite_history_count: row.get::<_, i64>(3)? as u32,
+                })
+            },
+        )
     }
 
     pub fn get_all_custom_item_hotkeys(&self) -> SqlResult<Vec<(i64, String)>> {
@@ -940,6 +952,45 @@ impl Database {
         Ok(())
     }
 
+    /// Bump updated_at for multiple items in one transaction, executing
+    /// bounded `UPDATE ... WHERE id IN (...)` statements of at most 500 IDs
+    /// each. Returns the number of affected rows; an empty id list is a
+    /// no-op. The caller supplies the timestamp so the in-memory refresh
+    /// stays consistent with the database.
+    pub fn touch_items(&self, item_ids: &[i64], now: &str) -> SqlResult<usize> {
+        if item_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let mut affected = 0usize;
+        for chunk in item_ids.chunks(500) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "UPDATE clipboard_items SET updated_at = ?1 WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            let mut params: Vec<rusqlite::types::Value> =
+                vec![rusqlite::types::Value::Text(now.to_string())];
+            params.extend(chunk.iter().map(|&id| id.into()));
+            affected += tx.execute(&sql, rusqlite::params_from_iter(params))?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    /// Test-only hook: reject `UPDATE clipboard_items SET updated_at` so the
+    /// usage-touch failure path can be exercised. The trigger is permanent
+    /// for this connection (tests use in-memory databases).
+    #[cfg(test)]
+    pub fn reject_updated_at_updates_for_test(&self) {
+        self.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_touch_for_test BEFORE UPDATE OF updated_at ON clipboard_items \
+                 BEGIN SELECT RAISE(ABORT, 'reject'); END;",
+            )
+            .unwrap();
+    }
+
     /// Set updated_at to an explicit value (used after sync merge to preserve
     /// remote timestamp when tag re-application has bumped it to now).
     pub fn set_item_updated_at(&self, item_id: i64, timestamp: &str) -> SqlResult<()> {
@@ -1271,13 +1322,15 @@ impl Database {
             return Ok(Vec::new());
         }
         let excess = (non_fav_count - max_items as i64) as usize;
+        // Read only the IDs that will actually be deleted instead of loading
+        // every non-favorite row and truncating in memory.
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer' ORDER BY created_at ASC",
+            "SELECT id FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer' \
+             ORDER BY created_at ASC LIMIT ?1",
         )?;
-        let all_ids: Vec<i64> = stmt
-            .query_map([], |row| row.get(0))?
+        let pruned_ids: Vec<i64> = stmt
+            .query_map([excess as i64], |row| row.get(0))?
             .collect::<SqlResult<Vec<_>>>()?;
-        let pruned_ids: Vec<i64> = all_ids.iter().take(excess).copied().collect();
         if pruned_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -2048,25 +2101,6 @@ impl Database {
             params![item_id],
         )?;
         Ok(())
-    }
-
-    /// Count all non-transfer clipboard rows affected by "clear data".
-    pub fn count_clearable_history(&self) -> SqlResult<u32> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM clipboard_items WHERE meta_type != 'transfer'",
-            [],
-            |row| row.get(0),
-        )
-    }
-
-    /// Count non-favorite, non-transfer rows affected by the default clear action.
-    pub fn count_clearable_non_favorite_history(&self) -> SqlResult<u32> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM clipboard_items \
-             WHERE meta_type != 'transfer' AND is_favorite = 0",
-            [],
-            |row| row.get(0),
-        )
     }
 
     /// Delete confirmed-stale items in a transaction with identity re-check.
@@ -3173,6 +3207,18 @@ mod tests {
     }
 
     #[test]
+    fn titlebar_stats_are_zero_for_an_empty_database() {
+        let (_path, db) = temp_db("empty-titlebar-stats");
+
+        let stats = db.load_titlebar_stats().unwrap();
+
+        assert!(!stats.has_hotkey_items);
+        assert!(!stats.has_favorite_items);
+        assert_eq!(stats.clearable_history_count, 0);
+        assert_eq!(stats.clearable_non_favorite_history_count, 0);
+    }
+
+    #[test]
     fn clear_clipboard_history_is_atomic_and_preserves_transfer_rows_and_tags() {
         let (path, db) = temp_db("clear-history");
         let missing_file = path.parent().unwrap().join("missing-file.txt");
@@ -3217,8 +3263,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(db.count_clearable_history().unwrap(), 3);
-        assert_eq!(db.count_clearable_non_favorite_history().unwrap(), 2);
+        let stats = db.load_titlebar_stats().unwrap();
+        assert_eq!(stats.clearable_history_count, 3);
+        assert_eq!(stats.clearable_non_favorite_history_count, 2);
+        assert!(stats.has_hotkey_items);
+        assert!(stats.has_favorite_items);
         let result = db.clear_clipboard_history("test-device", true).unwrap();
 
         assert_eq!(result.deleted_items, 3);
@@ -3679,5 +3728,87 @@ mod tests {
         assert_eq!(stats.stale_items, 1);
         assert!(db.get_by_hash(301).unwrap().is_none());
         assert!(db.get_by_hash(302).unwrap().is_some());
+    }
+
+    // ── touch_items (batch usage-time updates) ──────────────────────
+
+    #[test]
+    fn touch_items_updates_all_ids_across_chunk_boundaries() {
+        let db = Database::open(":memory:").unwrap();
+        let old = "2020-01-01T00:00:00Z";
+        let mut ids = Vec::with_capacity(1001);
+        for i in 0..1001i64 {
+            db.conn
+                .execute(
+                    "INSERT INTO clipboard_items \
+                     (content_type, full_text, content_hash, created_at, updated_at, meta_type) \
+                     VALUES ('plain_text', ?1, ?2, ?3, ?3, '')",
+                    params![format!("item {i}"), i, old],
+                )
+                .unwrap();
+            ids.push(db.conn.last_insert_rowid());
+        }
+
+        let now = "2026-08-10T00:00:00Z";
+        let affected = db.touch_items(&ids, now).unwrap();
+        assert_eq!(affected, 1001);
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items WHERE updated_at = ?1",
+                params![now],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1001);
+    }
+
+    #[test]
+    fn touch_items_is_atomic_on_failure() {
+        let db = Database::open(":memory:").unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, meta_type) \
+                 VALUES ('plain_text', 'a', 1, ?1, ?1, ''), \
+                        ('plain_text', 'b', 2, ?1, ?1, '')",
+                params!["2020-01-01T00:00:00Z"],
+            )
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_touch BEFORE UPDATE OF updated_at ON clipboard_items \
+                 BEGIN SELECT RAISE(ABORT, 'reject'); END;",
+            )
+            .unwrap();
+
+        let ids: Vec<i64> = db
+            .conn
+            .prepare("SELECT id FROM clipboard_items ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(db.touch_items(&ids, "2026-08-10T00:00:00Z").is_err());
+
+        // No partial update: both rows keep the old timestamp.
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items \
+                 WHERE updated_at = '2020-01-01T00:00:00Z'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn touch_items_empty_is_noop() {
+        let db = Database::open(":memory:").unwrap();
+        assert_eq!(db.touch_items(&[], "2026-08-10T00:00:00Z").unwrap(), 0);
     }
 }

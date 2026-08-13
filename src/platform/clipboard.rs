@@ -518,47 +518,12 @@ fn read_clipboard_rich_data(ctx: &ClipboardContext) -> Option<RichData> {
     let html = ctx
         .get_html()
         .ok()
-        .map(|html| normalize_clipboard_html(&html));
+        .map(|html| crate::core::html_text::normalize_clipboard_html(&html));
     let rtf = ctx.get_rich_text().ok();
     (html.is_some() || rtf.is_some()).then_some(RichData {
         html,
         rtf,
         ..Default::default()
-    })
-}
-
-fn normalize_clipboard_html(html: &str) -> String {
-    let Some(header_end) = html.find("<html").or_else(|| html.find("<!DOCTYPE")) else {
-        return html.to_string();
-    };
-
-    let header = &html[..header_end];
-    if !header.lines().any(|line| line.starts_with("Version:")) {
-        return html.to_string();
-    }
-
-    if let (Some(start), Some(end)) = (
-        parse_cf_html_offset(header, "StartFragment:"),
-        parse_cf_html_offset(header, "EndFragment:"),
-    ) {
-        if start < end && end <= html.len() {
-            return String::from_utf8_lossy(&html.as_bytes()[start..end])
-                .trim()
-                .to_string();
-        }
-    }
-
-    html[header_end..]
-        .replace("<!--StartFragment-->", "")
-        .replace("<!--EndFragment-->", "")
-        .trim()
-        .to_string()
-}
-
-fn parse_cf_html_offset(header: &str, key: &str) -> Option<usize> {
-    header.lines().find_map(|line| {
-        line.strip_prefix(key)
-            .and_then(|value| value.trim().parse::<usize>().ok())
     })
 }
 

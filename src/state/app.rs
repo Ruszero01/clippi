@@ -117,6 +117,14 @@ pub struct AppState {
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
     pub bitmap_paste_finished: Arc<AtomicBool>,
+    /// IDs touched by successful usage updates (copy/paste) since the list
+    /// last consumed them. Accumulated so background hotkey paths cannot
+    /// overwrite an earlier pending update.
+    last_usage_touched_ids: Vec<i64>,
+    /// Content changed while processing a usage action (for example, OCR was
+    /// cached). The list must perform one full sync instead of copying only
+    /// `updated_at`.
+    usage_sync_requires_full_reload: bool,
     /// Item IDs whose custom hotkeys need unregistering (consumed by WindowManager poll).
     pub pending_hotkey_unregister: Vec<i64>,
     pub toast_message: Option<String>,
@@ -247,6 +255,31 @@ fn shrink_item_for_list(item: &mut ClipboardItem) {
     item.rich_data = preview.to_json();
 }
 
+/// Stable reorder for usage-time updates, mirroring the database sort.
+/// `created_at` ordering keeps positions; favorites-first keyword searches
+/// reorder only inside each favorite group (all favorites lead the list).
+fn reorder_by_usage(items: &mut [ClipboardItem], sort_by_created: bool, favorites_first: bool) {
+    if sort_by_created || items.is_empty() {
+        return;
+    }
+    if favorites_first {
+        let split = items
+            .iter()
+            .position(|item| !item.is_favorite)
+            .unwrap_or(items.len());
+        items[..split].sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+        items[split..].sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+    } else {
+        items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+    }
+}
+
+/// Deduplicate ids preserving first-occurrence order.
+fn dedupe_ids(ids: &[i64]) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter().copied().filter(|id| seen.insert(*id)).collect()
+}
+
 impl AppState {
     /// Open the database and load initial data.
     pub fn new(settings: AppSettings) -> Self {
@@ -282,24 +315,10 @@ impl AppState {
         });
 
         let sync = SyncState::from_settings(&settings);
-        let has_hotkey_items = db.has_custom_hotkey_items().unwrap_or_else(|e| {
-            log::error!("Failed to load custom hotkey item availability: {e}");
-            false
+        let stats = db.load_titlebar_stats().unwrap_or_else(|e| {
+            log::error!("Failed to load titlebar stats: {e}");
+            crate::core::db::TitlebarStats::default()
         });
-        let has_favorite_items = db.has_favorite_items().unwrap_or_else(|e| {
-            log::error!("Failed to load favorite item availability: {e}");
-            false
-        });
-        let clearable_history_count = db.count_clearable_history().unwrap_or_else(|error| {
-            log::error!("Failed to count clearable clipboard history: {error}");
-            0
-        });
-        let clearable_non_favorite_history_count = db
-            .count_clearable_non_favorite_history()
-            .unwrap_or_else(|error| {
-                log::error!("Failed to count clearable non-favorite history: {error}");
-                0
-            });
 
         Self {
             settings,
@@ -307,10 +326,12 @@ impl AppState {
             items,
             tags,
             filters: ClipboardFilters::default(),
-            has_hotkey_items,
-            has_favorite_items,
-            clearable_history_count,
-            clearable_non_favorite_history_count,
+            last_usage_touched_ids: Vec::new(),
+            usage_sync_requires_full_reload: false,
+            has_hotkey_items: stats.has_hotkey_items,
+            has_favorite_items: stats.has_favorite_items,
+            clearable_history_count: stats.clearable_history_count,
+            clearable_non_favorite_history_count: stats.clearable_non_favorite_history_count,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
@@ -359,23 +380,15 @@ impl AppState {
     }
 
     fn refresh_titlebar_filter_availability(&mut self) {
-        match self.db.has_custom_hotkey_items() {
-            Ok(value) => self.has_hotkey_items = value,
-            Err(e) => log::error!("Failed to refresh custom hotkey item availability: {e}"),
-        }
-        match self.db.has_favorite_items() {
-            Ok(value) => self.has_favorite_items = value,
-            Err(e) => log::error!("Failed to refresh favorite item availability: {e}"),
-        }
-        match self.db.count_clearable_history() {
-            Ok(value) => self.clearable_history_count = value,
-            Err(error) => log::error!("Failed to refresh clearable history count: {error}"),
-        }
-        match self.db.count_clearable_non_favorite_history() {
-            Ok(value) => self.clearable_non_favorite_history_count = value,
-            Err(error) => {
-                log::error!("Failed to refresh clearable non-favorite history count: {error}")
+        match self.db.load_titlebar_stats() {
+            Ok(stats) => {
+                self.has_hotkey_items = stats.has_hotkey_items;
+                self.has_favorite_items = stats.has_favorite_items;
+                self.clearable_history_count = stats.clearable_history_count;
+                self.clearable_non_favorite_history_count =
+                    stats.clearable_non_favorite_history_count;
             }
+            Err(e) => log::error!("Failed to refresh titlebar stats: {e}"),
         }
     }
 
@@ -845,28 +858,77 @@ impl AppState {
         self.bitmap_paste_finished.swap(false, Ordering::SeqCst)
     }
 
-    fn touch_item_usage(&mut self, id: i64) {
-        let mark_dirty = match self.db.get_by_id(id) {
-            Ok(Some(item)) => self.should_mark_sync_dirty(&item),
-            Ok(None) => {
-                log::warn!("touch_item_usage: item {id} not found");
-                return;
-            }
-            Err(e) => {
-                log::error!("touch_item_usage: db error for {id}: {e}");
-                return;
-            }
-        };
-
-        match self.db.touch_item(id) {
+    /// Touch the usage time of one or more items: one database transaction
+    /// for the whole set, then a single in-memory reorder. Callers pass the
+    /// full items already read for the copy/paste operation (no re-read by
+    /// ID); the in-memory update never inserts items that are not part of
+    /// the current filter result.
+    fn touch_items_usage(&mut self, items: &[ClipboardItem]) {
+        if items.is_empty() {
+            return;
+        }
+        let mark_dirty = items.iter().any(|item| self.should_mark_sync_dirty(item));
+        let now = chrono::Utc::now().to_rfc3339();
+        let ids = dedupe_ids(&items.iter().map(|item| item.id).collect::<Vec<_>>());
+        match self.db.touch_items(&ids, &now) {
             Ok(_) => {
                 if mark_dirty {
                     self.sync_dirty.store(true, Ordering::SeqCst);
                 }
-                self.reload_items();
+                self.apply_usage_touch_in_memory(&ids, &now);
+                for id in ids {
+                    if !self.last_usage_touched_ids.contains(&id) {
+                        self.last_usage_touched_ids.push(id);
+                    }
+                }
             }
-            Err(e) => log::error!("touch_item_usage({id}): {e}"),
+            Err(e) => log::error!("touch_items_usage: {e}"),
         }
+    }
+
+    fn touch_item_usage(&mut self, item: &ClipboardItem) {
+        self.touch_items_usage(std::slice::from_ref(item));
+    }
+
+    /// In-memory half of a usage-time update: refresh `updated_at` for the
+    /// touched ids that are currently visible and reorder once. Items outside
+    /// the current filter result are only updated in the database.
+    fn apply_usage_touch_in_memory(&mut self, ids: &[i64], now: &str) {
+        let ts = chrono::DateTime::parse_from_rfc3339(now)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let mut hit = false;
+        for id in ids {
+            if let Some(item) = self.items.iter_mut().find(|item| item.id == *id) {
+                item.updated_at = ts;
+                hit = true;
+            }
+        }
+        if hit {
+            let favorites_first = self.settings.search_favorites_first
+                && self.filters.has_keyword()
+                && !self.filters.is_favorites_active();
+            reorder_by_usage(
+                &mut self.items,
+                self.settings.sort_by_created,
+                favorites_first,
+            );
+        }
+    }
+
+    /// Consume the pending list-sync request. A full reload supersedes the
+    /// accumulated IDs when the action also changed item content.
+    pub(crate) fn take_usage_sync_request(&mut self) -> (Vec<i64>, bool) {
+        (
+            std::mem::take(&mut self.last_usage_touched_ids),
+            std::mem::take(&mut self.usage_sync_requires_full_reload),
+        )
+    }
+
+    /// A full list sync already includes every pending usage update.
+    pub(crate) fn clear_usage_sync_request(&mut self) {
+        self.last_usage_touched_ids.clear();
+        self.usage_sync_requires_full_reload = false;
     }
 
     pub fn toggle_item_tag(&mut self, item_id: i64, tag_id: i64) {
@@ -1057,7 +1119,7 @@ impl AppState {
         if item.image_path.is_empty() {
             return;
         }
-        self.touch_item_usage(id);
+        self.touch_item_usage(&item);
         self.write_text_to_clipboard_internal(&item.image_path);
         restore_paste_target();
         let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
@@ -1093,7 +1155,7 @@ impl AppState {
             .collect::<Vec<_>>()
             .join("\n");
 
-        self.touch_item_usage(id);
+        self.touch_item_usage(&item);
         self.write_text_to_clipboard_internal(&paths_text);
         restore_paste_target();
         let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
@@ -1266,10 +1328,12 @@ impl AppState {
     }
 
     pub fn paste_ocr(&mut self, id: i64) {
-        let ocr_load = match self.db.get_by_id(id) {
+        // Keep the full item for the usage-time update below; the OCR load
+        // tuple only carries what the recognition path needs.
+        let (ocr_load, item) = match self.db.get_by_id(id) {
             Ok(Some(item)) => {
                 let rich = RichData::from_json(&item.rich_data);
-                match rich.ocr_text.filter(|text| !text.trim().is_empty()) {
+                let load = match rich.ocr_text.filter(|text| !text.trim().is_empty()) {
                     Some(cached) => Some((cached, true, String::new(), String::new())),
                     None if item.image_path.is_empty() => None,
                     None => Some((
@@ -1278,15 +1342,16 @@ impl AppState {
                         item.image_path.clone(),
                         item.rich_data.clone(),
                     )),
-                }
+                };
+                (load, Some(item))
             }
             Ok(None) => {
                 log::warn!("paste_ocr: item {id} not found");
-                None
+                (None, None)
             }
             Err(e) => {
                 log::error!("paste_ocr: db error for {id}: {e}");
-                None
+                (None, None)
             }
         };
 
@@ -1298,8 +1363,16 @@ impl AppState {
                     Ok(text) if !text.trim().is_empty() => {
                         let mut next_rich = RichData::from_json(&existing_rich);
                         next_rich.ocr_text = Some(text.clone());
-                        if let Err(e) = self.db.update_rich_data(id, &next_rich.to_json()) {
-                            log::error!("paste_ocr: update rich_data failed for {id}: {e}");
+                        match self.db.update_rich_data(id, &next_rich.to_json()) {
+                            Ok(_) => {
+                                // OCR changes the card payload and potentially
+                                // its measured height. Do not reuse the stale
+                                // incremental list cache after this action.
+                                self.usage_sync_requires_full_reload = true;
+                            }
+                            Err(e) => {
+                                log::error!("paste_ocr: update rich_data failed for {id}: {e}");
+                            }
                         }
                         self.reload_items();
                         Some(text)
@@ -1317,9 +1390,11 @@ impl AppState {
         if let Some(text) = ocr_text {
             // --- Use skip_next (not batch_pasting) — the OCR text written to ---
             // --- clipboard is internal and should be "consumed" by the listener ---
-            // --- (skip one cycle + update baseline seq#) rather than recorded ---
+            // (skip one cycle + update baseline seq#) rather than recorded
             // as a new history entry. This matches the Slint-era behaviour.
-            self.touch_item_usage(id);
+            if let Some(item) = item.as_ref() {
+                self.touch_item_usage(item);
+            }
             self.write_text_to_clipboard_internal(&text);
             crate::platform::paste::restore_paste_target();
             let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
@@ -1388,7 +1463,7 @@ impl AppState {
                 return;
             }
         };
-        self.touch_item_usage(id);
+        self.touch_item_usage(&item);
         self.write_item_to_clipboard_internal(&item, copy_as_plain_text);
     }
 
@@ -1409,7 +1484,7 @@ impl AppState {
             }
         };
 
-        self.touch_item_usage(id);
+        self.touch_item_usage(&item);
         let is_file = item.content_type == ContentType::File
             || (item.content_type == ContentType::Image && !item.image_path.is_empty());
         let expected = item.full_text.clone();
@@ -1448,7 +1523,7 @@ impl AppState {
             return;
         }
 
-        self.touch_item_usage(id);
+        self.touch_item_usage(&item);
         self.bitmap_paste_finished.store(false, Ordering::SeqCst);
         self.show_toast(I18nKey::ToastPreparingBitmapImage.text());
         let image_path = item.image_path.clone();
@@ -1502,7 +1577,7 @@ impl AppState {
             }
         };
 
-        self.touch_item_usage(id);
+        self.touch_item_usage(&item);
         let is_file_or_image = item.content_type == ContentType::File
             || (item.content_type == ContentType::Image && !item.image_path.is_empty());
         let expected = if item.content_type == ContentType::Image && !item.image_path.is_empty() {
@@ -1546,7 +1621,7 @@ impl AppState {
         };
 
         if let Some(color) = detect_color(&item.full_text) {
-            self.touch_item_usage(id);
+            self.touch_item_usage(&item);
             let rgb_text = color.to_rgb();
             self.write_text_to_clipboard_internal(&rgb_text);
             crate::services::clipboard_ops::verify_clipboard_content(&rgb_text, 200);
@@ -1570,7 +1645,7 @@ impl AppState {
         };
 
         if let Some(color) = detect_color(&item.full_text) {
-            self.touch_item_usage(id);
+            self.touch_item_usage(&item);
             let hex_text = color.to_css_hex();
             self.write_text_to_clipboard_internal(&hex_text);
             crate::services::clipboard_ops::verify_clipboard_content(&hex_text, 200);
@@ -1595,9 +1670,9 @@ impl AppState {
             .filter_map(|&id| self.db.get_by_id(id).ok().flatten())
             .collect();
 
-        for item in &items {
-            self.touch_item_usage(item.id);
-        }
+        // Usage-time update: one transaction + one in-memory reorder for the
+        // whole batch (replaces the per-item touch + full list reload).
+        self.touch_items_usage(&items);
 
         let n = items.len();
         for (i, item) in items.iter().enumerate() {
@@ -2694,6 +2769,8 @@ mod tests {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
+            last_usage_touched_ids: Vec::new(),
+            usage_sync_requires_full_reload: false,
             pending_hotkey_unregister: Vec::new(),
             toast_message: None,
             toast_is_warning: false,
@@ -4509,5 +4586,322 @@ mod tests {
             dirty.load(Ordering::SeqCst),
             "favorite in fav-only: should set dirty"
         );
+    }
+
+    // ── P0: usage-path performance baseline ────────────────────────
+    // Machine-timed, ignored by default (run with --ignored --nocapture).
+    // Measures single/batch usage-time updates against a 10,000-item
+    // history. The P1 signature change of touch_item_usage adapts the call
+    // sites below; scenarios and statistics stay unchanged.
+
+    fn baseline_median_us(samples: &[u128]) -> u128 {
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    }
+
+    /// Warm up (2 runs), then measure `runs` iterations; returns (mean, median) µs.
+    fn baseline_scenario<F: FnMut()>(mut op: F, runs: usize) -> (u128, u128) {
+        for _ in 0..2 {
+            op();
+        }
+        let mut samples = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            let start = std::time::Instant::now();
+            op();
+            samples.push(start.elapsed().as_micros());
+        }
+        let mean = samples.iter().sum::<u128>() / samples.len() as u128;
+        (mean, baseline_median_us(&samples))
+    }
+
+    #[test]
+    #[ignore = "machine-timed usage-path baseline; run with --ignored --nocapture"]
+    fn usage_performance_baseline() {
+        let (mut state, _dirty) = test_state();
+        let mut ids = Vec::with_capacity(10_000);
+        for i in 0..10_000i64 {
+            ids.push(insert_item_at_age(
+                &mut state,
+                1000 + i,
+                false,
+                &format!("usage item {i}"),
+                10_000 - i,
+            ));
+        }
+        state.reload_items();
+        assert_eq!(state.items.len(), 200, "default list window is 200");
+
+        // Reload-detection signal: delete the oldest item (outside the list
+        // window) without reloading. A full reload during a usage update
+        // refreshes clearable_history_count from 10000 to 9999.
+        state.db.delete_item(ids[0]).unwrap();
+        let stale_count = state.clearable_history_count;
+        assert_eq!(stale_count, 10_000);
+
+        let newest_id = state.items[0].id;
+        let newest_item = state.db.get_by_id(newest_id).unwrap().unwrap();
+        let runs = 10;
+
+        // Default updated_at order: single touch.
+        let (mean, median) = baseline_scenario(|| state.touch_item_usage(&newest_item), runs);
+        let reload_detected = state.clearable_history_count != stale_count;
+        println!(
+            "single touch (updated_at order): mean {mean} µs, median {median} µs, full reload detected: {reload_detected}"
+        );
+
+        // created_at order: positions must not change.
+        state.settings.sort_by_created = true;
+        state.reload_items();
+        let before: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        let (mean, median) = baseline_scenario(|| state.touch_item_usage(&newest_item), runs);
+        let after: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        println!(
+            "single touch (created_at order): mean {mean} µs, median {median} µs, order unchanged: {}",
+            before == after
+        );
+
+        // Favorites-first keyword search: touch inside the favorite group.
+        state.settings.sort_by_created = false;
+        state.settings.search_favorites_first = true;
+        state.filters.set_keyword("usage item 9");
+        state.reload_items();
+        let fav_id = state.items[0].id;
+        state.db.toggle_favorite(fav_id).unwrap();
+        state.reload_items();
+        assert_eq!(state.items[0].id, fav_id, "favorite leads the group");
+        let fav_item = state.db.get_by_id(fav_id).unwrap().unwrap();
+        let (mean, median) = baseline_scenario(|| state.touch_item_usage(&fav_item), runs);
+        println!("single touch (favorites-first search): mean {mean} µs, median {median} µs");
+
+        // Batch usage updates (the shared batch method used by batch_paste).
+        let batch_20: Vec<ClipboardItem> = state
+            .items
+            .iter()
+            .take(20)
+            .filter_map(|it| state.db.get_by_id(it.id).ok().flatten())
+            .collect();
+        let batch_100: Vec<ClipboardItem> = state
+            .items
+            .iter()
+            .take(100)
+            .filter_map(|it| state.db.get_by_id(it.id).ok().flatten())
+            .collect();
+        let (mean, median) = baseline_scenario(|| state.touch_items_usage(&batch_20), runs);
+        println!("batch usage update (20 items): mean {mean} µs, median {median} µs");
+        let (mean, median) = baseline_scenario(|| state.touch_items_usage(&batch_100), runs);
+        println!("batch usage update (100 items): mean {mean} µs, median {median} µs");
+    }
+
+    // ── Usage-path incremental updates (P1/P2) ─────────────────────
+
+    #[test]
+    fn usage_touch_moves_item_to_front_in_updated_at_order() {
+        let (mut state, _dirty) = test_state();
+        let id_old = insert_item_at_age(&mut state, 1, false, "oldest", 100);
+        insert_item_at_age(&mut state, 2, false, "middle", 50);
+        insert_item_at_age(&mut state, 3, false, "newest", 10);
+        state.reload_items();
+        assert_eq!(item_texts(&state), vec!["newest", "middle", "oldest"]);
+
+        let item = state.db.get_by_id(id_old).unwrap().unwrap();
+        state.touch_item_usage(&item);
+
+        assert_eq!(item_texts(&state), vec!["oldest", "newest", "middle"]);
+        assert_eq!(
+            state.items[0].updated_at,
+            state.db.get_by_id(id_old).unwrap().unwrap().updated_at
+        );
+        // The touched id is recorded for the list view to consume.
+        assert_eq!(state.last_usage_touched_ids, vec![id_old]);
+        assert_eq!(state.take_usage_sync_request(), (vec![id_old], false));
+        assert!(state.last_usage_touched_ids.is_empty());
+    }
+
+    #[test]
+    fn usage_sync_request_accumulates_until_consumed() {
+        let (mut state, _dirty) = test_state();
+        let id_a = insert_item_at_age(&mut state, 1, false, "a", 20);
+        let id_b = insert_item_at_age(&mut state, 2, false, "b", 10);
+        state.reload_items();
+
+        let item_a = state.db.get_by_id(id_a).unwrap().unwrap();
+        state.touch_item_usage(&item_a);
+        let item_b = state.db.get_by_id(id_b).unwrap().unwrap();
+        state.touch_item_usage(&item_b);
+        // Touching the same item again must not duplicate the pending id.
+        state.touch_item_usage(&item_a);
+
+        assert_eq!(state.take_usage_sync_request(), (vec![id_a, id_b], false));
+        assert_eq!(state.take_usage_sync_request(), (Vec::new(), false));
+    }
+
+    #[test]
+    fn full_usage_sync_request_supersedes_pending_ids() {
+        let (mut state, _dirty) = test_state();
+        state.last_usage_touched_ids = vec![1, 2];
+        state.usage_sync_requires_full_reload = true;
+
+        assert_eq!(state.take_usage_sync_request(), (vec![1, 2], true));
+        assert_eq!(state.take_usage_sync_request(), (Vec::new(), false));
+
+        state.last_usage_touched_ids = vec![3];
+        state.usage_sync_requires_full_reload = true;
+        state.clear_usage_sync_request();
+        assert_eq!(state.take_usage_sync_request(), (Vec::new(), false));
+    }
+
+    #[test]
+    fn usage_touch_keeps_order_in_created_at_sort() {
+        let (mut state, _dirty) = test_state();
+        let id = insert_item_at_age(&mut state, 1, false, "a", 100);
+        insert_item_at_age(&mut state, 2, false, "b", 50);
+        insert_item_at_age(&mut state, 3, false, "c", 10);
+        state.settings.sort_by_created = true;
+        state.reload_items();
+        let before: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+
+        let item = state.db.get_by_id(id).unwrap().unwrap();
+        state.touch_item_usage(&item);
+
+        let after: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        assert_eq!(before, after);
+        let touched = state.items.iter().find(|it| it.id == id).unwrap();
+        assert!(touched.updated_at > touched.created_at);
+    }
+
+    #[test]
+    fn usage_touch_reorders_only_inside_favorites_first_groups() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        let fav_old = insert_item_at_age(&mut state, 1, true, "k fav old", 100);
+        insert_item_at_age(&mut state, 2, false, "k reg new", 10);
+        insert_item_at_age(&mut state, 3, true, "k fav new", 50);
+        insert_item_at_age(&mut state, 4, false, "k reg old", 200);
+        state.filters.set_keyword("k");
+        state.reload_items();
+        assert_eq!(
+            item_texts(&state),
+            vec!["k fav new", "k fav old", "k reg new", "k reg old"]
+        );
+
+        let item = state.db.get_by_id(fav_old).unwrap().unwrap();
+        state.touch_item_usage(&item);
+
+        // The favorite moved inside its group; the regular group is untouched.
+        assert_eq!(
+            item_texts(&state),
+            vec!["k fav old", "k fav new", "k reg new", "k reg old"]
+        );
+    }
+
+    #[test]
+    fn usage_touch_never_inserts_items_outside_current_result() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "k visible one", 100);
+        insert_item_at_age(&mut state, 2, false, "k visible two", 50);
+        let hidden = insert_item_at_age(&mut state, 99, false, "hidden ghost", 10);
+        state.filters.set_keyword("k");
+        state.reload_items();
+        let before: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        assert!(!before.contains(&hidden));
+
+        let item = state.db.get_by_id(hidden).unwrap().unwrap();
+        state.touch_item_usage(&item);
+
+        let after: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        assert_eq!(before, after);
+        // The database side is updated even though the list result excludes it.
+        let db_updated = state.db.get_by_id(hidden).unwrap().unwrap().updated_at;
+        let now = chrono::Utc::now();
+        assert!((now - db_updated).num_seconds().abs() < 5);
+        assert_eq!(state.last_usage_touched_ids, vec![hidden]);
+    }
+
+    #[test]
+    fn batch_usage_touch_dedupes_ids_and_reorders_once() {
+        let (mut state, _dirty) = test_state();
+        let id_a = insert_item_at_age(&mut state, 1, false, "a", 100);
+        let id_b = insert_item_at_age(&mut state, 2, false, "b", 50);
+        let id_c = insert_item_at_age(&mut state, 3, false, "c", 10);
+        state.reload_items();
+        assert_eq!(item_texts(&state), vec!["c", "b", "a"]);
+
+        // Duplicate ids in the batch must not duplicate in-memory entries.
+        let items: Vec<ClipboardItem> = [id_a, id_b, id_c, id_a]
+            .iter()
+            .filter_map(|&id| state.db.get_by_id(id).ok().flatten())
+            .collect();
+        state.touch_items_usage(&items);
+
+        assert_eq!(state.items.len(), 3);
+        assert_eq!(item_texts(&state), vec!["c", "b", "a"]); // stable: all share the new timestamp
+        let times: std::collections::HashSet<chrono::DateTime<chrono::Utc>> =
+            state.items.iter().map(|it| it.updated_at).collect();
+        assert_eq!(times.len(), 1);
+        assert_eq!(state.last_usage_touched_ids, vec![id_a, id_b, id_c]);
+    }
+
+    #[test]
+    fn usage_touch_marks_sync_dirty_by_sync_scope() {
+        // Plain text (sync not favorites-only): in sync scope → dirty.
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        let id = insert_item_at_age(&mut state, 1, false, "text", 10);
+        state.reload_items();
+        let item = state.db.get_by_id(id).unwrap().unwrap();
+        state.touch_item_usage(&item);
+        assert!(dirty.load(Ordering::SeqCst));
+
+        // File items are never synced.
+        let (mut state2, dirty2) = test_state();
+        let file = make_item(2, ContentType::File, false, "file");
+        state2.db.upsert(&file).unwrap();
+        let file_id = state2
+            .db
+            .get_by_hash(file.content_hash)
+            .unwrap()
+            .unwrap()
+            .id;
+        state2.reload_items();
+        let file_item = state2.db.get_by_id(file_id).unwrap().unwrap();
+        state2.touch_item_usage(&file_item);
+        assert!(!dirty2.load(Ordering::SeqCst));
+
+        // Favorites-only sync: non-favorite stays clean, favorite turns dirty.
+        let (mut state3, dirty3) = test_state();
+        state3.settings.sync_favorites_only = true;
+        let plain = insert_item_at_age(&mut state3, 4, false, "plain", 20);
+        state3.reload_items();
+        let plain_item = state3.db.get_by_id(plain).unwrap().unwrap();
+        state3.touch_item_usage(&plain_item);
+        assert!(!dirty3.load(Ordering::SeqCst));
+        let fav = insert_item_at_age(&mut state3, 3, true, "fav", 10);
+        state3.reload_items();
+        let fav_item = state3.db.get_by_id(fav).unwrap().unwrap();
+        state3.touch_item_usage(&fav_item);
+        assert!(dirty3.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn usage_touch_failure_keeps_memory_unchanged() {
+        // DB-level failure atomicity is covered in db.rs; here we verify the
+        // in-memory half stays untouched when the database rejects the write.
+        let (mut state, dirty) = test_state();
+        let id = insert_item_at_age(&mut state, 1, false, "text", 10);
+        state.reload_items();
+        let before: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        let before_updated = state.items[0].updated_at;
+
+        // Reject the next UPDATE on clipboard_items via a trigger.
+        state.db.reject_updated_at_updates_for_test();
+        let item = state.db.get_by_id(id).unwrap().unwrap();
+        state.touch_item_usage(&item);
+
+        let after: Vec<i64> = state.items.iter().map(|it| it.id).collect();
+        assert_eq!(before, after);
+        assert_eq!(state.items[0].updated_at, before_updated);
+        assert!(!dirty.load(Ordering::SeqCst));
+        assert!(state.last_usage_touched_ids.is_empty());
     }
 }

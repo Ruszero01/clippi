@@ -62,6 +62,14 @@ pub enum DataMaintenanceResult {
 /// markers are not advanced.
 const MAINTENANCE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// Trailing-edge debounce before window geometry is persisted after a change.
+const GEOMETRY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn geometry_retry_delay(retry_count: u32) -> Duration {
+    let backoff_secs = (1u64 << retry_count.saturating_sub(1).min(5)).min(30);
+    Duration::from_secs(backoff_secs)
+}
+
 pub struct WebDavBackendForm {
     pub name: String,
     pub root_url: String,
@@ -394,6 +402,16 @@ pub struct WindowManager {
     saved_w: f32,
     saved_h: f32,
 
+    // --- Debounced geometry persistence ---
+    /// True while the in-memory geometry differs from what is on disk.
+    geometry_dirty: bool,
+    /// When the geometry last changed; flush happens 500 ms after this.
+    geometry_last_change: Option<Instant>,
+    /// Failed-write retry count (drives 1/2/4/8/16/30 s backoff).
+    geometry_retry_count: u32,
+    /// Earliest allowed retry after a failed write.
+    geometry_next_retry: Option<Instant>,
+
     // --- Hotkey blacklist ---
     blacklist: Vec<String>,
 
@@ -556,6 +574,10 @@ impl WindowManager {
             saved_y: settings.saved_window_y,
             saved_w: settings.saved_window_width,
             saved_h: settings.saved_window_height,
+            geometry_dirty: false,
+            geometry_last_change: None,
+            geometry_retry_count: 0,
+            geometry_next_retry: None,
             blacklist: settings.hotkey_blacklist.clone(),
             recording_paste_shortcut_app: None,
             recording_item_hotkey_id: None,
@@ -724,6 +746,7 @@ impl WindowManager {
 
         // 7. Capture window geometry for persistence
         self.capture_window_geometry(cx);
+        self.poll_geometry_flush(cx);
 
         // --- 8. Cloud sync ---
         self.poll_sync(cx);
@@ -1194,7 +1217,7 @@ impl WindowManager {
         log::info!("Config backup saved to {}", backup_path.display());
 
         // Save merged config to disk first, then commit it to memory so a
-        // later `settings.save()` (window-geometry capture, shutdown, any
+        // later `settings.save()` (debounced geometry flush, shutdown, any
         // setting change) cannot overwrite the freshly applied cloud config
         // with the stale in-memory copy.
         if let Err(e) = merged.save_atomic_to(&config_path) {
@@ -1763,7 +1786,7 @@ impl WindowManager {
                 self.saved_x = phys_x;
                 self.saved_y = phys_y;
 
-                self.persist_geometry(cx);
+                self.mark_geometry_dirty();
             }
         }
 
@@ -1802,7 +1825,7 @@ impl WindowManager {
                 self.saved_y = rect.y;
                 self.saved_w = rect.width as f32;
                 self.saved_h = rect.height as f32;
-                self.persist_geometry(cx);
+                self.mark_geometry_dirty();
             }
         }
 
@@ -1810,6 +1833,75 @@ impl WindowManager {
         {
             let _ = cx;
         }
+    }
+
+    /// Mark geometry dirty and schedule a trailing-edge flush 500 ms after
+    /// the last change. New changes reset the debounce and the backoff.
+    fn mark_geometry_dirty(&mut self) {
+        self.geometry_dirty = true;
+        self.geometry_last_change = Some(Instant::now());
+        self.geometry_retry_count = 0;
+        self.geometry_next_retry = None;
+    }
+
+    /// Poll-driven trailing-edge flush: writes settings only after the window
+    /// geometry has been stable for `GEOMETRY_DEBOUNCE`. Failed writes keep
+    /// the dirty flag and retry with 1/2/4/8/16/30 s backoff; a new geometry
+    /// change resets the backoff via `mark_geometry_dirty`.
+    fn poll_geometry_flush(&mut self, cx: &mut Context<Self>) {
+        if !self.geometry_dirty {
+            return;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.geometry_last_change.unwrap_or(now)) < GEOMETRY_DEBOUNCE {
+            return;
+        }
+        if self.geometry_next_retry.is_some_and(|at| now < at) {
+            return;
+        }
+        self.flush_geometry_now(cx);
+    }
+
+    /// Persist immediately and keep the debounce/retry state consistent for
+    /// both poll-driven and forced (hide/shutdown) flushes.
+    fn flush_geometry_now(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        if self.persist_geometry(cx) {
+            self.geometry_dirty = false;
+            self.geometry_last_change = None;
+            self.geometry_retry_count = 0;
+            self.geometry_next_retry = None;
+        } else {
+            self.geometry_dirty = true;
+            if self.geometry_last_change.is_none() {
+                self.geometry_last_change = Some(now);
+            }
+            self.geometry_retry_count = self.geometry_retry_count.saturating_add(1);
+            self.geometry_next_retry = Some(now + geometry_retry_delay(self.geometry_retry_count));
+        }
+    }
+
+    /// Force a geometry flush (hide / shutdown), bypassing the debounce.
+    /// Serializes the latest in-memory `AppState.settings` at flush time so a
+    /// config-sync apply (disk-then-memory) can never be overwritten by a
+    /// stale settings copy.
+    fn persist_geometry(&mut self, cx: &mut Context<Self>) -> bool {
+        let (x, y, width, height) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
+        self.state.update(cx, |state, _cx| {
+            if width > 0.0 && height > 0.0 {
+                state.settings.saved_window_x = x;
+                state.settings.saved_window_y = y;
+                state.settings.saved_window_width = width;
+                state.settings.saved_window_height = height;
+            }
+            match state.settings.save_result() {
+                Ok(()) => true,
+                Err(e) => {
+                    log::error!("Failed to save window geometry settings: {e}");
+                    false
+                }
+            }
+        })
     }
 
     /// Prepare for graceful shutdown: save geometry, flush WAL,
@@ -1831,21 +1923,12 @@ impl WindowManager {
         {
             self.capture_window_geometry(cx);
         }
-        let (sx, sy, sw, sh) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
+        // Force a geometry flush on shutdown (bypasses the debounce).
+        self.flush_geometry_now(cx);
         self.state.update(cx, |state, _cx| {
             if let Err(e) = state.db.checkpoint() {
                 log::error!("WAL checkpoint failed (save geometry): {e}");
             }
-            let settings = &mut state.settings;
-            if sw > 0.0 && sh > 0.0 {
-                settings.saved_window_x = sx;
-                settings.saved_window_y = sy;
-            }
-            if sw > 0.0 && sh > 0.0 {
-                settings.saved_window_width = sw;
-                settings.saved_window_height = sh;
-            }
-            settings.save();
         });
         self.shutdown(cx);
     }
@@ -2563,6 +2646,8 @@ impl WindowManager {
         }
 
         self.visible = false;
+        // Persist the final geometry immediately on hide (bypass debounce).
+        self.flush_geometry_now(cx);
     }
 
     fn show_quick_window(&mut self, cx: &mut Context<Self>) {
@@ -3681,21 +3766,6 @@ impl WindowManager {
         }
     }
 
-    fn persist_geometry(&self, cx: &mut Context<Self>) {
-        let (x, y, width, height) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
-        self.state.update(cx, |state, _cx| {
-            if width > 0.0 && height > 0.0 {
-                state.settings.saved_window_x = x;
-                state.settings.saved_window_y = y;
-            }
-            if width > 0.0 && height > 0.0 {
-                state.settings.saved_window_width = width;
-                state.settings.saved_window_height = height;
-            }
-            state.settings.save();
-        });
-    }
-
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;
 
@@ -4804,6 +4874,18 @@ impl WindowManager {
                 *slot = Some(result);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod geometry_persistence_tests {
+    use super::geometry_retry_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn geometry_retry_delay_is_exponential_and_capped() {
+        let delays: Vec<_> = (1..=7).map(geometry_retry_delay).collect();
+        assert_eq!(delays, [1, 2, 4, 8, 16, 30, 30].map(Duration::from_secs));
     }
 }
 
