@@ -2986,8 +2986,9 @@ impl RenderOnce for ClipboardCard {
             card
         };
 
-        // --- Hover toolbar (hidden during inline editing/recording). ---
-        if is_hovered && !editing && !recording_hotkey {
+        // --- Hover toolbar (hidden during inline editing/recording, and for
+        // non-persisted pending placeholders whose id is negative). ---
+        if is_hovered && !editing && !recording_hotkey && item.id >= 0 {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
                 .can_merge_selection(can_merge_selection);
             card.child(

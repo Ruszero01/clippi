@@ -180,16 +180,30 @@ impl GpuiClipboardService {
             state.clear_selection();
         }
 
-        let pending = {
-            let Ok(mut pending) = self.shared.pending.lock() else {
+        // Snapshot placeholders and ready items under the same lock order used
+        // by ImagePersistWorker. This makes placeholder -> ready publication
+        // atomic from the GPUI poller's perspective.
+        let (pending_images, pending) = {
+            let Ok(image_guard) = self.shared.pending_images.lock() else {
+                log::error!("Clipboard pending_images lock poisoned");
+                return false;
+            };
+            let Ok(mut pending_guard) = self.shared.pending.lock() else {
                 log::error!("Clipboard pending lock poisoned");
                 return false;
             };
-            pending.drain(..).collect::<Vec<_>>()
+            (
+                image_guard.clone(),
+                pending_guard.drain(..).collect::<Vec<_>>(),
+            )
         };
+        let pending_images_changed = state.pending_images != pending_images;
+        if pending_images_changed {
+            state.pending_images = pending_images;
+        }
 
         if pending.is_empty() {
-            if needs_reload {
+            if needs_reload || pending_images_changed {
                 state.reload_items();
                 return true;
             }
@@ -334,7 +348,7 @@ impl GpuiClipboardService {
             state.reload_items();
         }
 
-        changed || needs_reload
+        changed || needs_reload || pending_images_changed
     }
 
     fn process_image_analysis(
@@ -393,7 +407,17 @@ fn compute_size(item: &ClipboardItem) -> i64 {
 }
 
 fn run_qr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
-    match crate::core::qr::detect_qr(std::path::Path::new(&job.img_path)) {
+    let path = std::path::Path::new(&job.img_path);
+    // Ready-only push guarantees the cache file exists before this job is
+    // enqueued; this check is a protocol assertion, not a retry loop.
+    if !path.is_file() {
+        log::error!(
+            "QR analysis: image file missing at enqueue: {}",
+            job.img_path
+        );
+        return;
+    }
+    match crate::core::qr::detect_qr(path) {
         Ok(Some(text)) => {
             let resolved = crate::core::paths::resolve_db_path(&job.db_path);
             if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {
@@ -414,8 +438,16 @@ fn run_qr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
 }
 
 fn run_ocr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
+    let path = std::path::Path::new(&job.img_path);
+    if !path.is_file() {
+        log::error!(
+            "OCR analysis: image file missing at enqueue: {}",
+            job.img_path
+        );
+        return;
+    }
     let engine = crate::core::ocr::create_ocr_engine();
-    match engine.recognize(std::path::Path::new(&job.img_path)) {
+    match engine.recognize(path) {
         Ok(text) if !text.trim().is_empty() => {
             let resolved = crate::core::paths::resolve_db_path(&job.db_path);
             if let Ok(db) = crate::core::db::Database::open(&resolved.to_string_lossy()) {

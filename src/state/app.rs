@@ -58,6 +58,9 @@ pub struct AppState {
     pub db: Database,
     /// Clipboard items loaded from DB
     pub items: Vec<ClipboardItem>,
+    /// In-memory image placeholders awaiting background persistence.
+    /// Not persisted; consumed by the list view for immediate feedback.
+    pub pending_images: Vec<crate::core::types::PendingImageView>,
     /// All tags loaded from DB
     pub tags: Vec<TagInfo>,
     /// Active filter state
@@ -324,6 +327,7 @@ impl AppState {
             settings,
             db,
             items,
+            pending_images: Vec::new(),
             tags,
             filters: ClipboardFilters::default(),
             last_usage_touched_ids: Vec::new(),
@@ -2744,6 +2748,7 @@ mod tests {
             settings,
             db,
             items: Vec::new(),
+            pending_images: Vec::new(),
             tags: Vec::new(),
             filters: ClipboardFilters::default(),
             has_hotkey_items: false,

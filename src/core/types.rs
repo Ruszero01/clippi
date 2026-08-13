@@ -74,6 +74,20 @@ pub struct SourceAppInfo {
     pub icon_base64: String, // PNG icon encoded as base64
 }
 
+/// In-memory placeholder for an image that has been captured but whose cache
+/// file has not been committed yet. Not persisted to the database; the UI
+/// atomically replaces it with the real `ClipboardItem` once the background
+/// worker finishes decoding and writing the full-size PNG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingImageView {
+    pub raw_hash: u64,
+    pub width: u32,
+    pub height: u32,
+    pub source_name: String,
+    pub source_icon: String,
+    pub started_at: std::time::Instant,
+}
+
 /// User-defined tag with name and color
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TagInfo {

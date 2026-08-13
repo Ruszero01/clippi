@@ -13,7 +13,9 @@ use gpui_component::v_virtual_list;
 use gpui_component::VirtualListScrollHandle;
 
 use crate::core::i18n_keys::I18nKey;
-use crate::core::types::{ClipboardItem, ContentType, FileData, HotkeyPasteFormat};
+use crate::core::types::{
+    ClipboardItem, ContentType, FileData, HotkeyPasteFormat, PendingImageView,
+};
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
@@ -35,6 +37,11 @@ fn additive_selection_modifier(modifiers: Modifiers) -> bool {
 
 fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
     modifiers.secondary()
+}
+
+/// Pending image placeholders use a negative id and are not persisted.
+fn item_is_pending(item: &ClipboardItem) -> bool {
+    item.id < 0
 }
 
 /// Stable pairwise reorder for usage updates, mirroring the AppState usage
@@ -161,6 +168,7 @@ impl EventEmitter<ClipboardListEvent> for ClipboardListView {}
 /// The clipboard list view entity.
 pub struct ClipboardListView {
     items: Vec<ClipboardItem>,
+    pending_images: Vec<PendingImageView>,
     item_sizes: Rc<Vec<Size<Pixels>>>,
     card_height_mode: String,
     scroll_handle: VirtualListScrollHandle,
@@ -230,6 +238,7 @@ impl ClipboardListView {
         let item_sizes = Rc::new(Self::compute_sizes(&items, &card_height_mode));
         Self {
             items,
+            pending_images: Vec::new(),
             item_sizes,
             card_height_mode,
             scroll_handle: VirtualListScrollHandle::new(),
@@ -275,7 +284,9 @@ impl ClipboardListView {
     pub fn set_items(&mut self, items: Vec<ClipboardItem>, cx: &mut Context<Self>) {
         self.state
             .update(cx, |state, _| state.clear_usage_sync_request());
-        self.item_sizes = Rc::new(Self::compute_sizes(&items, &self.card_height_mode));
+        self.pending_images = self.state.read(cx).pending_images.clone();
+        let combined = self.combined_with_pending(items);
+        self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
         // --- Persist current selection before swap (survives empty-item clears ---
         // --- during window hide, when hide() emits ClipboardChanged).         ---
         if let Some(idx) = self.selected_index {
@@ -283,7 +294,7 @@ impl ClipboardListView {
                 self.last_selected_id = item.id;
             }
         }
-        self.items = items;
+        self.items = combined;
         self.selected_ids.clear();
         self.selected_index = None;
         self.anchor_index = None;
@@ -296,6 +307,7 @@ impl ClipboardListView {
                 .items
                 .iter()
                 .enumerate()
+                .filter(|(_, item)| !item_is_pending(item))
                 .max_by_key(|(_, item)| &item.updated_at)
                 .map(|(i, _)| i)
                 .unwrap_or(0);
@@ -313,10 +325,11 @@ impl ClipboardListView {
                 self.scroll_handle.scroll_to_item(idx, ScrollStrategy::Top);
             }
         }
-        // --- Fallback: select first item when nothing else matched ---
-        // --- (first launch, persisted item deleted, empty history, etc.) ---
+        // --- Fallback: select first selectable (non-pending) item ---
         if self.selected_index.is_none() && !self.items.is_empty() {
-            self.select_index_without_scroll(0, cx);
+            if let Some(idx) = self.items.iter().position(|item| !item_is_pending(item)) {
+                self.select_index_without_scroll(idx, cx);
+            }
         }
         cx.notify();
     }
@@ -400,9 +413,25 @@ impl ClipboardListView {
         self.state
             .update(cx, |state, _| state.clear_usage_sync_request());
         let app_items = self.state.read(cx).visible_items();
-        self.item_sizes = Rc::new(Self::compute_sizes(&app_items, &self.card_height_mode));
-        self.items = app_items;
+        self.pending_images = self.state.read(cx).pending_images.clone();
+        let combined = self.combined_with_pending(app_items);
+        self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
+        self.items = combined;
         cx.notify();
+    }
+
+    /// Prepend synthesized, non-persisted pending image placeholders so they
+    /// render with the same `ClipboardCard` as real image items.
+    fn combined_with_pending(&self, real_items: Vec<ClipboardItem>) -> Vec<ClipboardItem> {
+        if self.pending_images.is_empty() {
+            return real_items;
+        }
+        let mut combined = Vec::with_capacity(self.pending_images.len() + real_items.len());
+        for (index, pending) in self.pending_images.iter().enumerate() {
+            combined.push(synthesize_pending_item(pending, index));
+        }
+        combined.extend(real_items);
+        combined
     }
 
     /// Incremental sync after usage operations (copy/paste): only the touched
@@ -531,6 +560,9 @@ impl ClipboardListView {
         let Some(item) = self.items.get(index) else {
             return;
         };
+        if item_is_pending(item) {
+            return;
+        }
         let item_id = item.id;
         self.selected_ids.clear();
         self.selected_ids.push(item_id);
@@ -549,6 +581,9 @@ impl ClipboardListView {
         let Some(item) = self.items.get(index) else {
             return;
         };
+        if item_is_pending(item) {
+            return;
+        }
         let item_id = item.id;
         self.selected_ids.clear();
         self.selected_ids.push(item_id);
@@ -641,11 +676,12 @@ impl ClipboardListView {
         if self.items.is_empty() {
             return;
         }
-        let next_index = self
-            .selected_index
-            .map(|index| (index + 1).min(self.items.len().saturating_sub(1)))
-            .unwrap_or(0);
-        self.select_index(next_index, scroll_strategy, cx);
+        let start = self.selected_index.map(|index| index + 1).unwrap_or(0);
+        let next_index = (start..self.items.len())
+            .find(|&i| self.items.get(i).is_some_and(|item| !item_is_pending(item)));
+        if let Some(next_index) = next_index {
+            self.select_index(next_index, scroll_strategy, cx);
+        }
     }
 
     pub(crate) fn select_previous(
@@ -656,11 +692,15 @@ impl ClipboardListView {
         if self.items.is_empty() {
             return;
         }
-        let previous_index = self
-            .selected_index
-            .map(|index| index.saturating_sub(1))
-            .unwrap_or(0);
-        self.select_index(previous_index, scroll_strategy, cx);
+        let start = self.selected_index.map(|index| index.saturating_sub(1));
+        let previous_index = start.and_then(|start| {
+            (0..=start)
+                .rev()
+                .find(|&i| self.items.get(i).is_some_and(|item| !item_is_pending(item)))
+        });
+        if let Some(previous_index) = previous_index {
+            self.select_index(previous_index, scroll_strategy, cx);
+        }
     }
 
     // --- Keyboard-shortcut action helpers (pub(crate) so SearchBar can call them) ---
@@ -746,6 +786,11 @@ impl ClipboardListView {
         // --- Clicking another card while editing → commit first ---
         if self.editing_note_id > 0 {
             self.commit_note_edit(window, cx);
+        }
+
+        // Pending placeholders are not selectable until replaced by a real item.
+        if self.items.get(index).is_some_and(item_is_pending) {
+            return;
         }
 
         let before_ids = self.selected_ids.clone();
@@ -1835,6 +1880,26 @@ impl ClipboardListView {
     }
 }
 
+/// Render the in-memory pending image placeholders using the same image card
+/// as persisted items. The `ClipboardItem` is synthesized with a negative id
+/// and empty `image_path`, so the card shows a neutral pending placeholder and,
+/// once the thumbnail is ready, the thumbnail preview.
+fn synthesize_pending_item(p: &PendingImageView, index: usize) -> ClipboardItem {
+    let mut item = ClipboardItem::new_image(
+        -2 - (index as i64),
+        "",
+        p.raw_hash,
+        p.width,
+        p.height,
+        Some(&crate::core::types::SourceAppInfo {
+            app_name: p.source_name.clone(),
+            icon_base64: p.source_icon.clone(),
+        }),
+    );
+    item.meta_type = "pending-image".to_string();
+    item
+}
+
 impl Render for ClipboardListView {
     #[allow(refining_impl_trait_reachable)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2236,6 +2301,9 @@ impl Render for ClipboardListView {
                                                                     if let Some(item) =
                                                                         this.items.get(i)
                                                                     {
+                                                                        if item_is_pending(item) {
+                                                                            return;
+                                                                        }
                                                                         this.selected_ids.clear();
                                                                         this.selected_ids
                                                                             .push(item.id);
@@ -2273,6 +2341,9 @@ impl Render for ClipboardListView {
                                                             }
 
                                                             if let Some(item) = this.items.get(i) {
+                                                                if item_is_pending(item) {
+                                                                    return;
+                                                                }
                                                                 let already_selected = this
                                                                     .selected_ids
                                                                     .contains(&item.id);
