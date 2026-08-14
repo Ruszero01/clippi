@@ -1436,7 +1436,11 @@ impl AppState {
         result
     }
 
-    fn write_item_to_clipboard_internal(&self, item: &ClipboardItem, copy_as_plain_text: bool) {
+    pub(crate) fn write_item_to_clipboard_internal(
+        &self,
+        item: &ClipboardItem,
+        copy_as_plain_text: bool,
+    ) {
         Self::with_internal_clipboard_write(&self.batch_pasting, &self.skip_next, || {
             crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
         });

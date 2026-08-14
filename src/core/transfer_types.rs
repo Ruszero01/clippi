@@ -91,8 +91,8 @@ pub struct ManifestEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedEntry {
     pub entry: ManifestEntry,
-    /// `true` if this file has a corresponding DB record (already downloaded
-    /// or uploaded by this device), `false` if it only exists in the cloud.
+    /// `true` if this device has a usable local copy (a DB record whose path
+    /// still exists), `false` if the entry is cloud-only.
     pub is_local: bool,
     /// Local-only absolute path. Never serialized into the shared manifest.
     pub local_path: Option<String>,
@@ -205,13 +205,14 @@ impl ManifestEntry {
 /// Compute the effective expiration instant for a manifest entry.
 ///
 /// Shared by automatic cleanup and the UI remaining-time projection so they
-/// never diverge on the legacy fallback rules:
-/// - global retention off (`retention_days == 0`) means keep forever: stale
-///   explicit `expires_at` values from earlier settings are ignored so the UI
+/// never diverge on the retention rules:
+/// - global retention off (`retention_days == 0`) means keep forever: any
+///   explicit `expires_at` from earlier settings is ignored so the UI
 ///   projection and the (disabled) cleanup scheduling can never disagree;
-/// - otherwise a parseable `expires_at` wins;
-/// - legacy entries with an empty `expires_at` fall back to
-///   `uploaded_at + retention_days`.
+/// - an empty `expires_at` also means keep forever: entries uploaded under
+///   "permanent" retention (or pinned) never gain an expiration merely
+///   because the global retention setting later changed;
+/// - otherwise the parseable `expires_at` wins.
 ///
 /// `pinned` does not change the returned value; callers decide whether the
 /// entry is exempt from cleanup, so unpinning can still recompute a fresh
@@ -220,14 +221,16 @@ pub fn effective_expiration(entry: &ManifestEntry, retention_days: u32) -> Optio
     if retention_days == 0 {
         return None;
     }
-    if !entry.expires_at.is_empty() {
-        if let Ok(parsed) = DateTime::parse_from_rfc3339(&entry.expires_at) {
-            return Some(parsed.with_timezone(&Utc));
-        }
+    // An empty `expires_at` means the entry was uploaded under "keep forever"
+    // retention (or was pinned). It must stay permanent regardless of the
+    // current global retention setting; falling back to
+    // `uploaded_at + retention_days` would retroactively expire it.
+    if entry.expires_at.is_empty() {
+        return None;
     }
-    DateTime::parse_from_rfc3339(&entry.uploaded_at)
+    DateTime::parse_from_rfc3339(&entry.expires_at)
         .ok()
-        .and_then(|parsed| retention_expiration(parsed.with_timezone(&Utc), retention_days))
+        .map(|parsed| parsed.with_timezone(&Utc))
 }
 
 /// Return the end of a retention window without panicking on an invalid local
@@ -279,11 +282,13 @@ mod tests {
     }
 
     #[test]
-    fn effective_expiration_falls_back_to_uploaded_plus_retention() {
+    fn effective_expiration_treats_empty_expires_as_permanent() {
         let now = Utc::now();
-        let e = entry(now - Duration::days(2));
-        let expires = effective_expiration(&e, 5).unwrap();
-        assert_eq!(expires, now + Duration::days(3));
+        // A "keep forever" upload leaves expires_at empty. A later global
+        // retention change must not retroactively expire it.
+        let e = entry(now - Duration::days(30));
+        assert_eq!(effective_expiration(&e, 3), None);
+        assert_eq!(effective_expiration(&e, 30), None);
     }
 
     #[test]
@@ -299,16 +304,28 @@ mod tests {
     }
 
     #[test]
-    fn effective_expiration_does_not_panic_on_oversized_local_retention() {
-        let e = entry(Utc::now());
-        assert_eq!(effective_expiration(&e, u32::MAX), None);
+    fn retention_expiration_does_not_panic_on_oversized_days() {
+        let start = Utc::now();
+        assert_eq!(retention_expiration(start, u32::MAX), None);
+        assert_eq!(retention_expiration(start, 0), None);
+        assert_eq!(
+            retention_expiration(start, 3),
+            Some(start + Duration::days(3))
+        );
     }
 
     #[test]
     fn pinned_does_not_change_effective_expiration() {
         let now = Utc::now();
+        // Pinned entries with an empty expires_at are permanent.
         let mut e = entry(now);
         e.pinned = true;
+        assert_eq!(effective_expiration(&e, 3), None);
+
+        // An explicit expires_at still wins even when pinned.
+        let mut e = entry(now);
+        e.pinned = true;
+        e.expires_at = (now + Duration::days(3)).to_rfc3339();
         assert_eq!(effective_expiration(&e, 3), Some(now + Duration::days(3)));
     }
 }

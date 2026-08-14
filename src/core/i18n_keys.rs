@@ -409,7 +409,7 @@ define_i18n! {
     TransferUnpin:            ("取消固定", "Unpin file"),
     TransferPinFailed:        ("固定状态更新失败：{0}", "Failed to update pin: {0}"),
     TransferRemainingDays:    ("剩余 {0} 天", "{0}d left"),
-    TransferExpired:          ("已到期", "Expired"),
+    TransferPendingCleanup:   ("待清理", "Pending cleanup"),
     TransferProtocolUpgradeRequired: ("中转站协议已升级，其他设备也需要升级 Clippi", "The transfer protocol was upgraded; update Clippi on other devices"),
     TransferProtocolUnsupported: ("当前 Clippi 不支持此中转站协议版本", "This Clippi version does not support the transfer protocol"),
 

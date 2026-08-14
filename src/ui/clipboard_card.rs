@@ -1442,6 +1442,16 @@ impl RenderOnce for ClipboardCard {
                 .files
                 .first()
                 .is_none_or(|file| file.path.is_empty());
+        let single_file_missing = remote_host.is_none()
+            && transfer_file_data.files.len() == 1
+            && transfer_file_data.files.first().is_some_and(|file| {
+                crate::services::file_status::cached_file_exists(&file.path) == Some(false)
+            });
+        // Transfer entries never become a stale source: a missing local copy is
+        // re-downloadable from the backend, and the dedicated cloud/local pill
+        // reflects the resolved status. Only ordinary clipboard sources keep
+        // the stale marker (preview + size label).
+        let source_file_missing = !transfer_file_data.is_transfer() && single_file_missing;
         let remote_path_preview = match content_type {
             ContentType::Image if remote_host.is_some() => {
                 Some((image_name.clone(), item.image_path.clone()))
@@ -2390,14 +2400,7 @@ impl RenderOnce for ClipboardCard {
                             serde_json::from_str(&item.file_data).unwrap_or_default();
                         let files: Vec<FileInfo> = file_data.files;
                         let multi = files.len() > 1;
-                        let file_missing = remote_host.is_none()
-                            && !transfer_is_cloud
-                            && !multi
-                            && files.first().is_some_and(|file| {
-                                crate::services::file_status::cached_file_exists(&file.path)
-                                    == Some(false)
-                            });
-                        if file_missing {
+                        if source_file_missing {
                             let fi = &files[0];
                             let stem_len = if fi.is_dir {
                                 fi.name.len()
@@ -2592,16 +2595,9 @@ impl RenderOnce for ClipboardCard {
             ContentType::File => {
                 let fd: FileData = serde_json::from_str(&item.file_data).unwrap_or_default();
                 let count = fd.files.len();
-                // Only check single-file items for missing sources.
-                let file_missing = remote_host.is_none()
-                    && !transfer_is_cloud
-                    && count == 1
-                    && fd.files.first().is_some_and(|file| {
-                        crate::services::file_status::cached_file_exists(&file.path) == Some(false)
-                    });
                 if let Some(host) = remote_host.clone() {
                     Some(host)
-                } else if file_missing {
+                } else if source_file_missing {
                     size_label_danger = true;
                     Some(I18nKey::CardStaleFile.text().to_string())
                 } else if count > 1 {
@@ -2659,7 +2655,7 @@ impl RenderOnce for ClipboardCard {
                     Some(expires) => {
                         let now = chrono::Utc::now();
                         if expires <= now {
-                            (I18nKey::TransferExpired.text().to_string(), danger)
+                            (I18nKey::TransferPendingCleanup.text().to_string(), danger)
                         } else {
                             let remaining = expires - now;
                             if remaining <= chrono::Duration::hours(24) {
@@ -2987,8 +2983,9 @@ impl RenderOnce for ClipboardCard {
         };
 
         // --- Hover toolbar (hidden during inline editing/recording, and for
-        // non-persisted pending placeholders whose id is negative). ---
-        if is_hovered && !editing && !recording_hotkey && item.id >= 0 {
+        // non-persisted pending placeholders). Transfer entries keep their
+        // toolbar even though they also use negative ids. ---
+        if is_hovered && !editing && !recording_hotkey && item.meta_type != "pending-image" {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
                 .can_merge_selection(can_merge_selection);
             card.child(

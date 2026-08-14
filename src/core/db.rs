@@ -1050,6 +1050,71 @@ impl Database {
         )?;
         Ok(changed > 0)
     }
+
+    /// Update the local path of an ordinary file row after its transfer blob
+    /// has been downloaded again. Identity and user metadata stay on the
+    /// original row; only the local file projection is refreshed.
+    pub fn restore_original_transfer_file(
+        &self,
+        item_id: i64,
+        file_data: &str,
+        size: i64,
+    ) -> SqlResult<bool> {
+        let changed = self.conn.execute(
+            "UPDATE clipboard_items
+             SET file_data = ?1, size = ?2, updated_at = ?3,
+                 existence_observed_at = '', sync_pending = 0
+             WHERE id = ?4 AND content_type = 'file' AND meta_type != 'transfer'",
+            params![file_data, size, chrono::Utc::now().to_rfc3339(), item_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Insert or refresh the hidden local backing row for a transfer entry.
+    /// This is deliberately keyed by `remote_hash`, not `content_hash`: an
+    /// ordinary history row may represent the same bytes and must not be
+    /// converted into a transfer backing row by the generic upsert path.
+    pub fn upsert_transfer_backing(&self, item: &ClipboardItem) -> SqlResult<()> {
+        let remote_hash = FileData::from_json(&item.file_data).remote_hash;
+        let changed = self.conn.execute(
+            "UPDATE clipboard_items
+             SET updated_at = ?1, full_text = ?2, content_hash = ?3,
+                 file_data = ?4, size = ?5, existence_observed_at = '',
+                 sync_pending = 0
+             WHERE content_type = 'file' AND meta_type = 'transfer'
+               AND json_valid(file_data)
+               AND json_extract(file_data, '$.remote_hash') = ?6",
+            params![
+                item.updated_at.to_rfc3339(),
+                item.full_text,
+                item.content_hash as i64,
+                item.file_data,
+                item.size,
+                remote_hash
+            ],
+        )?;
+        if changed == 0 {
+            self.conn.execute(
+                "INSERT INTO clipboard_items
+                 (content_type, full_text, content_hash, created_at, updated_at,
+                  image_path, rich_data, file_data, source_app_name,
+                  source_app_icon, image_width, image_height, size, meta_type,
+                  existence_observed_at)
+                 VALUES ('file', ?1, ?2, ?3, ?4, '', '', ?5, '', '', 0, 0,
+                         ?6, 'transfer', '')",
+                params![
+                    item.full_text,
+                    item.content_hash as i64,
+                    item.created_at.to_rfc3339(),
+                    item.updated_at.to_rfc3339(),
+                    item.file_data,
+                    item.size
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Delete a transfer item by its remote_hash (stored in file_data JSON).
     /// Returns true if an item was deleted.
     pub fn delete_transfer_by_hash(&self, remote_hash: &str) -> SqlResult<bool> {

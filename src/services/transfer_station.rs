@@ -591,7 +591,10 @@ fn apply_result(app: &mut AppState, result: TransferJobResult) -> TransferPollOu
                     .replace("{0}", &entry.name),
             );
             let item = transfer_clipboard_item(&entry, &path);
-            crate::services::clipboard_ops::write_item_to_clipboard(&item, false);
+            // This is an application-generated clipboard write. Suppress the
+            // listener echo so the downloaded cache path is not captured as a
+            // second ordinary history row after we restored the original one.
+            app.write_item_to_clipboard_internal(&item, false);
             data_changed = true;
         }
         Ok(TransferAction::Delete(name)) => {
@@ -906,12 +909,8 @@ fn upload_file(
     }
 
     let canonical_path = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
-    upsert_transfer_item(
-        db,
-        &entry,
-        &canonical_path.to_string_lossy(),
-        digest.content_hash,
-    )?;
+    let local_path = normalize_local_path(&canonical_path.to_string_lossy());
+    upsert_transfer_item(db, &entry, &local_path, digest.content_hash)?;
     Ok(name)
 }
 
@@ -943,6 +942,7 @@ fn download_file(
         format!("replace cache file: {error}")
     })?;
     remove_stale_cache_files(&directory, &destination);
+    restore_original_file_after_download(db, entry, &destination)?;
     upsert_transfer_item(
         db,
         entry,
@@ -1112,13 +1112,41 @@ fn get_local_transfer_paths(db: &Database) -> HashMap<String, String> {
         .into_iter()
         .filter_map(|item| {
             let file_data = FileData::from_json(&item.file_data);
-            let path = file_data.files.first()?.path.clone();
-            // The database owns local-item validity. Avoid touching the path here:
-            // cloud placeholders, offline volumes, and network shares can make a
-            // simple existence check block manifest refresh for seconds.
-            (!file_data.remote_hash.is_empty()).then_some((file_data.remote_hash, path))
+            let path = normalize_local_path(&file_data.files.first()?.path.clone());
+            if file_data.remote_hash.is_empty() {
+                return None;
+            }
+            // A transfer entry whose local copy is definitely gone (source
+            // moved or deleted) falls back to cloud-only. The probe is
+            // conservative: remote shares, offline volumes and cloud
+            // providers are never trusted to certify a file as missing, so
+            // only `DefinitelyMissing` flips the entry to cloud.
+            if matches!(
+                crate::core::cache_cleanup::probe_path_status(&path),
+                crate::core::types::PathStatus::DefinitelyMissing
+            ) {
+                return None;
+            }
+            Some((file_data.remote_hash, path))
         })
         .collect()
+}
+
+/// Normalize a stored local path for probing and display. On Windows,
+/// `std::fs::canonicalize` returns `\\?\`-prefixed verbatim paths, which the
+/// remote-path classifier mistakes for UNC shares and Explorer cannot select;
+/// the prefix is stripped for storage and resolution.
+fn normalize_local_path(path: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = path.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+    path.to_string()
 }
 
 fn validate_manifest(manifest: &FileManifest) -> Result<(), String> {
@@ -1274,8 +1302,65 @@ fn upsert_transfer_item(
         custom_hotkey_format: String::new(),
         existence_observed_at: String::new(),
     };
-    db.upsert(&item)
+    db.upsert_transfer_backing(&item)
         .map_err(|error| format!("save transfer item: {error}"))
+}
+
+/// Redirect the original ordinary clipboard row to a freshly downloaded cache
+/// file instead of creating a second visible history entry. The marker scan may
+/// already have cleared `remote_hash` after the old source disappeared, so the
+/// previous transfer backing path is retained as a second identity signal.
+fn restore_original_file_after_download(
+    db: &Database,
+    entry: &ManifestEntry,
+    destination: &Path,
+) -> Result<bool, String> {
+    let previous_paths: HashSet<String> = db
+        .get_transfer_items()
+        .map_err(|error| format!("load transfer backing items: {error}"))?
+        .into_iter()
+        .filter_map(|item| {
+            let file_data = FileData::from_json(&item.file_data);
+            (file_data.remote_hash == entry.hash)
+                .then(|| {
+                    file_data
+                        .files
+                        .first()
+                        .map(|file| normalize_local_path(&file.path))
+                })
+                .flatten()
+        })
+        .collect();
+
+    let ordinary_items = db
+        .get_original_file_items()
+        .map_err(|error| format!("load original file items: {error}"))?;
+    let candidate = ordinary_items
+        .into_iter()
+        .filter_map(|item| {
+            let mut file_data = FileData::from_json(&item.file_data);
+            let marker_matches = file_data.remote_hash == entry.hash;
+            let [file] = file_data.files.as_mut_slice() else {
+                return None;
+            };
+            let path_matches = previous_paths.contains(&normalize_local_path(&file.path));
+            if !marker_matches && !path_matches {
+                return None;
+            }
+            file.path = destination.to_string_lossy().into_owned();
+            file_data.remote_hash = entry.hash.clone();
+            // Prefer the exact row associated with the previous backing path. A
+            // remote content hash can legitimately match more than one history
+            // row containing identical bytes.
+            Some((usize::from(path_matches), item.id, file_data.to_json()))
+        })
+        .max_by_key(|(path_matches, _, _)| *path_matches);
+
+    let Some((_, item_id, file_data)) = candidate else {
+        return Ok(false);
+    };
+    db.restore_original_transfer_file(item_id, &file_data, entry.size as i64)
+        .map_err(|error| format!("restore original transfer file: {error}"))
 }
 
 fn transfer_clipboard_item(entry: &ManifestEntry, local_path: &str) -> ClipboardItem {
@@ -1648,7 +1733,7 @@ mod tests {
     }
 
     #[test]
-    fn expiry_prefers_explicit_timestamp_and_supports_legacy_entries() {
+    fn expiry_prefers_explicit_timestamp_and_empty_expires_is_permanent() {
         let now = chrono::Utc::now();
         let mut entry = ManifestEntry {
             hash: "a".repeat(64),
@@ -1661,10 +1746,17 @@ mod tests {
             uploaded_by: String::new(),
             pinned: false,
         };
+        // Explicit future expiration: not yet expired.
         assert!(!entry_expired(&entry, now, 1));
 
-        entry.expires_at.clear();
+        // Explicit past expiration: expired.
+        entry.expires_at = (now - chrono::Duration::hours(1)).to_rfc3339();
         assert!(entry_expired(&entry, now, 1));
+
+        // Empty expires_at (a keep-forever upload) never expires, even with a
+        // short global retention window.
+        entry.expires_at.clear();
+        assert!(!entry_expired(&entry, now, 1));
         assert!(!entry_expired(&entry, now, 3));
     }
 
@@ -1872,7 +1964,7 @@ mod tests {
     }
 
     #[test]
-    fn local_transfer_resolution_trusts_the_database_without_touching_the_path() {
+    fn local_transfer_resolution_keeps_unverifiable_paths_local() {
         let directory = std::env::temp_dir().join(format!(
             "clippi-transfer-db-resolution-{}-{}",
             std::process::id(),
@@ -1881,6 +1973,8 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let db_path = directory.join("clipboard.db");
         let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        // The parent directory does not exist, so the path cannot be certified
+        // missing (offline volume / unmounted share) — the entry stays local.
         let missing_path = directory.join("offline-volume").join("file.bin");
         let entry = valid_entry('a', "file.bin");
         upsert_transfer_item(&db, &entry, &missing_path.to_string_lossy(), 123).unwrap();
@@ -1890,6 +1984,135 @@ mod tests {
             paths.get(&entry.hash).map(String::as_str),
             Some(missing_path.to_string_lossy().as_ref())
         );
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn local_transfer_resolution_filters_definitely_missing_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-db-missing-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+
+        let present_file = directory.join("present.bin");
+        std::fs::write(&present_file, b"data").unwrap();
+        // Recorded path whose file was moved/deleted from an existing directory.
+        let moved_away = directory.join("moved-away.bin");
+
+        let entry_present = valid_entry('a', "present.bin");
+        let entry_missing = valid_entry('b', "moved-away.bin");
+        upsert_transfer_item(&db, &entry_present, &present_file.to_string_lossy(), 1).unwrap();
+        upsert_transfer_item(&db, &entry_missing, &moved_away.to_string_lossy(), 2).unwrap();
+
+        let paths = get_local_transfer_paths(&db);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths.get(&entry_present.hash).map(String::as_str),
+            Some(present_file.to_string_lossy().as_ref())
+        );
+        assert!(!paths.contains_key(&entry_missing.hash));
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn normalize_local_path_strips_verbatim_prefix() {
+        assert_eq!(
+            normalize_local_path(r"\\?\C:\Users\me\file.bin"),
+            r"C:\Users\me\file.bin"
+        );
+        assert_eq!(
+            normalize_local_path(r"C:\Users\me\file.bin"),
+            r"C:\Users\me\file.bin"
+        );
+        assert_eq!(
+            normalize_local_path(r"\\?\UNC\server\share\file.bin"),
+            r"\\server\share\file.bin"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn local_transfer_resolution_filters_verbatim_missing_paths() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-db-verbatim-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+
+        // Verbatim form produced by std::fs::canonicalize on Windows. After
+        // normalization the path probes as DefinitelyMissing and flips to
+        // cloud-only instead of being mistaken for a UNC share.
+        let verbatim_missing = format!(
+            r"\\?\{}",
+            directory.join("moved-away.bin").to_string_lossy()
+        );
+        let entry = valid_entry('a', "moved-away.bin");
+        upsert_transfer_item(&db, &entry, &verbatim_missing, 7).unwrap();
+
+        let paths = get_local_transfer_paths(&db);
+        assert!(paths.is_empty());
+
+        drop(db);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn redownload_restores_original_row_without_creating_visible_duplicate() {
+        let directory = std::env::temp_dir().join(format!(
+            "clippi-transfer-redownload-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("clipboard.db");
+        let db = Database::open(&db_path.to_string_lossy()).unwrap();
+        let old_path = directory.join("moved-away.bin");
+        let destination = directory.join("file_cache").join("download.bin");
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&destination, b"same bytes").unwrap();
+
+        let mut entry = valid_entry('a', "download.bin");
+        entry.size = 10;
+        let content_hash = default_hash(b"same bytes");
+
+        // The visible history row may have lost its derived marker after the
+        // old path disappeared. Its path still links it to the hidden backing.
+        let mut original = transfer_clipboard_item(&entry, &old_path.to_string_lossy());
+        original.content_hash = content_hash;
+        original.meta_type.clear();
+        let mut original_data = FileData::from_json(&original.file_data);
+        original_data.transfer = false;
+        original_data.remote_hash.clear();
+        original.file_data = original_data.to_json();
+        db.upsert(&original).unwrap();
+
+        // Backing bytes intentionally use the same local content hash. The
+        // specialized backing upsert must not convert the ordinary row.
+        upsert_transfer_item(&db, &entry, &old_path.to_string_lossy(), content_hash).unwrap();
+        assert_eq!(db.get_original_file_items().unwrap().len(), 1);
+        assert_eq!(db.get_transfer_items().unwrap().len(), 1);
+
+        assert!(restore_original_file_after_download(&db, &entry, &destination).unwrap());
+        upsert_transfer_item(&db, &entry, &destination.to_string_lossy(), content_hash).unwrap();
+
+        let ordinary = db.get_original_file_items().unwrap();
+        assert_eq!(ordinary.len(), 1);
+        let restored = FileData::from_json(&ordinary[0].file_data);
+        assert_eq!(restored.files[0].path, destination.to_string_lossy());
+        assert_eq!(restored.remote_hash, entry.hash);
+        assert_eq!(db.get_transfer_items().unwrap().len(), 1);
 
         drop(db);
         std::fs::remove_dir_all(directory).unwrap();

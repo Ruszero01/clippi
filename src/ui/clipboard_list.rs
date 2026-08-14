@@ -39,9 +39,10 @@ fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
     modifiers.secondary()
 }
 
-/// Pending image placeholders use a negative id and are not persisted.
+/// Pending image placeholders are non-persisted and identified by meta_type.
+/// Transfer entries also use negative ids, so the id alone is not sufficient.
 fn item_is_pending(item: &ClipboardItem) -> bool {
-    item.id < 0
+    item.meta_type == "pending-image"
 }
 
 /// Stable pairwise reorder for usage updates, mirroring the AppState usage
@@ -210,7 +211,7 @@ pub struct ClipboardListView {
     confirm_dialog: Option<ConfirmDialogState>,
     /// Persisted last-selected item ID — survives across set_items calls
     /// (including the empty-item clear during window hide).
-    last_selected_id: i64,
+    last_selected_id: Option<i64>,
     theme: ClippiTheme,
     last_lang_version: u64,
     /// WindowManager entity for hotkey recording coordination.
@@ -270,7 +271,7 @@ impl ClipboardListView {
             }),
             image_cache: RetainAllImageCache::new(cx),
             confirm_dialog: None,
-            last_selected_id: -1,
+            last_selected_id: None,
             theme,
             last_lang_version: crate::core::i18n::lang_version(),
             window_manager,
@@ -291,7 +292,7 @@ impl ClipboardListView {
         // --- during window hide, when hide() emits ClipboardChanged).         ---
         if let Some(idx) = self.selected_index {
             if let Some(item) = self.items.get(idx) {
-                self.last_selected_id = item.id;
+                self.last_selected_id = Some(item.id);
             }
         }
         self.items = combined;
@@ -314,12 +315,14 @@ impl ClipboardListView {
             self.select_index_without_scroll(latest_idx, cx);
             self.scroll_handle
                 .scroll_to_item(latest_idx, ScrollStrategy::Top);
-        } else if self.last_selected_id > 0 {
-            // --- Keep position: restore the previously selected item by persisted ID ---
+        } else if let Some(last_selected_id) = self.last_selected_id {
+            // --- Keep position: restore the previously selected selectable item. ---
+            // Transfer entries have negative IDs, so sign cannot distinguish
+            // them from pending placeholders.
             if let Some(idx) = self
                 .items
                 .iter()
-                .position(|item| item.id == self.last_selected_id)
+                .position(|item| item.id == last_selected_id && !item_is_pending(item))
             {
                 self.select_index_without_scroll(idx, cx);
                 self.scroll_handle.scroll_to_item(idx, ScrollStrategy::Top);
@@ -381,7 +384,7 @@ impl ClipboardListView {
     pub fn release_items_for_hide(&mut self, cx: &mut Context<Self>) {
         if let Some(idx) = self.selected_index {
             if let Some(item) = self.items.get(idx) {
-                self.last_selected_id = item.id;
+                self.last_selected_id = Some(item.id);
             }
         }
 
@@ -603,6 +606,9 @@ impl ClipboardListView {
         let Some(item) = self.items.get(index) else {
             return;
         };
+        if item_is_pending(item) {
+            return;
+        }
         let item_id = item.id;
         if let Some(pos) = self.selected_ids.iter().position(|&x| x == item_id) {
             // --- Don't deselect the last remaining item — always keep at least one selected ---
@@ -651,14 +657,14 @@ impl ClipboardListView {
         if anchor <= index {
             // --- Selecting downward: anchor (top) gets #1, count goes down ---
             for i in anchor..=index {
-                if let Some(item) = self.items.get(i) {
+                if let Some(item) = self.items.get(i).filter(|item| !item_is_pending(item)) {
                     self.selected_ids.push(item.id);
                 }
             }
         } else {
             // --- Selecting upward: anchor (bottom) gets #1, count goes up ---
             for i in (index..=anchor).rev() {
-                if let Some(item) = self.items.get(i) {
+                if let Some(item) = self.items.get(i).filter(|item| !item_is_pending(item)) {
                     self.selected_ids.push(item.id);
                 }
             }
@@ -2500,7 +2506,9 @@ impl Render for ClipboardListView {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_incrementally_sync_usage, item_id_at, item_index, reorder_usage_pairs};
+    use super::{
+        can_incrementally_sync_usage, item_id_at, item_index, item_is_pending, reorder_usage_pairs,
+    };
     use crate::core::types::{ClipboardItem, ContentType};
     use gpui::Pixels;
 
@@ -2533,6 +2541,22 @@ mod tests {
 
     fn height(px: f32) -> gpui::Size<gpui::Pixels> {
         gpui::Size::new(Pixels::from(px), Pixels::from(px))
+    }
+
+    #[test]
+    fn item_is_pending_distinguishes_pending_placeholders_from_transfer_items() {
+        let mut transfer = test_item(1, 0, false);
+        transfer.id = -1;
+        transfer.meta_type = "transfer".to_string();
+        assert!(!item_is_pending(&transfer));
+
+        let mut pending = test_item(2, 0, false);
+        pending.id = -2;
+        pending.meta_type = "pending-image".to_string();
+        assert!(item_is_pending(&pending));
+
+        let regular = test_item(3, 0, false);
+        assert!(!item_is_pending(&regular));
     }
 
     #[test]
