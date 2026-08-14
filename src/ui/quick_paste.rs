@@ -809,8 +809,15 @@ impl Render for QuickPasteView {
         div()
             .w(px(QUICK_WINDOW_WIDTH))
             .h(px(window_h))
-            .rounded(px(QUICK_WINDOW_CORNER_RADIUS))
-            .overflow_hidden()
+            // Paint the entire rectangular HWND. On Windows 11 the DWM clips
+            // it to the requested small system radius; if system rounding is
+            // disabled, the popup falls back to a solid rectangle instead of
+            // exposing transparent wedges at its corners.
+            .when(!cfg!(target_os = "windows"), |popup| {
+                popup
+                    .rounded(px(QUICK_WINDOW_CORNER_RADIUS))
+                    .overflow_hidden()
+            })
             .bg(theme.bg)
             .flex()
             .flex_col()

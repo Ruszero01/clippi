@@ -1351,20 +1351,34 @@ impl WindowManager {
             // poll_recording_pressed() returns None when not recording —            // it checks the hotkey's internal is_recording flag directly,
             // --- avoiding any AppState synchronization gap. ---
             if let Some(recording_press) = hk.poll_recording_pressed() {
-                let HotkeyRecordingPress::Hotkey(new_hotkey) = recording_press else {
-                    self.recording_paste_shortcut_app = None;
-                    self.recording_item_hotkey_id = None;
-                    self.recording_item_hotkey_format = None;
-                    self.recording_latest_slot = None;
-                    hk.finish_recording();
-                    hk.register();
-                    self.state.update(cx, |state, _cx| {
-                        state.hotkey_recording = false;
-                        state.recording_quick_hotkey = false;
-                    });
-                    cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
-                    cx.notify();
-                    return;
+                let new_hotkey = match recording_press {
+                    // A protected single key (letter/digit/space/...) was
+                    // pressed — keep recording and explain why nothing was
+                    // recorded.
+                    HotkeyRecordingPress::Rejected => {
+                        self.state.update(cx, |state, _cx| {
+                            state.toast_message =
+                                Some(I18nKey::HotkeyProtectedSingleKey.text().to_string());
+                            state.toast_is_warning = true;
+                        });
+                        return;
+                    }
+                    HotkeyRecordingPress::Cancel => {
+                        self.recording_paste_shortcut_app = None;
+                        self.recording_item_hotkey_id = None;
+                        self.recording_item_hotkey_format = None;
+                        self.recording_latest_slot = None;
+                        hk.finish_recording();
+                        hk.register();
+                        self.state.update(cx, |state, _cx| {
+                            state.hotkey_recording = false;
+                            state.recording_quick_hotkey = false;
+                        });
+                        cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+                        cx.notify();
+                        return;
+                    }
+                    HotkeyRecordingPress::Hotkey(new_hotkey) => new_hotkey,
                 };
                 // Check if recording for paste shortcut
                 if let Some(app_name) = self.recording_paste_shortcut_app.take() {
@@ -1490,7 +1504,12 @@ impl WindowManager {
             .map(|fg| fg.clone())
             .unwrap_or_default();
 
-        if !fg_name.is_empty() && self.blacklist.contains(&fg_name) {
+        // While Clippi's own window is foreground, unregister the hotkeys so a
+        // single-key hotkey does not swallow input in Clippi's search box.
+        // (update_foreground_app_name clears fg_name for self, so the blacklist
+        // match alone can never cover this case.)
+        let self_foreground = self.is_self_foreground();
+        if self_foreground || (!fg_name.is_empty() && self.blacklist.contains(&fg_name)) {
             if let Some(ref mut hk) = self.hotkey {
                 hk.unregister();
             }
@@ -3129,6 +3148,9 @@ impl WindowManager {
 
     #[cfg(target_os = "windows")]
     pub fn set_quick_hwnd(&mut self, hwnd: isize) {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
             SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_NOACTIVATE,
@@ -3144,6 +3166,16 @@ impl WindowManager {
         // Keep the quick popup out of Alt-Tab/taskbar and prevent mouse clicks
         // from activating it while still allowing it to receive mouse messages.
         unsafe {
+            // Popup windows do not always receive Windows 11's automatic
+            // rounding. Explicitly request the standard system radius so DWM
+            // clips the fully painted rectangular background and frame as one.
+            let corner_preference = DWMWCP_ROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                &corner_preference as *const _ as *const _,
+                std::mem::size_of_val(&corner_preference) as u32,
+            );
             let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE)
                 | WS_EX_NOACTIVATE as i32
                 | WS_EX_TOOLWINDOW as i32
