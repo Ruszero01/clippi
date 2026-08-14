@@ -1757,6 +1757,9 @@ impl WindowManager {
     /// saved_w / saved_h. Called from the poll loop while the window
     /// is visible.
     fn capture_window_geometry(&mut self, cx: &mut Context<Self>) {
+        #[cfg(not(target_os = "windows"))]
+        let _ = cx;
+
         if !self.visible {
             return;
         }
@@ -1861,11 +1864,6 @@ impl WindowManager {
                 self.saved_h = rect.height as f32;
                 self.mark_geometry_dirty();
             }
-        }
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            let _ = cx;
         }
     }
 

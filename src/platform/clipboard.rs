@@ -13,7 +13,7 @@ use crate::core::types::{
 use crate::platform::source;
 use crate::services::favicon;
 use chrono::Utc;
-#[cfg(target_os = "macos")]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::collections::hash_map::DefaultHasher;
@@ -36,6 +36,7 @@ static THUMBNAIL_JOBS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 const MAX_THUMBNAIL_JOBS: usize = 2;
 const MAX_CAPTURED_IMAGE_DIMENSION: u32 = 10_000;
 const MAX_CAPTURED_IMAGE_PIXELS: u64 = 64_000_000;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const MAX_CAPTURED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_IMAGE_PERSIST_JOBS: usize = 2;
 const MAX_IMAGE_PERSIST_BYTES: usize = 192 * 1024 * 1024;
@@ -402,13 +403,21 @@ enum RawClipboardImage {
     /// 已是 PNG 字节，直接落盘。
     Png(Vec<u8>),
     /// 原始 CF_DIB / CF_DIBV5 内存块（不含 BITMAPFILEHEADER），后台解码。
+    #[cfg(target_os = "windows")]
     Bitmap(Vec<u8>),
+    /// macOS 原生 TIFF 负载，后台解码并转换为 PNG。
+    #[cfg(target_os = "macos")]
+    Tiff(Vec<u8>),
 }
 
 impl RawClipboardImage {
     fn len(&self) -> usize {
         match self {
-            Self::Png(bytes) | Self::Bitmap(bytes) => bytes.len(),
+            Self::Png(bytes) => bytes.len(),
+            #[cfg(target_os = "windows")]
+            Self::Bitmap(bytes) => bytes.len(),
+            #[cfg(target_os = "macos")]
+            Self::Tiff(bytes) => bytes.len(),
         }
     }
 }
@@ -522,7 +531,10 @@ fn persist_queue_over_budget(
 fn hash_raw_image(raw: &RawClipboardImage) -> u64 {
     let bytes = match raw {
         RawClipboardImage::Png(bytes) => bytes,
+        #[cfg(target_os = "windows")]
         RawClipboardImage::Bitmap(bytes) => bytes,
+        #[cfg(target_os = "macos")]
+        RawClipboardImage::Tiff(bytes) => bytes,
     };
     let mut hasher = DefaultHasher::new();
     hasher.write(bytes);
@@ -530,6 +542,7 @@ fn hash_raw_image(raw: &RawClipboardImage) -> u64 {
 }
 
 /// 从 DIB 内存块头解析尺寸（纯函数）。
+#[cfg(any(target_os = "windows", test))]
 fn parse_dib_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     let bi_size = u32::from_le_bytes(data.get(0..4)?.try_into().ok()?);
     match bi_size {
@@ -556,6 +569,7 @@ fn image_exceeds_capture_limit(width: u32, height: u32) -> bool {
             .is_none_or(|pixels| pixels > MAX_CAPTURED_IMAGE_PIXELS)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn select_image_format(png_id: u32, png: bool, dib: bool, dib_v5: bool) -> Option<u32> {
     if png {
         Some(png_id)
@@ -652,6 +666,7 @@ fn copy_clipboard_format_once(format: u32) -> Option<Vec<u8>> {
 }
 
 /// 解码原始 DIB 块（不含 BITMAPFILEHEADER）。
+#[cfg(target_os = "windows")]
 fn decode_dib(bytes: &[u8]) -> Option<image::DynamicImage> {
     use std::io::Cursor;
     let decoder =
@@ -692,7 +707,12 @@ fn persist_image(captured: &CapturedImage, img_dir: &std::path::Path) -> Option<
         RawClipboardImage::Png(bytes) => {
             image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()
         }
+        #[cfg(target_os = "windows")]
         RawClipboardImage::Bitmap(bytes) => decode_dib(bytes),
+        #[cfg(target_os = "macos")]
+        RawClipboardImage::Tiff(bytes) => {
+            image::load_from_memory_with_format(bytes, image::ImageFormat::Tiff).ok()
+        }
     }?;
     if decoded.width() != captured.width || decoded.height() != captured.height {
         log::warn!(
@@ -722,7 +742,12 @@ fn persist_image(captured: &CapturedImage, img_dir: &std::path::Path) -> Option<
         RawClipboardImage::Png(bytes) => {
             std::fs::write(&temp_path, bytes).map_err(|error| error.to_string())
         }
+        #[cfg(target_os = "windows")]
         RawClipboardImage::Bitmap(_) => decoded
+            .save_with_format(&temp_path, image::ImageFormat::Png)
+            .map_err(|error| error.to_string()),
+        #[cfg(target_os = "macos")]
+        RawClipboardImage::Tiff(_) => decoded
             .save_with_format(&temp_path, image::ImageFormat::Png)
             .map_err(|error| error.to_string()),
     };
@@ -995,8 +1020,41 @@ fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(RawClipboardImage
         }
     }
 
-    // macOS keeps the original synchronous decode path.
-    #[cfg(not(target_os = "windows"))]
+    // macOS: copy the native encoded payload only. Full TIFF decoding and PNG
+    // conversion happen in ImagePersistWorker, so the listener can publish a
+    // placeholder and resume polling without synchronously re-encoding pixels.
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Cursor;
+
+        let (raw, w, h) = if let Ok(bytes) = ctx.get_buffer("public.png") {
+            if bytes.is_empty() || bytes.len() > MAX_CAPTURED_IMAGE_BYTES {
+                return None;
+            }
+            let (w, h) = png_dimensions(&bytes)?;
+            (RawClipboardImage::Png(bytes), w, h)
+        } else {
+            let bytes = ctx.get_buffer("public.tiff").ok()?;
+            if bytes.is_empty() || bytes.len() > MAX_CAPTURED_IMAGE_BYTES {
+                return None;
+            }
+            // `into_dimensions` reads image metadata without allocating or
+            // decoding the full pixel buffer.
+            let (w, h) = image::ImageReader::new(Cursor::new(&bytes))
+                .with_guessed_format()
+                .ok()?
+                .into_dimensions()
+                .ok()?;
+            (RawClipboardImage::Tiff(bytes), w, h)
+        };
+        if image_exceeds_capture_limit(w, h) {
+            log::warn!("skipped oversized clipboard image {w}x{h}");
+            return None;
+        }
+        Some((raw, w, h))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let img = ctx.get_image().ok()?;
         if img.is_empty() {
@@ -1004,7 +1062,6 @@ fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(RawClipboardImage
         }
         let (w, h) = img.get_size();
         if image_exceeds_capture_limit(w, h) {
-            log::warn!("skipped oversized clipboard image {w}x{h}");
             return None;
         }
         let png_bytes = img.to_png().ok()?;
@@ -1175,6 +1232,42 @@ fn should_process_clipboard_sequence<T: Eq>(startup_done: bool, current: &T, pre
     startup_done && current != previous
 }
 
+#[cfg(target_os = "macos")]
+const MACOS_PASTEBOARD_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+];
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct MacosPasteboardRetry {
+    change_count: isize,
+    failed_attempts: usize,
+    retry_after: Instant,
+}
+
+#[cfg(target_os = "macos")]
+fn record_macos_pasteboard_failure(
+    retry: &mut Option<MacosPasteboardRetry>,
+    change_count: isize,
+    now: Instant,
+) -> bool {
+    let failed_attempts = retry
+        .filter(|state| state.change_count == change_count)
+        .map_or(1, |state| state.failed_attempts + 1);
+    let Some(delay) = MACOS_PASTEBOARD_RETRY_DELAYS.get(failed_attempts - 1) else {
+        *retry = None;
+        return false;
+    };
+    *retry = Some(MacosPasteboardRetry {
+        change_count,
+        failed_attempts,
+        retry_after: now + *delay,
+    });
+    true
+}
+
 /// Decide whether a newly captured item/image duplicates the previous capture
 /// (delayed rendering, owner destruction, or rapid same-content re-copy).
 /// Returns `true` when the capture should be skipped; otherwise records the
@@ -1247,6 +1340,8 @@ impl ClipboardListener for PollingClipboardListener {
         let last_cc = Arc::new(Mutex::new(with_clipboard_access(|| {
             objc2_app_kit::NSPasteboard::generalPasteboard().changeCount()
         })));
+        #[cfg(target_os = "macos")]
+        let macos_retry = Arc::new(Mutex::new(None::<MacosPasteboardRetry>));
 
         self.handle = Some(thread::spawn(move || {
             // One poll cycle, extracted so the macOS branch can run inside an
@@ -1277,6 +1372,7 @@ impl ClipboardListener for PollingClipboardListener {
                             NSPasteboard::generalPasteboard().changeCount()
                         });
                         *last_cc.lock().unwrap_or_else(|e| e.into_inner()) = cc;
+                        *macos_retry.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     }
                     thread::sleep(Duration::from_millis(50));
                     return;
@@ -1308,17 +1404,26 @@ impl ClipboardListener for PollingClipboardListener {
                 // --- macOS equivalent: NSPasteboard.changeCount increments on every ---
                 // pasteboard write, serving the same role as the Windows sequence number.
                 #[cfg(target_os = "macos")]
-                {
+                let observed_cc = {
                     let cc =
                         with_clipboard_access(|| NSPasteboard::generalPasteboard().changeCount());
-                    let mut last = last_cc.lock().unwrap_or_else(|e| e.into_inner());
+                    let last = last_cc.lock().unwrap_or_else(|e| e.into_inner());
                     if !should_process_clipboard_sequence(startup_done, &cc, &*last) {
                         drop(last);
                         thread::sleep(Duration::from_millis(50));
                         return;
                     }
-                    *last = cc;
-                }
+                    drop(last);
+                    let retry = macos_retry.lock().unwrap_or_else(|e| e.into_inner());
+                    if retry.is_some_and(|state| {
+                        state.change_count == cc && Instant::now() < state.retry_after
+                    }) {
+                        drop(retry);
+                        thread::sleep(Duration::from_millis(25));
+                        return;
+                    }
+                    cc
+                };
 
                 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                 if !startup_done {
@@ -1337,6 +1442,15 @@ impl ClipboardListener for PollingClipboardListener {
                     .read()
                     .unwrap_or_else(|e| e.into_inner())
                     .clone();
+                #[cfg(target_os = "macos")]
+                let capture_allowed = capture_gate(
+                    source_info
+                        .as_ref()
+                        .map(|source| source.app_name.as_str())
+                        .unwrap_or(""),
+                    &blacklist_snapshot,
+                    true,
+                );
 
                 // ── Unified gate + content detection ──
                 let detection = detect_if_allowed(
@@ -1348,6 +1462,24 @@ impl ClipboardListener for PollingClipboardListener {
                             .unwrap_or(DetectionResult::None)
                     },
                 );
+
+                // `clearContents()` increments AppKit's change count before a
+                // writer necessarily supplies its representations. Commit the
+                // baseline after a readable result, or after bounded retries
+                // when the new content is genuinely unsupported.
+                #[cfg(target_os = "macos")]
+                {
+                    // A blacklist rejection is intentional, not a transient
+                    // empty pasteboard, and must consume the baseline at once.
+                    let readable = !capture_allowed || !matches!(&detection, DetectionResult::None);
+                    let mut retry = macos_retry.lock().unwrap_or_else(|e| e.into_inner());
+                    let should_retry = !readable
+                        && record_macos_pasteboard_failure(&mut retry, observed_cc, Instant::now());
+                    if readable || !should_retry {
+                        *last_cc.lock().unwrap_or_else(|e| e.into_inner()) = observed_cc;
+                        *retry = None;
+                    }
+                }
 
                 match detection {
                     DetectionResult::Item(item) => {
@@ -1616,6 +1748,40 @@ mod gate_tests {
             true, &previous, &previous
         ));
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_empty_pasteboard_read_retries_with_bounded_backoff() {
+        let now = Instant::now();
+        let mut retry = None;
+
+        assert!(record_macos_pasteboard_failure(&mut retry, 42, now));
+        let first = retry.unwrap();
+        assert_eq!(first.failed_attempts, 1);
+        assert_eq!(
+            first.retry_after.duration_since(now),
+            Duration::from_millis(50)
+        );
+
+        assert!(record_macos_pasteboard_failure(&mut retry, 42, now));
+        assert_eq!(retry.unwrap().failed_attempts, 2);
+        assert!(record_macos_pasteboard_failure(&mut retry, 42, now));
+        assert_eq!(retry.unwrap().failed_attempts, 3);
+
+        assert!(!record_macos_pasteboard_failure(&mut retry, 42, now));
+        assert!(retry.is_none(), "retry budget must be exhausted");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_new_change_count_resets_retry_budget() {
+        let now = Instant::now();
+        let mut retry = None;
+        assert!(record_macos_pasteboard_failure(&mut retry, 42, now));
+        assert!(record_macos_pasteboard_failure(&mut retry, 42, now));
+        assert!(record_macos_pasteboard_failure(&mut retry, 43, now));
+        assert_eq!(retry.unwrap().failed_attempts, 1);
+    }
 }
 
 #[cfg(test)]
@@ -1753,6 +1919,42 @@ mod image_capture_tests {
                 .to_string_lossy()
                 .contains(".tmp.png")
         }));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn persist_image_converts_native_tiff_to_png() {
+        use std::io::Cursor;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "clippi-image-tiff-persist-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let image = image::DynamicImage::new_rgba8(3, 2);
+        let mut tiff = Cursor::new(Vec::new());
+        image.write_to(&mut tiff, image::ImageFormat::Tiff).unwrap();
+        let raw = RawClipboardImage::Tiff(tiff.into_inner());
+        let hash = hash_raw_image(&raw);
+        let captured = CapturedImage {
+            raw,
+            width: 3,
+            height: 2,
+            raw_hash: hash,
+            source: None,
+        };
+
+        let item = persist_image(&captured, &root).expect("TIFF should be converted and published");
+        let final_path = root.join(format!("{hash:016x}.png"));
+        assert_eq!(image::image_dimensions(&final_path).unwrap(), (3, 2));
+        assert_eq!(item.image_path, final_path.to_string_lossy());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
