@@ -142,6 +142,8 @@ pub struct AppState {
     pub hotkey_recording: bool,
     /// Whether a quick-window hotkey recording is in progress.
     pub recording_quick_hotkey: bool,
+    /// Modifier-less key waiting for single-click confirmation or a second press.
+    pub pending_single_hotkey: Option<String>,
     /// GPUI-facing sync status and backend snapshots.
     pub sync: SyncState,
     /// Update available info (set by WM poll, consumed by RootView + settings).
@@ -363,6 +365,7 @@ impl AppState {
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
             recording_quick_hotkey: false,
+            pending_single_hotkey: None,
             sync,
             update_available: None,
             update_phase: UpdatePhase::Idle,
@@ -2788,6 +2791,7 @@ mod tests {
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
             recording_quick_hotkey: false,
+            pending_single_hotkey: None,
             sync: SyncState::default(),
             update_available: None,
             update_phase: UpdatePhase::Idle,

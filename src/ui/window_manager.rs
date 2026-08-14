@@ -20,7 +20,8 @@ use crate::core::frontend::{
 use crate::core::i18n_keys::I18nKey;
 use crate::platform::focus::{start_focus_watcher, FocusWatcher};
 use crate::platform::hotkey::{
-    create_hotkey_listener, HotkeyEvent, HotkeyListener, HotkeyRecordingPress, QuickAction,
+    create_hotkey_listener, hotkey_display, HotkeyEvent, HotkeyListener, HotkeyRecordingPress,
+    QuickAction,
 };
 use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
@@ -1352,11 +1353,19 @@ impl WindowManager {
             // --- avoiding any AppState synchronization gap. ---
             if let Some(recording_press) = hk.poll_recording_pressed() {
                 let new_hotkey = match recording_press {
+                    HotkeyRecordingPress::AwaitingSingle(candidate) => {
+                        self.state.update(cx, |state, _cx| {
+                            state.pending_single_hotkey = Some(candidate);
+                        });
+                        cx.notify();
+                        return;
+                    }
                     // A protected single key (letter/digit/space/...) was
                     // pressed — keep recording and explain why nothing was
                     // recorded.
                     HotkeyRecordingPress::Rejected => {
                         self.state.update(cx, |state, _cx| {
+                            state.pending_single_hotkey = None;
                             state.toast_message =
                                 Some(I18nKey::HotkeyProtectedSingleKey.text().to_string());
                             state.toast_is_warning = true;
@@ -1378,7 +1387,12 @@ impl WindowManager {
                         cx.notify();
                         return;
                     }
-                    HotkeyRecordingPress::Hotkey(new_hotkey) => new_hotkey,
+                    HotkeyRecordingPress::Hotkey(new_hotkey) => {
+                        self.state.update(cx, |state, _cx| {
+                            state.pending_single_hotkey = None;
+                        });
+                        new_hotkey
+                    }
                 };
                 // Check if recording for paste shortcut
                 if let Some(app_name) = self.recording_paste_shortcut_app.take() {
@@ -1418,6 +1432,7 @@ impl WindowManager {
                     } else {
                         self.state.update(cx, |state, _cx| {
                             state.recording_quick_hotkey = false;
+                            state.pending_single_hotkey = None;
                         });
                     }
                     cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
@@ -1431,7 +1446,7 @@ impl WindowManager {
                     if !new_hotkey.is_empty() {
                         self.commit_item_hotkey(item_id, &new_hotkey, &format, cx);
                     } else {
-                        self.cancel_custom_recording();
+                        self.cancel_custom_recording(cx);
                     }
                     return;
                 }
@@ -1442,7 +1457,7 @@ impl WindowManager {
                     if !new_hotkey.is_empty() {
                         self.commit_latest_hotkey(slot, &new_hotkey, cx);
                     } else {
-                        self.cancel_custom_recording();
+                        self.cancel_custom_recording(cx);
                     }
                     return;
                 }
@@ -2270,21 +2285,29 @@ impl WindowManager {
                 // If a fallback was used, persist the new hotkey and notify the user.
                 if hk.main_fallback_used() {
                     let actual = hk.actual_main_hotkey().to_string();
+                    let configured_display = hotkey_display(&hotkey_str);
+                    let actual_display = hotkey_display(&actual);
                     self.state.update(cx, |state, _cx| {
                         state.settings.hotkey = actual.clone();
                         state.settings.save();
-                        state.toast_message =
-                            Some(I18nKey::HotkeyFallbackToast.fmt(&[&hotkey_str, &actual]));
+                        state.toast_message = Some(
+                            I18nKey::HotkeyFallbackToast
+                                .fmt(&[&configured_display, &actual_display]),
+                        );
                         state.toast_is_warning = true;
                     });
                 }
                 if hk.quick_fallback_used() {
                     let actual = hk.actual_quick_hotkey().to_string();
+                    let configured_display = hotkey_display(&quick_hotkey_str);
+                    let actual_display = hotkey_display(&actual);
                     self.state.update(cx, |state, _cx| {
                         state.settings.quick_hotkey = actual.clone();
                         state.settings.save();
-                        state.toast_message =
-                            Some(I18nKey::HotkeyFallbackToast.fmt(&[&quick_hotkey_str, &actual]));
+                        state.toast_message = Some(
+                            I18nKey::HotkeyFallbackToast
+                                .fmt(&[&configured_display, &actual_display]),
+                        );
                         state.toast_is_warning = true;
                     });
                 }
@@ -4037,7 +4060,7 @@ impl WindowManager {
     }
 
     /// Cancel any custom recording (per-item or latest-N).
-    pub fn cancel_custom_recording(&mut self) {
+    pub fn cancel_custom_recording(&mut self, cx: &mut Context<Self>) {
         self.recording_item_hotkey_id = None;
         self.recording_item_hotkey_format = None;
         self.recording_latest_slot = None;
@@ -4045,6 +4068,9 @@ impl WindowManager {
             hk.finish_recording();
             hk.register();
         }
+        self.state.update(cx, |state, _cx| {
+            state.pending_single_hotkey = None;
+        });
     }
 
     /// Cancel the currently active hotkey recording, if any.
@@ -4069,6 +4095,7 @@ impl WindowManager {
         self.state.update(cx, |state, _cx| {
             state.hotkey_recording = false;
             state.recording_quick_hotkey = false;
+            state.pending_single_hotkey = None;
         });
         if let Some(ref mut hk) = self.hotkey {
             hk.finish_recording();
@@ -4077,6 +4104,18 @@ impl WindowManager {
         cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
         cx.notify();
         true
+    }
+
+    /// Confirm the first modifier-less key as a single-press hotkey.
+    pub fn confirm_pending_single_hotkey(&mut self, cx: &mut Context<Self>) -> bool {
+        let confirmed = self
+            .hotkey
+            .as_mut()
+            .is_some_and(|hotkey| hotkey.confirm_pending_single());
+        if confirmed {
+            cx.notify();
+        }
+        confirmed
     }
 
     /// Register the item hotkey that was just recorded.
@@ -4097,7 +4136,7 @@ impl WindowManager {
                 }
             }
         }
-        self.cancel_custom_recording();
+        self.cancel_custom_recording(cx);
         cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
         cx.notify();
     }
@@ -4123,7 +4162,7 @@ impl WindowManager {
                 }
             }
         }
-        self.cancel_custom_recording();
+        self.cancel_custom_recording(cx);
         cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
         cx.notify();
     }

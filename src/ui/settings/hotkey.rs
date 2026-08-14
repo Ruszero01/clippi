@@ -14,6 +14,7 @@ use gpui::*;
 use super::SettingsPanel;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::LatestHotkeyEntry;
+use crate::platform::hotkey::hotkey_display;
 use crate::state::app::AppState;
 use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::{WinVTakeoverStatus, WindowManager};
@@ -67,30 +68,43 @@ impl SettingsPanel {
         title: I18nKey,
         hotkey_display: SharedString,
         recording: bool,
+        pending_single: Option<String>,
         theme: &ClippiTheme,
         on_click: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        let recording_border = if recording {
+        let waiting = pending_single.is_some();
+        let waiting_color = rgb(0xeab308);
+        let recording_border = if waiting {
+            waiting_color
+        } else if recording {
             theme.accent
         } else {
             theme.divider
         };
-        let recording_btn_bg = if recording {
+        let recording_btn_bg = if waiting {
+            rgba(0xeab30822)
+        } else if recording {
             theme.accent_soft
         } else {
             theme.accent
         };
-        let recording_btn_text = if recording {
+        let recording_btn_text = if waiting {
+            waiting_color
+        } else if recording {
             theme.accent
         } else {
             rgb(0xffffff)
         };
-        let desc_color = if recording {
+        let desc_color = if waiting {
+            waiting_color
+        } else if recording {
             theme.accent
         } else {
             theme.text_3
         };
-        let desc_text = if recording {
+        let desc_text = if waiting {
+            I18nKey::HotkeySingleAwaiting.text()
+        } else if recording {
             I18nKey::HotkeyPressToRecord.text()
         } else {
             I18nKey::HotkeyRecordingIdle.text()
@@ -135,12 +149,12 @@ impl SettingsPanel {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(!recording, |d| {
+                    .when(!recording || waiting, |d| {
                         d.cursor(CursorStyle::PointingHand)
                             .hover(move |style| style.opacity(0.85))
                     })
                     .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                        if recording {
+                        if recording && !waiting {
                             return;
                         }
                         on_click(window, cx);
@@ -150,7 +164,11 @@ impl SettingsPanel {
                             .text_size(px(11.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(recording_btn_text)
-                            .child(hotkey_display),
+                            .child(if let Some(candidate) = pending_single {
+                                I18nKey::HotkeyConfirmSingle.fmt(&[&candidate])
+                            } else {
+                                hotkey_display.to_string()
+                            }),
                     ),
             )
     }
@@ -171,7 +189,7 @@ impl SettingsPanel {
         let label = if recording {
             I18nKey::LatestHotkeyRecording.text().to_string()
         } else if has_hotkey {
-            hotkey.to_string()
+            hotkey_display(hotkey)
         } else {
             I18nKey::LatestHotkeyClickRecord.text().to_string()
         };
@@ -436,7 +454,11 @@ impl SettingsPanel {
                                             let panel_record = panel_l.clone();
                                             let rec: AppCallback = Rc::new(move |_window, cx| {
                                                 wm_l.update(cx, |wm, cx| {
-                                                    wm.start_latest_slot_recording(left, cx);
+                                                    if wm.recording_latest_slot() != Some(left)
+                                                        || !wm.confirm_pending_single_hotkey(cx)
+                                                    {
+                                                        wm.start_latest_slot_recording(left, cx);
+                                                    }
                                                 });
                                                 panel_record.update(cx, |_panel, cx| cx.notify());
                                             });
@@ -470,7 +492,11 @@ impl SettingsPanel {
                                             let panel_record = panel_r.clone();
                                             let rec: AppCallback = Rc::new(move |_window, cx| {
                                                 wm_r.update(cx, |wm, cx| {
-                                                    wm.start_latest_slot_recording(right, cx);
+                                                    if wm.recording_latest_slot() != Some(right)
+                                                        || !wm.confirm_pending_single_hotkey(cx)
+                                                    {
+                                                        wm.start_latest_slot_recording(right, cx);
+                                                    }
                                                 });
                                                 panel_record.update(cx, |_panel, cx| cx.notify());
                                             });
@@ -517,8 +543,9 @@ impl SettingsPanel {
 
         // Snapshot current values from AppState
         let app = self.state.read(cx);
-        let hotkey_display = app.settings.hotkey.clone();
+        let main_hotkey_display = hotkey_display(&app.settings.hotkey);
         let recording = app.hotkey_recording;
+        let pending_single = app.pending_single_hotkey.clone();
         let blacklist = app.settings.hotkey_blacklist.clone();
         let paste_shortcuts = app.settings.paste_shortcuts.clone();
         #[cfg(target_os = "windows")]
@@ -600,12 +627,21 @@ impl SettingsPanel {
                 } else {
                     Self::render_recording_card(
                         I18nKey::HotkeyTabTitle,
-                        hotkey_display.clone().into(),
+                        main_hotkey_display.clone().into(),
                         recording,
+                        pending_single.clone().filter(|_| recording),
                         theme,
                         move |_window, cx| {
-                            wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
-                            state.update(cx, |s, _cx| s.hotkey_recording = true);
+                            if state.read(cx).hotkey_recording
+                                && state.read(cx).pending_single_hotkey.is_some()
+                            {
+                                wm.update(cx, |wm, cx| {
+                                    wm.confirm_pending_single_hotkey(cx);
+                                });
+                            } else {
+                                wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                                state.update(cx, |s, _cx| s.hotkey_recording = true);
+                            }
                             this.update(cx, |_panel, cx| cx.notify());
                         },
                     )
@@ -616,12 +652,21 @@ impl SettingsPanel {
                 {
                     Self::render_recording_card(
                         I18nKey::HotkeyTabTitle,
-                        hotkey_display.clone().into(),
+                        main_hotkey_display.clone().into(),
                         recording,
+                        pending_single.clone().filter(|_| recording),
                         theme,
                         move |_window, cx| {
-                            wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
-                            state.update(cx, |s, _cx| s.hotkey_recording = true);
+                            if state.read(cx).hotkey_recording
+                                && state.read(cx).pending_single_hotkey.is_some()
+                            {
+                                wm.update(cx, |wm, cx| {
+                                    wm.confirm_pending_single_hotkey(cx);
+                                });
+                            } else {
+                                wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                                state.update(cx, |s, _cx| s.hotkey_recording = true);
+                            }
                             this.update(cx, |_panel, cx| cx.notify());
                         },
                     )
@@ -630,8 +675,9 @@ impl SettingsPanel {
             })
             // 1b. Quick hotkey recording card (only visible when enabled)
             .when(self.state.read(cx).settings.quick_hotkey_enabled, {
-                let quick_hotkey = self.state.read(cx).settings.quick_hotkey.clone();
+                let quick_hotkey = hotkey_display(&self.state.read(cx).settings.quick_hotkey);
                 let quick_recording = self.state.read(cx).recording_quick_hotkey;
+                let pending_single = self.state.read(cx).pending_single_hotkey.clone();
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
@@ -641,10 +687,19 @@ impl SettingsPanel {
                         I18nKey::QuickHotkeyLabel,
                         quick_hotkey.into(),
                         quick_recording,
+                        pending_single.filter(|_| quick_recording),
                         &theme,
                         move |_window, cx| {
-                            wm.update(cx, |wm, cx| wm.start_quick_hotkey_recording(cx));
-                            state.update(cx, |s, _cx| s.recording_quick_hotkey = true);
+                            if state.read(cx).recording_quick_hotkey
+                                && state.read(cx).pending_single_hotkey.is_some()
+                            {
+                                wm.update(cx, |wm, cx| {
+                                    wm.confirm_pending_single_hotkey(cx);
+                                });
+                            } else {
+                                wm.update(cx, |wm, cx| wm.start_quick_hotkey_recording(cx));
+                                state.update(cx, |s, _cx| s.recording_quick_hotkey = true);
+                            }
                             this.update(cx, |_panel, cx| cx.notify());
                         },
                     ))

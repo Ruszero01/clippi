@@ -4,6 +4,13 @@ use crate::core::i18n_keys::I18nKey;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use std::time::{Duration, Instant};
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(650);
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const RECORDING_SINGLE_CONFIRM_DELAY: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
@@ -34,7 +41,11 @@ pub enum QuickAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotkeyRecordingPress {
     Hotkey(String),
+    AwaitingSingle(String),
     Cancel,
+    /// The pressed key is a protected single key and was rejected.
+    /// The recorder keeps listening for an allowed key.
+    Rejected,
 }
 
 /// Hotkey listener - platform-agnostic trait (must be used on main thread)
@@ -48,6 +59,7 @@ pub trait HotkeyListener {
     fn is_recording(&self) -> bool;
     fn poll_event(&mut self) -> Option<HotkeyEvent>;
     fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress>;
+    fn confirm_pending_single(&mut self) -> bool;
     fn set_quick_actions_enabled(&mut self, enabled: bool);
     /// Register a per-item custom hotkey. Returns error on conflict.
     fn register_item_hotkey(&mut self, _id: i64, _hotkey_str: &str) -> Result<(), String> {
@@ -156,6 +168,8 @@ pub(crate) fn key_name_to_code(name: &str) -> Option<Code> {
         "esc" | "escape" => Some(Code::Escape),
         "up" | "arrowup" => Some(Code::ArrowUp),
         "down" | "arrowdown" => Some(Code::ArrowDown),
+        "left" | "arrowleft" => Some(Code::ArrowLeft),
+        "right" | "arrowright" => Some(Code::ArrowRight),
         "backspace" => Some(Code::Backspace),
         "=" | "equal" => Some(Code::Equal),
         "-" | "minus" => Some(Code::Minus),
@@ -246,6 +260,7 @@ pub(crate) fn key_code_to_name(code: Code) -> &'static str {
 }
 
 fn parse_hotkey(value: &str) -> Result<HotKey, String> {
+    let value = value.strip_prefix("Double:").unwrap_or(value);
     let mut modifiers = Modifiers::empty();
     let mut key = None;
 
@@ -261,6 +276,55 @@ fn parse_hotkey(value: &str) -> Result<HotKey, String> {
 
     let key = key.ok_or(I18nKey::HotkeyErrNoKey.text())?;
     Ok(HotKey::new(Some(modifiers), key))
+}
+
+fn is_double_hotkey(value: &str) -> bool {
+    value.starts_with("Double:")
+}
+
+fn double_hotkey(value: &str) -> String {
+    format!("Double:{value}")
+}
+
+/// User-facing hotkey label. Keep the `Double:` prefix as an internal,
+/// backwards-compatible storage detail only.
+pub(crate) fn hotkey_display(value: &str) -> String {
+    value.strip_prefix("Double:").map_or_else(
+        || value.to_string(),
+        |key| I18nKey::HotkeyDoubleDisplay.fmt(&[key]),
+    )
+}
+
+/// Convert a polled key-down level into a physical press edge. A second press
+/// is accepted only after at least one poll observed the key released.
+fn recording_key_edge(last_down: &mut Option<Code>, current: Option<Code>) -> Option<Code> {
+    match current {
+        Some(code) if *last_down == Some(code) => None,
+        Some(code) => {
+            *last_down = Some(code);
+            Some(code)
+        }
+        None => {
+            *last_down = None;
+            None
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn take_expired_recording_single(
+    pending: &mut Option<(String, Instant)>,
+    now: Instant,
+) -> Option<String> {
+    let expired = pending.as_ref().is_some_and(|(_, pressed_at)| {
+        now.duration_since(*pressed_at) > RECORDING_SINGLE_CONFIRM_DELAY
+    });
+    expired.then(|| {
+        pending
+            .take()
+            .expect("pending candidate was checked above")
+            .0
+    })
 }
 
 /// Returns `true` if the given hotkey is exactly `Win+V` (Super + V).
@@ -287,27 +351,98 @@ fn format_pressed_hotkey(modifiers: Modifiers, code: Code) -> String {
     parts.join("+")
 }
 
+/// Keys that may never be used as a modifier-less (single-key) global hotkey.
+///
+/// Registering such a key with no modifiers consumes it system-wide: the key
+/// stops reaching every other application, which makes typing, navigation and
+/// dialog interaction impossible. This is a hard block, not a confirmation —
+/// any other single key (punctuation, F1-F12, Insert, ...) remains usable.
+pub(crate) fn is_protected_single_key(code: Code) -> bool {
+    matches!(
+        code,
+        Code::KeyA
+            | Code::KeyB
+            | Code::KeyC
+            | Code::KeyD
+            | Code::KeyE
+            | Code::KeyF
+            | Code::KeyG
+            | Code::KeyH
+            | Code::KeyI
+            | Code::KeyJ
+            | Code::KeyK
+            | Code::KeyL
+            | Code::KeyM
+            | Code::KeyN
+            | Code::KeyO
+            | Code::KeyP
+            | Code::KeyQ
+            | Code::KeyR
+            | Code::KeyS
+            | Code::KeyT
+            | Code::KeyU
+            | Code::KeyV
+            | Code::KeyW
+            | Code::KeyX
+            | Code::KeyY
+            | Code::KeyZ
+            | Code::Digit0
+            | Code::Digit1
+            | Code::Digit2
+            | Code::Digit3
+            | Code::Digit4
+            | Code::Digit5
+            | Code::Digit6
+            | Code::Digit7
+            | Code::Digit8
+            | Code::Digit9
+            | Code::Space
+            | Code::Tab
+            | Code::Enter
+            | Code::NumpadEnter
+            | Code::Escape
+            | Code::Backspace
+            | Code::ArrowUp
+            | Code::ArrowDown
+            | Code::ArrowLeft
+            | Code::ArrowRight
+    )
+}
+
+/// True when `hotkey` is a modifier-less single key on the protected list.
+pub(crate) fn is_protected_single_hotkey(hotkey: HotKey) -> bool {
+    hotkey.mods.is_empty() && is_protected_single_key(hotkey.key)
+}
+
 fn format_recorded_hotkey(modifiers: Modifiers, code: Code) -> Option<HotkeyRecordingPress> {
     if code == Code::Escape {
         return Some(HotkeyRecordingPress::Cancel);
     }
-    if matches!(code, Code::Enter | Code::NumpadEnter) || modifiers.is_empty() {
-        None
-    } else {
-        Some(HotkeyRecordingPress::Hotkey(format_pressed_hotkey(
-            modifiers, code,
-        )))
+    // Enter confirms/cancels recording — never recordable.
+    if matches!(code, Code::Enter | Code::NumpadEnter) {
+        return None;
     }
+    // Modifier-less protected single keys are rejected (with a toast in the
+    // settings UI) instead of silently recorded.
+    if modifiers.is_empty() && is_protected_single_key(code) {
+        return Some(HotkeyRecordingPress::Rejected);
+    }
+    Some(HotkeyRecordingPress::Hotkey(format_pressed_hotkey(
+        modifiers, code,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        format_recorded_hotkey, hotkey_register_error_message, is_win_v_hotkey, parse_hotkey,
-        HotkeyRecordingPress,
+        format_recorded_hotkey, hotkey_display, hotkey_register_error_message, is_double_hotkey,
+        is_protected_single_hotkey, is_protected_single_key, is_win_v_hotkey, parse_hotkey,
+        recording_key_edge, take_expired_recording_single, HotkeyRecordingPress,
+        RECORDING_SINGLE_CONFIRM_DELAY,
     };
     use crate::core::i18n_keys::I18nKey;
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn shared_parser_accepts_platform_modifier_aliases() {
@@ -364,11 +499,149 @@ mod tests {
             format_recorded_hotkey(Modifiers::empty(), Code::NumpadEnter),
             None
         );
-        assert_eq!(format_recorded_hotkey(Modifiers::empty(), Code::KeyV), None);
+        // Protected single keys are rejected, not silently recorded.
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::KeyV),
+            Some(HotkeyRecordingPress::Rejected)
+        );
+        // Combos (even with protected keys) remain recordable.
         assert_eq!(
             format_recorded_hotkey(Modifiers::ALT, Code::KeyV),
             Some(HotkeyRecordingPress::Hotkey("Alt+V".to_string()))
         );
+    }
+
+    #[test]
+    fn recording_allows_unprotected_single_keys() {
+        // Punctuation single keys — the original issue's backtick case.
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::Backquote),
+            Some(HotkeyRecordingPress::Hotkey("`".to_string()))
+        );
+        // Function keys.
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::F1),
+            Some(HotkeyRecordingPress::Hotkey("F1".to_string()))
+        );
+        // Symbols.
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::empty(), Code::Semicolon),
+            Some(HotkeyRecordingPress::Hotkey(";".to_string()))
+        );
+        // Punctuation with a modifier is unaffected.
+        assert_eq!(
+            format_recorded_hotkey(Modifiers::ALT, Code::Backquote),
+            Some(HotkeyRecordingPress::Hotkey("Alt+`".to_string()))
+        );
+    }
+
+    #[test]
+    fn recording_requires_release_before_second_press() {
+        let mut last_down = None;
+        assert_eq!(
+            recording_key_edge(&mut last_down, Some(Code::Backquote)),
+            Some(Code::Backquote)
+        );
+        assert_eq!(
+            recording_key_edge(&mut last_down, Some(Code::Backquote)),
+            None,
+            "holding a key must not create a second press"
+        );
+        assert_eq!(recording_key_edge(&mut last_down, None), None);
+        assert_eq!(
+            recording_key_edge(&mut last_down, Some(Code::Backquote)),
+            Some(Code::Backquote),
+            "a press after release must be accepted"
+        );
+    }
+
+    #[test]
+    fn recording_timeout_confirms_single_key() {
+        let pressed_at = Instant::now();
+        let mut pending = Some(("`".to_string(), pressed_at));
+        assert_eq!(
+            take_expired_recording_single(
+                &mut pending,
+                pressed_at + RECORDING_SINGLE_CONFIRM_DELAY
+            ),
+            None
+        );
+        assert!(pending.is_some());
+        assert_eq!(
+            take_expired_recording_single(
+                &mut pending,
+                pressed_at + RECORDING_SINGLE_CONFIRM_DELAY + Duration::from_millis(1)
+            ),
+            Some("`".to_string())
+        );
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn protected_single_key_detection() {
+        // Letters, digits, space and input-critical keys are protected.
+        for code in [
+            Code::KeyA,
+            Code::KeyZ,
+            Code::KeyV,
+            Code::Digit0,
+            Code::Digit9,
+            Code::Space,
+            Code::Tab,
+            Code::Enter,
+            Code::NumpadEnter,
+            Code::Escape,
+            Code::Backspace,
+            Code::ArrowUp,
+            Code::ArrowDown,
+            Code::ArrowLeft,
+            Code::ArrowRight,
+        ] {
+            assert!(
+                is_protected_single_key(code),
+                "{code:?} should be protected"
+            );
+        }
+        // Punctuation, function keys and Insert are not protected.
+        for code in [
+            Code::Backquote,
+            Code::Semicolon,
+            Code::Comma,
+            Code::Period,
+            Code::Slash,
+            Code::Minus,
+            Code::F1,
+            Code::F12,
+            Code::Insert,
+        ] {
+            assert!(
+                !is_protected_single_key(code),
+                "{code:?} should not be protected"
+            );
+        }
+        // parse_hotkey round-trips the same classification.
+        assert!(is_protected_single_hotkey(parse_hotkey("a").unwrap()));
+        assert!(is_protected_single_hotkey(parse_hotkey("5").unwrap()));
+        assert!(is_protected_single_hotkey(parse_hotkey("Space").unwrap()));
+        assert!(!is_protected_single_hotkey(parse_hotkey("`").unwrap()));
+        assert!(!is_protected_single_hotkey(parse_hotkey("F5").unwrap()));
+        // Combos are never protected.
+        assert!(!is_protected_single_hotkey(parse_hotkey("Ctrl+A").unwrap()));
+        assert_eq!(
+            parse_hotkey("Double:`").unwrap().id(),
+            parse_hotkey("`").unwrap().id()
+        );
+        assert!(is_double_hotkey("Double:`"));
+        assert!(!is_double_hotkey("`"));
+        assert_eq!(parse_hotkey("Left").unwrap().key, Code::ArrowLeft);
+        assert_eq!(parse_hotkey("Right").unwrap().key, Code::ArrowRight);
+    }
+
+    #[test]
+    fn double_hotkey_storage_prefix_is_hidden_from_display() {
+        assert_eq!(hotkey_display("Alt+C"), "Alt+C");
+        assert!(!hotkey_display("Double:`").contains("Double:"));
+        assert!(hotkey_display("Double:`").contains('`'));
     }
 
     #[test]
@@ -426,7 +699,7 @@ mod tests {
         let custom_body = &source[custom_start..unregister_start];
 
         assert!(custom_body.contains("self.unregister();"));
-        assert!(custom_body.contains("self.is_recording = true;"));
+        assert!(custom_body.contains("self.start_recording();"));
     }
 
     #[test]
@@ -479,6 +752,7 @@ struct ItemHotkeyBinding {
     id: i64,
     hotkey: HotKey,
     registered: bool,
+    double_press: bool,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -487,6 +761,7 @@ struct LatestHotkeyBinding {
     slot: usize,
     hotkey: HotKey,
     registered: bool,
+    double_press: bool,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -512,6 +787,12 @@ struct DesktopHotkeyListener {
     item_hotkeys: Vec<ItemHotkeyBinding>,
     /// Latest-N slot hotkeys.
     latest_hotkeys: Vec<LatestHotkeyBinding>,
+    main_double_press: bool,
+    quick_double_press: bool,
+    pending_double_press: Option<(u32, Instant)>,
+    recording_single: Option<(String, Instant)>,
+    confirm_recording_single: bool,
+    recording_key_down: Option<Code>,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -525,10 +806,15 @@ impl DesktopHotkeyListener {
         let mut main_fallback = false;
         let mut hotkey = parse_hotkey(hotkey_str)?;
         let mut registered = true;
-        if let Err(e) = manager.register(hotkey) {
+        if is_protected_single_hotkey(hotkey) {
+            log::warn!("main hotkey ({hotkey_str}) is a protected single key, using fallback");
+            registered = false;
+        } else if let Err(e) = manager.register(hotkey) {
             log::warn!("main hotkey register failed ({hotkey_str}): {e}");
             registered = false;
-            // Walk the fallback chain.
+        }
+        if !registered {
+            // Walk the fallback chain for both unavailable and protected values.
             for &fb in MAIN_FALLBACKS {
                 if let Ok(fb_key) = parse_hotkey(fb) {
                     if let Err(e) = manager.register(fb_key) {
@@ -560,6 +846,11 @@ impl DesktopHotkeyListener {
             // Skip if same as the already-registered main hotkey.
             if registered && quick_hotkey.id() == hotkey.id() {
                 log::warn!("quick hotkey conflicts with main hotkey, trying fallbacks");
+                quick_registered = false;
+            } else if is_protected_single_hotkey(quick_hotkey) {
+                log::warn!(
+                    "quick hotkey ({quick_hotkey_str}) is a protected single key, trying fallbacks"
+                );
                 quick_registered = false;
             } else if let Err(e) = manager.register(quick_hotkey) {
                 log::warn!("quick hotkey register failed ({quick_hotkey_str}): {e}");
@@ -603,12 +894,18 @@ impl DesktopHotkeyListener {
             quick_registered,
             quick_action_hotkeys: quick_action_hotkeys(),
             quick_actions_registered: false,
-            actual_main_hotkey: actual_main,
-            actual_quick_hotkey: actual_quick,
+            actual_main_hotkey: actual_main.clone(),
+            actual_quick_hotkey: actual_quick.clone(),
             main_fallback_used: main_fallback,
             quick_fallback_used: quick_fallback,
             item_hotkeys: Vec::new(),
             latest_hotkeys: Vec::new(),
+            main_double_press: is_double_hotkey(&actual_main),
+            quick_double_press: is_double_hotkey(&actual_quick),
+            pending_double_press: None,
+            recording_single: None,
+            confirm_recording_single: false,
+            recording_key_down: None,
         })
     }
 
@@ -730,8 +1027,13 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
         let new_hotkey = parse_hotkey(hotkey_str)?;
+        if is_protected_single_hotkey(new_hotkey) {
+            return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
+        }
         // Already registered — no-op.
         if self.registered && new_hotkey.id() == self.hotkey.id() {
+            self.main_double_press = is_double_hotkey(hotkey_str);
+            self.actual_main_hotkey = hotkey_str.to_string();
             return Ok(());
         }
         // Refuse to shadow the quick-window hotkey.
@@ -747,6 +1049,8 @@ impl HotkeyListener for DesktopHotkeyListener {
             let _ = self.manager.unregister(self.hotkey);
         }
         self.hotkey = new_hotkey;
+        self.main_double_press = is_double_hotkey(hotkey_str);
+        self.actual_main_hotkey = hotkey_str.to_string();
         self.registered = true;
         Ok(())
     }
@@ -763,12 +1067,17 @@ impl HotkeyListener for DesktopHotkeyListener {
         }
 
         let new_hotkey = parse_hotkey(hotkey_str)?;
+        if is_protected_single_hotkey(new_hotkey) {
+            return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
+        }
         // Refuse to shadow the main hotkey.
         if self.is_conflicting_except(new_hotkey, None, None, false, true) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         if self.quick_registered && new_hotkey.id() == self.quick_hotkey.id() {
             self.quick_enabled = true;
+            self.quick_double_press = is_double_hotkey(hotkey_str);
+            self.actual_quick_hotkey = hotkey_str.to_string();
             return Ok(());
         }
 
@@ -779,6 +1088,8 @@ impl HotkeyListener for DesktopHotkeyListener {
             let _ = self.manager.unregister(self.quick_hotkey);
         }
         self.quick_hotkey = new_hotkey;
+        self.quick_double_press = is_double_hotkey(hotkey_str);
+        self.actual_quick_hotkey = hotkey_str.to_string();
         self.quick_enabled = true;
         self.quick_registered = true;
         Ok(())
@@ -801,11 +1112,17 @@ impl HotkeyListener for DesktopHotkeyListener {
     }
 
     fn start_recording(&mut self) {
+        self.recording_single = None;
+        self.confirm_recording_single = false;
+        self.recording_key_down = None;
         self.is_recording = true;
     }
 
     fn finish_recording(&mut self) {
         self.is_recording = false;
+        self.recording_single = None;
+        self.confirm_recording_single = false;
+        self.recording_key_down = None;
     }
 
     fn is_recording(&self) -> bool {
@@ -814,7 +1131,7 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn start_custom_recording(&mut self) {
         self.unregister();
-        self.is_recording = true;
+        self.start_recording();
     }
 
     fn unregister(&mut self) {
@@ -889,11 +1206,35 @@ impl HotkeyListener for DesktopHotkeyListener {
                 continue;
             }
             let id = event.id();
-            if id == self.hotkey.id() {
-                return Some(HotkeyEvent::Main);
-            }
-            if self.quick_enabled && id == self.quick_hotkey.id() {
-                return Some(HotkeyEvent::Quick);
+            let matched = if id == self.hotkey.id() {
+                Some((HotkeyEvent::Main, self.main_double_press))
+            } else if self.quick_enabled && id == self.quick_hotkey.id() {
+                Some((HotkeyEvent::Quick, self.quick_double_press))
+            } else if let Some(binding) = self
+                .item_hotkeys
+                .iter()
+                .find(|binding| binding.registered && binding.hotkey.id() == id)
+            {
+                Some((HotkeyEvent::CustomItem(binding.id), binding.double_press))
+            } else {
+                self.latest_hotkeys
+                    .iter()
+                    .find(|binding| binding.registered && binding.hotkey.id() == id)
+                    .map(|binding| (HotkeyEvent::LatestItem(binding.slot), binding.double_press))
+            };
+            if let Some((matched_event, double_press)) = matched {
+                if !double_press {
+                    return Some(matched_event);
+                }
+                let now = Instant::now();
+                if self.pending_double_press.is_some_and(|(pending_id, at)| {
+                    pending_id == id && now.duration_since(at) <= DOUBLE_PRESS_WINDOW
+                }) {
+                    self.pending_double_press = None;
+                    return Some(matched_event);
+                }
+                self.pending_double_press = Some((id, now));
+                continue;
             }
             if let Some(action) = self
                 .quick_action_hotkeys
@@ -904,22 +1245,6 @@ impl HotkeyListener for DesktopHotkeyListener {
             {
                 return Some(action);
             }
-            // Check per-item custom hotkeys.
-            if let Some(binding) = self
-                .item_hotkeys
-                .iter()
-                .find(|binding| binding.registered && binding.hotkey.id() == id)
-            {
-                return Some(HotkeyEvent::CustomItem(binding.id));
-            }
-            // Check latest-N slot hotkeys.
-            if let Some(binding) = self
-                .latest_hotkeys
-                .iter()
-                .find(|binding| binding.registered && binding.hotkey.id() == id)
-            {
-                return Some(HotkeyEvent::LatestItem(binding.slot));
-            }
         }
         None
     }
@@ -928,12 +1253,53 @@ impl HotkeyListener for DesktopHotkeyListener {
         if !self.is_recording {
             return None;
         }
+        if self.confirm_recording_single {
+            self.confirm_recording_single = false;
+            if let Some((candidate, _)) = self.recording_single.take() {
+                return Some(HotkeyRecordingPress::Hotkey(candidate));
+            }
+        }
+        let now = Instant::now();
+        if let Some(candidate) = take_expired_recording_single(&mut self.recording_single, now) {
+            return Some(HotkeyRecordingPress::Hotkey(candidate));
+        }
+        let code = recording_key_edge(&mut self.recording_key_down, platform_input::pressed_key())?;
         let modifiers = platform_input::pressed_modifiers();
-        platform_input::pressed_key().and_then(|code| format_recorded_hotkey(modifiers, code))
+        let press = format_recorded_hotkey(modifiers, code)?;
+        match press {
+            HotkeyRecordingPress::Hotkey(candidate) if modifiers.is_empty() => {
+                if self.recording_single.as_ref().is_some_and(|(pending, at)| {
+                    pending == &candidate
+                        && now.duration_since(*at) <= RECORDING_SINGLE_CONFIRM_DELAY
+                }) {
+                    self.recording_single = None;
+                    Some(HotkeyRecordingPress::Hotkey(double_hotkey(&candidate)))
+                } else {
+                    self.recording_single = Some((candidate.clone(), now));
+                    Some(HotkeyRecordingPress::AwaitingSingle(candidate))
+                }
+            }
+            other => {
+                self.recording_single = None;
+                Some(other)
+            }
+        }
+    }
+
+    fn confirm_pending_single(&mut self) -> bool {
+        if self.recording_single.is_some() {
+            self.confirm_recording_single = true;
+            true
+        } else {
+            false
+        }
     }
 
     fn register_item_hotkey(&mut self, id: i64, hotkey_str: &str) -> Result<(), String> {
         let hk = parse_hotkey(hotkey_str)?;
+        if is_protected_single_hotkey(hk) {
+            return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
+        }
         if self.is_conflicting_except(hk, Some(id), None, false, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
@@ -946,6 +1312,7 @@ impl HotkeyListener for DesktopHotkeyListener {
                 self.register_hotkey(hk)?;
                 self.item_hotkeys[existing.unwrap()].registered = true;
             }
+            self.item_hotkeys[existing.unwrap()].double_press = is_double_hotkey(hotkey_str);
             return Ok(());
         }
         self.register_hotkey(hk)?;
@@ -957,12 +1324,14 @@ impl HotkeyListener for DesktopHotkeyListener {
                 id,
                 hotkey: hk,
                 registered: true,
+                double_press: is_double_hotkey(hotkey_str),
             };
         } else {
             self.item_hotkeys.push(ItemHotkeyBinding {
                 id,
                 hotkey: hk,
                 registered: true,
+                double_press: is_double_hotkey(hotkey_str),
             });
         }
         Ok(())
@@ -983,6 +1352,9 @@ impl HotkeyListener for DesktopHotkeyListener {
 
     fn register_latest_hotkey(&mut self, slot: usize, hotkey_str: &str) -> Result<(), String> {
         let hk = parse_hotkey(hotkey_str)?;
+        if is_protected_single_hotkey(hk) {
+            return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
+        }
         if self.is_conflicting_except(hk, None, Some(slot), false, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
@@ -995,6 +1367,7 @@ impl HotkeyListener for DesktopHotkeyListener {
                 self.register_hotkey(hk)?;
                 self.latest_hotkeys[existing.unwrap()].registered = true;
             }
+            self.latest_hotkeys[existing.unwrap()].double_press = is_double_hotkey(hotkey_str);
             return Ok(());
         }
         self.register_hotkey(hk)?;
@@ -1006,12 +1379,14 @@ impl HotkeyListener for DesktopHotkeyListener {
                 slot,
                 hotkey: hk,
                 registered: true,
+                double_press: is_double_hotkey(hotkey_str),
             };
         } else {
             self.latest_hotkeys.push(LatestHotkeyBinding {
                 slot,
                 hotkey: hk,
                 registered: true,
+                double_press: is_double_hotkey(hotkey_str),
             });
         }
         Ok(())
@@ -1049,26 +1424,30 @@ impl HotkeyListener for DesktopHotkeyListener {
         // Re-register from the provided lists.
         for &(id, ref s) in item_hotkeys {
             if let Ok(hk) = parse_hotkey(s) {
-                if !self.is_conflicting_except(hk, None, None, false, false)
+                if !is_protected_single_hotkey(hk)
+                    && !self.is_conflicting_except(hk, None, None, false, false)
                     && self.manager.register(hk).is_ok()
                 {
                     self.item_hotkeys.push(ItemHotkeyBinding {
                         id,
                         hotkey: hk,
                         registered: true,
+                        double_press: is_double_hotkey(s),
                     });
                 }
             }
         }
         for &(slot, ref s) in latest_hotkeys {
             if let Ok(hk) = parse_hotkey(s) {
-                if !self.is_conflicting_except(hk, None, None, false, false)
+                if !is_protected_single_hotkey(hk)
+                    && !self.is_conflicting_except(hk, None, None, false, false)
                     && self.manager.register(hk).is_ok()
                 {
                     self.latest_hotkeys.push(LatestHotkeyBinding {
                         slot,
                         hotkey: hk,
                         registered: true,
+                        double_press: is_double_hotkey(s),
                     });
                 }
             }
@@ -1099,8 +1478,16 @@ impl HotkeyListener for DesktopHotkeyListener {
 mod platform_input {
     use super::{Code, Modifiers};
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        GetAsyncKeyState, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
+        VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
     };
+
+    fn any_key_down(keys: &[u16]) -> bool {
+        // SAFETY: `GetAsyncKeyState` only reads the current state for the
+        // provided well-known Windows virtual-key codes.
+        keys.iter()
+            .any(|key| unsafe { GetAsyncKeyState(i32::from(*key)) < 0 })
+    }
 
     pub fn super_key_name() -> &'static str {
         "Win"
@@ -1108,22 +1495,20 @@ mod platform_input {
 
     pub fn pressed_modifiers() -> Modifiers {
         let mut modifiers = Modifiers::empty();
-        // SAFETY: `GetAsyncKeyState` is a non-blocking poll of the physical key
-        // state; callable from any thread. The key codes (VK_CONTROL, VK_MENU,
-        // VK_SHIFT, VK_LWIN, VK_RWIN) are well-known constants on Windows.
-        unsafe {
-            if GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 {
-                modifiers |= Modifiers::CONTROL;
-            }
-            if GetAsyncKeyState(VK_MENU.0 as i32) < 0 {
-                modifiers |= Modifiers::ALT;
-            }
-            if GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 {
-                modifiers |= Modifiers::SHIFT;
-            }
-            if GetAsyncKeyState(VK_LWIN.0 as i32) < 0 || GetAsyncKeyState(VK_RWIN.0 as i32) < 0 {
-                modifiers |= Modifiers::SUPER;
-            }
+        if any_key_down(&[VK_CONTROL.0, VK_LCONTROL.0, VK_RCONTROL.0]) {
+            modifiers |= Modifiers::CONTROL;
+        }
+        // Some keyboard layouts and Windows menu-mode transitions do not
+        // reliably expose left Alt through the aggregate VK_MENU state. Read
+        // both side-specific keys as well.
+        if any_key_down(&[VK_MENU.0, VK_LMENU.0, VK_RMENU.0]) {
+            modifiers |= Modifiers::ALT;
+        }
+        if any_key_down(&[VK_SHIFT.0, VK_LSHIFT.0, VK_RSHIFT.0]) {
+            modifiers |= Modifiers::SHIFT;
+        }
+        if any_key_down(&[VK_LWIN.0, VK_RWIN.0]) {
+            modifiers |= Modifiers::SUPER;
         }
         modifiers
     }
@@ -1355,6 +1740,9 @@ mod linux {
         }
         fn poll_recording_pressed(&mut self) -> Option<HotkeyRecordingPress> {
             None
+        }
+        fn confirm_pending_single(&mut self) -> bool {
+            false
         }
         fn set_quick_actions_enabled(&mut self, _enabled: bool) {}
         fn start_custom_recording(&mut self) {}

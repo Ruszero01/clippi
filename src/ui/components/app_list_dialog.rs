@@ -482,7 +482,11 @@ fn render_entry(
                                 .child(I18nKey::HotkeyPasteShortcutRecording.text()),
                         )
                     } else {
-                        let label = entry.shortcut.clone().unwrap_or_default();
+                        let label = entry
+                            .shortcut
+                            .as_deref()
+                            .map(crate::platform::hotkey::hotkey_display)
+                            .unwrap_or_default();
                         let click = actions.on_shortcut_click.clone();
                         let label_name = next_name;
                         row.child(

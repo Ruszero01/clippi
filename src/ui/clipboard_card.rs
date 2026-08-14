@@ -2689,7 +2689,7 @@ impl RenderOnce for ClipboardCard {
         let mut fixed_widths = Vec::with_capacity(3);
         // Hotkey pill (if item has a custom hotkey)
         let hotkey_pill = if !item.custom_hotkey.is_empty() {
-            Some(item.custom_hotkey.clone())
+            Some(crate::platform::hotkey::hotkey_display(&item.custom_hotkey))
         } else {
             None
         };

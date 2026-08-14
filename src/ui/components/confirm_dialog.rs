@@ -162,9 +162,10 @@ impl ConfirmDialog {
 
     /// Add paste shortcut confirmation.
     pub fn add_paste_shortcut(app_name: &str, shortcut: &str) -> Self {
+        let shortcut = crate::platform::hotkey::hotkey_display(shortcut);
         Self::new()
             .title(I18nKey::HotkeyPasteShortcutConfirmAddTitle.text())
-            .message(I18nKey::HotkeyPasteShortcutConfirmAddMsg.fmt(&[app_name, shortcut]))
+            .message(I18nKey::HotkeyPasteShortcutConfirmAddMsg.fmt(&[app_name, &shortcut]))
             .confirm_label(I18nKey::ConfirmAddLabel.text())
             .danger(false)
     }

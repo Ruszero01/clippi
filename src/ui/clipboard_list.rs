@@ -1381,7 +1381,7 @@ impl ClipboardListView {
     /// Cancel hotkey recording and restore normal card view.
     fn cancel_hotkey_recording(&mut self, cx: &mut Context<Self>) {
         self.window_manager
-            .update(cx, |wm, _cx| wm.cancel_custom_recording());
+            .update(cx, |wm, cx| wm.cancel_custom_recording(cx));
         self.recording_hotkey_id = -1;
         self.recording_hotkey_format.clear();
         self.escape_consumed_inline = true;
@@ -1390,8 +1390,16 @@ impl ClipboardListView {
     }
 
     fn confirm_hotkey_recording(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).pending_single_hotkey.is_some()
+            && self
+                .window_manager
+                .update(cx, |wm, cx| wm.confirm_pending_single_hotkey(cx))
+        {
+            cx.notify();
+            return;
+        }
         self.window_manager
-            .update(cx, |wm, _cx| wm.cancel_custom_recording());
+            .update(cx, |wm, cx| wm.cancel_custom_recording(cx));
         self.recording_hotkey_id = -1;
         self.recording_hotkey_format.clear();
         self.escape_consumed_inline = true;

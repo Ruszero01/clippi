@@ -374,6 +374,7 @@ define_i18n! {
     HotkeyErrConflictQuick: ("与快速窗口快捷键冲突", "Conflicts with quick window hotkey"),
     HotkeyErrConflictMain:  ("与主窗口快捷键冲突", "Conflicts with main window hotkey"),
     HotkeyErrNoKey:         ("未指定按键", "No key specified"),
+    HotkeyProtectedSingleKey: ("该键不能作为单键快捷键使用，请搭配修饰键", "This key cannot be used as a single-key hotkey, use a modifier key"),
     HotkeyFallbackToast:    ("{0} 已被占用，已自动切换为 {1}", "{0} is in use, switched to {1}"),
 
     // ─── Data operation ───
@@ -437,6 +438,9 @@ define_i18n! {
     HotkeyNoForeground:     ("无前台应用", "No foreground app"),
     HotkeyPressToRecord:    ("按下新快捷键进行录制", "Press new hotkey to record"),
     HotkeyRecordingIdle:    ("点击开始录制", "Click to start recording"),
+    HotkeySingleAwaiting:   ("再次按下录入双击，或点击按钮确认单击", "Press again for double-click, or click the button to confirm single-click"),
+    HotkeyConfirmSingle:    ("确认单击 {0}", "Confirm single {0}"),
+    HotkeyDoubleDisplay:    ("双击 {0}", "Double {0}"),
     HotkeyBlacklistEmptyHint:("在当前应用中不再唤起 Clippi", "Stop Clippi hotkey in current app"),
     HotkeyConfirmAddTitle:  ("确认添加黑名单", "Confirm Add to Blacklist"),
     HotkeyConfirmAddMsg:    ("将 {0} 加入快捷键黑名单？", "Add {0} to hotkey blacklist?"),
