@@ -848,9 +848,36 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 4096];
-            let read = std::io::Read::read(&mut stream, &mut request).unwrap();
-            let request_text = String::from_utf8_lossy(&request[..read]);
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let expected_len = loop {
+                let read = std::io::Read::read(&mut stream, &mut chunk).unwrap();
+                assert!(read > 0, "request closed before headers were complete");
+                request.extend_from_slice(&chunk[..read]);
+
+                let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let header_len = header_end + 4;
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_len = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                break header_len + content_len;
+            };
+            while request.len() < expected_len {
+                let read = std::io::Read::read(&mut stream, &mut chunk).unwrap();
+                assert!(read > 0, "request closed before its body was complete");
+                request.extend_from_slice(&chunk[..read]);
+            }
+
+            let request_text = String::from_utf8_lossy(&request);
             assert!(request_text.starts_with(expect_method));
             std::io::Write::write_all(&mut stream, &response).unwrap();
         });
