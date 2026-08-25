@@ -45,6 +45,18 @@ fn item_is_pending(item: &ClipboardItem) -> bool {
     item.meta_type == "pending-image"
 }
 
+/// Collect the ids of every selectable (non-pending) item currently held by the
+/// list (self.items = visible filter results + pending image placeholders).
+/// Used by Ctrl/Cmd+A; pending placeholders are excluded, matching the
+/// toggle_index / range_select_to_index selection rules.
+fn collect_selectable_ids(items: &[ClipboardItem]) -> Vec<i64> {
+    items
+        .iter()
+        .filter(|item| !item_is_pending(item))
+        .map(|item| item.id)
+        .collect()
+}
+
 /// Stable pairwise reorder for usage updates, mirroring the AppState usage
 /// reorder rule: created_at ordering keeps positions; favorites-first keyword
 /// searches reorder only inside each group. Items move together with their
@@ -674,6 +686,30 @@ impl ClipboardListView {
         let selected = self.selected_ids.clone();
         self.state.update(cx, move |state, _cx| {
             state.range_select(&selected);
+        });
+        cx.notify();
+    }
+
+    /// Ctrl/Cmd+A — select every selectable (non-pending) item currently visible.
+    /// Idempotent: repeating the shortcut keeps the same result (not a toggle).
+    fn select_all_visible(&mut self, cx: &mut Context<Self>) {
+        let ids = collect_selectable_ids(&self.items);
+        if ids.is_empty() {
+            // Empty or all-pending list: silent no-op.
+            return;
+        }
+        self.selected_ids = ids.clone();
+        // Point selected_index/anchor_index at the first selected (non-pending)
+        // item so arrow-key navigation starts from a real entry even when a
+        // pending placeholder sits at the top of self.items.
+        self.selected_index = self.items.iter().position(|item| item.id == ids[0]);
+        self.anchor_index = self.selected_index;
+        self.selected_count = self.selected_ids.len();
+        self.modified_double_click_candidate = None;
+        // Replace AppState.selected_ids wholesale. `range_select` copies from
+        // the slice; pass a direct reference to self.selected_ids (no clone).
+        self.state.update(cx, |state, _cx| {
+            state.range_select(&self.selected_ids);
         });
         cx.notify();
     }
@@ -2031,6 +2067,11 @@ impl Render for ClipboardListView {
                                 this.action_toggle_favorite(cx);
                                 cx.stop_propagation();
                             }
+                            "a" if !this.has_any_panel_or_editing() => {
+                                // Ctrl+A / Cmd+A — select all visible items
+                                this.select_all_visible(cx);
+                                cx.stop_propagation();
+                            }
                             "e" if !this.has_any_panel_or_editing() => {
                                 // Ctrl+E — open edit panel
                                 this.action_edit(cx);
@@ -2515,7 +2556,8 @@ impl Render for ClipboardListView {
 #[cfg(test)]
 mod tests {
     use super::{
-        can_incrementally_sync_usage, item_id_at, item_index, item_is_pending, reorder_usage_pairs,
+        can_incrementally_sync_usage, collect_selectable_ids, item_id_at, item_index,
+        item_is_pending, reorder_usage_pairs,
     };
     use crate::core::types::{ClipboardItem, ContentType};
     use gpui::Pixels;
@@ -2699,5 +2741,51 @@ mod tests {
             false,
             false
         ));
+    }
+
+    fn pending_item(id: i64) -> ClipboardItem {
+        let mut item = test_item(id, 0, false);
+        item.id = -id;
+        item.meta_type = "pending-image".to_string();
+        item
+    }
+
+    #[test]
+    fn select_all_collects_non_pending_ids_and_excludes_pending_placeholders() {
+        // Pending placeholder sits at the top of self.items; regular items follow.
+        let items = vec![
+            pending_item(1),
+            test_item(10, 30, false),
+            test_item(20, 20, true),
+            pending_item(2),
+            test_item(30, 10, false),
+        ];
+        let ids = collect_selectable_ids(&items);
+        assert_eq!(ids, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn select_all_empty_list_returns_empty_without_side_effect() {
+        assert!(collect_selectable_ids(&[]).is_empty());
+    }
+
+    #[test]
+    fn select_all_all_pending_returns_empty() {
+        let items = vec![pending_item(1), pending_item(2), pending_item(3)];
+        assert!(collect_selectable_ids(&items).is_empty());
+    }
+
+    #[test]
+    fn select_all_is_idempotent() {
+        let items = vec![
+            pending_item(1),
+            test_item(10, 30, false),
+            test_item(20, 20, false),
+            test_item(30, 10, true),
+        ];
+        let first = collect_selectable_ids(&items);
+        let second = collect_selectable_ids(&items);
+        assert_eq!(first, second);
+        assert_eq!(first, vec![10, 20, 30]);
     }
 }

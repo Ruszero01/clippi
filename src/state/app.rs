@@ -3143,6 +3143,16 @@ mod tests {
     }
 
     #[test]
+    fn range_select_replaces_the_entire_selection() {
+        let (mut state, _dirty) = test_state();
+        state.selected_ids = vec![1, 2, 3];
+        // Ctrl/Cmd+A select-all hands the full visible id set to range_select,
+        // which must replace (not merge) any prior selection wholesale.
+        state.range_select(&[10, 20, 30, 40]);
+        assert_eq!(state.selected_ids, vec![10, 20, 30, 40]);
+    }
+
+    #[test]
     fn favorites_beyond_scan_limit_are_not_found() {
         let (mut state, _dirty) = test_state();
         state.settings.search_favorites_first = true;
