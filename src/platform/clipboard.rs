@@ -34,12 +34,12 @@ static THUMBNAIL_READY: AtomicBool = AtomicBool::new(false);
 static RECENT_IMAGE_FILE_REFERENCE: Mutex<Option<Instant>> = Mutex::new(None);
 static THUMBNAIL_JOBS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 const MAX_THUMBNAIL_JOBS: usize = 2;
-const MAX_CAPTURED_IMAGE_DIMENSION: u32 = 10_000;
-const MAX_CAPTURED_IMAGE_PIXELS: u64 = 64_000_000;
+const MAX_CAPTURED_IMAGE_DIMENSION: u32 = 100_000;
+const MAX_CAPTURED_IMAGE_PIXELS: u64 = 512_000_000;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-const MAX_CAPTURED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_CAPTURED_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_IMAGE_PERSIST_JOBS: usize = 2;
-const MAX_IMAGE_PERSIST_BYTES: usize = 192 * 1024 * 1024;
+const MAX_IMAGE_PERSIST_BYTES: usize = 1024 * 1024 * 1024;
 
 /// 结构化诊断日志：特性关闭时展开为空，生产构建零影响。
 /// 注册 "PNG" 剪贴板格式并缓存其 ID（进程内只注册一次）。
@@ -966,10 +966,15 @@ fn read_clipboard_rich_data(ctx: &ClipboardContext) -> Option<RichData> {
         return None;
     }
 
+    #[cfg(target_os = "windows")]
     let html = ctx
-        .get_html()
+        .get_buffer("HTML Format")
         .ok()
-        .map(|html| crate::core::html_text::normalize_clipboard_html(&html));
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .map(|html| crate::core::html_text::preserve_clipboard_html_document(&html))
+        .or_else(|| ctx.get_html().ok());
+    #[cfg(not(target_os = "windows"))]
+    let html = ctx.get_html().ok();
     let rtf = ctx.get_rich_text().ok();
     (html.is_some() || rtf.is_some()).then_some(RichData {
         html,
@@ -1848,10 +1853,23 @@ mod image_capture_tests {
 
     #[test]
     fn image_limits_cover_dimensions_pixels_and_boundaries() {
-        assert!(!image_exceeds_capture_limit(8_000, 8_000));
+        // 报告尺寸（1200×26500 / 2000×40000）在新上限内，必须接受。
+        assert!(!image_exceeds_capture_limit(1200, 26_500));
+        assert!(!image_exceeds_capture_limit(2000, 40_000));
+        // 单边维度上限边界：等于上限接受，超一拒绝。
+        assert!(!image_exceeds_capture_limit(100_000, 1));
+        assert!(image_exceeds_capture_limit(100_001, 1));
+        // 像素乘积极限边界：100_000×5120 = 512_000_000 恰好等于上限，接受；
+        // 100_000×5121 = 512_100_000 超限，拒绝。
+        assert!(!image_exceeds_capture_limit(100_000, 5_120));
+        assert!(image_exceeds_capture_limit(100_000, 5_121));
+        // 维度未超但像素乘积超限（旧 8_001×8_000 断言按新上限重写）：
+        // 80_001×8_000 = 640_008_000 > 512_000_000，拒绝。
+        assert!(image_exceeds_capture_limit(80_001, 8_000));
+        // 旧边界断言更新而非删除：10_000/10_001 与 8_001×8_000 在新上限下均接受。
         assert!(!image_exceeds_capture_limit(10_000, 1));
-        assert!(image_exceeds_capture_limit(10_001, 1));
-        assert!(image_exceeds_capture_limit(8_001, 8_000));
+        assert!(!image_exceeds_capture_limit(10_001, 1));
+        assert!(!image_exceeds_capture_limit(8_001, 8_000));
     }
 
     #[test]

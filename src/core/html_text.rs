@@ -1,5 +1,92 @@
 //! Plain visible-text extraction for clipboard HTML.
 
+/// Preserve the complete HTML document from a Windows CF_HTML payload.
+///
+/// Unlike [`normalize_clipboard_html`], this keeps `<head>` and `<style>` so
+/// class-based formatting (notably WPS spreadsheet cell styles) survives a
+/// clipboard history round trip.
+pub fn preserve_clipboard_html_document(html: &str) -> String {
+    let html = html.trim_end_matches('\0');
+    let document_start = find_html_start(html);
+    let has_cf_header = document_start.is_some_and(|pos| {
+        html[..pos]
+            .lines()
+            .any(|line| line.trim_start().starts_with("Version:"))
+    });
+
+    if let Some(pos) = document_start {
+        if has_cf_header {
+            let header = &html[..pos];
+            if let (Some(start), Some(end)) = (
+                parse_cf_html_offset(header, "StartHTML:"),
+                parse_cf_html_offset(header, "EndHTML:"),
+            ) {
+                if start <= end
+                    && end <= html.len()
+                    && html.is_char_boundary(start)
+                    && html.is_char_boundary(end)
+                {
+                    return strip_fragment_markers(html[start..end].trim_end_matches('\0'));
+                }
+            }
+            return strip_fragment_markers(html[pos..].trim_end_matches('\0'));
+        }
+    }
+
+    strip_fragment_markers(html)
+}
+
+/// Encode plain HTML as a Windows CF_HTML payload with byte-accurate offsets.
+/// The full document remains available to consumers while the fragment points
+/// only at the body content.
+pub fn encode_cf_html(html: &str) -> String {
+    const START_MARKER: &str = "<!--StartFragment-->";
+    const END_MARKER: &str = "<!--EndFragment-->";
+
+    let clean = strip_fragment_markers(html.trim_end_matches('\0'));
+    let mut document = if find_html_start(&clean).is_some() {
+        clean
+    } else {
+        format!("<html><body>{clean}</body></html>")
+    };
+
+    let body_range = find_case_insensitive(&document, "<body").and_then(|body_start| {
+        let fragment_start = body_start + document[body_start..].find('>')? + 1;
+        let fragment_end =
+            fragment_start + find_case_insensitive(&document[fragment_start..], "</body")?;
+        Some((fragment_start, fragment_end))
+    });
+    if let Some((fragment_start, fragment_end)) = body_range {
+        document.insert_str(fragment_end, END_MARKER);
+        document.insert_str(fragment_start, START_MARKER);
+    } else {
+        document = format!("<html><body>{START_MARKER}{document}{END_MARKER}</body></html>");
+    }
+
+    let header_template = concat!(
+        "Version:1.0\r\n",
+        "StartHTML:0000000000\r\n",
+        "EndHTML:0000000000\r\n",
+        "StartFragment:0000000000\r\n",
+        "EndFragment:0000000000\r\n"
+    );
+    let start_html = header_template.len();
+    let end_html = start_html + document.len();
+    let marker_start = document
+        .find(START_MARKER)
+        .expect("CF_HTML start marker must exist");
+    let marker_end = document
+        .find(END_MARKER)
+        .expect("CF_HTML end marker must exist");
+    let start_fragment = start_html + marker_start + START_MARKER.len();
+    let end_fragment = start_html + marker_end;
+    let header = format!(
+        "Version:1.0\r\nStartHTML:{start_html:010}\r\nEndHTML:{end_html:010}\r\nStartFragment:{start_fragment:010}\r\nEndFragment:{end_fragment:010}\r\n"
+    );
+    debug_assert_eq!(header.len(), header_template.len());
+    format!("{header}{document}")
+}
+
 /// Normalize a clipboard HTML payload down to its visible fragment.
 ///
 /// Clipboard HTML arrives in several shapes:
@@ -558,5 +645,30 @@ lang=EN-US><o:p></o:p></span></span></b></p>
         let text = visible_text(r#"<p><a href="https://example.com">Link text</a></p>"#);
 
         assert_eq!(text, "Link text");
+    }
+
+    #[test]
+    fn wps_class_style_survives_cf_html_round_trip() {
+        let wps = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+
+        let payload = encode_cf_html(wps);
+        let preserved = preserve_clipboard_html_document(&payload);
+
+        assert_eq!(preserved, wps);
+        assert!(preserved.contains(".et2 { color: #ff6600; }"));
+        assert_eq!(
+            normalize_clipboard_html(&payload),
+            "<table><tr><td class=et2>测试文本</td></tr></table>"
+        );
+    }
+
+    #[test]
+    fn cf_html_fragment_offsets_are_byte_accurate_for_non_ascii_text() {
+        let payload = encode_cf_html("<span style='color:#ff6600'>测试文本</span>");
+
+        assert_eq!(
+            normalize_clipboard_html(&payload),
+            "<span style='color:#ff6600'>测试文本</span>"
+        );
     }
 }

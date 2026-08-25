@@ -20,6 +20,7 @@ clippi.toml
 CLAUDE.md
 AGENTS.md
 .superpowers/
+.tang/
 
 # Local dev plan
 PLAN.md
