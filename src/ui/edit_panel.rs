@@ -661,9 +661,12 @@ fn render_rich_preview(
         .heading_font_size(|level, base| if level <= 2 { base * 1.08 } else { base });
     if selected_type == "html" {
         // --- Try to render colored spans first, fall back to plain HTML ---
+        // The full entry parses the raw buffered `rich.html` (including
+        // `<head>` / `<style>` class rules); normalization + link stripping
+        // remain the `TextView::html` fallback path.
         let normalized = rich_preview::normalize_clipboard_html_for_render(text);
         let stripped = rich_preview::strip_html_links(&normalized);
-        if let Some(lines) = rich_preview::parse_styled_html_lines(&stripped) {
+        if let Some(lines) = rich_preview::parse_styled_html_lines_full(text) {
             return div()
                 .child(rich_preview::render_styled_html_lines(
                     lines,

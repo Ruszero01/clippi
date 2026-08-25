@@ -1551,15 +1551,16 @@ fn type_icon(item: &ClipboardItem) -> &'static str {
 /// Split preview into (label, optional_subtitle) for rich display.
 /// URL: (site/domain, page title or path)  Path: (leaf, full path)
 /// Extract the first line of styled HTML for quick-window preview.
-/// Returns `None` when the item has no colour-inline HTML → falls back to plain text.
+/// Returns `None` when the item has no styled HTML → falls back to plain text.
 fn styled_preview(item: &ClipboardItem) -> Option<Vec<rich_preview::StyledHtmlSpan>> {
     let rich = RichData::from_json(&item.rich_data);
     let html = rich.html.as_deref()?;
     if html.trim().is_empty() {
         return None;
     }
-    let html = rich_preview::normalize_clipboard_html_for_render(html);
-    let lines = rich_preview::parse_styled_html_lines(&html)?;
+    // The full entry parses the raw `rich.html` (including `<head>` /
+    // `<style>` class rules) and returns the first line.
+    let lines = rich_preview::parse_styled_html_lines_full(html)?;
     lines.into_iter().next()
 }
 

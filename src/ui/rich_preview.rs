@@ -3,6 +3,8 @@
 //! Extracted from `clipboard_card.rs` so the edit panel can reuse HTML color-tag
 //! parsing and rendering.
 
+use std::collections::HashMap;
+
 use gpui::*;
 
 use super::search_highlight;
@@ -22,6 +24,9 @@ pub struct StyledHtmlSpan {
 
 /// Tags whose inline styles we track for inheritance. Closing tags
 /// pop the stack so styling is scoped correctly.
+// Only referenced by the frozen legacy `parse_styled_html_lines` (kept for
+// its regression tests); the full entry tracks every tag's frame instead.
+#[allow(dead_code)]
 fn is_style_container_tag(tag: &str) -> bool {
     matches!(
         tag,
@@ -42,6 +47,11 @@ fn is_non_visible_tag(tag: &str) -> bool {
 ///
 /// Returns `None` when the HTML contains no recognised styles, so the caller
 /// can fall back to `TextView::html()`.
+///
+/// Frozen legacy entry point (04-spec §4.8): signature and body are
+/// unchanged; production callers use `parse_styled_html_lines_full`. Kept
+/// only for its existing regression tests.
+#[allow(dead_code)]
 pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
     let html_lower = html.to_ascii_lowercase();
     if !html_lower.contains("style=")
@@ -148,6 +158,196 @@ pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
                     || tag_lower.starts_with("/p")
                     || tag_lower.starts_with("/pre")
                 {
+                    push_newline(&mut lines);
+                }
+            }
+
+            idx += tag_end_rel + 1;
+        } else {
+            if skip_depth == 0 {
+                push_html_text(&mut lines, rest, style_stack.last().unwrap());
+            }
+            break;
+        }
+    }
+
+    trim_empty_styled_lines(&mut lines);
+
+    if found_style && !lines.is_empty() {
+        Some(lines)
+    } else {
+        None
+    }
+}
+
+/// Map from a CSS selector (`.class` or bare tag name) to the bounded
+/// four-property style parsed for it. Only selectors that yield at least one
+/// whitelisted declaration are stored.
+pub type EmbeddedStyleMap = HashMap<String, ParsedInlineStyle>;
+
+/// Extract and parse the embedded `<style>` blocks of a raw clipboard HTML
+/// payload (Word/WPS style sheets) into a bounded CSS subset (04-spec §3):
+///
+/// - Case-insensitive `<style>...</style>` extraction with `<!-- -->` and
+///   `/* ... */` comment stripping.
+/// - Rules split on `{...}`; `@`-rules (`@media`, `@font-face`, …) are
+///   skipped together with their whole (nested-brace-aware) block.
+/// - Only `.class` and bare tag-name selectors are accepted; combinators,
+///   pseudo-selectors, attributes, IDs and compound selectors are ignored.
+/// - Only `color`, `font-weight`, `font-style`, `background-color` are
+///   parsed; `!important` is stripped without any priority semantics.
+/// - Later rules override earlier ones per property for the same selector.
+/// - Truncated input (unclosed `<style>` / `{`) never panics and parses
+///   everything up to the last complete rule.
+///
+/// Never fetches external resources (`<link rel=stylesheet>` is ignored).
+pub fn parse_embedded_stylesheet(raw_html: &str) -> EmbeddedStyleMap {
+    let mut map: EmbeddedStyleMap = HashMap::new();
+    let lower = raw_html.to_ascii_lowercase();
+    let mut search_from = 0usize;
+    while let Some(rel) = lower[search_from..].find("<style") {
+        let style_open_start = search_from + rel;
+        let Some(after_open_rel) = lower[style_open_start..].find('>') else {
+            break;
+        };
+        let content_start = style_open_start + after_open_rel + 1;
+        let Some(close_rel) = lower[content_start..].find("</style") else {
+            break;
+        };
+        let content_end = content_start + close_rel;
+        parse_style_content(&raw_html[content_start..content_end], &mut map);
+        search_from = content_end;
+    }
+    map
+}
+
+/// Parse a raw clipboard HTML payload (including `<head>`/`<style>` blocks)
+/// into styled preview lines, honouring the bounded embedded-stylesheet
+/// subset on top of the legacy inline-style parsing.
+///
+/// Pipeline: `parse_embedded_stylesheet` → normalize the visible fragment →
+/// stack-based parse. Style merge order at an opening tag is:
+/// `b/strong/i/em` semantic defaults → tag-selector rule → class-selector
+/// rules (in attribute order, later wins) → inline `style` attribute, with
+/// inline > class > tag > inherited stack. Non-container elements that hit a
+/// rule also push/pop stack frames so their text children inherit the style.
+/// `</tr>` breaks lines (`</td>` stays inline).
+///
+/// Returns `None` when no recognisable style applies, so callers fall back
+/// to `TextView::html`/plain text.
+pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
+    let raw_lower = raw_html.to_ascii_lowercase();
+    if !raw_lower.contains("style=")
+        && !raw_lower.contains("color=")
+        && !raw_lower.contains("<b")
+        && !raw_lower.contains("<strong")
+        && !raw_lower.contains("<i")
+        && !raw_lower.contains("<em")
+        && !raw_lower.contains("class=")
+        && !raw_lower.contains("<style")
+    {
+        return None;
+    }
+
+    let style_map = parse_embedded_stylesheet(raw_html);
+    let html = normalize_clipboard_html_for_render(raw_html);
+
+    let mut lines: Vec<Vec<StyledHtmlSpan>> = vec![Vec::new()];
+    let mut style_stack: Vec<ParsedInlineStyle> = vec![ParsedInlineStyle::default()];
+    let mut found_style = false;
+    let mut idx = 0usize;
+    // Nesting depth of non-visible containers (`head`, `style`, `script`,
+    // `title`, `xml`). While > 0, no text, styles, or newlines are emitted.
+    let mut skip_depth = 0usize;
+
+    while idx < html.len() {
+        let rest = &html[idx..];
+        if let Some(tag_start_rel) = rest.find('<') {
+            let text = &rest[..tag_start_rel];
+            if skip_depth == 0 {
+                push_html_text(&mut lines, text, style_stack.last().unwrap());
+            }
+            idx += tag_start_rel;
+
+            let Some(tag_end_rel) = html[idx..].find('>') else {
+                break;
+            };
+            let tag = &html[idx + 1..idx + tag_end_rel];
+            let tag_lower = tag.trim().to_ascii_lowercase();
+
+            // HTML comments are skipped as a unit (same semantics as the
+            // legacy parser).
+            if tag_lower.starts_with("!--") {
+                idx += "<!--".len();
+                if let Some(rel) = html[idx..].find("-->") {
+                    idx += rel + "-->".len();
+                }
+                continue;
+            }
+
+            let is_closing = tag_lower.starts_with('/');
+            let tag_name = tag_lower
+                .trim_start_matches('/')
+                .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                .next()
+                .unwrap_or("");
+
+            if is_non_visible_tag(tag_name) {
+                if is_closing {
+                    skip_depth = skip_depth.saturating_sub(1);
+                } else {
+                    skip_depth += 1;
+                }
+                idx += tag_end_rel + 1;
+                continue;
+            }
+
+            if skip_depth > 0 {
+                idx += tag_end_rel + 1;
+                continue;
+            }
+
+            if is_closing {
+                // Closing tag — pop the frame pushed by its opening tag.
+                if style_stack.len() > 1 {
+                    style_stack.pop();
+                }
+                if tag_lower.starts_with("/div")
+                    || tag_lower.starts_with("/p")
+                    || tag_lower.starts_with("/pre")
+                    || tag_lower.starts_with("/tr")
+                {
+                    push_newline(&mut lines);
+                }
+            } else {
+                // Opening tag — merge semantic defaults, then tag/class
+                // stylesheet rules (inline > class > tag > inherited stack),
+                // then the inline style attribute. Every opening tag pushes a
+                // frame so closing tags can always pop it back; transparent
+                // frames are identical to their parent and change nothing.
+                let semantic = semantic_tag_defaults(tag_name);
+                if semantic.has_any_style() {
+                    found_style = true;
+                }
+                let mut merged = merge_rule_style(style_stack.last().unwrap(), &semantic);
+                if let Some(rule) = style_map.get(tag_name) {
+                    merged = merge_rule_style(&merged, rule);
+                    found_style = true;
+                }
+                for cls in extract_classes(tag) {
+                    if let Some(rule) = style_map.get(&format!(".{}", cls)) {
+                        merged = merge_rule_style(&merged, rule);
+                        found_style = true;
+                    }
+                }
+                let inline = parse_inline_style_attr(tag);
+                if inline.has_any_style() {
+                    found_style = true;
+                }
+                merged = merge_rule_style(&merged, &inline);
+                style_stack.push(merged);
+
+                if tag_lower.starts_with("br") {
                     push_newline(&mut lines);
                 }
             }
@@ -686,7 +886,7 @@ fn decode_html_text(text: &str) -> String {
 /// Parsed inline CSS properties from an HTML tag's style attribute,
 /// plus classic HTML presentational attributes (e.g. `<font color="...">`).
 #[derive(Clone, Default)]
-struct ParsedInlineStyle {
+pub struct ParsedInlineStyle {
     color: Option<Rgba>,
     font_weight: Option<FontWeight>,
     font_style: Option<FontStyle>,
@@ -702,6 +902,9 @@ impl ParsedInlineStyle {
     }
 }
 
+// Only referenced by the frozen legacy `parse_styled_html_lines`; the full
+// entry uses `semantic_tag_defaults` + `parse_inline_style_attr` separately.
+#[allow(dead_code)]
 fn parse_inline_style(tag_name: &str, tag: &str) -> ParsedInlineStyle {
     let mut color = None;
     let mut font_weight = match tag_name {
@@ -802,6 +1005,287 @@ fn parse_named_html_color(name: &str) -> Option<Rgba> {
     }
 }
 
+/// Default styles applied for semantic tags (`b`/`strong` → bold,
+/// `i`/`em` → italic). Lowest precedence in the merge order.
+fn semantic_tag_defaults(tag_name: &str) -> ParsedInlineStyle {
+    ParsedInlineStyle {
+        color: None,
+        font_weight: match tag_name {
+            "b" | "strong" => Some(FontWeight::BOLD),
+            _ => None,
+        },
+        font_style: match tag_name {
+            "i" | "em" => Some(FontStyle::Italic),
+            _ => None,
+        },
+        background_color: None,
+    }
+}
+
+/// Parse only the inline `style="..."` attribute (plus the classic HTML
+/// `color="..."` attribute) of a tag — no semantic tag defaults.
+fn parse_inline_style_attr(tag: &str) -> ParsedInlineStyle {
+    let mut color = None;
+    let mut font_weight = None;
+    let mut font_style = None;
+    let mut background_color = None;
+
+    if let Some(style_body) = extract_style_body(tag) {
+        for decl in style_body.split(';') {
+            let mut parts = decl.splitn(2, ':');
+            let key = match parts.next() {
+                Some(k) => k.trim().to_ascii_lowercase(),
+                None => continue,
+            };
+            let value = match parts.next() {
+                Some(v) => v.trim(),
+                None => continue,
+            };
+            match key.as_str() {
+                "color" => color = parse_css_color(value),
+                "font-weight" => font_weight = parse_css_font_weight(value),
+                "font-style" => font_style = parse_css_font_style(value),
+                "background-color" => background_color = parse_css_color(value),
+                _ => {}
+            }
+        }
+    }
+
+    if color.is_none() {
+        color = parse_html_color_attr(tag);
+    }
+
+    ParsedInlineStyle {
+        color,
+        font_weight,
+        font_style,
+        background_color,
+    }
+}
+
+/// Merge `over` onto `base`: properties set by `over` replace `base`'s,
+/// unset properties inherit from `base`.
+fn merge_rule_style(base: &ParsedInlineStyle, over: &ParsedInlineStyle) -> ParsedInlineStyle {
+    ParsedInlineStyle {
+        color: over.color.or(base.color),
+        font_weight: over.font_weight.or(base.font_weight),
+        font_style: over.font_style.or(base.font_style),
+        background_color: over.background_color.or(base.background_color),
+    }
+}
+
+/// Insert or merge one parsed rule into the map. Later rules override
+/// earlier ones per property (04-spec §3.6).
+fn merge_rule_into(map: &mut EmbeddedStyleMap, key: String, style: ParsedInlineStyle) {
+    let existing = map.entry(key).or_default();
+    if style.color.is_some() {
+        existing.color = style.color;
+    }
+    if style.font_weight.is_some() {
+        existing.font_weight = style.font_weight;
+    }
+    if style.font_style.is_some() {
+        existing.font_style = style.font_style;
+    }
+    if style.background_color.is_some() {
+        existing.background_color = style.background_color;
+    }
+}
+
+/// Strip `/* ... */` comments entirely and remove the `<!--`/`-->` markers
+/// Word/WPS use to *wrap* a stylesheet (the CSS between the markers is kept,
+/// per 04-spec §3.1). Unclosed markers drop the rest of the input
+/// (truncation safe).
+fn strip_style_comments(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let bytes = content.as_bytes();
+    let mut idx = 0usize;
+    let mut in_comment_wrap = false;
+    while idx < bytes.len() {
+        if bytes[idx..].starts_with(b"/*") {
+            idx = bytes[idx + 2..]
+                .windows(2)
+                .position(|w| w == b"*/".as_slice())
+                .map(|rel| idx + 2 + rel + 2)
+                .unwrap_or(bytes.len());
+            continue;
+        }
+        if bytes[idx..].starts_with(b"<!--") {
+            in_comment_wrap = true;
+            idx += "<!--".len();
+            continue;
+        }
+        if in_comment_wrap && bytes[idx..].starts_with(b"-->") {
+            in_comment_wrap = false;
+            idx += "-->".len();
+            continue;
+        }
+        let ch_len = content[idx..]
+            .chars()
+            .next()
+            .map_or(1, char::len_utf8);
+        out.push_str(&content[idx..idx + ch_len]);
+        idx += ch_len;
+    }
+    out
+}
+
+/// Split a style block into `selector { declarations }` rules. `@`-rules are
+/// skipped together with their whole (nested-brace-aware) block; truncated
+/// input stops parsing at the last complete rule.
+fn parse_style_content(content: &str, map: &mut EmbeddedStyleMap) {
+    let cleaned = strip_style_comments(content);
+    let mut idx = 0usize;
+    while idx < cleaned.len() {
+        let rest = &cleaned[idx..];
+        let Some(open_rel) = rest.find('{') else {
+            break;
+        };
+        let selector = &rest[..open_rel];
+        let open_abs = idx + open_rel;
+        let Some(close_rel) = matching_brace(&cleaned[open_abs..]) else {
+            break;
+        };
+        let close_abs = open_abs + close_rel;
+        let body = &cleaned[open_abs + 1..close_abs];
+
+        let selector = selector.trim();
+        if !selector.starts_with('@') {
+            for item in selector.split(',') {
+                let item = item.trim();
+                if let Some((key, style)) = parse_rule_selector(item, body) {
+                    merge_rule_into(map, key, style);
+                }
+            }
+        }
+        idx = close_abs + 1;
+    }
+}
+
+/// Position of the `}` closing the brace block that starts at `text[0]`,
+/// counting nested braces. `None` when the block is truncated.
+fn matching_brace(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (idx, ch) in text.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Validate one comma-separated selector item and parse its declarations.
+/// Only plain `.class` or bare tag-name selectors are accepted; combinators,
+/// pseudo-selectors, attributes, IDs and compound selectors reject the whole
+/// item (04-spec §3.3). Rules without whitelisted declarations are dropped.
+fn parse_rule_selector(selector: &str, body: &str) -> Option<(String, ParsedInlineStyle)> {
+    let selector = selector.trim();
+    if selector.is_empty() || selector.starts_with('@') {
+        return None;
+    }
+    let is_class = selector.starts_with('.');
+    let name = if is_class { &selector[1..] } else { selector };
+    if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let style = parse_style_declarations(body);
+    if !style.has_any_style() {
+        return None;
+    }
+    let key = if is_class {
+        format!(".{name}")
+    } else {
+        name.to_ascii_lowercase()
+    };
+    Some((key, style))
+}
+
+/// Parse the whitelisted declarations (`color`, `font-weight`, `font-style`,
+/// `background-color`) from a rule body, stripping `!important`.
+fn parse_style_declarations(body: &str) -> ParsedInlineStyle {
+    let mut style = ParsedInlineStyle::default();
+    for decl in body.split(';') {
+        let mut parts = decl.splitn(2, ':');
+        let Some(key) = parts.next() else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let Some(value) = parts.next() else {
+            continue;
+        };
+        let value = strip_important(value);
+        match key.as_str() {
+            "color" => style.color = parse_css_color(value),
+            "font-weight" => style.font_weight = parse_css_font_weight(value),
+            "font-style" => style.font_style = parse_css_font_style(value),
+            "background-color" => style.background_color = parse_css_color(value),
+            _ => {}
+        }
+    }
+    style
+}
+
+/// Remove a trailing `!important` marker so the value parses as a normal
+/// declaration (no priority semantics, 04-spec §3.5).
+fn strip_important(value: &str) -> &str {
+    let value = value.trim();
+    match value.to_ascii_lowercase().find("!important") {
+        Some(pos) => value[..pos].trim(),
+        None => value,
+    }
+}
+
+/// Extract the class names of an opening tag in attribute order, supporting
+/// both quoted (`class="a b"`) and unquoted (`class=et2`) forms.
+fn extract_classes(tag: &str) -> Vec<&str> {
+    let lower = tag.to_ascii_lowercase();
+    let mut classes: Vec<&str> = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel) = lower[search_from..].find("class=") {
+        let value_start = search_from + rel + "class=".len();
+        let after = &tag[value_start..];
+        let (value, consumed) = if let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|&c| matches!(c, '"' | '\''))
+        {
+            let rest = &after[quote.len_utf8()..];
+            match rest.find(quote) {
+                Some(end) => (
+                    &rest[..end],
+                    value_start + quote.len_utf8() + end + quote.len_utf8(),
+                ),
+                None => (rest, tag.len()),
+            }
+        } else {
+            let end = after
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(after.len());
+            (&after[..end], value_start + end)
+        };
+        for cls in value.split_whitespace() {
+            if !cls.is_empty() {
+                classes.push(cls);
+            }
+        }
+        search_from = consumed;
+    }
+    classes
+}
+
 fn parse_css_font_weight(value: &str) -> Option<FontWeight> {
     match value.trim().to_ascii_lowercase().as_str() {
         "bold" | "700" => Some(FontWeight::BOLD),
@@ -880,7 +1364,8 @@ fn looks_like_url(after_paren: &str) -> bool {
 mod tests {
     use super::{
         focus_styled_html_lines, highlight_styled_html_lines, normalize_clipboard_html_for_render,
-        parse_styled_html_lines, strip_html_links,
+        parse_embedded_stylesheet, parse_styled_html_lines, parse_styled_html_lines_full,
+        strip_html_links,
     };
     use gpui::{rgb, FontStyle, FontWeight};
 
@@ -1112,5 +1597,151 @@ mod tests {
             .iter()
             .filter(|span| span.background_color == Some(rgb(0x7ECBA3)))
             .all(|span| span.color == Some(rgb(0xFFFFFF))));
+    }
+
+    #[test]
+    fn class_selector_styles_cell_text() {
+        // WPS sample aligned with `html_text::wps_class_style_survives_cf_html_round_trip`.
+        let html = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+        let map = parse_embedded_stylesheet(html);
+        assert!(map.contains_key(".et2"));
+        let lines = parse_styled_html_lines_full(html).unwrap();
+
+        assert_eq!(lines.len(), 1);
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "测试文本");
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|span| span.color == Some(rgb(0xFF6600))));
+    }
+
+    #[test]
+    fn inline_style_overrides_class_rule() {
+        let html = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2 style="color:#00ff00">测试文本</td></tr></table></body></html>"#;
+        let lines = parse_styled_html_lines_full(html).unwrap();
+
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "测试文本");
+        let span = lines
+            .iter()
+            .flatten()
+            .find(|s| s.text == "测试文本")
+            .unwrap();
+        assert_eq!(span.color, Some(rgb(0x00FF00)));
+    }
+
+    #[test]
+    fn external_stylesheet_and_at_rules_ignored() {
+        let html = r#"<html><head><link rel=stylesheet href="http://example.com/x.css"><style>@media screen { .et2 { color: #ff6600; } } @font-face { font-family: "X"; src: url(x.woff); }</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+        // `@media` inner `.et2` must NOT apply; the external `<link>` is
+        // never parsed or fetched.
+        let map = parse_embedded_stylesheet(html);
+        assert!(map.is_empty());
+        assert!(parse_styled_html_lines_full(html).is_none());
+    }
+
+    #[test]
+    fn complex_selectors_ignored() {
+        let html = r#"<html><head><style>p:hover { color: #ff0000; } #id { color: #00ff00; } .a.b { color: #0000ff; } td[colspan] { color: #ffff00; } div p { color: #ff00ff; }</style></head><body><table><tr><td class=a>测试文本</td></tr></table></body></html>"#;
+        // Pseudo-selectors, IDs, compound/attribute/descendant selectors
+        // reject the whole rule, so nothing applies.
+        assert!(parse_styled_html_lines_full(html).is_none());
+    }
+
+    #[test]
+    fn comment_wrapped_stylesheet_parses() {
+        let html = r#"<html><head><style><!-- .et2 { color:#ff6600 } --></style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+        let lines = parse_styled_html_lines_full(html).unwrap();
+
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|span| span.color == Some(rgb(0xFF6600))));
+    }
+
+    #[test]
+    fn important_stripped() {
+        let html = r#"<html><head><style>.et2 { color:#ff6600 !important }</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+        let lines = parse_styled_html_lines_full(html).unwrap();
+
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|span| span.color == Some(rgb(0xFF6600))));
+    }
+
+    #[test]
+    fn truncated_style_block_degrades_gracefully() {
+        // Unclosed `<style>` / `{`: no panic, no garbage text, degrades to None.
+        let truncated = r#"<html><head><style>.et2 { color: #ff6600"#;
+        assert!(parse_styled_html_lines_full(truncated).is_none());
+
+        // A complete rule before a truncated one still applies.
+        let partial = r#"<html><head><style>.et2 { color: #ff6600; } .broken { font-weight: bold</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+        let lines = parse_styled_html_lines_full(partial).unwrap();
+        let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "测试文本");
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|span| span.color == Some(rgb(0xFF6600))));
+    }
+
+    #[test]
+    fn no_stylesheet_keeps_legacy_behavior() {
+        // The full entry without a `<style>` block must produce the same
+        // spans as the frozen legacy parser.
+        type SpanFingerprint = (
+            String,
+            Option<gpui::Rgba>,
+            Option<FontWeight>,
+            Option<FontStyle>,
+            Option<gpui::Rgba>,
+        );
+
+        let html = r#"<p><span style='color:#ff0000'>带超链接的文字</span></p>"#;
+        let legacy = parse_styled_html_lines(html).unwrap();
+        let full = parse_styled_html_lines_full(html).unwrap();
+
+        let legacy_spans: Vec<SpanFingerprint> = legacy
+            .iter()
+            .flatten()
+            .map(|s| {
+                (
+                    s.text.clone(),
+                    s.color,
+                    s.font_weight,
+                    s.font_style,
+                    s.background_color,
+                )
+            })
+            .collect();
+        let full_spans: Vec<SpanFingerprint> = full
+            .iter()
+            .flatten()
+            .map(|s| {
+                (
+                    s.text.clone(),
+                    s.color,
+                    s.font_weight,
+                    s.font_style,
+                    s.background_color,
+                )
+            })
+            .collect();
+        assert_eq!(legacy_spans, full_spans);
+    }
+
+    #[test]
+    fn tr_tag_breaks_line() {
+        let html = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2>第一行</td><td>第二格</td></tr><tr><td class=et2>第三行</td></tr></table></body></html>"#;
+        let lines = parse_styled_html_lines_full(html).unwrap();
+
+        let rows: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|s| s.text.as_str()).collect())
+            .collect();
+        assert_eq!(rows, vec!["第一行第二格", "第三行"]);
     }
 }

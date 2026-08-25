@@ -148,6 +148,7 @@ mod info_row_tests {
         rich_preview, visible_tag_count, RichPreview,
     };
     use crate::core::types::{ClipboardItem, ContentType, RichData};
+    use gpui::rgb;
 
     fn rich_item(text: &str, rich: RichData) -> ClipboardItem {
         ClipboardItem::new_text(1, text, ContentType::RichText, None, Some(&rich))
@@ -272,6 +273,30 @@ mod info_row_tests {
         match rich_preview(&item) {
             RichPreview::Plain(text) => assert_eq!(text, "plain fallback text"),
             _ => panic!("expected plain text fallback"),
+        }
+    }
+
+    #[test]
+    fn wps_class_styled_cell_renders_styled_preview() {
+        // WPS table cell styled through a `<style>` class selector
+        // (`.et2` applied to `<td>`) → styled span preview, not plain text.
+        let html = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;
+        let item = rich_item(
+            "测试文本",
+            RichData {
+                html: Some(html.to_string()),
+                ..Default::default()
+            },
+        );
+
+        match rich_preview(&item) {
+            RichPreview::StyledHtml { lines, .. } => {
+                assert!(lines
+                    .iter()
+                    .flatten()
+                    .any(|span| span.color == Some(rgb(0xFF6600))));
+            }
+            _ => panic!("expected styled html preview"),
         }
     }
 
@@ -915,9 +940,12 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
     match item.display_kind() {
         DisplayKind::Html => {
             let rich = RichData::from_json(&item.rich_data);
-            let html = rich.html.clone().unwrap_or_else(|| item.full_text.clone());
-            let html = rich_preview::normalize_clipboard_html_for_render(&html);
-            let visible_text = html_text::visible_text(&html);
+            let raw_html = rich.html.clone().unwrap_or_else(|| item.full_text.clone());
+            // The full entry parses the *raw* document (including `<head>` /
+            // `<style>`); normalization is used only for `visible_text` and
+            // the `TextView::html` fallback.
+            let normalized = rich_preview::normalize_clipboard_html_for_render(&raw_html);
+            let visible_text = html_text::visible_text(&normalized);
             // Defensive fallback chain (HTML → RTF → plain text): when the
             // HTML fragment carries no visible text (empty fragment,
             // metadata-only body, unparseable markup), try the same item's
@@ -925,13 +953,13 @@ fn rich_preview(item: &ClipboardItem) -> RichPreview {
             if visible_text.is_empty() {
                 return rtf_fallback_preview(&rich, item);
             }
-            if let Some(lines) = rich_preview::parse_styled_html_lines(&html) {
+            if let Some(lines) = rich_preview::parse_styled_html_lines_full(&raw_html) {
                 return RichPreview::StyledHtml {
                     lines,
                     visible_text,
                 };
             }
-            RichPreview::Html(rich_preview::strip_html_links(&html))
+            RichPreview::Html(rich_preview::strip_html_links(&normalized))
         }
         DisplayKind::Markdown => {
             RichPreview::Markdown(rich_preview::strip_markdown_links(&item.full_text))
