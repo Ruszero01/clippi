@@ -481,6 +481,24 @@ pub struct WindowManager {
     quick_hwnd: isize,
     #[cfg(target_os = "macos")]
     quick_ns_window: isize,
+    // --- Monitor topology cache (issue-75 P2, Windows only) ---
+    /// Last seen monitor snapshot; compared every 200 ms poll to detect
+    /// topology / work-area changes (04-spec C1). Seeded on the first poll
+    /// without reacting.
+    #[cfg(target_os = "windows")]
+    last_monitor_snapshot: Option<monitor::MonitorSnapshot>,
+    /// Bumped on every detected topology change. Async migration tasks
+    /// capture it and abort when a newer change superseded them, so rapid
+    /// re-plug sequences never apply stale positions (04-spec C5).
+    #[cfg(target_os = "windows")]
+    topology_generation: u64,
+    /// Keeps the in-flight async monitor-migration positioning tasks alive
+    /// (dropping a `Task` cancels it). One slot per window — main and quick
+    /// are never visible simultaneously.
+    #[cfg(target_os = "windows")]
+    _main_monitor_migration_task: Option<Task<()>>,
+    #[cfg(target_os = "windows")]
+    _quick_monitor_migration_task: Option<Task<()>>,
     // --- System tray ---
     tray: Option<TrayManager>,
 
@@ -622,6 +640,14 @@ impl WindowManager {
             quick_hwnd: 0,
             #[cfg(target_os = "macos")]
             quick_ns_window: 0,
+            #[cfg(target_os = "windows")]
+            last_monitor_snapshot: None,
+            #[cfg(target_os = "windows")]
+            topology_generation: 0,
+            #[cfg(target_os = "windows")]
+            _main_monitor_migration_task: None,
+            #[cfg(target_os = "windows")]
+            _quick_monitor_migration_task: None,
             _poll_task: None,
             #[cfg(target_os = "windows")]
             _main_show_task: None,
@@ -748,6 +774,13 @@ impl WindowManager {
         // 7. Capture window geometry for persistence
         self.capture_window_geometry(cx);
         self.poll_geometry_flush(cx);
+
+        // --- 7b. Monitor topology change detection (Windows, issue-75 C1) ---
+        // Periodic snapshot comparison inside the single 200 ms poll loop —
+        // no second UI polling loop. Reacts only to actual topology /
+        // work-area changes; hidden windows stay hidden (C2).
+        #[cfg(target_os = "windows")]
+        self.poll_monitor_topology(cx);
 
         // --- 8. Cloud sync ---
         self.poll_sync(cx);
@@ -1936,6 +1969,316 @@ impl WindowManager {
         })
     }
 
+    // --- Monitor topology change handling (issue-75 P2, Windows only) ---
+    //
+    // Poll step 7b detects topology / work-area changes by comparing a cached
+    // snapshot against a fresh enumeration, then — for already-visible
+    // windows only — migrates them onto a remaining monitor (C3) and
+    // re-applies the quick window's design bounds (C4). None of these paths
+    // calls any show/focus entry (`show_and_focus` / `show_quick_window`,
+    // AC1) and none writes the visibility state bits (C2).
+
+    /// Current dynamic quick-window height from the visible bars, with the
+    /// `QUICK_WINDOW_WIDTH` × `calc_quick_window_height` semantics unchanged
+    /// (04-spec C4).
+    fn current_quick_height(&self, cx: &mut Context<Self>) -> f32 {
+        let state = self.state.read(cx);
+        let pinned_tag_ids = &state.settings.pinned_tag_ids;
+        let tags = &state.tags;
+        let has_tag = pinned_tag_ids
+            .iter()
+            .any(|&id| tags.iter().any(|t| t.id == id));
+        let has_type = !state.settings.type_filter_config.is_empty();
+        calc_quick_window_height(has_tag, has_type)
+    }
+
+    /// C4 terminal positioning fallback for the quick window: when the caret /
+    /// cursor monitor queries fail, resolve a deterministic position through
+    /// the C3 fallback chain from a fresh monitor snapshot. Never returns
+    /// `(0,0)`; `None` means no remaining monitor yields a valid target, in
+    /// which case the caller keeps the window hidden (04-spec §4).
+    #[cfg(target_os = "windows")]
+    fn quick_position_c3_fallback(&self, quick_h: f32) -> Option<(i32, i32)> {
+        let snapshot = monitor::enumerate_monitors()?;
+        if snapshot.is_empty() {
+            return None;
+        }
+        let target = monitor::pick_migration_target(&snapshot.monitors, monitor::get_cursor_pos())?;
+        let scale = monitor::get_scale_factor(target.x, target.y);
+        let win_w = (QUICK_WINDOW_WIDTH * scale) as i32;
+        let win_h = (quick_h * scale) as i32;
+        Some(clamp_to_work_area(
+            target.x, target.y, win_w, win_h, &target,
+        ))
+    }
+
+    /// Poll step 7b: compare the cached monitor snapshot with a fresh
+    /// enumeration and react to actual topology / work-area changes (C1:
+    /// disconnect, turn-off, signal loss, reconnect, resolution / work-area
+    /// change). The snapshot is deterministic (position-sorted, P1), so an
+    /// unchanged topology always compares equal and produces no reaction.
+    #[cfg(target_os = "windows")]
+    fn poll_monitor_topology(&mut self, cx: &mut Context<Self>) {
+        let Some(snapshot) = monitor::enumerate_monitors() else {
+            // Enumeration failure: keep the cached snapshot — a transient
+            // failure must not be treated as "no monitors".
+            log::warn!("monitor topology: EnumDisplayMonitors failed; keeping last snapshot");
+            return;
+        };
+
+        let Some(previous) = &self.last_monitor_snapshot else {
+            // First poll: seed the cache without reacting — there is no
+            // baseline to compare against yet.
+            self.last_monitor_snapshot = Some(snapshot);
+            return;
+        };
+
+        if previous == &snapshot {
+            return;
+        }
+
+        log::info!(
+            "monitor topology changed: {} monitor(s) now (was {})",
+            snapshot.monitors.len(),
+            previous.monitors.len()
+        );
+        self.topology_generation = self.topology_generation.wrapping_add(1);
+        let generation = self.topology_generation;
+        self.last_monitor_snapshot = Some(snapshot.clone());
+
+        // C2: read-only visibility branches — hidden windows stay hidden.
+        if self.visible {
+            self.migrate_main_window_on_topology_change(&snapshot, generation, cx);
+        }
+        if self.quick_visible {
+            self.reapply_quick_window_on_topology_change(&snapshot, generation, cx);
+        }
+    }
+
+    /// C3: when the visible main window's bounds no longer overlap any
+    /// remaining monitor work area, migrate it onto the deterministic
+    /// fallback target (cursor monitor → primary → first remaining) using
+    /// the existing `clamp_to_work_area` primitive and the async
+    /// `cx.spawn()` + yield `SetWindowPos` pattern (never inside an entity
+    /// update — Windows DPI re-entrancy). With no remaining monitor the
+    /// window keeps its position and no positioning happens (04-spec §4).
+    #[cfg(target_os = "windows")]
+    fn migrate_main_window_on_topology_change(
+        &mut self,
+        snapshot: &monitor::MonitorSnapshot,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+        if self.hwnd == 0 {
+            return;
+        }
+        let hwnd = self.hwnd as *mut std::ffi::c_void;
+
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+            log::warn!("monitor topology: GetWindowRect failed for main window");
+            return;
+        }
+        let bounds = monitor::MonitorRect {
+            x: rect.left,
+            y: rect.top,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+        };
+        if !bounds.is_valid() {
+            return;
+        }
+
+        if !monitor::window_needs_migration(&bounds, &snapshot.work_areas()) {
+            return; // still overlaps a remaining work area — nothing to do.
+        }
+
+        let cursor = monitor::get_cursor_pos();
+        let Some(target) = monitor::pick_migration_target(&snapshot.monitors, cursor) else {
+            log::warn!(
+                "monitor topology: no remaining monitor work area; leaving main window at ({},{})",
+                bounds.x,
+                bounds.y
+            );
+            return;
+        };
+
+        let (x, y) = clamp_to_work_area(bounds.x, bounds.y, bounds.width, bounds.height, &target);
+        log::info!(
+            "monitor topology: migrating main window ({},{}) → ({},{})",
+            bounds.x,
+            bounds.y,
+            x,
+            y
+        );
+
+        let hwnd_isize = self.hwnd;
+        self._main_monitor_migration_task = Some(cx.spawn(async move |weak_self, cx| {
+            // Yield until the poll update has released GPUI's AppCell borrow
+            // so synchronous WM_DPICHANGED / WM_SIZE / WM_MOVE callbacks can
+            // re-borrow (Windows DPI re-entrancy).
+            Timer::after(Duration::from_millis(1)).await;
+
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let should_move = this
+                .update(cx, |wm, _cx| {
+                    wm.visible && wm.hwnd == hwnd_isize && wm.topology_generation == generation
+                })
+                .unwrap_or(false);
+            if !should_move || hwnd_isize == 0 {
+                return;
+            }
+
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE,
+            };
+            let hwnd = hwnd_isize as *mut std::ffi::c_void;
+            // SAFETY: `hwnd` is our own main window. SWP_NOACTIVATE keeps the
+            // foreground app and SWP_NOSIZE preserves the GPUI-managed size —
+            // only the position changes.
+            unsafe {
+                SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
+            }
+        }));
+    }
+
+    /// C4: after a topology change, re-apply the quick window's design bounds
+    /// (`QUICK_WINDOW_WIDTH` × dynamic height) and, when its current bounds
+    /// are off every remaining work area, migrate it through the C3 fallback
+    /// chain. Uses the existing two-phase async positioning pattern
+    /// (`position_quick_window_windows`), never a synchronous native call.
+    #[cfg(target_os = "windows")]
+    fn reapply_quick_window_on_topology_change(
+        &mut self,
+        snapshot: &monitor::MonitorSnapshot,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+        if self.quick_hwnd == 0 {
+            return;
+        }
+        let quick_hwnd = self.quick_hwnd;
+        let hwnd = quick_hwnd as *mut std::ffi::c_void;
+
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let bounds = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
+            monitor::MonitorRect {
+                x: rect.left,
+                y: rect.top,
+                width: rect.right - rect.left,
+                height: rect.bottom - rect.top,
+            }
+        } else {
+            log::warn!("monitor topology: GetWindowRect failed for quick window");
+            return;
+        };
+
+        let quick_h = self.current_quick_height(cx);
+
+        // Keep the current top-left when it still overlaps a remaining work
+        // area; otherwise pick the C3 fallback target (cursor monitor →
+        // primary → first remaining). No remaining monitor → keep position,
+        // no positioning (04-spec §4).
+        let (x, y) = if monitor::window_needs_migration(&bounds, &snapshot.work_areas()) {
+            let cursor = monitor::get_cursor_pos();
+            match monitor::pick_migration_target(&snapshot.monitors, cursor) {
+                Some(target) => {
+                    let pos = clamp_to_work_area(
+                        bounds.x,
+                        bounds.y,
+                        bounds.width,
+                        bounds.height,
+                        &target,
+                    );
+                    log::info!(
+                        "monitor topology: migrating quick window ({},{}) → ({},{})",
+                        bounds.x,
+                        bounds.y,
+                        pos.0,
+                        pos.1
+                    );
+                    pos
+                }
+                None => {
+                    log::warn!(
+                        "monitor topology: no remaining monitor work area; leaving quick window at ({},{})",
+                        bounds.x,
+                        bounds.y
+                    );
+                    (bounds.x, bounds.y)
+                }
+            }
+        } else {
+            (bounds.x, bounds.y)
+        };
+
+        let target_sf = monitor::get_scale_factor(x, y);
+        let quick_window = self.quick_window;
+        self._quick_monitor_migration_task = Some(cx.spawn(async move |weak_self, cx| {
+            // Yield until the poll update has released GPUI's AppCell borrow.
+            Timer::after(Duration::from_millis(1)).await;
+
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let should_position = this
+                .update(cx, |wm, _cx| {
+                    wm.quick_visible
+                        && wm.quick_hwnd == quick_hwnd
+                        && wm.topology_generation == generation
+                })
+                .unwrap_or(false);
+            if !should_position || quick_hwnd == 0 {
+                return;
+            }
+
+            // Phase 1: place with the window's current DPI so WM_DPICHANGED
+            // can update GPUI before the final size compensation.
+            let current_sf =
+                unsafe { GetDpiForWindow(quick_hwnd as *mut std::ffi::c_void) } as f32 / 96.0;
+            position_quick_window_windows(quick_hwnd, x, y, quick_h, current_sf, false);
+
+            // Phase 2: enforce the target-monitor client size with the frame
+            // insets measured after the DPI change (two-phase pattern).
+            Timer::after(Duration::from_millis(1)).await;
+            let should_finish = this
+                .update(cx, |wm, _cx| {
+                    wm.quick_visible
+                        && wm.quick_hwnd == quick_hwnd
+                        && wm.topology_generation == generation
+                })
+                .unwrap_or(false);
+            if !should_finish {
+                return;
+            }
+
+            position_quick_window_windows(quick_hwnd, x, y, quick_h, target_sf, true);
+
+            if let Some(handle) = quick_window {
+                let _ = cx.update_window(handle, |_, window, _cx| window.refresh());
+            }
+        }));
+    }
+
     /// Prepare for graceful shutdown: save geometry, flush WAL,
     /// release platform resources.
     fn prepare_shutdown(&mut self, cx: &mut Context<Self>) {
@@ -2718,27 +3061,25 @@ impl WindowManager {
             hotkey.set_quick_actions_enabled(true);
         }
 
-        // Compute dynamic window height based on visible bars
-        let quick_h = {
-            let state = self.state.read(cx);
-            let pinned_tag_ids = &state.settings.pinned_tag_ids;
-            let tags = &state.tags;
-            let has_tag = pinned_tag_ids
-                .iter()
-                .any(|&id| tags.iter().any(|t| t.id == id));
-            let has_type = !state.settings.type_filter_config.is_empty();
-            calc_quick_window_height(has_tag, has_type)
-        };
+        // Compute dynamic window height based on visible bars (C4: semantics
+        // of QUICK_WINDOW_WIDTH × calc_quick_window_height unchanged).
+        let quick_h = self.current_quick_height(cx);
 
-        // Positioning priority: Caret (Path A/B) → Cursor (Path D) → raw cursor
-        // Never fall back to window-centered positioning — the window
-        // must follow the text caret or the mouse, never the screen center.
-        let (x, y) = self
-            .calculate_quick_position(quick_h)
-            .or_else(|| {
-                // calculate_quick_position already tries cursor as Path D;
-                // reaching here means even GetCursorPos failed (extremely rare).
-                // Try one more time directly as a last resort.
+        // Positioning priority: Caret (Path A/B) → Cursor (Path D) → C3
+        // fallback chain (issue-75 C4). Never fall back to window-centered
+        // positioning — the window must follow the text caret or the mouse.
+        // On Windows the terminal fallback resolves a deterministic position
+        // from a fresh monitor snapshot; when no remaining monitor yields a
+        // valid target the quick window stays hidden (04-spec §4 — never
+        // (0,0)). On macOS/Linux the pre-issue-75 raw-cursor fallback is
+        // preserved unchanged (C6).
+        let Some((x, y)) = self.calculate_quick_position(quick_h).or_else(|| {
+            #[cfg(target_os = "windows")]
+            {
+                self.quick_position_c3_fallback(quick_h)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
                 let (cx, cy) = monitor::get_cursor_pos().unwrap_or((0, 0));
                 log::debug!(
                     "show_quick_window: positioning fallback, raw cursor=({},{})",
@@ -2746,8 +3087,15 @@ impl WindowManager {
                     cy
                 );
                 Some((cx, cy))
-            })
-            .unwrap_or((0, 0));
+            }
+        }) else {
+            log::warn!(
+                "show_quick_window: no valid monitor for positioning (C4 fallback chain exhausted); keeping quick window hidden"
+            );
+            self.quick_suppress_until = None;
+            self.hide_quick_window(cx);
+            return;
+        };
 
         #[cfg(target_os = "macos")]
         {
