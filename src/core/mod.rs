@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod i18n_keys;
 pub mod migration;
 pub mod ocr;
+pub mod paste_plain;
 pub mod paths;
 pub mod qr;
 pub mod search;

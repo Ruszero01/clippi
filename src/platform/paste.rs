@@ -15,8 +15,8 @@ use windows_sys::Win32::System::Threading::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-    VK_CONTROL, VK_INSERT, VK_SHIFT, VK_V,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, VK_CONTROL, VK_INSERT, VK_SHIFT, VK_V,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -274,6 +274,37 @@ fn is_extended_key(vk: u16) -> bool {
 /// Send the paste keystroke via SendInput.
 #[cfg(target_os = "windows")]
 fn send_paste_keystroke(shortcut: &PasteShortcut) {
+    // A global hotkey (e.g. Alt+Shift+V) fires while its modifier keys are still
+    // physically held, so a naive Ctrl+V is delivered as Alt+Shift+Ctrl+V — which
+    // most apps ignore. That's why the user has to hold then release the combo
+    // together for the paste to land. Release any currently-held modifier that is
+    // NOT part of the paste shortcut first, so the injected paste is always clean.
+    let extra_held: Vec<u16> = [VK_CONTROL, VK_SHIFT, VK_MENU_KEY, VK_LWIN_KEY]
+        .into_iter()
+        .filter(|vk| {
+            !shortcut.modifiers.contains(vk) && unsafe { GetAsyncKeyState(*vk as i32) } < 0
+        })
+        .collect();
+    if !extra_held.is_empty() {
+        // SAFETY: `SendInput` with a fully-initialised INPUT array is the standard
+        // Windows API for synthesizing keyboard input.
+        unsafe {
+            let mut releases: Vec<INPUT> =
+                (0..extra_held.len()).map(|_| std::mem::zeroed()).collect();
+            for (i, &vk) in extra_held.iter().enumerate() {
+                set_key_input(&mut releases[i], vk, true);
+            }
+            SendInput(
+                releases.len() as u32,
+                releases.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            );
+        }
+        // Let the target process the released modifiers (e.g. leave the "Alt
+        // menu" accelerator mode) before the paste keystroke is injected.
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+
     // SAFETY: `SendInput` with a correctly-initialised INPUT array is the standard
     // Windows API for synthesizing keyboard input. All INPUT structs are fully
     // initialised via zeroed() + field assignment before the call, and the array

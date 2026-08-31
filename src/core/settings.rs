@@ -85,6 +85,10 @@ pub struct AppSettings {
     pub quick_hotkey: String,
     #[serde(default)]
     pub quick_hotkey_enabled: bool,
+    /// 「快捷粘贴纯文本」全局热键：空 = 禁用（不注册、不占用、触发无效），
+    /// 非空 = 注册并生效（spec §2）。TOML 标量，旧配置缺失时按空值加载。
+    #[serde(default)]
+    pub paste_plain_hotkey: String,
     pub auto_start: bool,
     pub auto_hide: bool,
     pub db_path: String,
@@ -263,6 +267,7 @@ impl Default for AppSettings {
             replace_system_win_v: false,
             quick_hotkey: default_quick_hotkey(),
             quick_hotkey_enabled: false,
+            paste_plain_hotkey: String::new(),
             auto_start: false,
             auto_hide: true,
             db_path: String::new(),
@@ -1274,6 +1279,48 @@ mod tests {
         let loaded: AppSettings = toml::from_str(&serialized).unwrap();
 
         assert!(loaded.search_favorites_first);
+    }
+
+    #[test]
+    fn missing_paste_plain_hotkey_defaults_to_empty() {
+        let serialized = toml::to_string(&AppSettings::default()).unwrap();
+        let legacy_config = serialized
+            .lines()
+            .filter(|line| !line.starts_with("paste_plain_hotkey ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed: AppSettings = toml::from_str(&legacy_config).unwrap();
+
+        assert!(parsed.paste_plain_hotkey.is_empty());
+    }
+
+    #[test]
+    fn paste_plain_hotkey_roundtrips_through_toml() {
+        let settings = AppSettings {
+            paste_plain_hotkey: "Alt+Shift+P".into(),
+            ..Default::default()
+        };
+        let serialized = toml::to_string(&settings).unwrap();
+        let loaded: AppSettings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(loaded.paste_plain_hotkey, "Alt+Shift+P");
+    }
+
+    #[test]
+    fn paste_plain_hotkey_follows_source_in_merge() {
+        // Scalar fields keep the `source` (current user) values in merge.
+        let source = AppSettings {
+            paste_plain_hotkey: "Alt+Shift+P".into(),
+            ..Default::default()
+        };
+        let target = AppSettings {
+            paste_plain_hotkey: "Ctrl+Shift+P".into(),
+            ..Default::default()
+        };
+
+        let merged = merge_configs(&source, &target, "/new/path/clippi.db");
+        assert_eq!(merged.paste_plain_hotkey, "Alt+Shift+P");
     }
 
     #[test]

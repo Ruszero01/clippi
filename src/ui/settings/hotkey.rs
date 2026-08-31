@@ -61,9 +61,31 @@ const LATEST_HOTKEY_POPUP_HEIGHT: f32 = 316.;
 const LATEST_HOTKEY_SLOT_WIDTH: f32 = 128.;
 const LATEST_HOTKEY_COLUMN_GAP: f32 = 12.;
 
+/// Optional presentation overrides for the shared recording card
+/// (`render_recording_card`). `Default` reproduces the legacy rendering
+/// element-for-element, so existing callers that pass `Default` keep their
+/// current output unchanged (spec §5 共享组件边界).
+#[derive(Clone, Copy, Default)]
+struct RecordingCardOptions {
+    /// Idle-state description shown in place of `HotkeyRecordingIdle`
+    /// (AC-12). `None` keeps the legacy "点击开始录制" text.
+    idle_desc: Option<I18nKey>,
+    /// Render the clear affordance as a neutral (non-`theme.danger`) text
+    /// button ("重置"/"清空") to the LEFT of the record button, shown only
+    /// while recording (AC-13). `false` keeps the legacy right-side
+    /// `theme.danger` red X. The clear callback semantics are unchanged in
+    /// both modes.
+    neutral_clear: bool,
+}
+
 impl SettingsPanel {
     /// Shared recording card: title + description + record button.
-    /// Used for both the main hotkey and quick hotkey cards.
+    /// Used for the main hotkey, quick hotkey and paste-plain hotkey cards.
+    /// `on_clear` is an optional clear affordance shown only while recording —
+    /// the idle card stays clean. `options` carries the optional AC-12/AC-13
+    /// presentation overrides; passing `RecordingCardOptions::default()`
+    /// renders exactly as before.
+    #[allow(clippy::too_many_arguments)]
     fn render_recording_card(
         title: I18nKey,
         hotkey_display: SharedString,
@@ -71,6 +93,8 @@ impl SettingsPanel {
         pending_single: Option<String>,
         theme: &ClippiTheme,
         on_click: impl Fn(&mut Window, &mut App) + 'static,
+        on_clear: Option<AppCallback>,
+        options: RecordingCardOptions,
     ) -> impl IntoElement {
         let waiting = pending_single.is_some();
         let waiting_color = rgb(0xeab308);
@@ -107,8 +131,18 @@ impl SettingsPanel {
         } else if recording {
             I18nKey::HotkeyPressToRecord.text()
         } else {
-            I18nKey::HotkeyRecordingIdle.text()
+            // AC-12: optional idle-state description replaces the legacy
+            // "点击开始录制" only when `idle_desc` is provided.
+            options
+                .idle_desc
+                .unwrap_or(I18nKey::HotkeyRecordingIdle)
+                .text()
         };
+        // Clear affordance (a text "重置" button for the paste-plain card) is
+        // shown only while recording, so the idle card stays clean. It is
+        // hidden during a pending single-key confirmation so it never competes
+        // with the confirm affordance.
+        let clear_btn = on_clear.filter(|_| recording && !waiting);
 
         div()
             .h(px(66.))
@@ -126,6 +160,11 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
+                    // Constrain the column only for cards with a description
+                    // override, so long AC-12 descriptions ellipsize instead
+                    // of overflowing. Existing callers (no override) keep the
+                    // legacy content-sized column.
+                    .when(options.idle_desc.is_some(), |d| d.flex_1().min_w(px(0.)))
                     .child(
                         div()
                             .text_size(px(12.))
@@ -137,39 +176,113 @@ impl SettingsPanel {
                         div()
                             .text_size(px(10.))
                             .text_color(desc_color)
+                            .when(options.idle_desc.is_some(), |d| {
+                                d.max_w_full()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                            })
                             .child(desc_text),
                     ),
             )
             .child(
                 div()
-                    .h(px(28.))
-                    .w(px(80.))
-                    .rounded(px(7.))
-                    .bg(recording_btn_bg)
                     .flex()
+                    .flex_row()
                     .items_center()
-                    .justify_center()
-                    .when(!recording || waiting, |d| {
-                        d.cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.opacity(0.85))
-                    })
-                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                        if recording && !waiting {
-                            return;
-                        }
-                        on_click(window, cx);
+                    .gap(px(6.))
+                    // AC-13: neutral text clear button rendered to the LEFT of
+                    // the record button when `neutral_clear` is set. Clicking it
+                    // still runs the exact same clear callback.
+                    .when(options.neutral_clear, |row| {
+                        row.when_some(clear_btn.clone(), |d, clear| {
+                            let neutral = theme.text_2;
+                            d.child(
+                                div()
+                                    .h(px(28.))
+                                    .px(px(10.))
+                                    .rounded(px(7.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| style.bg(neutral).opacity(0.15))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                        cx.stop_propagation();
+                                        clear(window, cx);
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(neutral)
+                                            .child(I18nKey::BtnReset.text()),
+                                    ),
+                            )
+                        })
                     })
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(recording_btn_text)
-                            .child(if let Some(candidate) = pending_single {
-                                I18nKey::HotkeyConfirmSingle.fmt(&[&candidate])
-                            } else {
-                                hotkey_display.to_string()
-                            }),
-                    ),
+                            .h(px(28.))
+                            .w(px(80.))
+                            .rounded(px(7.))
+                            .bg(recording_btn_bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(!recording || waiting, |d| {
+                                d.cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| style.opacity(0.85))
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                if recording && !waiting {
+                                    return;
+                                }
+                                on_click(window, cx);
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(recording_btn_text)
+                                    .child(if let Some(candidate) = pending_single {
+                                        I18nKey::HotkeyConfirmSingle.fmt(&[&candidate])
+                                    } else {
+                                        hotkey_display.to_string()
+                                    }),
+                            ),
+                    )
+                    // Legacy clear (X) — right of the record button, red
+                    // `theme.danger` style; the default for existing callers.
+                    .when(!options.neutral_clear, |row| {
+                        row.when_some(clear_btn, |d, clear| {
+                            let danger = theme.danger;
+                            d.child(
+                                div()
+                                    .w(px(22.))
+                                    .h(px(28.))
+                                    .rounded(px(7.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |style| style.bg(danger).opacity(0.15))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                        cx.stop_propagation();
+                                        clear(window, cx);
+                                    })
+                                    .child(
+                                        div()
+                                            .font_family("iconfont")
+                                            .text_size(px(9.))
+                                            .text_color(danger)
+                                            .child("\u{e7b7}"),
+                                    ),
+                            )
+                        })
+                    }),
             )
     }
 
@@ -548,6 +661,12 @@ impl SettingsPanel {
         let pending_single = app.pending_single_hotkey.clone();
         let blacklist = app.settings.hotkey_blacklist.clone();
         let paste_shortcuts = app.settings.paste_shortcuts.clone();
+        // 「快捷粘贴纯文本」hotkey: empty = disabled (spec §2). Snapshot both
+        // the value (for the display + clear affordance) and the recording flag.
+        let paste_plain_hotkey = app.settings.paste_plain_hotkey.clone();
+        let paste_plain_display = hotkey_display(&paste_plain_hotkey);
+        let has_paste_plain_hotkey = !paste_plain_hotkey.is_empty();
+        let recording_paste_plain = app.recording_paste_plain_hotkey;
         #[cfg(target_os = "windows")]
         let _replace_system_win_v = app.settings.replace_system_win_v;
         // borrow released
@@ -644,6 +763,8 @@ impl SettingsPanel {
                             }
                             this.update(cx, |_panel, cx| cx.notify());
                         },
+                        None,
+                        RecordingCardOptions::default(),
                     )
                     .into_any_element()
                 }
@@ -669,6 +790,8 @@ impl SettingsPanel {
                             }
                             this.update(cx, |_panel, cx| cx.notify());
                         },
+                        None,
+                        RecordingCardOptions::default(),
                     )
                     .into_any_element()
                 }
@@ -702,8 +825,57 @@ impl SettingsPanel {
                             }
                             this.update(cx, |_panel, cx| cx.notify());
                         },
+                        None,
+                        RecordingCardOptions::default(),
                     ))
                 }
+            })
+            // 1b2. Paste-plain hotkey recording card (spec §2: empty = disabled,
+            // recording reuses the shared flow, clear = immediate unregister).
+            .child({
+                let state = state.clone();
+                let wm = wm.clone();
+                let this = this.clone();
+                let theme = theme.clone();
+                // Empty state display mirrors the has_hotkey empty style
+                // (muted "点击录制" label instead of a blank button).
+                let display: SharedString = if has_paste_plain_hotkey {
+                    paste_plain_display.clone().into()
+                } else {
+                    I18nKey::LatestHotkeyClickRecord.text().into()
+                };
+                let clear_cb: Option<AppCallback> = has_paste_plain_hotkey.then(|| {
+                    let wm = wm.clone();
+                    let this = this.clone();
+                    let cb: AppCallback = Rc::new(move |_window, cx| {
+                        wm.update(cx, |wm, cx| wm.clear_paste_plain_hotkey(cx));
+                        this.update(cx, |_panel, cx| cx.notify());
+                    });
+                    cb
+                });
+                Self::render_recording_card(
+                    I18nKey::HotkeyPastePlainLabel,
+                    display,
+                    recording_paste_plain,
+                    pending_single.clone().filter(|_| recording_paste_plain),
+                    &theme,
+                    move |_window, cx| {
+                        if state.read(cx).recording_paste_plain_hotkey
+                            && state.read(cx).pending_single_hotkey.is_some()
+                        {
+                            wm.update(cx, |wm, cx| wm.confirm_pending_single_hotkey(cx));
+                        } else {
+                            state.update(cx, |s, _cx| s.recording_paste_plain_hotkey = true);
+                            wm.update(cx, |wm, cx| wm.start_paste_plain_hotkey_recording(cx));
+                        }
+                        this.update(cx, |_panel, cx| cx.notify());
+                    },
+                    clear_cb,
+                    RecordingCardOptions {
+                        idle_desc: Some(I18nKey::HotkeyPastePlainDesc),
+                        neutral_clear: true,
+                    },
+                )
             })
             // 1c. Win+V takeover toggle + status (Windows only)
             .when(cfg!(target_os = "windows"), {

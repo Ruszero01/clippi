@@ -1375,6 +1375,7 @@ impl WindowManager {
                     }
                 }
                 HotkeyEvent::QuickAction(action) => self.handle_quick_action(action, cx),
+                HotkeyEvent::PastePlain => self.paste_plain_from_clipboard(cx),
                 HotkeyEvent::CustomItem(item_id) => {
                     // Dismiss quick window if visible.
                     if self.quick_visible {
@@ -1416,6 +1417,78 @@ impl WindowManager {
                 }
             }
         }
+    }
+
+    /// 「快捷粘贴纯文本」触发（spec §3）：读取当前系统剪贴板 → §4 映射 →
+    /// 无操作则静默结束；否则纯文本写回（防自记录）→ 模拟粘贴。
+    /// 全程不弹出/隐藏/移动任何 Clippi 窗口、不抢占焦点（spec §3.2）。
+    fn paste_plain_from_clipboard(&mut self, cx: &mut Context<Self>) {
+        use crate::core::paste_plain::{
+            map_to_plain_paste, ClipboardContentClass, PastePlainDecision,
+        };
+        use crate::platform::clipboard::{
+            classify_clipboard_for_plain_paste, with_clipboard_context,
+        };
+
+        // §3.1 黑名单语义：前台应用命中「快捷键黑名单」（与主/快速热键一致，
+        // 该应用内不触发 Clippi）或 Clippi 自身前台时静默不执行。注意这里
+        // 用的是 hotkey_blacklist；剪贴板应用黑名单（clipboard_app_blacklist）
+        // 只控制内容是否记录，不参与本功能的执行闸门。poll_blacklist 的正常
+        // 注销是兜底，这里是竞态窗口内的显式闸门。
+        if self.is_paste_plain_trigger_blocked() {
+            log::debug!("paste-plain hotkey: trigger blocked (blacklist / self foreground)");
+            return;
+        }
+
+        // §3.3.1 只读判定：不触发图片落盘/缩略图/OCR/QR 等附带副作用（§3.4）。
+        let class = with_clipboard_context(classify_clipboard_for_plain_paste)
+            .unwrap_or(ClipboardContentClass::Empty);
+
+        // §3.3.2 映射；「无操作」→ 静默结束，不写剪贴板、不模拟粘贴（§4.3/§4.4）。
+        let PastePlainDecision::Paste(text) = map_to_plain_paste(class) else {
+            log::debug!("paste-plain hotkey: clipboard not mappable, no-op");
+            return;
+        };
+
+        // §3.3.3 纯文本写回，复用既有防自记录一次性标志（AC-6）。
+        let batch_pasting = self.clipboard_service.batch_pasting();
+        let skip_next = self.clipboard_service.skip_next();
+        let wrote = crate::state::app::AppState::with_internal_clipboard_write(
+            &batch_pasting,
+            &skip_next,
+            || crate::services::clipboard_ops::write_text_to_clipboard(&text),
+        );
+        if !wrote {
+            log::warn!("paste-plain hotkey: failed to write plain text back to clipboard");
+            return;
+        }
+
+        // 短验证，与既有粘贴路径一致；失败不回滚（§6.4 明确接受写回保留）。
+        crate::services::clipboard_ops::verify_clipboard_content(&text, 200);
+
+        // §3.3.4 复用模拟粘贴（含前台窗口焦点恢复）。粘贴失败时剪贴板保留已
+        // 写回的纯文本（§6.4），记日志、不弹窗。
+        //
+        // 必须用 `paste_after_delay`（后台线程）而非 `paste_sync`：本流程在
+        // Clippi 隐藏时由全局热键触发，前台是目标应用。`paste_sync` 会同步阻塞
+        // GPUI 主线程，期间 SetForegroundWindow 的前台切换无法被消息泵处理，
+        // 焦点校验超时后 Ctrl+V 落到非目标上下文，导致"剪贴板已写入但未粘贴"。
+        // 与全局热键粘贴（paste_item_plain / paste_as_rgb 等）保持一致的异步路径。
+        crate::platform::paste::restore_paste_target();
+        let shortcuts = std::sync::Arc::new(self.state.read(cx).settings.paste_shortcuts.clone());
+        crate::platform::paste::paste_after_delay(shortcuts);
+    }
+
+    /// §3.1 黑名单闸门：与 poll_blacklist 的判定一致（前台应用命中快捷键
+    /// 黑名单，或 Clippi 自身窗口在前台）。
+    fn is_paste_plain_trigger_blocked(&self) -> bool {
+        let fg_name = self
+            .foreground_app_name
+            .lock()
+            .ok()
+            .map(|fg| fg.clone())
+            .unwrap_or_default();
+        self.is_self_foreground() || (!fg_name.is_empty() && self.blacklist.contains(&fg_name))
     }
 
     /// Poll for hotkey recording completion.
@@ -1462,6 +1535,7 @@ impl WindowManager {
                         self.state.update(cx, |state, _cx| {
                             state.hotkey_recording = false;
                             state.recording_quick_hotkey = false;
+                            state.recording_paste_plain_hotkey = false;
                         });
                         cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
                         cx.notify();
@@ -1512,6 +1586,40 @@ impl WindowManager {
                     } else {
                         self.state.update(cx, |state, _cx| {
                             state.recording_quick_hotkey = false;
+                            state.pending_single_hotkey = None;
+                        });
+                    }
+                    cx.emit(WindowManagerEvent::HotkeyRecordingComplete);
+                    return;
+                }
+
+                // Check if recording for the paste-plain hotkey.
+                let recording_paste_plain = self.state.read(cx).recording_paste_plain_hotkey;
+                if recording_paste_plain {
+                    hk.finish_recording();
+                    hk.register();
+                    if !new_hotkey.is_empty() {
+                        match hk.update_paste_plain_hotkey(&new_hotkey) {
+                            Ok(()) => {
+                                self.state.update(cx, |state, _cx| {
+                                    state.settings.paste_plain_hotkey = new_hotkey;
+                                    state.settings.save();
+                                    state.recording_paste_plain_hotkey = false;
+                                });
+                            }
+                            Err(e) => {
+                                // Conflict / protected key — keep the previous
+                                // registration intact and notify (spec §6.3).
+                                self.state.update(cx, |state, _cx| {
+                                    state.toast_message = Some(e);
+                                    state.toast_is_warning = true;
+                                    state.recording_paste_plain_hotkey = false;
+                                });
+                            }
+                        }
+                    } else {
+                        self.state.update(cx, |state, _cx| {
+                            state.recording_paste_plain_hotkey = false;
                             state.pending_single_hotkey = None;
                         });
                     }
@@ -2835,6 +2943,12 @@ impl WindowManager {
                 .collect();
             hk.reload_custom_hotkeys(&item_hotkeys, &latest_hotkeys);
         }
+
+        // Register the paste-plain hotkey from persisted settings
+        // (empty = disabled; spec §2.1/§2.3). Conflicts surface as a toast and
+        // leave the hotkey unregistered — the existing registered hotkeys are
+        // never disturbed (spec §6.3).
+        self.reload_paste_plain_hotkey(cx);
 
         // After fallback hotkey is registered, attempt Win+V takeover if enabled.
         self.init_win_v_takeover(cx);
@@ -4497,6 +4611,67 @@ impl WindowManager {
         }
     }
 
+    /// Start recording the 「快捷粘贴纯文本」hotkey (spec §2.6).
+    /// The settings UI sets `AppState::recording_paste_plain_hotkey` before
+    /// calling this, mirroring the quick-hotkey card flow.
+    ///
+    /// Consumed by the settings hotkey tab (rites-ui, phase 1).
+    pub fn start_paste_plain_hotkey_recording(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut hk) = self.hotkey {
+            hk.unregister();
+            hk.start_recording();
+            self.start_recording_poll(cx);
+        }
+    }
+
+    /// Cancel a paste-plain hotkey recording — re-register the global hotkeys
+    /// and clear the recording flag.
+    ///
+    /// Currently unreferenced: recording cancel is handled by the poll's
+    /// `HotkeyRecordingPress::Cancel` branch and by
+    /// [`cancel_active_hotkey_recording`] (Esc in RootView), both of which
+    /// reset `recording_paste_plain_hotkey`. Kept as the public entry point
+    /// for any future UI cancel path (mirrors `start_paste_plain_hotkey_recording`).
+    #[allow(dead_code)]
+    pub fn cancel_paste_plain_hotkey_recording(&mut self, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, _cx| {
+            state.recording_paste_plain_hotkey = false;
+            state.pending_single_hotkey = None;
+        });
+        if let Some(ref mut hk) = self.hotkey {
+            hk.finish_recording();
+            hk.register();
+        }
+    }
+
+    /// Clear the paste-plain hotkey: unregister immediately and persist the
+    /// empty value (spec §2.4 清空即停用). Other hotkeys are unaffected.
+    ///
+    /// Consumed by the settings hotkey tab (rites-ui, phase 1).
+    pub fn clear_paste_plain_hotkey(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut hk) = self.hotkey {
+            let _ = hk.update_paste_plain_hotkey("");
+        }
+        self.state.update(cx, |state, _cx| {
+            state.settings.paste_plain_hotkey.clear();
+            state.settings.save();
+        });
+    }
+
+    /// Reload the paste-plain hotkey registration from settings (recording
+    /// commits via poll_recording; this covers external apply paths).
+    pub fn reload_paste_plain_hotkey(&mut self, cx: &mut Context<Self>) {
+        let hotkey = self.state.read(cx).settings.paste_plain_hotkey.clone();
+        if let Some(ref mut hk) = self.hotkey {
+            if let Err(e) = hk.update_paste_plain_hotkey(&hotkey) {
+                self.state.update(cx, |state, _cx| {
+                    state.toast_message = Some(e);
+                    state.toast_is_warning = true;
+                });
+            }
+        }
+    }
+
     /// Start recording a paste shortcut for the given app.
     pub fn start_paste_shortcut_recording(&mut self, app_name: String, cx: &mut Context<Self>) {
         self.recording_paste_shortcut_app = Some(app_name);
@@ -4595,6 +4770,7 @@ impl WindowManager {
         self.state.update(cx, |state, _cx| {
             state.hotkey_recording = false;
             state.recording_quick_hotkey = false;
+            state.recording_paste_plain_hotkey = false;
             state.pending_single_hotkey = None;
         });
         if let Some(ref mut hk) = self.hotkey {

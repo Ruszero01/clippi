@@ -4,6 +4,7 @@
 //! --- Files > Image (Image+RichText coexistence -> Text) > Link > Path > Color > Email/Phone > RichText > Markdown > PlainText ---
 
 use crate::core::color::detect_color;
+use crate::core::paste_plain::ClipboardContentClass;
 use crate::core::paths::images_dir;
 use crate::core::settings::capture_gate;
 use crate::core::types::{
@@ -607,6 +608,72 @@ fn clipboard_has_image(ctx: &ClipboardContext) -> bool {
     {
         ctx.has(ContentFormat::Image)
     }
+}
+
+/// Read-only clipboard classification for the 「快捷粘贴纯文本」hotkey (spec §4).
+///
+/// Unlike the capture path (`detect_clipboard_content`), this function only
+/// probes format availability and reads text/file payloads. It never persists
+/// images, generates thumbnails, or triggers OCR/QR (spec §3.4), and it never
+/// consults Clippi's persisted history — the data source is the current
+/// system clipboard only (spec §1.2, §9).
+///
+/// Priority (spec §4): file references → text/rich text (bitmap + HTML/RTF
+/// coexistence counts as text, AC-11) → bitmap only (no file reference, AC-5)
+/// → nothing recognizable.
+pub(crate) fn classify_clipboard_for_plain_paste(ctx: &ClipboardContext) -> ClipboardContentClass {
+    // Rule 2: file references (Windows CF_HDROP / macOS NSFilenames),
+    // including a single image file reference ("带路径图片"). Judgment is
+    // based on the file-reference format existing, never on a persisted path.
+    if ctx.has(ContentFormat::Files) {
+        if let Ok(files) = ctx.get_files() {
+            let paths: Vec<String> = files
+                .iter()
+                .filter(|path| !path.trim().is_empty())
+                .cloned()
+                .collect();
+            if !paths.is_empty() {
+                return ClipboardContentClass::Files(paths);
+            }
+        }
+    }
+
+    // Rule 1: text / rich text (plain text, HTML, RTF, links/colors/paths as
+    // text). Bitmap + HTML/RTF coexistence (WPS/Excel/OneNote) is text, and a
+    // bitmap alongside plain text is not "仅位图" either — rule 3 only covers
+    // a bitmap with no text and no file reference.
+    let has_text = ctx.has(ContentFormat::Text);
+    let has_rich = ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf);
+    if has_text || has_rich {
+        let text = if has_text {
+            ctx.get_text().ok().filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        let html_text = if has_rich {
+            read_clipboard_rich_data(ctx)
+                .and_then(|rich| rich.html)
+                .and_then(|html| {
+                    let visible = crate::core::html_text::visible_text(&html);
+                    (!visible.is_empty()).then_some(visible)
+                })
+        } else {
+            None
+        };
+        if let Some(text) = text.or(html_text) {
+            return ClipboardContentClass::Text(text);
+        }
+        // Text formats exist but produced nothing readable → rule 4.
+        return ClipboardContentClass::Empty;
+    }
+
+    // Rule 3: bitmap only, no file reference and no text → no-op (AC-5).
+    if clipboard_has_image(ctx) {
+        return ClipboardContentClass::BitmapOnly;
+    }
+
+    // Rule 4: nothing recognizable (empty / read failure).
+    ClipboardContentClass::Empty
 }
 
 /// 检查 Windows 剪贴板是否提供指定格式（不触发渲染）。

@@ -142,6 +142,8 @@ pub struct AppState {
     pub hotkey_recording: bool,
     /// Whether a quick-window hotkey recording is in progress.
     pub recording_quick_hotkey: bool,
+    /// Whether a paste-plain hotkey recording is in progress.
+    pub recording_paste_plain_hotkey: bool,
     /// Modifier-less key waiting for single-click confirmation or a second press.
     pub pending_single_hotkey: Option<String>,
     /// GPUI-facing sync status and backend snapshots.
@@ -365,6 +367,7 @@ impl AppState {
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
             recording_quick_hotkey: false,
+            recording_paste_plain_hotkey: false,
             pending_single_hotkey: None,
             sync,
             update_available: None,
@@ -1427,7 +1430,11 @@ impl AppState {
         }
     }
 
-    fn with_internal_clipboard_write<T>(
+    /// Run a clipboard write while suppressing history capture through the
+    /// shared `batch_pasting` / `skip_next` one-shot flags. Used by every
+    /// internal clipboard write (paste-as-*, re-copy, paste-plain hotkey) so
+    /// the listener never records the write as a new history entry (AC-6).
+    pub(crate) fn with_internal_clipboard_write<T>(
         batch_pasting: &Arc<AtomicBool>,
         skip_next: &Arc<AtomicBool>,
         operation: impl FnOnce() -> T,
@@ -2791,6 +2798,7 @@ mod tests {
             foreground_app_icon_base64: String::new(),
             hotkey_recording: false,
             recording_quick_hotkey: false,
+            recording_paste_plain_hotkey: false,
             pending_single_hotkey: None,
             sync: SyncState::default(),
             update_available: None,

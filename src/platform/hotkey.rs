@@ -16,6 +16,9 @@ const RECORDING_SINGLE_CONFIRM_DELAY: Duration = Duration::from_millis(1500);
 pub enum HotkeyEvent {
     Main,
     Quick,
+    /// 「快捷粘贴纯文本」hotkey triggered: read the current system clipboard,
+    /// map it to plain text (spec §4), write it back and paste.
+    PastePlain,
     QuickAction(QuickAction),
     /// Per-item custom hotkey activated, carries the item id.
     CustomItem(i64),
@@ -54,6 +57,11 @@ pub trait HotkeyListener {
     fn update_hotkey(&mut self, hotkey_str: &str) -> Result<(), String>;
     #[allow(dead_code)]
     fn update_quick_hotkey(&mut self, hotkey_str: &str) -> Result<(), String>;
+    /// Update the 「快捷粘贴纯文本」hotkey. An empty string disables it
+    /// (unregisters immediately, spec §2.4). Platform stubs no-op.
+    fn update_paste_plain_hotkey(&mut self, _hotkey_str: &str) -> Result<(), String> {
+        Ok(())
+    }
     fn start_recording(&mut self);
     fn finish_recording(&mut self);
     fn is_recording(&self) -> bool;
@@ -775,6 +783,14 @@ struct DesktopHotkeyListener {
     quick_registered: bool,
     quick_action_hotkeys: Vec<(QuickAction, HotKey)>,
     quick_actions_registered: bool,
+    /// 「快捷粘贴纯文本」hotkey (spec §2). Dummy F24 binding while disabled.
+    paste_plain_hotkey: HotKey,
+    /// True when a non-empty paste-plain hotkey is configured (survives the
+    /// blacklist unregister/register cycle).
+    paste_plain_enabled: bool,
+    /// Current OS registration state of the paste-plain hotkey.
+    paste_plain_registered: bool,
+    paste_plain_double_press: bool,
     /// Actual main hotkey string (may differ from config if fallback used).
     actual_main_hotkey: String,
     /// Actual quick hotkey string (may differ from config if fallback used).
@@ -894,6 +910,12 @@ impl DesktopHotkeyListener {
             quick_registered,
             quick_action_hotkeys: quick_action_hotkeys(),
             quick_actions_registered: false,
+            // Empty = disabled; the actual value is registered separately via
+            // `update_paste_plain_hotkey` (startup / recording / clear).
+            paste_plain_hotkey: HotKey::new(None, global_hotkey::hotkey::Code::F24),
+            paste_plain_enabled: false,
+            paste_plain_registered: false,
+            paste_plain_double_press: false,
             actual_main_hotkey: actual_main.clone(),
             actual_quick_hotkey: actual_quick.clone(),
             main_fallback_used: main_fallback,
@@ -922,6 +944,7 @@ impl DesktopHotkeyListener {
         ignore_latest_slot: Option<usize>,
         ignore_main: bool,
         ignore_quick: bool,
+        ignore_paste_plain: bool,
     ) -> bool {
         let id = hotkey.id();
         // Check against main hotkey.
@@ -930,6 +953,11 @@ impl DesktopHotkeyListener {
         }
         // Check against quick hotkey.
         if !ignore_quick && self.quick_enabled && self.quick_hotkey.id() == id {
+            return true;
+        }
+        // Check against the paste-plain hotkey.
+        if !ignore_paste_plain && self.paste_plain_registered && self.paste_plain_hotkey.id() == id
+        {
             return true;
         }
         // Check against item hotkeys.
@@ -1037,7 +1065,7 @@ impl HotkeyListener for DesktopHotkeyListener {
             return Ok(());
         }
         // Refuse to shadow the quick-window hotkey.
-        if self.is_conflicting_except(new_hotkey, None, None, true, false) {
+        if self.is_conflicting_except(new_hotkey, None, None, true, false, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         // Register the new hotkey *before* dropping the old one so a
@@ -1071,7 +1099,7 @@ impl HotkeyListener for DesktopHotkeyListener {
             return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
         }
         // Refuse to shadow the main hotkey.
-        if self.is_conflicting_except(new_hotkey, None, None, false, true) {
+        if self.is_conflicting_except(new_hotkey, None, None, false, true, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         if self.quick_registered && new_hotkey.id() == self.quick_hotkey.id() {
@@ -1092,6 +1120,46 @@ impl HotkeyListener for DesktopHotkeyListener {
         self.actual_quick_hotkey = hotkey_str.to_string();
         self.quick_enabled = true;
         self.quick_registered = true;
+        Ok(())
+    }
+
+    fn update_paste_plain_hotkey(&mut self, hotkey_str: &str) -> Result<(), String> {
+        // Empty string disables: unregister immediately (spec §2.4 清空即停用).
+        if hotkey_str.is_empty() {
+            if self.paste_plain_registered {
+                let _ = self.manager.unregister(self.paste_plain_hotkey);
+                self.paste_plain_registered = false;
+            }
+            self.paste_plain_enabled = false;
+            return Ok(());
+        }
+
+        let new_hotkey = parse_hotkey(hotkey_str)?;
+        if is_protected_single_hotkey(new_hotkey) {
+            return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
+        }
+        // Refuse to shadow any other Clippi hotkey (main/quick/item/latest).
+        // The current paste-plain binding itself is ignored so re-recording
+        // the same value stays a no-op (same pattern as quick hotkey).
+        if self.is_conflicting_except(new_hotkey, None, None, false, false, true) {
+            return Err(I18nKey::HotkeyConflictCustom.text().to_string());
+        }
+        if self.paste_plain_registered && new_hotkey.id() == self.paste_plain_hotkey.id() {
+            self.paste_plain_enabled = true;
+            self.paste_plain_double_press = is_double_hotkey(hotkey_str);
+            return Ok(());
+        }
+
+        // Register first so a conflict does not silently disable the previous
+        // working paste-plain hotkey (spec §6.3).
+        self.register_hotkey(new_hotkey)?;
+        if self.paste_plain_registered {
+            let _ = self.manager.unregister(self.paste_plain_hotkey);
+        }
+        self.paste_plain_hotkey = new_hotkey;
+        self.paste_plain_double_press = is_double_hotkey(hotkey_str);
+        self.paste_plain_enabled = true;
+        self.paste_plain_registered = true;
         Ok(())
     }
 
@@ -1143,6 +1211,10 @@ impl HotkeyListener for DesktopHotkeyListener {
             let _ = self.manager.unregister(self.quick_hotkey);
             self.quick_registered = false;
         }
+        if self.paste_plain_registered {
+            let _ = self.manager.unregister(self.paste_plain_hotkey);
+            self.paste_plain_registered = false;
+        }
         for binding in &mut self.item_hotkeys {
             if binding.registered {
                 let _ = self.manager.unregister(binding.hotkey);
@@ -1173,6 +1245,12 @@ impl HotkeyListener for DesktopHotkeyListener {
             match self.register_hotkey(self.quick_hotkey) {
                 Ok(()) => self.quick_registered = true,
                 Err(e) => log::error!("quick hotkey register failed: {e}"),
+            }
+        }
+        if self.paste_plain_enabled && !self.paste_plain_registered {
+            match self.register_hotkey(self.paste_plain_hotkey) {
+                Ok(()) => self.paste_plain_registered = true,
+                Err(e) => log::error!("paste-plain hotkey register failed: {e}"),
             }
         }
         let manager = &self.manager;
@@ -1210,6 +1288,8 @@ impl HotkeyListener for DesktopHotkeyListener {
                 Some((HotkeyEvent::Main, self.main_double_press))
             } else if self.quick_enabled && id == self.quick_hotkey.id() {
                 Some((HotkeyEvent::Quick, self.quick_double_press))
+            } else if self.paste_plain_enabled && id == self.paste_plain_hotkey.id() {
+                Some((HotkeyEvent::PastePlain, self.paste_plain_double_press))
             } else if let Some(binding) = self
                 .item_hotkeys
                 .iter()
@@ -1300,7 +1380,7 @@ impl HotkeyListener for DesktopHotkeyListener {
         if is_protected_single_hotkey(hk) {
             return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
         }
-        if self.is_conflicting_except(hk, Some(id), None, false, false) {
+        if self.is_conflicting_except(hk, Some(id), None, false, false, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         let existing = self
@@ -1355,7 +1435,7 @@ impl HotkeyListener for DesktopHotkeyListener {
         if is_protected_single_hotkey(hk) {
             return Err(I18nKey::HotkeyProtectedSingleKey.text().to_string());
         }
-        if self.is_conflicting_except(hk, None, Some(slot), false, false) {
+        if self.is_conflicting_except(hk, None, Some(slot), false, false, false) {
             return Err(I18nKey::HotkeyConflictCustom.text().to_string());
         }
         let existing = self
@@ -1425,7 +1505,7 @@ impl HotkeyListener for DesktopHotkeyListener {
         for &(id, ref s) in item_hotkeys {
             if let Ok(hk) = parse_hotkey(s) {
                 if !is_protected_single_hotkey(hk)
-                    && !self.is_conflicting_except(hk, None, None, false, false)
+                    && !self.is_conflicting_except(hk, None, None, false, false, false)
                     && self.manager.register(hk).is_ok()
                 {
                     self.item_hotkeys.push(ItemHotkeyBinding {
@@ -1440,7 +1520,7 @@ impl HotkeyListener for DesktopHotkeyListener {
         for &(slot, ref s) in latest_hotkeys {
             if let Ok(hk) = parse_hotkey(s) {
                 if !is_protected_single_hotkey(hk)
-                    && !self.is_conflicting_except(hk, None, None, false, false)
+                    && !self.is_conflicting_except(hk, None, None, false, false, false)
                     && self.manager.register(hk).is_ok()
                 {
                     self.latest_hotkeys.push(LatestHotkeyBinding {

@@ -439,6 +439,8 @@ define_i18n! {
 
     // ─── Hotkey settings ───
     HotkeyTabTitle:         ("快捷键", "Hotkey"),
+    HotkeyPastePlainLabel:  ("快捷粘贴纯文本", "Paste Plain Text"),
+    HotkeyPastePlainDesc:   ("将剪贴板内容以纯文本粘贴", "Paste clipboard content as plain text"),
     HotkeyNoForeground:     ("无前台应用", "No foreground app"),
     HotkeyPressToRecord:    ("按下新快捷键进行录制", "Press new hotkey to record"),
     HotkeyRecordingIdle:    ("点击开始录制", "Click to start recording"),
