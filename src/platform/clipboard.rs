@@ -867,22 +867,40 @@ fn detect_text_content(
     ctx: &ClipboardContext,
     source_info: &Option<SourceAppInfo>,
 ) -> Option<ClipboardItem> {
+    detect_text_content_with_readers(
+        ctx.has(ContentFormat::Text),
+        || ctx.get_text().ok(),
+        || read_clipboard_rich_data(ctx),
+        source_info,
+    )
+}
+
+fn detect_text_content_with_readers(
+    has_text: bool,
+    read_text: impl FnOnce() -> Option<String>,
+    read_rich: impl FnOnce() -> Option<RichData>,
+    source_info: &Option<SourceAppInfo>,
+) -> Option<ClipboardItem> {
     // Do not open the clipboard when there is no text. `get_text()` would
     // call `OpenClipboard`, which can race with a source app that is still
     // writing a large clipboard payload (e.g. FastStone's non-atomic
     // EmptyClipboard -> encode -> SetClipboardData sequence). Checking format
     // availability first is a non-blocking `IsClipboardFormatAvailable` call
     // that never opens the clipboard.
-    if !ctx.has(ContentFormat::Text) {
-        return None;
-    }
-    if let Ok(text) = ctx.get_text() {
-        if text.is_empty() {
-            return None;
-        }
-
-        let rich_data = read_clipboard_rich_data(ctx);
-
+    let text = has_text.then(read_text).flatten().filter(|s| !s.is_empty());
+    // HTML is an independent representation: a missing or unreadable plain
+    // text flavor must not discard a spreadsheet's HTML in favor of its bitmap.
+    // The rich reader checks format availability before opening the clipboard.
+    let rich_data = read_rich();
+    let text = text.or_else(|| {
+        rich_data
+            .as_ref()?
+            .html
+            .as_deref()
+            .map(crate::core::html_text::visible_text)
+            .filter(|text| !text.is_empty())
+    });
+    if let Some(text) = text {
         if is_url(&text) {
             // --- Prefetch favicon in background thread (non-critical) ---
             if let Some(host) = crate::core::secret::url_clean_host(&text) {
@@ -1705,6 +1723,89 @@ mod access_tests {
 
         first.join().unwrap();
         second.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod rich_capture_tests {
+    use super::*;
+    use crate::core::types::DisplayKind;
+
+    fn spreadsheet_rich_data() -> RichData {
+        let html = "<html><head><style>.et2{color:#ff6600}</style></head><body><!--StartFragment--><table><tr><td class=et2>测试文本</td><td>第二格</td></tr></table><!--EndFragment--></body></html>";
+        RichData {
+            html: Some(crate::core::html_text::preserve_clipboard_html_document(
+                &crate::core::html_text::encode_cf_html(html),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn spreadsheet_html_is_captured_without_plain_text_format() {
+        let rich = spreadsheet_rich_data();
+        let item = detect_text_content_with_readers(
+            false,
+            || panic!("an unavailable text format must not be read"),
+            || Some(rich.clone()),
+            &None,
+        )
+        .expect("HTML must be captured before falling back to a spreadsheet bitmap");
+        assert_eq!(item.display_kind(), DisplayKind::Html);
+        assert!(item.full_text.contains("测试文本"));
+        assert!(item.full_text.contains("第二格"));
+        assert!(!item.full_text.contains("color"));
+        assert_eq!(RichData::from_json(&item.rich_data).html, rich.html);
+    }
+
+    #[test]
+    fn spreadsheet_html_survives_empty_or_failed_plain_text_reads() {
+        for text in [None, Some(String::new())] {
+            let item = detect_text_content_with_readers(
+                true,
+                || text,
+                || Some(spreadsheet_rich_data()),
+                &None,
+            )
+            .expect("plain text failure must not discard readable HTML");
+            assert_eq!(item.display_kind(), DisplayKind::Html);
+            assert!(item.full_text.contains("测试文本"));
+        }
+    }
+
+    #[test]
+    fn spreadsheet_native_text_and_html_styles_are_preserved_together() {
+        let text = "测试文本\t第二格\r\n";
+        let rich = spreadsheet_rich_data();
+        let item = detect_text_content_with_readers(
+            true,
+            || Some(text.into()),
+            || Some(rich.clone()),
+            &None,
+        )
+        .unwrap();
+        assert_eq!(item.full_text, text);
+        assert_eq!(item.display_kind(), DisplayKind::Html);
+        assert_eq!(RichData::from_json(&item.rich_data).html, rich.html);
+    }
+
+    #[test]
+    fn absent_or_image_only_html_still_allows_image_capture() {
+        for rich in [
+            None,
+            Some(RichData {
+                html: Some("<html><body><img src='preview.png'></body></html>".into()),
+                ..Default::default()
+            }),
+        ] {
+            let item = detect_text_content_with_readers(
+                false,
+                || panic!("image-only clipboard must not read an unavailable text format"),
+                || rich,
+                &None,
+            );
+            assert!(item.is_none());
+        }
     }
 }
 
