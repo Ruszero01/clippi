@@ -26,6 +26,16 @@ pub struct MonitorRect {
     pub height: i32,
 }
 
+/// Cocoa and CoreGraphics use the primary display as their shared origin.
+/// `mainScreen` follows keyboard focus and must not be used for conversion.
+#[cfg(target_os = "macos")]
+pub(crate) fn primary_screen_height() -> Option<f64> {
+    let screens = objc2_app_kit::NSScreen::screens(objc2::MainThreadMarker::new()?);
+    screens
+        .firstObject()
+        .map(|screen| screen.frame().size.height)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn cocoa_rect_to_top_left(
     main_screen_height: f64,
@@ -105,10 +115,7 @@ pub fn get_monitor_work_area(x: i32, y: i32) -> Option<MonitorRect> {
     let mtm = objc2::MainThreadMarker::new()?;
 
     let screens = objc2_app_kit::NSScreen::screens(mtm);
-    let main_screen_height = objc2_app_kit::NSScreen::mainScreen(mtm)?
-        .frame()
-        .size
-        .height;
+    let main_screen_height = screens.firstObject()?.frame().size.height;
     let count = screens.count();
     let mut target_screen = None;
     for i in 0..count {
@@ -164,7 +171,7 @@ pub fn is_point_on_monitor(x: i32, y: i32) -> bool {
     };
 
     let screens = objc2_app_kit::NSScreen::screens(mtm);
-    let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
+    let Some(main_screen) = screens.firstObject() else {
         return false;
     };
     let main_screen_height = main_screen.frame().size.height;
@@ -447,24 +454,26 @@ unsafe extern "system" fn collect_monitor_info(
     let mut info: MONITORINFOEXW = std::mem::zeroed();
     info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
     let ok = unsafe { GetMonitorInfoW(hmonitor, &mut info.monitorInfo) };
-    if ok != 0 {
-        let mi = info.monitorInfo;
-        monitors.push(MonitorInfo {
-            rect: MonitorRect {
-                x: mi.rcMonitor.left,
-                y: mi.rcMonitor.top,
-                width: mi.rcMonitor.right - mi.rcMonitor.left,
-                height: mi.rcMonitor.bottom - mi.rcMonitor.top,
-            },
-            work_area: MonitorRect {
-                x: mi.rcWork.left,
-                y: mi.rcWork.top,
-                width: mi.rcWork.right - mi.rcWork.left,
-                height: mi.rcWork.bottom - mi.rcWork.top,
-            },
-            is_primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0,
-        });
+    // A partial snapshot during hot-plug is not a reliable topology change.
+    if ok == 0 {
+        return 0;
     }
+    let mi = info.monitorInfo;
+    monitors.push(MonitorInfo {
+        rect: MonitorRect {
+            x: mi.rcMonitor.left,
+            y: mi.rcMonitor.top,
+            width: mi.rcMonitor.right - mi.rcMonitor.left,
+            height: mi.rcMonitor.bottom - mi.rcMonitor.top,
+        },
+        work_area: MonitorRect {
+            x: mi.rcWork.left,
+            y: mi.rcWork.top,
+            width: mi.rcWork.right - mi.rcWork.left,
+            height: mi.rcWork.bottom - mi.rcWork.top,
+        },
+        is_primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0,
+    });
     TRUE
 }
 
@@ -476,18 +485,15 @@ unsafe extern "system" fn collect_monitor_info(
 pub fn enumerate_monitors() -> Option<MonitorSnapshot> {
     let mtm = objc2::MainThreadMarker::new()?;
     let screens = objc2_app_kit::NSScreen::screens(mtm);
-    let main_screen = objc2_app_kit::NSScreen::mainScreen(mtm)?;
+    let main_screen = screens.firstObject()?;
     let main_frame = main_screen.frame();
     let main_screen_height = main_frame.size.height;
     let count = screens.count();
-    let mut monitors = Vec::with_capacity(count as usize);
+    let mut monitors = Vec::with_capacity(count);
     for i in 0..count {
         let screen = screens.objectAtIndex(i);
         let frame = screen.frame();
-        let is_primary = frame.origin.x == main_frame.origin.x
-            && frame.origin.y == main_frame.origin.y
-            && frame.size.width == main_frame.size.width
-            && frame.size.height == main_frame.size.height;
+        let is_primary = i == 0;
         let visible = screen.visibleFrame();
         monitors.push(MonitorInfo {
             rect: cocoa_rect_to_top_left(

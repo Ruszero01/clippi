@@ -22,162 +22,11 @@ pub struct StyledHtmlSpan {
     pub background_color: Option<Rgba>,
 }
 
-/// Tags whose inline styles we track for inheritance. Closing tags
-/// pop the stack so styling is scoped correctly.
-// Only referenced by the frozen legacy `parse_styled_html_lines` (kept for
-// its regression tests); the full entry tracks every tag's frame instead.
-#[allow(dead_code)]
-fn is_style_container_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "span" | "a" | "font" | "b" | "strong" | "i" | "em" | "u"
-    )
-}
-
 /// Tags whose content must never become visible text. Word documents ship
 /// `<head>`/`<style>` blocks and Office XML whose text (font names, style
 /// rules) would otherwise leak into previews.
 fn is_non_visible_tag(tag: &str) -> bool {
     matches!(tag, "head" | "style" | "script" | "title" | "xml")
-}
-
-/// Parse an HTML string and extract styled lines with color, font-weight,
-/// font-style, and background-color from inline `style` attributes as well
-/// as classic HTML `color` attributes (e.g. `<font color="red">`).
-///
-/// Returns `None` when the HTML contains no recognised styles, so the caller
-/// can fall back to `TextView::html()`.
-///
-/// Frozen legacy entry point (04-spec §4.8): signature and body are
-/// unchanged; production callers use `parse_styled_html_lines_full`. Kept
-/// only for its existing regression tests.
-#[allow(dead_code)]
-pub fn parse_styled_html_lines(html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
-    let html_lower = html.to_ascii_lowercase();
-    if !html_lower.contains("style=")
-        && !html_lower.contains("color=")
-        && !html_lower.contains("<b")
-        && !html_lower.contains("<strong")
-        && !html_lower.contains("<i")
-        && !html_lower.contains("<em")
-    {
-        return None;
-    }
-
-    let mut lines: Vec<Vec<StyledHtmlSpan>> = vec![Vec::new()];
-    let mut style_stack: Vec<ParsedInlineStyle> = vec![ParsedInlineStyle::default()];
-    let mut found_style = false;
-    let mut idx = 0usize;
-    // Nesting depth of non-visible containers (`head`, `style`, `script`,
-    // `title`, `xml`). While > 0, no text, styles, or newlines are emitted.
-    let mut skip_depth = 0usize;
-
-    while idx < html.len() {
-        let rest = &html[idx..];
-        if let Some(tag_start_rel) = rest.find('<') {
-            let text = &rest[..tag_start_rel];
-            if skip_depth == 0 {
-                push_html_text(&mut lines, text, style_stack.last().unwrap());
-            }
-            idx += tag_start_rel;
-
-            let Some(tag_end_rel) = html[idx..].find('>') else {
-                break;
-            };
-            let tag = &html[idx + 1..idx + tag_end_rel];
-            let tag_lower = tag.trim().to_ascii_lowercase();
-
-            // HTML comments (including Word's conditional comments) are
-            // skipped as a unit so their inner markup never becomes visible
-            // text. The `>` found above may belong to a conditional-comment
-            // opener (`<!--[if gte mso 9]>`), so scan for the comment's own
-            // `-->` terminator from the comment start instead of reusing it —
-            // otherwise a second comment further down would swallow the
-            // visible text between two comments.
-            if tag_lower.starts_with("!--") {
-                idx += "<!--".len();
-                if let Some(rel) = html[idx..].find("-->") {
-                    idx += rel + "-->".len();
-                }
-                continue;
-            }
-
-            let is_closing = tag_lower.starts_with('/');
-            let tag_name = tag_lower.trim_start_matches('/');
-            let tag_name = tag_name
-                .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
-                .next()
-                .unwrap_or("");
-
-            if is_non_visible_tag(tag_name) {
-                if is_closing {
-                    skip_depth = skip_depth.saturating_sub(1);
-                } else {
-                    skip_depth += 1;
-                }
-                idx += tag_end_rel + 1;
-                continue;
-            }
-
-            if skip_depth > 0 {
-                idx += tag_end_rel + 1;
-                continue;
-            }
-
-            if is_closing {
-                // Closing tag — pop style stack for container tags
-                if is_style_container_tag(tag_name) && style_stack.len() > 1 {
-                    style_stack.pop();
-                }
-                if tag_lower.starts_with("/div")
-                    || tag_lower.starts_with("/p")
-                    || tag_lower.starts_with("/pre")
-                {
-                    push_newline(&mut lines);
-                }
-            } else {
-                // Opening tag — extract pure tag name
-                let tag_style = parse_inline_style(tag_name, tag);
-                found_style |= tag_style.has_any_style();
-
-                if is_style_container_tag(tag_name) {
-                    // Inherit from parent for properties not set on this tag
-                    let parent = style_stack.last().unwrap();
-                    let merged = ParsedInlineStyle {
-                        color: tag_style.color.or(parent.color),
-                        font_weight: tag_style.font_weight.or(parent.font_weight),
-                        font_style: tag_style.font_style.or(parent.font_style),
-                        background_color: tag_style.background_color.or(parent.background_color),
-                    };
-                    style_stack.push(merged);
-                }
-                // Non-container tags: transparent, no stack change.
-
-                if tag_lower.starts_with("br")
-                    || tag_lower.starts_with("/div")
-                    || tag_lower.starts_with("/p")
-                    || tag_lower.starts_with("/pre")
-                {
-                    push_newline(&mut lines);
-                }
-            }
-
-            idx += tag_end_rel + 1;
-        } else {
-            if skip_depth == 0 {
-                push_html_text(&mut lines, rest, style_stack.last().unwrap());
-            }
-            break;
-        }
-    }
-
-    trim_empty_styled_lines(&mut lines);
-
-    if found_style && !lines.is_empty() {
-        Some(lines)
-    } else {
-        None
-    }
 }
 
 /// Map from a CSS selector (`.class` or bare tag name) to the bounded
@@ -236,24 +85,11 @@ pub fn parse_embedded_stylesheet(raw_html: &str) -> EmbeddedStyleMap {
 /// Returns `None` when no recognisable style applies, so callers fall back
 /// to `TextView::html`/plain text.
 pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtmlSpan>>> {
-    let raw_lower = raw_html.to_ascii_lowercase();
-    if !raw_lower.contains("style=")
-        && !raw_lower.contains("color=")
-        && !raw_lower.contains("<b")
-        && !raw_lower.contains("<strong")
-        && !raw_lower.contains("<i")
-        && !raw_lower.contains("<em")
-        && !raw_lower.contains("class=")
-        && !raw_lower.contains("<style")
-    {
-        return None;
-    }
-
     let style_map = parse_embedded_stylesheet(raw_html);
     let html = normalize_clipboard_html_for_render(raw_html);
 
     let mut lines: Vec<Vec<StyledHtmlSpan>> = vec![Vec::new()];
-    let mut style_stack: Vec<ParsedInlineStyle> = vec![ParsedInlineStyle::default()];
+    let mut style_stack = vec![(String::new(), ParsedInlineStyle::default())];
     let mut found_style = false;
     let mut idx = 0usize;
     // Nesting depth of non-visible containers (`head`, `style`, `script`,
@@ -265,25 +101,23 @@ pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtml
         if let Some(tag_start_rel) = rest.find('<') {
             let text = &rest[..tag_start_rel];
             if skip_depth == 0 {
-                push_html_text(&mut lines, text, style_stack.last().unwrap());
+                push_html_text(&mut lines, text, &style_stack.last().unwrap().1);
             }
             idx += tag_start_rel;
 
-            let Some(tag_end_rel) = html[idx..].find('>') else {
+            if html[idx..].starts_with("<!--") {
+                let content_start = idx + "<!--".len();
+                let Some(end) = html[content_start..].find("-->") else {
+                    break;
+                };
+                idx = content_start + end + "-->".len();
+                continue;
+            }
+            let Some(tag_end_rel) = html_tag_end(&html[idx..]) else {
                 break;
             };
             let tag = &html[idx + 1..idx + tag_end_rel];
             let tag_lower = tag.trim().to_ascii_lowercase();
-
-            // HTML comments are skipped as a unit (same semantics as the
-            // legacy parser).
-            if tag_lower.starts_with("!--") {
-                idx += "<!--".len();
-                if let Some(rel) = html[idx..].find("-->") {
-                    idx += rel + "-->".len();
-                }
-                continue;
-            }
 
             let is_closing = tag_lower.starts_with('/');
             let tag_name = tag_lower
@@ -309,14 +143,10 @@ pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtml
 
             if is_closing {
                 // Closing tag — pop the frame pushed by its opening tag.
-                if style_stack.len() > 1 {
-                    style_stack.pop();
+                if let Some(frame) = style_stack.iter().rposition(|(name, _)| name == tag_name) {
+                    style_stack.truncate(frame.max(1));
                 }
-                if tag_lower.starts_with("/div")
-                    || tag_lower.starts_with("/p")
-                    || tag_lower.starts_with("/pre")
-                    || tag_lower.starts_with("/tr")
-                {
+                if matches!(tag_name, "div" | "p" | "pre" | "tr" | "li") {
                     push_newline(&mut lines);
                 }
             } else {
@@ -329,7 +159,7 @@ pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtml
                 if semantic.has_any_style() {
                     found_style = true;
                 }
-                let mut merged = merge_rule_style(style_stack.last().unwrap(), &semantic);
+                let mut merged = merge_rule_style(&style_stack.last().unwrap().1, &semantic);
                 if let Some(rule) = style_map.get(tag_name) {
                     merged = merge_rule_style(&merged, rule);
                     found_style = true;
@@ -345,9 +175,29 @@ pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtml
                     found_style = true;
                 }
                 merged = merge_rule_style(&merged, &inline);
-                style_stack.push(merged);
+                if !tag_lower.ends_with('/')
+                    && !matches!(
+                        tag_name,
+                        "area"
+                            | "base"
+                            | "br"
+                            | "col"
+                            | "embed"
+                            | "hr"
+                            | "img"
+                            | "input"
+                            | "link"
+                            | "meta"
+                            | "param"
+                            | "source"
+                            | "track"
+                            | "wbr"
+                    )
+                {
+                    style_stack.push((tag_name.to_string(), merged));
+                }
 
-                if tag_lower.starts_with("br") {
+                if tag_name == "br" {
                     push_newline(&mut lines);
                 }
             }
@@ -355,7 +205,7 @@ pub fn parse_styled_html_lines_full(raw_html: &str) -> Option<Vec<Vec<StyledHtml
             idx += tag_end_rel + 1;
         } else {
             if skip_depth == 0 {
-                push_html_text(&mut lines, rest, style_stack.last().unwrap());
+                push_html_text(&mut lines, rest, &style_stack.last().unwrap().1);
             }
             break;
         }
@@ -902,80 +752,58 @@ impl ParsedInlineStyle {
     }
 }
 
-// Only referenced by the frozen legacy `parse_styled_html_lines`; the full
-// entry uses `semantic_tag_defaults` + `parse_inline_style_attr` separately.
-#[allow(dead_code)]
-fn parse_inline_style(tag_name: &str, tag: &str) -> ParsedInlineStyle {
-    let mut color = None;
-    let mut font_weight = match tag_name {
-        "b" | "strong" => Some(FontWeight::BOLD),
-        _ => None,
-    };
-    let mut font_style = match tag_name {
-        "i" | "em" => Some(FontStyle::Italic),
-        _ => None,
-    };
-    let mut background_color = None;
+/// Read a complete HTML attribute, accepting whitespace around `=` and both
+/// quoted and unquoted values. Never match `data-class` or text inside quotes.
+fn html_attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
+    let mut rest = tag.trim_start();
+    let tag_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    rest = &rest[tag_end..];
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        let name_end = rest
+            .find(|c: char| c.is_whitespace() || c == '=' || c == '/')
+            .unwrap_or(rest.len());
+        if name_end == 0 {
+            break;
+        }
+        let name = &rest[..name_end];
+        rest = rest[name_end..].trim_start();
+        if !rest.starts_with('=') {
+            continue;
+        }
+        rest = rest[1..].trim_start();
+        let (value, tail) =
+            if let Some(quote) = rest.chars().next().filter(|c| matches!(c, '\'' | '"')) {
+                let body = &rest[1..];
+                let end = body.find(quote)?;
+                (&body[..end], &body[end + 1..])
+            } else {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                (&rest[..end], &rest[end..])
+            };
+        if name.eq_ignore_ascii_case(wanted) {
+            return Some(value);
+        }
+        rest = tail;
+    }
+    None
+}
 
-    // ── CSS style="..." attribute ──
-    if let Some(style_body) = extract_style_body(tag) {
-        for decl in style_body.split(';') {
-            let mut parts = decl.splitn(2, ':');
-            let key = match parts.next() {
-                Some(k) => k.trim().to_ascii_lowercase(),
-                None => continue,
-            };
-            let value = match parts.next() {
-                Some(v) => v.trim(),
-                None => continue,
-            };
-            match key.as_str() {
-                "color" => color = parse_css_color(value),
-                "font-weight" => font_weight = parse_css_font_weight(value),
-                "font-style" => font_style = parse_css_font_style(value),
-                "background-color" => background_color = parse_css_color(value),
-                _ => {}
-            }
+fn html_tag_end(tag: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, ch) in tag.char_indices() {
+        match (quote, ch) {
+            (Some(open), ch) if open == ch => quote = None,
+            (None, '\'' | '"') => quote = Some(ch),
+            (None, '>') => return Some(index),
+            _ => {}
         }
     }
-
-    // ── Classic HTML color="..." attribute (e.g. <font color="red">) ──
-    if color.is_none() {
-        color = parse_html_color_attr(tag);
-    }
-
-    ParsedInlineStyle {
-        color,
-        font_weight,
-        font_style,
-        background_color,
-    }
+    None
 }
 
-/// Extract the body of a `style="..."` attribute from an HTML tag.
-fn extract_style_body(tag: &str) -> Option<String> {
-    let lower = tag.to_ascii_lowercase();
-    let style_pos = lower.find("style=")?;
-    let after_style = &tag[style_pos + "style=".len()..];
-    let quote = after_style.chars().next()?;
-    let value_start = quote.len_utf8();
-    let rest = &after_style[value_start..];
-    let end = rest.find(quote)?;
-    Some(rest[..end].to_string())
-}
-
-/// Parse a classic HTML `color="..."` attribute value (named colors and hex).
 fn parse_html_color_attr(tag: &str) -> Option<Rgba> {
-    let lower = tag.to_ascii_lowercase();
-    let color_pos = lower.find("color=")?;
-    let after_color = &tag[color_pos + "color=".len()..];
-    let quote = after_color.chars().next()?;
-    // Only parse quoted attribute values
-    let value_start = quote.len_utf8();
-    let rest = &after_color[value_start..];
-    let end = rest.find(quote)?;
-    let value = rest[..end].trim();
-    // Try hex first, then named colors
+    let value = html_attribute(tag, "color")?.trim();
     parse_css_color(value).or_else(|| parse_named_html_color(value))
 }
 
@@ -1025,42 +853,13 @@ fn semantic_tag_defaults(tag_name: &str) -> ParsedInlineStyle {
 /// Parse only the inline `style="..."` attribute (plus the classic HTML
 /// `color="..."` attribute) of a tag — no semantic tag defaults.
 fn parse_inline_style_attr(tag: &str) -> ParsedInlineStyle {
-    let mut color = None;
-    let mut font_weight = None;
-    let mut font_style = None;
-    let mut background_color = None;
-
-    if let Some(style_body) = extract_style_body(tag) {
-        for decl in style_body.split(';') {
-            let mut parts = decl.splitn(2, ':');
-            let key = match parts.next() {
-                Some(k) => k.trim().to_ascii_lowercase(),
-                None => continue,
-            };
-            let value = match parts.next() {
-                Some(v) => v.trim(),
-                None => continue,
-            };
-            match key.as_str() {
-                "color" => color = parse_css_color(value),
-                "font-weight" => font_weight = parse_css_font_weight(value),
-                "font-style" => font_style = parse_css_font_style(value),
-                "background-color" => background_color = parse_css_color(value),
-                _ => {}
-            }
-        }
+    let mut style = html_attribute(tag, "style")
+        .map(parse_style_declarations)
+        .unwrap_or_default();
+    if style.color.is_none() {
+        style.color = parse_html_color_attr(tag);
     }
-
-    if color.is_none() {
-        color = parse_html_color_attr(tag);
-    }
-
-    ParsedInlineStyle {
-        color,
-        font_weight,
-        font_style,
-        background_color,
-    }
+    style
 }
 
 /// Merge `over` onto `base`: properties set by `over` replace `base`'s,
@@ -1120,10 +919,7 @@ fn strip_style_comments(content: &str) -> String {
             idx += "-->".len();
             continue;
         }
-        let ch_len = content[idx..]
-            .chars()
-            .next()
-            .map_or(1, char::len_utf8);
+        let ch_len = content[idx..].chars().next().map_or(1, char::len_utf8);
         out.push_str(&content[idx..idx + ch_len]);
         idx += ch_len;
     }
@@ -1251,39 +1047,10 @@ fn strip_important(value: &str) -> &str {
 /// Extract the class names of an opening tag in attribute order, supporting
 /// both quoted (`class="a b"`) and unquoted (`class=et2`) forms.
 fn extract_classes(tag: &str) -> Vec<&str> {
-    let lower = tag.to_ascii_lowercase();
-    let mut classes: Vec<&str> = Vec::new();
-    let mut search_from = 0usize;
-    while let Some(rel) = lower[search_from..].find("class=") {
-        let value_start = search_from + rel + "class=".len();
-        let after = &tag[value_start..];
-        let (value, consumed) = if let Some(quote) = after
-            .chars()
-            .next()
-            .filter(|&c| matches!(c, '"' | '\''))
-        {
-            let rest = &after[quote.len_utf8()..];
-            match rest.find(quote) {
-                Some(end) => (
-                    &rest[..end],
-                    value_start + quote.len_utf8() + end + quote.len_utf8(),
-                ),
-                None => (rest, tag.len()),
-            }
-        } else {
-            let end = after
-                .find(|c: char| c.is_whitespace() || c == '>')
-                .unwrap_or(after.len());
-            (&after[..end], value_start + end)
-        };
-        for cls in value.split_whitespace() {
-            if !cls.is_empty() {
-                classes.push(cls);
-            }
-        }
-        search_from = consumed;
-    }
-    classes
+    html_attribute(tag, "class")
+        .unwrap_or("")
+        .split_whitespace()
+        .collect()
 }
 
 fn parse_css_font_weight(value: &str) -> Option<FontWeight> {
@@ -1364,15 +1131,14 @@ fn looks_like_url(after_paren: &str) -> bool {
 mod tests {
     use super::{
         focus_styled_html_lines, highlight_styled_html_lines, normalize_clipboard_html_for_render,
-        parse_embedded_stylesheet, parse_styled_html_lines, parse_styled_html_lines_full,
-        strip_html_links,
+        parse_embedded_stylesheet, parse_styled_html_lines_full, strip_html_links,
     };
     use gpui::{rgb, FontStyle, FontWeight};
 
     #[test]
     fn styled_html_skips_head_style_and_office_xml() {
         let html = r#"<html><head><style>p { color: red }</style><xml><w:LatentStyles>Times New Roman</w:LatentStyles></xml></head><body><p><span style="color:#ff0000">Visible</span></p></body></html>"#;
-        let lines = parse_styled_html_lines(html).unwrap();
+        let lines = parse_styled_html_lines_full(html).unwrap();
 
         let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
         assert_eq!(text, "Visible");
@@ -1381,7 +1147,7 @@ mod tests {
     #[test]
     fn styled_html_keeps_text_between_two_comments() {
         let html = r#"<!--a--><span style="color:#ff0000">正文</span><!--b-->"#;
-        let lines = parse_styled_html_lines(html).unwrap();
+        let lines = parse_styled_html_lines_full(html).unwrap();
 
         let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
         assert_eq!(text, "正文");
@@ -1390,7 +1156,7 @@ mod tests {
     #[test]
     fn styled_html_skips_single_simple_comment() {
         let html = r#"<!-- plain comment --><span style="color:#ff0000">Text</span>"#;
-        let lines = parse_styled_html_lines(html).unwrap();
+        let lines = parse_styled_html_lines_full(html).unwrap();
 
         let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
         assert_eq!(text, "Text");
@@ -1399,7 +1165,7 @@ mod tests {
     #[test]
     fn styled_html_skips_conditional_comments() {
         let html = r#"<!--[if gte mso 9]><xml><w:LatentStyles>Cambria Math</w:LatentStyles></xml><![endif]--><p><span style="color:#ff0000">正文</span></p>"#;
-        let lines = parse_styled_html_lines(html).unwrap();
+        let lines = parse_styled_html_lines_full(html).unwrap();
 
         let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
         assert_eq!(text, "正文");
@@ -1408,7 +1174,7 @@ mod tests {
     #[test]
     fn styled_html_skips_title_and_script() {
         let html = r#"<html><title>Title Text</title><script>var x = 1;</script><body><span style="color:#ff0000">Real</span></body></html>"#;
-        let lines = parse_styled_html_lines(html).unwrap();
+        let lines = parse_styled_html_lines_full(html).unwrap();
 
         let text: String = lines.iter().flatten().map(|s| s.text.as_str()).collect();
         assert_eq!(text, "Real");
@@ -1427,7 +1193,7 @@ mod tests {
 
     #[test]
     fn parses_semantic_weight_and_style_without_color() {
-        let lines = parse_styled_html_lines("<strong>Bold</strong> <em>Italic</em>").unwrap();
+        let lines = parse_styled_html_lines_full("<strong>Bold</strong> <em>Italic</em>").unwrap();
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0][0].text, "Bold");
@@ -1440,7 +1206,7 @@ mod tests {
     #[test]
     fn parses_background_only_styles() {
         let lines =
-            parse_styled_html_lines(r#"<span style="background-color: yellow">Marked</span>"#)
+            parse_styled_html_lines_full(r#"<span style="background-color: yellow">Marked</span>"#)
                 .unwrap();
 
         assert_eq!(lines.len(), 1);
@@ -1450,7 +1216,7 @@ mod tests {
 
     #[test]
     fn closing_block_tags_split_lines() {
-        let lines = parse_styled_html_lines(
+        let lines = parse_styled_html_lines_full(
             r#"<div><span style="color:#ff0000">One</span></div><div><span style="color:#00ff00">Two</span></div>"#,
         )
         .unwrap();
@@ -1464,7 +1230,7 @@ mod tests {
     fn styled_links_keep_style_when_links_are_stripped() {
         let stripped =
             strip_html_links(r#"<a href="https://example.com" style="color: red">Link</a>"#);
-        let lines = parse_styled_html_lines(&stripped).unwrap();
+        let lines = parse_styled_html_lines_full(&stripped).unwrap();
 
         assert_eq!(stripped, r#"<span style="color: red">Link</span>"#);
         assert_eq!(lines[0][0].text, "Link");
@@ -1474,7 +1240,7 @@ mod tests {
     #[test]
     fn styled_html_highlights_substring_inside_span() {
         let terms = vec!["api".to_string()];
-        let lines = parse_styled_html_lines(
+        let lines = parse_styled_html_lines_full(
             r#"<div><span style="color:#bbbebf"> rapid=</span><span style="color:#569cd6">false</span></div>"#,
         )
         .unwrap();
@@ -1493,7 +1259,8 @@ mod tests {
     fn styled_html_only_changes_matched_fragment() {
         let terms = vec!["api".to_string()];
         let lines =
-            parse_styled_html_lines(r#"<span style="color:#bbbebf"> rapid=false</span>"#).unwrap();
+            parse_styled_html_lines_full(r#"<span style="color:#bbbebf"> rapid=false</span>"#)
+                .unwrap();
         let lines = highlight_styled_html_lines(lines, &terms, rgb(0x7ECBA3), rgb(0xFFFFFF));
         let spans = &lines[0];
 
@@ -1515,7 +1282,7 @@ mod tests {
     #[test]
     fn styled_html_focuses_matching_line_before_highlighting() {
         let terms = vec!["api".to_string()];
-        let lines = parse_styled_html_lines(
+        let lines = parse_styled_html_lines_full(
             r#"<div><span style="color:#bbbebf">first line</span></div><div><span style="color:#bbbebf"> rapid=</span><span style="color:#569cd6">false</span></div><div><span style="color:#bbbebf">last line</span></div>"#,
         )
         .unwrap();
@@ -1539,7 +1306,7 @@ mod tests {
     #[test]
     fn styled_html_focuses_inside_long_matching_line() {
         let terms = vec!["api".to_string()];
-        let lines = parse_styled_html_lines(
+        let lines = parse_styled_html_lines_full(
             r#"<div><span style="color:#bbbebf">03:12:05 [INFO] [clipboard] SKIP hash=631733700374619062 owner=43257930 last_owner=43257930 last_hash=6787954947296119038 elapsed=8364ms seq_delta=2 destroyed=false delayed=true same_hash=false owner_window=Visual Studio Code foreground_window=Clippi rapid=</span><span style="color:#569cd6">false</span></div>"#,
         )
         .unwrap();
@@ -1560,7 +1327,7 @@ mod tests {
     #[test]
     fn styled_html_focuses_match_near_end_even_when_line_fits_window() {
         let terms = vec!["key".to_string()];
-        let lines = parse_styled_html_lines(
+        let lines = parse_styled_html_lines_full(
             r#"<div><span style="color:#bbbebf">02:29:03 [INFO] [clipboard] PUSH hash=</span><span style="color:#569cd6">14609533420180055385</span><span style="color:#bbbebf"> owner=</span><span style="color:#569cd6">49222182</span><span style="color:#bbbebf"> elapsed=3073ms same_hash=</span><span style="color:#569cd6">false</span><span style="color:#bbbebf"> type=Image text=</span><span style="color:#a5d6ff">"G:\Develop\github\clippi\docs\images\hotkey.png"</span></div>"#,
         )
         .unwrap();
@@ -1581,7 +1348,7 @@ mod tests {
     #[test]
     fn styled_html_highlights_match_across_spans() {
         let terms = vec!["api".to_string()];
-        let lines = parse_styled_html_lines(
+        let lines = parse_styled_html_lines_full(
             r#"<div><span style="color:#bbbebf">a</span><span style="color:#569cd6">pi</span></div>"#,
         )
         .unwrap();
@@ -1629,6 +1396,52 @@ mod tests {
             .find(|s| s.text == "测试文本")
             .unwrap();
         assert_eq!(span.color, Some(rgb(0x00FF00)));
+    }
+
+    #[test]
+    fn void_elements_and_mismatched_closings_do_not_leak_styles() {
+        let lines = parse_styled_html_lines_full(
+            "<span style='color:red'>red<br>still red<img src=x><meta></span>plain</bogus><b>bold</b>plain again",
+        ).unwrap();
+        let spans: Vec<_> = lines.iter().flatten().collect();
+        for span in &spans {
+            match span.text.as_str() {
+                "red" | "still red" => assert_eq!(span.color, Some(rgb(0xff0000))),
+                "plain" | "plain again" => {
+                    assert_eq!(span.color, None);
+                    assert_eq!(span.font_weight, None);
+                }
+                "bold" => assert_eq!(span.font_weight, Some(FontWeight::BOLD)),
+                _ => panic!("unexpected text: {}", span.text),
+            }
+        }
+        assert_eq!(spans.len(), 5);
+    }
+
+    #[test]
+    fn attributes_use_exact_names_and_accept_spaces_quotes_and_important() {
+        let html = "<style>.red{color:red}</style><span data-class='red' title='class=red > ignored'>plain</span><span CLASS = 'red' style = 'color: blue !important'>blue</span><font color=green>green</font>";
+        let lines = parse_styled_html_lines_full(html).unwrap();
+        assert_eq!(lines[0][0].text, "plain");
+        assert_eq!(lines[0][0].color, None);
+        assert_eq!(lines[0][1].text, "blue");
+        assert_eq!(lines[0][1].color, Some(rgb(0x0000ff)));
+        assert_eq!(lines[0][2].color, Some(rgb(0x008000)));
+    }
+
+    #[test]
+    fn unclosed_comments_do_not_display_hidden_text() {
+        let lines =
+            parse_styled_html_lines_full("<b>visible</b><!-- unfinished >hidden<b>secret</b>")
+                .unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .flatten()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            "visible"
+        );
     }
 
     #[test]
@@ -1689,48 +1502,16 @@ mod tests {
     }
 
     #[test]
-    fn no_stylesheet_keeps_legacy_behavior() {
-        // The full entry without a `<style>` block must produce the same
-        // spans as the frozen legacy parser.
-        type SpanFingerprint = (
-            String,
-            Option<gpui::Rgba>,
-            Option<FontWeight>,
-            Option<FontStyle>,
-            Option<gpui::Rgba>,
-        );
-
+    fn inline_only_html_keeps_text_and_color() {
         let html = r#"<p><span style='color:#ff0000'>带超链接的文字</span></p>"#;
-        let legacy = parse_styled_html_lines(html).unwrap();
-        let full = parse_styled_html_lines_full(html).unwrap();
-
-        let legacy_spans: Vec<SpanFingerprint> = legacy
-            .iter()
-            .flatten()
-            .map(|s| {
-                (
-                    s.text.clone(),
-                    s.color,
-                    s.font_weight,
-                    s.font_style,
-                    s.background_color,
-                )
-            })
-            .collect();
-        let full_spans: Vec<SpanFingerprint> = full
-            .iter()
-            .flatten()
-            .map(|s| {
-                (
-                    s.text.clone(),
-                    s.color,
-                    s.font_weight,
-                    s.font_style,
-                    s.background_color,
-                )
-            })
-            .collect();
-        assert_eq!(legacy_spans, full_spans);
+        let lines = parse_styled_html_lines_full(html).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), 1);
+        assert_eq!(lines[0][0].text, "带超链接的文字");
+        assert_eq!(lines[0][0].color, Some(rgb(0xff0000)));
+        assert_eq!(lines[0][0].font_weight, None);
+        assert_eq!(lines[0][0].font_style, None);
+        assert_eq!(lines[0][0].background_color, None);
     }
 
     #[test]

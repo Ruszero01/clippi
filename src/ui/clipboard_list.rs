@@ -3177,7 +3177,11 @@ mod tests {
                 platform: true,
                 ..Default::default()
             }),
-            Other
+            if cfg!(target_os = "macos") {
+                Primary
+            } else {
+                Other
+            }
         );
     }
 
@@ -3489,6 +3493,9 @@ mod tests {
             }, // Fn alone → Other
             Modifiers {
                 platform: true,
+                // Command is the primary modifier on macOS, not an unused
+                // Windows/Super key. Command+Option must never paste.
+                alt: cfg!(target_os = "macos"),
                 ..Default::default()
             }, // Win/Super alone → Other
         ] {

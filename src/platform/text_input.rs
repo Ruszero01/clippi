@@ -521,11 +521,7 @@ fn macos_text_input_anchor() -> Option<TextInputAnchor> {
     }
 
     fn anchor_from_cocoa_rect(rect: CGRect, kind: AnchorRectKind) -> Option<TextInputAnchor> {
-        let mtm = objc2::MainThreadMarker::new()?;
-        let main_screen_height = objc2_app_kit::NSScreen::mainScreen(mtm)?
-            .frame()
-            .size
-            .height;
+        let main_screen_height = crate::platform::monitor::primary_screen_height()?;
         let flipped = crate::platform::monitor::cocoa_rect_to_top_left(
             main_screen_height,
             rect.origin.x,

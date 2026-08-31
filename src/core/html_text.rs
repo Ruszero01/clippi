@@ -7,60 +7,73 @@
 /// clipboard history round trip.
 pub fn preserve_clipboard_html_document(html: &str) -> String {
     let html = html.trim_end_matches('\0');
-    let document_start = find_html_start(html);
-    let has_cf_header = document_start.is_some_and(|pos| {
-        html[..pos]
-            .lines()
-            .any(|line| line.trim_start().starts_with("Version:"))
-    });
-
-    if let Some(pos) = document_start {
-        if has_cf_header {
-            let header = &html[..pos];
-            if let (Some(start), Some(end)) = (
-                parse_cf_html_offset(header, "StartHTML:"),
-                parse_cf_html_offset(header, "EndHTML:"),
-            ) {
-                if start <= end
-                    && end <= html.len()
-                    && html.is_char_boundary(start)
-                    && html.is_char_boundary(end)
-                {
-                    return strip_fragment_markers(html[start..end].trim_end_matches('\0'));
-                }
-            }
-            return strip_fragment_markers(html[pos..].trim_end_matches('\0'));
-        }
+    if !html.trim_start().starts_with("Version:") {
+        return html.to_string();
     }
 
-    strip_fragment_markers(html)
+    let markup_start = html.find('<').unwrap_or(html.len());
+    let header = &html[..markup_start];
+    let (start, end) = match (
+        parse_cf_html_offset(header, "StartHTML:"),
+        parse_cf_html_offset(header, "EndHTML:"),
+    ) {
+        (Some(start), Some(end)) if start >= markup_start && valid_byte_range(html, start, end) => {
+            (start, end)
+        }
+        _ => (markup_start, html.len()),
+    };
+    let document = &html[start..end];
+    // Keep numeric fragment boundaries when stripping the transport header.
+    // Otherwise a later encode/preview would expand a selection to the body.
+    if let (Some(fragment_start), Some(fragment_end)) = (
+        parse_cf_html_offset(header, "StartFragment:"),
+        parse_cf_html_offset(header, "EndFragment:"),
+    ) {
+        if fragment_start >= start
+            && fragment_end <= end
+            && valid_byte_range(html, fragment_start, fragment_end)
+        {
+            return format!(
+                "{}<!--StartFragment-->{}<!--EndFragment-->{}",
+                strip_fragment_markers(&html[start..fragment_start]),
+                strip_fragment_markers(&html[fragment_start..fragment_end]),
+                strip_fragment_markers(&html[fragment_end..end]),
+            );
+        }
+    }
+    document.to_string()
 }
 
-/// Encode plain HTML as a Windows CF_HTML payload with byte-accurate offsets.
-/// The full document remains available to consumers while the fragment points
-/// only at the body content.
+fn valid_byte_range(text: &str, start: usize, end: usize) -> bool {
+    start <= end && end <= text.len() && text.is_char_boundary(start) && text.is_char_boundary(end)
+}
+
+/// Encode HTML as CF_HTML, preserving the selected fragment and its context.
+#[cfg(any(target_os = "windows", test))]
 pub fn encode_cf_html(html: &str) -> String {
     const START_MARKER: &str = "<!--StartFragment-->";
     const END_MARKER: &str = "<!--EndFragment-->";
 
-    let clean = strip_fragment_markers(html.trim_end_matches('\0'));
+    let clean = preserve_clipboard_html_document(html);
     let mut document = if find_html_start(&clean).is_some() {
         clean
     } else {
         format!("<html><body>{clean}</body></html>")
     };
 
-    let body_range = find_case_insensitive(&document, "<body").and_then(|body_start| {
-        let fragment_start = body_start + document[body_start..].find('>')? + 1;
-        let fragment_end =
-            fragment_start + find_case_insensitive(&document[fragment_start..], "</body")?;
-        Some((fragment_start, fragment_end))
-    });
-    if let Some((fragment_start, fragment_end)) = body_range {
-        document.insert_str(fragment_end, END_MARKER);
-        document.insert_str(fragment_start, START_MARKER);
-    } else {
-        document = format!("<html><body>{START_MARKER}{document}{END_MARKER}</body></html>");
+    if fragment_marker_range(&document).is_none() {
+        document = strip_fragment_markers(&document);
+        let body_range = find_case_insensitive(&document, "<body").and_then(|body_start| {
+            let start = body_start + document[body_start..].find('>')? + 1;
+            let end = start + find_case_insensitive(&document[start..], "</body")?;
+            Some((start, end))
+        });
+        if let Some((start, end)) = body_range {
+            document.insert_str(end, END_MARKER);
+            document.insert_str(start, START_MARKER);
+        } else {
+            document = format!("<html><body>{START_MARKER}{document}{END_MARKER}</body></html>");
+        }
     }
 
     let header_template = concat!(
@@ -72,19 +85,34 @@ pub fn encode_cf_html(html: &str) -> String {
     );
     let start_html = header_template.len();
     let end_html = start_html + document.len();
-    let marker_start = document
-        .find(START_MARKER)
-        .expect("CF_HTML start marker must exist");
-    let marker_end = document
-        .find(END_MARKER)
-        .expect("CF_HTML end marker must exist");
-    let start_fragment = start_html + marker_start + START_MARKER.len();
-    let end_fragment = start_html + marker_end;
+    let (start, end) = fragment_marker_range(&document).expect("CF_HTML fragment must exist");
+    let start_fragment = start_html + start;
+    let end_fragment = start_html + end;
     let header = format!(
         "Version:1.0\r\nStartHTML:{start_html:010}\r\nEndHTML:{end_html:010}\r\nStartFragment:{start_fragment:010}\r\nEndFragment:{end_fragment:010}\r\n"
     );
     debug_assert_eq!(header.len(), header_template.len());
     format!("{header}{document}")
+}
+
+/// NSPasteboard takes HTML, not CF_HTML. Keep embedded styles but exclude
+/// unselected body context when pasting a history item synced from Windows.
+#[cfg(any(target_os = "macos", test))]
+pub fn clipboard_html_for_macos(html: &str) -> String {
+    let document = preserve_clipboard_html_document(html);
+    if fragment_marker_range(&document).is_none() {
+        return document;
+    }
+    let head = find_case_insensitive(&document, "<head")
+        .and_then(|start| {
+            let end = start + find_case_insensitive(&document[start..], "</head>")? + 7;
+            document.get(start..end)
+        })
+        .unwrap_or("");
+    format!(
+        "<html>{head}<body>{}</body></html>",
+        normalize_clipboard_html(&document)
+    )
 }
 
 /// Normalize a clipboard HTML payload down to its visible fragment.
@@ -654,7 +682,7 @@ lang=EN-US><o:p></o:p></span></span></b></p>
         let payload = encode_cf_html(wps);
         let preserved = preserve_clipboard_html_document(&payload);
 
-        assert_eq!(preserved, wps);
+        assert_eq!(super::strip_fragment_markers(&preserved), wps);
         assert!(preserved.contains(".et2 { color: #ff6600; }"));
         assert_eq!(
             normalize_clipboard_html(&payload),
@@ -669,6 +697,54 @@ lang=EN-US><o:p></o:p></span></span></b></p>
         assert_eq!(
             normalize_clipboard_html(&payload),
             "<span style='color:#ff6600'>测试文本</span>"
+        );
+    }
+
+    #[test]
+    fn selected_fragment_survives_storage_and_cross_platform_paste() {
+        let document = "<html><head><style>.x{color:red}</style></head><body>未选中<!--StartFragment--><b class=x>选中</b><!--EndFragment-->也未选中</body></html>";
+        let payload = encode_cf_html(document);
+        let stored = preserve_clipboard_html_document(&payload);
+        assert_eq!(stored, document);
+        assert_eq!(normalize_clipboard_html(&stored), "<b class=x>选中</b>");
+        assert_eq!(
+            normalize_clipboard_html(&encode_cf_html(&stored)),
+            "<b class=x>选中</b>"
+        );
+        let mac_html = super::clipboard_html_for_macos(&stored);
+        assert!(!mac_html.contains("未选中"));
+        assert!(mac_html.contains("<style>.x{color:red}</style>"));
+        assert_eq!(
+            normalize_clipboard_html(&encode_cf_html(&mac_html)),
+            "<b class=x>选中</b>"
+        );
+    }
+
+    #[test]
+    fn numeric_fragment_offsets_survive_without_comments_or_document_context() {
+        let fragment = "<b>选中</b>";
+        let header = format!("Version:1.0\r\nStartHTML:-1\r\nEndHTML:-1\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n", 0, 0);
+        let start = header.len();
+        let payload = format!("Version:1.0\r\nStartHTML:-1\r\nEndHTML:-1\r\nStartFragment:{start:010}\r\nEndFragment:{:010}\r\n{fragment}", start + fragment.len());
+        let stored = preserve_clipboard_html_document(&payload);
+        assert!(!stored.contains("Version:"));
+        assert_eq!(normalize_clipboard_html(&stored), fragment);
+        assert_eq!(normalize_clipboard_html(&encode_cf_html(&stored)), fragment);
+    }
+
+    #[test]
+    fn invalid_fragment_offsets_fall_back_without_slicing_utf8() {
+        let document = "<html><body><!--StartFragment-->中文<!--EndFragment--></body></html>";
+        let payload = encode_cf_html(document);
+        let start = payload.find("中文").unwrap() + 1;
+        let previous = payload
+            .lines()
+            .find(|line| line.starts_with("StartFragment:"))
+            .unwrap();
+        let payload = payload.replacen(previous, &format!("StartFragment:{start:010}"), 1);
+        assert_eq!(
+            normalize_clipboard_html(&preserve_clipboard_html_document(&payload)),
+            "中文"
         );
     }
 }

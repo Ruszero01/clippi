@@ -1915,15 +1915,12 @@ impl WindowManager {
             if self.ns_window == 0 || self.main_compacted_state.is_some() {
                 return;
             }
-            let Some(mtm) = objc2::MainThreadMarker::new() else {
-                return;
-            };
-            let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
+            let Some(primary_height) = monitor::primary_screen_height() else {
                 return;
             };
             let frame = unsafe { (&*(self.ns_window as *const objc2_app_kit::NSWindow)).frame() };
             let rect = monitor::cocoa_rect_to_top_left(
-                main_screen.frame().size.height,
+                primary_height,
                 frame.origin.x,
                 frame.origin.y,
                 frame.size.width,
@@ -2044,7 +2041,7 @@ impl WindowManager {
     /// the C3 fallback chain from a fresh monitor snapshot. Never returns
     /// `(0,0)`; `None` means no remaining monitor yields a valid target, in
     /// which case the caller keeps the window hidden (04-spec §4).
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     fn quick_position_c3_fallback(&self, quick_h: f32) -> Option<(i32, i32)> {
         let snapshot = monitor::enumerate_monitors()?;
         if snapshot.is_empty() {
@@ -2291,14 +2288,22 @@ impl WindowManager {
             }
 
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE,
+                SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             };
             let hwnd = hwnd_isize as *mut std::ffi::c_void;
             // SAFETY: `hwnd` is our own main window. SWP_NOACTIVATE keeps the
             // foreground app and SWP_NOSIZE preserves the GPUI-managed size —
             // only the position changes.
             unsafe {
-                SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                );
             }
         }));
     }
@@ -2353,11 +2358,14 @@ impl WindowManager {
             let cursor = monitor::get_cursor_pos();
             match monitor::pick_migration_target(&snapshot.monitors, cursor) {
                 Some(target) => {
+                    // Clamp the intended client size at the destination DPI;
+                    // the old monitor's size can leave the popup off-screen.
+                    let scale = monitor::get_scale_factor(target.x, target.y);
                     let pos = clamp_to_work_area(
                         bounds.x,
                         bounds.y,
-                        bounds.width,
-                        bounds.height,
+                        (QUICK_WINDOW_WIDTH * scale) as i32,
+                        (quick_h * scale) as i32,
                         &target,
                     );
                     log::info!(
@@ -2375,7 +2383,7 @@ impl WindowManager {
                         bounds.x,
                         bounds.y
                     );
-                    (bounds.x, bounds.y)
+                    return;
                 }
             }
         } else {
@@ -3132,6 +3140,7 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             self._main_show_task = None;
+            self._main_monitor_migration_task = None;
         }
         if self.quick_visible {
             self.hide_quick_window(cx);
@@ -3222,14 +3231,13 @@ impl WindowManager {
         // On Windows the terminal fallback resolves a deterministic position
         // from a fresh monitor snapshot; when no remaining monitor yields a
         // valid target the quick window stays hidden (04-spec §4 — never
-        // (0,0)). On macOS/Linux the pre-issue-75 raw-cursor fallback is
-        // preserved unchanged (C6).
+        // (0,0)). macOS uses the same work-area fallback in logical points.
         let Some((x, y)) = self.calculate_quick_position(quick_h).or_else(|| {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             {
                 self.quick_position_c3_fallback(quick_h)
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             {
                 let (cx, cy) = monitor::get_cursor_pos().unwrap_or((0, 0));
                 log::debug!(
@@ -3322,6 +3330,7 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         {
             self._quick_position_task = None;
+            self._quick_monitor_migration_task = None;
         }
         self.quick_visible = false;
         self.quick_mouse_down = false;
@@ -4272,13 +4281,10 @@ impl WindowManager {
         if self.quick_ns_window == 0 {
             return;
         }
-        let Some(mtm) = objc2::MainThreadMarker::new() else {
+        let Some(primary_height) = monitor::primary_screen_height() else {
             return;
         };
-        let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
-            return;
-        };
-        let top = main_screen.frame().size.height - y as f64;
+        let top = primary_height - y as f64;
         unsafe {
             let window = &*(self.quick_ns_window as *const objc2_app_kit::NSWindow);
             window.setContentSize(objc2_foundation::NSSize::new(
@@ -4305,13 +4311,10 @@ impl WindowManager {
         if self.ns_window == 0 {
             return;
         }
-        let Some(mtm) = objc2::MainThreadMarker::new() else {
+        let Some(primary_height) = monitor::primary_screen_height() else {
             return;
         };
-        let Some(main_screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
-            return;
-        };
-        let top = main_screen.frame().size.height - y as f64;
+        let top = primary_height - y as f64;
         unsafe {
             let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
             window.setFrameTopLeftPoint(objc2_foundation::NSPoint::new(x as f64, top));

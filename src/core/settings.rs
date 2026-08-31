@@ -533,20 +533,7 @@ impl AppSettings {
         super::paths::resolve_db_path(&self.db_path)
     }
 
-    /// Normalized read accessor for the main-window paste gesture.
-    ///
-    /// `paste_click_mode` is persisted as a plain TOML string and takes
-    /// `"double_click"` (default) or `"single_click"`. A missing key falls back
-    /// via serde's default, but an explicit out-of-range value would otherwise
-    /// be read verbatim. This accessor mirrors the anti-degradation guard used
-    /// for `image_alt_mode` (see config_sync) and returns the default on any
-    /// unknown value, so dispatch/UI consumers never act on stale data.
-    ///
-    /// Not yet referenced in this phase: it is consumed by the stage-2 click
-    /// dispatch (`paste_click_mode` routing) and the settings UI option row
-    /// (Rites r1). Kept `pub` with an explicit reason so future callers use
-    /// the normalized value rather than the raw persisted string.
-    #[allow(dead_code)]
+    /// Unknown persisted values fall back to the default gesture.
     pub fn paste_click_mode_normalized(&self) -> String {
         if self.paste_click_mode == "single_click" {
             "single_click".to_string()

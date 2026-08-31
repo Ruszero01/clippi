@@ -35,11 +35,13 @@ static RECENT_IMAGE_FILE_REFERENCE: Mutex<Option<Instant>> = Mutex::new(None);
 static THUMBNAIL_JOBS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 const MAX_THUMBNAIL_JOBS: usize = 2;
 const MAX_CAPTURED_IMAGE_DIMENSION: u32 = 100_000;
-const MAX_CAPTURED_IMAGE_PIXELS: u64 = 512_000_000;
+// 128 MP covers 2000×40000 screenshots while keeping 8-bit RGBA below 512 MiB.
+const MAX_CAPTURED_IMAGE_PIXELS: u64 = 128_000_000;
+const MAX_DECODED_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const MAX_CAPTURED_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_IMAGE_PERSIST_JOBS: usize = 2;
-const MAX_IMAGE_PERSIST_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_IMAGE_PERSIST_BYTES: usize = 512 * 1024 * 1024;
 
 /// 结构化诊断日志：特性关闭时展开为空，生产构建零影响。
 /// 注册 "PNG" 剪贴板格式并缓存其 ID（进程内只注册一次）。
@@ -562,7 +564,9 @@ fn parse_dib_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn image_exceeds_capture_limit(width: u32, height: u32) -> bool {
-    width > MAX_CAPTURED_IMAGE_DIMENSION
+    width == 0
+        || height == 0
+        || width > MAX_CAPTURED_IMAGE_DIMENSION
         || height > MAX_CAPTURED_IMAGE_DIMENSION
         || u64::from(width)
             .checked_mul(u64::from(height))
@@ -668,9 +672,14 @@ fn copy_clipboard_format_once(format: u32) -> Option<Vec<u8>> {
 /// 解码原始 DIB 块（不含 BITMAPFILEHEADER）。
 #[cfg(target_os = "windows")]
 fn decode_dib(bytes: &[u8]) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
     use std::io::Cursor;
-    let decoder =
+    let mut decoder =
         image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(bytes)).ok()?;
+    if decoder.total_bytes() > MAX_DECODED_IMAGE_BYTES {
+        return None;
+    }
+    decoder.set_limits(capture_decode_limits()).ok()?;
     image::DynamicImage::from_decoder(decoder).ok()
 }
 
@@ -683,9 +692,50 @@ fn enqueue_image_persist(
     IMAGE_PERSIST_WORKER.enqueue(captured, pending, pending_images);
 }
 
+fn capture_decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_CAPTURED_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_CAPTURED_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODED_IMAGE_BYTES);
+    limits
+}
+
+fn decode_encoded_image(bytes: &[u8], format: image::ImageFormat) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    reader.limits(capture_decode_limits());
+    let result = reader.into_decoder().and_then(|decoder| {
+        let (width, height) = decoder.dimensions();
+        if image_exceeds_capture_limit(width, height)
+            || decoder.total_bytes() > MAX_DECODED_IMAGE_BYTES
+        {
+            return Err(image::ImageError::Limits(
+                image::error::LimitError::from_kind(
+                    image::error::LimitErrorKind::InsufficientMemory,
+                ),
+            ));
+        }
+        // TIFF needs a separate decoding buffer as well as the output buffer.
+        // ImageReader::decode subtracts the output from max_alloc first,
+        // unintentionally rejecting supported 80 MP TIFFs. Bound both buffers
+        // separately: at most 512 MiB output plus 512 MiB decoder workspace.
+        image::DynamicImage::from_decoder(decoder)
+    });
+    match result {
+        Ok(image) => Some(image),
+        Err(error) => {
+            log::warn!("clipboard image decoding failed: {error}");
+            None
+        }
+    }
+}
+
 /// 将原始图片负载写入缓存并生成缩略图，成功后构造完整 ClipboardItem。
 /// 返回 None 表示解码/落盘失败，不发布条目。
 fn persist_image(captured: &CapturedImage, img_dir: &std::path::Path) -> Option<ClipboardItem> {
+    if image_exceeds_capture_limit(captured.width, captured.height) {
+        return None;
+    }
     let file_path = img_dir.join(format!("{:016x}.png", captured.raw_hash));
     let file_path_str = file_path.to_string_lossy().to_string();
 
@@ -704,15 +754,11 @@ fn persist_image(captured: &CapturedImage, img_dir: &std::path::Path) -> Option<
     }
 
     let decoded = match &captured.raw {
-        RawClipboardImage::Png(bytes) => {
-            image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()
-        }
+        RawClipboardImage::Png(bytes) => decode_encoded_image(bytes, image::ImageFormat::Png),
         #[cfg(target_os = "windows")]
         RawClipboardImage::Bitmap(bytes) => decode_dib(bytes),
         #[cfg(target_os = "macos")]
-        RawClipboardImage::Tiff(bytes) => {
-            image::load_from_memory_with_format(bytes, image::ImageFormat::Tiff).ok()
-        }
+        RawClipboardImage::Tiff(bytes) => decode_encoded_image(bytes, image::ImageFormat::Tiff),
     }?;
     if decoded.width() != captured.width || decoded.height() != captured.height {
         log::warn!(
@@ -974,7 +1020,10 @@ fn read_clipboard_rich_data(ctx: &ClipboardContext) -> Option<RichData> {
         .map(|html| crate::core::html_text::preserve_clipboard_html_document(&html))
         .or_else(|| ctx.get_html().ok());
     #[cfg(not(target_os = "windows"))]
-    let html = ctx.get_html().ok();
+    let html = ctx
+        .get_html()
+        .ok()
+        .map(|html| crate::core::html_text::preserve_clipboard_html_document(&html));
     let rtf = ctx.get_rich_text().ok();
     (html.is_some() || rtf.is_some()).then_some(RichData {
         html,
@@ -1076,13 +1125,27 @@ fn read_clipboard_image_png(ctx: &ClipboardContext) -> Option<(RawClipboardImage
 
 /// Target thumbnail width matching the card content area logical-pixel width.
 const THUMB_WIDTH: u32 = 310;
+const THUMB_MAX_HEIGHT: u32 = 8192;
+
+fn thumbnail_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let scale = (THUMB_WIDTH as f64 / width.max(1) as f64)
+        .min(THUMB_MAX_HEIGHT as f64 / height.max(1) as f64)
+        .min(1.0);
+    (
+        ((width as f64 * scale) as u32).max(1),
+        ((height as f64 * scale) as u32).max(1),
+    )
+}
 
 fn thumbnail_file_is_valid(path: &std::path::Path) -> bool {
     let mut header = [0_u8; 24];
     let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };
-    file.read_exact(&mut header).is_ok() && png_dimensions(&header).is_some()
+    file.read_exact(&mut header).is_ok()
+        && png_dimensions(&header).is_some_and(|(width, height)| {
+            width > 0 && height > 0 && width <= THUMB_WIDTH && height <= THUMB_MAX_HEIGHT
+        })
 }
 
 /// Generate a thumbnail by scaling the full image to match the card width,
@@ -1117,12 +1180,11 @@ fn write_thumbnail(img: &image::DynamicImage, img_dir: &std::path::Path, hash: u
         return;
     }
     let (w, h) = img.dimensions();
-    let thumb = if w <= THUMB_WIDTH {
+    let (thumb_w, thumb_h) = thumbnail_dimensions(w, h);
+    let thumb = if (w, h) == (thumb_w, thumb_h) {
         img.clone()
     } else {
-        let ratio = THUMB_WIDTH as f64 / w as f64;
-        let nh = (h as f64 * ratio) as u32;
-        img.resize(THUMB_WIDTH, nh, image::imageops::FilterType::Lanczos3)
+        img.resize_exact(thumb_w, thumb_h, image::imageops::FilterType::Lanczos3)
     };
 
     let unique = std::time::SystemTime::now()
@@ -1853,23 +1915,39 @@ mod image_capture_tests {
 
     #[test]
     fn image_limits_cover_dimensions_pixels_and_boundaries() {
-        // 报告尺寸（1200×26500 / 2000×40000）在新上限内，必须接受。
         assert!(!image_exceeds_capture_limit(1200, 26_500));
         assert!(!image_exceeds_capture_limit(2000, 40_000));
-        // 单边维度上限边界：等于上限接受，超一拒绝。
         assert!(!image_exceeds_capture_limit(100_000, 1));
         assert!(image_exceeds_capture_limit(100_001, 1));
-        // 像素乘积极限边界：100_000×5120 = 512_000_000 恰好等于上限，接受；
-        // 100_000×5121 = 512_100_000 超限，拒绝。
-        assert!(!image_exceeds_capture_limit(100_000, 5_120));
-        assert!(image_exceeds_capture_limit(100_000, 5_121));
-        // 维度未超但像素乘积超限（旧 8_001×8_000 断言按新上限重写）：
-        // 80_001×8_000 = 640_008_000 > 512_000_000，拒绝。
+        assert!(!image_exceeds_capture_limit(100_000, 1280));
+        assert!(image_exceeds_capture_limit(100_000, 1281));
         assert!(image_exceeds_capture_limit(80_001, 8_000));
-        // 旧边界断言更新而非删除：10_000/10_001 与 8_001×8_000 在新上限下均接受。
-        assert!(!image_exceeds_capture_limit(10_000, 1));
+        assert!(image_exceeds_capture_limit(0, 100));
+        assert!(image_exceeds_capture_limit(100, 0));
         assert!(!image_exceeds_capture_limit(10_001, 1));
         assert!(!image_exceeds_capture_limit(8_001, 8_000));
+    }
+
+    #[test]
+    fn extreme_aspect_ratio_thumbnails_stay_nonzero_and_fit_gpu_limits() {
+        assert_eq!(thumbnail_dimensions(100_000, 1), (310, 1));
+        assert_eq!(thumbnail_dimensions(1, 100_000), (1, THUMB_MAX_HEIGHT));
+        assert_eq!(thumbnail_dimensions(100, 100), (100, 100));
+        assert_eq!(thumbnail_dimensions(2000, 40_000), (310, 6200));
+    }
+
+    #[test]
+    #[ignore = "80 MP decode stress test; run explicitly before release"]
+    fn long_screenshot_png_and_tiff_decode_with_bounded_memory() {
+        for format in [image::ImageFormat::Png, image::ImageFormat::Tiff] {
+            let image = image::DynamicImage::new_rgba8(2000, 40_000);
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut encoded, format).unwrap();
+            drop(image);
+            let decoded = decode_encoded_image(encoded.get_ref(), format)
+                .expect("a supported long screenshot must decode in either native format");
+            assert_eq!((decoded.width(), decoded.height()), (2000, 40_000));
+        }
     }
 
     #[test]

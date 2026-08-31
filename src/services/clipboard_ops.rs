@@ -42,6 +42,8 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
             if let Some(html) = rich.html {
                 #[cfg(target_os = "windows")]
                 let html = crate::core::html_text::encode_cf_html(&html);
+                #[cfg(target_os = "macos")]
+                let html = crate::core::html_text::clipboard_html_for_macos(&html);
                 contents.push(ClipboardContent::Html(html));
             }
             if let Some(rtf) = rich.rtf {
