@@ -71,6 +71,29 @@ fn geometry_retry_delay(retry_count: u32) -> Duration {
     Duration::from_secs(backoff_secs)
 }
 
+/// Visibility-guard decision for one window (04-spec v2 G2, issue-75).
+///
+/// Pure and cross-platform so `#[cfg(test)]` can exercise the full
+/// state-bit × hwnd-validity × HWND-visibility combination table (AC2)
+/// without a live window. It reads only the passed inputs and never
+/// consults or writes any Clippi state, so no parallel visibility flag is
+/// introduced — `visible` / `quick_visible` remain the only visibility
+/// truth (G2/G6).
+///
+/// Returns `true` (re-hide) exactly when the Clippi state bit says the
+/// window should be hidden but the HWND is actually visible:
+/// `!state_visible && hwnd_valid && hwnd_visible`. An invalid `hwnd`
+/// (`hwnd == 0`) always yields `false` and is safely skipped.
+///
+/// This cross-platform pure helper is referenced only by the Windows-only
+/// guard (`poll_visibility_guard`) and `#[cfg(test)]` modules; on macOS /
+/// Linux non-test builds it is intentionally unused, so silence the
+/// warn-by-default `dead_code` lint (repo convention: zero warnings).
+#[allow(dead_code)]
+fn visibility_guard_should_hide(state_visible: bool, hwnd_valid: bool, hwnd_visible: bool) -> bool {
+    hwnd_valid && !state_visible && hwnd_visible
+}
+
 pub struct WebDavBackendForm {
     pub name: String,
     pub root_url: String,
@@ -499,6 +522,17 @@ pub struct WindowManager {
     _main_monitor_migration_task: Option<Task<()>>,
     #[cfg(target_os = "windows")]
     _quick_monitor_migration_task: Option<Task<()>>,
+    // --- Visibility guard log-dedup bookkeeping (issue-75 v2 G5) ---
+    /// True while the main window is inside a continuous "state bit hidden
+    /// but HWND visible" episode, so `log::warn!` fires once per episode
+    /// instead of every 200 ms tick. NOT visibility truth — the only
+    /// visibility truth remains `visible` / `quick_visible`; this field
+    /// only throttles logging (G5) and never participates in a decision.
+    #[cfg(target_os = "windows")]
+    main_guard_episode_logged: bool,
+    /// Same log-dedup bookkeeping for the quick window (issue-75 v2 G5).
+    #[cfg(target_os = "windows")]
+    quick_guard_episode_logged: bool,
     // --- System tray ---
     tray: Option<TrayManager>,
 
@@ -648,6 +682,10 @@ impl WindowManager {
             _main_monitor_migration_task: None,
             #[cfg(target_os = "windows")]
             _quick_monitor_migration_task: None,
+            #[cfg(target_os = "windows")]
+            main_guard_episode_logged: false,
+            #[cfg(target_os = "windows")]
+            quick_guard_episode_logged: false,
             _poll_task: None,
             #[cfg(target_os = "windows")]
             _main_show_task: None,
@@ -781,6 +819,15 @@ impl WindowManager {
         // work-area changes; hidden windows stay hidden (C2).
         #[cfg(target_os = "windows")]
         self.poll_monitor_topology(cx);
+
+        // --- 7c. Visibility guard (Windows, issue-75 v2 G1) ---
+        // Every tick, re-hide any window whose HWND was shown by an external
+        // path (GPUI display-change handling, system behavior, future paths)
+        // while the Clippi state bit says hidden (G1–G6). Runs inside the
+        // single 200 ms poll loop — no second UI polling loop. A topology
+        // change detected in 7b is covered by the guard in the same tick.
+        #[cfg(target_os = "windows")]
+        self.poll_visibility_guard(cx);
 
         // --- 8. Cloud sync ---
         self.poll_sync(cx);
@@ -2052,6 +2099,110 @@ impl WindowManager {
         }
         if self.quick_visible {
             self.reapply_quick_window_on_topology_change(&snapshot, generation, cx);
+        }
+    }
+
+    /// Poll step 7c (Windows, issue-75 v2): visibility guard G1–G6.
+    ///
+    /// Every 200 ms tick, for each window, compares the Clippi state bit
+    /// (`visible` / `quick_visible`) with the HWND's actual visibility
+    /// (`IsWindowVisible`). When the state bit says hidden but the HWND is
+    /// visible, an external path (GPUI 0.2.2 `handle_display_change_msg`
+    /// unconditional `ShowWindow(SW_SHOWNORMAL)` — verified events.rs
+    /// L842-844; system behavior; future paths) has shown the window
+    /// against the state machine: re-hide it with the exact primitives the
+    /// normal hide paths use (G3), leaving every state bit untouched (they
+    /// are already false). Restores "state bit hidden ⇒ HWND invisible".
+    ///
+    /// G1: mounted right after the topology poll (7b) inside the single
+    /// 200 ms poll loop — no second UI polling loop; a topology change
+    /// detected in 7b is covered by the guard in the same tick.
+    ///
+    /// G4: the hide calls run synchronously inside the poll update. This is
+    /// safe because gpui-0.2.2 handles every message they dispatch without
+    /// synchronously re-borrowing the app (source-verified in events.rs):
+    /// `WM_SHOWWINDOW(0)` returns `None` without a callback (L1180-1185),
+    /// `WM_ACTIVATE` is dispatched through the executor (L749-764), and
+    /// `WM_WINDOWPOSCHANGED`/`WM_WINDOWPOSCHANGING` have no GPUI handler
+    /// (only Clippi's subclass touches them during title-bar drags). The
+    /// `SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER` flags suppress
+    /// the geometry messages that drive the documented DPI re-entrancy
+    /// trap. No re-entrancy evidence found ⇒ synchronous path kept; if a
+    /// future change introduces re-entrancy, switch to `cx.spawn()` +
+    /// yield and re-check "state bit still hidden + hwnd unchanged" before
+    /// hiding (mirroring the migration-task re-check pattern).
+    ///
+    /// G5: `log::warn!` fires once per continuous episode (`*_guard_episode_logged`
+    /// toggles on first hit and resets when the window is consistent again) —
+    /// never every tick.
+    ///
+    /// G6: the guard can only act while the state bit is false, so it is
+    /// mutually exclusive by state bit with the C3 migration (true state)
+    /// and the 16 ms quick poll (`quick_visible == true` only); under
+    /// `silent_start` (`visible == false` from startup) the guard is active
+    /// from the first poll tick. An invalid `hwnd` is skipped safely (G2).
+    #[cfg(target_os = "windows")]
+    fn poll_visibility_guard(&mut self, _cx: &mut Context<Self>) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            IsWindowVisible, SetWindowPos, ShowWindow, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+        };
+
+        // --- Main window ---
+        let main_hwnd = self.hwnd;
+        let main_hwnd_visible = unsafe { IsWindowVisible(main_hwnd as *mut std::ffi::c_void) } != 0;
+        if visibility_guard_should_hide(self.visible, main_hwnd != 0, main_hwnd_visible) {
+            if !self.main_guard_episode_logged {
+                self.main_guard_episode_logged = true;
+                log::warn!(
+                    "visibility guard: main window shown while hidden state bit set (visible={}, hwnd=0x{:X}, IsWindowVisible=true); re-hiding",
+                    self.visible,
+                    main_hwnd
+                );
+            }
+            // G3: reuse the hide() primitive — SW_HIDE clears WS_VISIBLE;
+            // idempotent on an already-hidden window. SAFETY: `hwnd` is our
+            // own main window.
+            let hwnd = main_hwnd as *mut std::ffi::c_void;
+            if !hwnd.is_null() {
+                unsafe { ShowWindow(hwnd, SW_HIDE) };
+            }
+        } else {
+            self.main_guard_episode_logged = false;
+        }
+
+        // --- Quick window ---
+        let quick_hwnd = self.quick_hwnd;
+        let quick_hwnd_visible =
+            unsafe { IsWindowVisible(quick_hwnd as *mut std::ffi::c_void) } != 0;
+        if visibility_guard_should_hide(self.quick_visible, quick_hwnd != 0, quick_hwnd_visible) {
+            if !self.quick_guard_episode_logged {
+                self.quick_guard_episode_logged = true;
+                log::warn!(
+                    "visibility guard: quick window shown while hidden state bit set (quick_visible={}, quick_hwnd=0x{:X}, IsWindowVisible=true); re-hiding",
+                    self.quick_visible,
+                    quick_hwnd
+                );
+            }
+            // G3: reuse the hide_quick_window() primitive —
+            // SWP_HIDEWINDOW|NOACTIVATE|NOMOVE|NOSIZE|NOZORDER; idempotent.
+            // SAFETY: `hwnd` is our own quick window.
+            let hwnd = quick_hwnd as *mut std::ffi::c_void;
+            if !hwnd.is_null() {
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        std::ptr::null_mut(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_HIDEWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                    );
+                }
+            }
+        } else {
+            self.quick_guard_episode_logged = false;
         }
     }
 
@@ -5386,5 +5537,98 @@ mod exit_tests {
 
         assert!(body.contains("cx.quit();"));
         assert!(!body.contains("cx.shutdown();"));
+    }
+}
+
+#[cfg(test)]
+mod visibility_guard_tests {
+    use super::visibility_guard_should_hide;
+
+    /// Mirror the actual main-window call form (`poll_visibility_guard`,
+    /// 04-spec v2 G2): `hwnd_valid = main_hwnd != 0`.
+    fn main_should_hide(state_visible: bool, hwnd_valid: bool, hwnd_visible: bool) -> bool {
+        visibility_guard_should_hide(state_visible, hwnd_valid, hwnd_visible)
+    }
+
+    /// Mirror the actual quick-window call form (`poll_visibility_guard`,
+    /// 04-spec v2 G2): `hwnd_valid = quick_hwnd != 0`.
+    fn quick_should_hide(state_visible: bool, hwnd_valid: bool, hwnd_visible: bool) -> bool {
+        visibility_guard_should_hide(state_visible, hwnd_valid, hwnd_visible)
+    }
+
+    // AC2 combination table (04-spec v2 §3): {state-bit, hwnd-valid,
+    // HWND-visible} -> should-hide. The main and quick windows share the
+    // same pure decision, so each row asserts both invocation forms.
+
+    #[test]
+    fn hidden_state_with_invisible_hwnd_does_not_hide_main() {
+        // {隐藏, 有效, 不可见} -> 不动作
+        assert!(!main_should_hide(false, true, false));
+    }
+
+    #[test]
+    fn hidden_state_with_invisible_hwnd_does_not_hide_quick() {
+        // {隐藏, 有效, 不可见} -> 不动作
+        assert!(!quick_should_hide(false, true, false));
+    }
+
+    #[test]
+    fn hidden_state_with_visible_hwnd_hides_main() {
+        // {隐藏, 有效, 可见} -> 应隐藏（核心：GPUI 越权调起场景）
+        assert!(main_should_hide(false, true, true));
+    }
+
+    #[test]
+    fn hidden_state_with_visible_hwnd_hides_quick() {
+        // {隐藏, 有效, 可见} -> 应隐藏
+        assert!(quick_should_hide(false, true, true));
+    }
+
+    #[test]
+    fn visible_state_with_visible_hwnd_does_not_hide_main() {
+        // {可见, 有效, 可见} -> 不动作（主动唤出，守卫不误伤）
+        assert!(!main_should_hide(true, true, true));
+    }
+
+    #[test]
+    fn visible_state_with_visible_hwnd_does_not_hide_quick() {
+        // {可见, 有效, 可见} -> 不动作（主动唤出，守卫不误伤）
+        assert!(!quick_should_hide(true, true, true));
+    }
+
+    #[test]
+    fn visible_state_with_invisible_hwnd_does_not_hide_main() {
+        // {可见, 有效, 不可见} -> 不动作
+        assert!(!main_should_hide(true, true, false));
+    }
+
+    #[test]
+    fn visible_state_with_invisible_hwnd_does_not_hide_quick() {
+        // {可见, 有效, 不可见} -> 不动作
+        assert!(!quick_should_hide(true, true, false));
+    }
+
+    #[test]
+    fn invalid_hwnd_never_hides_main_regardless_of_hwnd_visibility() {
+        // {隐藏, hwnd=0(无效), HWND 任意} -> 不动作（hwnd_valid=false 时
+        // hwnd_visible 无论何值均不动作，安全跳过）。
+        assert!(!main_should_hide(false, false, false));
+        assert!(!main_should_hide(false, false, true));
+    }
+
+    #[test]
+    fn invalid_hwnd_never_hides_quick_regardless_of_hwnd_visibility() {
+        // {隐藏, hwnd=0(无效), HWND 任意} -> 不动作。
+        assert!(!quick_should_hide(false, false, false));
+        assert!(!quick_should_hide(false, false, true));
+    }
+
+    #[test]
+    fn visible_state_with_invalid_hwnd_does_not_hide() {
+        // 状态位为可见 + hwnd 无效：任何 HWND 可见性均不动作。
+        assert!(!main_should_hide(true, false, false));
+        assert!(!main_should_hide(true, false, true));
+        assert!(!quick_should_hide(true, false, false));
+        assert!(!quick_should_hide(true, false, true));
     }
 }
