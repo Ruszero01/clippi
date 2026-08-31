@@ -194,10 +194,16 @@ pub struct AppSettings {
     pub always_reset_to_clipboard: bool, // always switch to clipboard history when window is shown
     #[serde(default = "default_image_alt_mode")]
     pub image_alt_mode: String, // advanced paste mode for images: "bitmap" | "path" | "ocr"
+    #[serde(default = "default_paste_click_mode")]
+    pub paste_click_mode: String, // main-window paste gesture: "double_click" | "single_click"
 }
 
 fn default_image_alt_mode() -> String {
     "bitmap".to_string()
+}
+
+fn default_paste_click_mode() -> String {
+    "double_click".to_string()
 }
 
 fn default_qr_enabled() -> bool {
@@ -315,6 +321,7 @@ impl Default for AppSettings {
             transfer_cleanup_last_date: String::new(),
             always_reset_to_clipboard: false,
             image_alt_mode: default_image_alt_mode(),
+            paste_click_mode: default_paste_click_mode(),
         }
     }
 }
@@ -524,6 +531,28 @@ impl AppSettings {
 
     pub fn resolve_db_path(&self) -> PathBuf {
         super::paths::resolve_db_path(&self.db_path)
+    }
+
+    /// Normalized read accessor for the main-window paste gesture.
+    ///
+    /// `paste_click_mode` is persisted as a plain TOML string and takes
+    /// `"double_click"` (default) or `"single_click"`. A missing key falls back
+    /// via serde's default, but an explicit out-of-range value would otherwise
+    /// be read verbatim. This accessor mirrors the anti-degradation guard used
+    /// for `image_alt_mode` (see config_sync) and returns the default on any
+    /// unknown value, so dispatch/UI consumers never act on stale data.
+    ///
+    /// Not yet referenced in this phase: it is consumed by the stage-2 click
+    /// dispatch (`paste_click_mode` routing) and the settings UI option row
+    /// (Rites r1). Kept `pub` with an explicit reason so future callers use
+    /// the normalized value rather than the raw persisted string.
+    #[allow(dead_code)]
+    pub fn paste_click_mode_normalized(&self) -> String {
+        if self.paste_click_mode == "single_click" {
+            "single_click".to_string()
+        } else {
+            default_paste_click_mode()
+        }
     }
 }
 
@@ -1258,6 +1287,53 @@ mod tests {
         let loaded: AppSettings = toml::from_str(&serialized).unwrap();
 
         assert!(loaded.search_favorites_first);
+    }
+
+    #[test]
+    fn missing_paste_click_mode_defaults_to_double_click() {
+        let serialized = toml::to_string(&AppSettings::default()).unwrap();
+        let legacy_config = serialized
+            .lines()
+            .filter(|line| !line.starts_with("paste_click_mode ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed: AppSettings = toml::from_str(&legacy_config).unwrap();
+
+        assert_eq!(parsed.paste_click_mode, "double_click");
+        assert_eq!(parsed.paste_click_mode_normalized(), "double_click");
+    }
+
+    #[test]
+    fn paste_click_mode_roundtrips_through_toml() {
+        let settings = AppSettings {
+            paste_click_mode: "single_click".into(),
+            ..Default::default()
+        };
+        let serialized = toml::to_string(&settings).unwrap();
+        let loaded: AppSettings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(loaded.paste_click_mode, "single_click");
+        assert_eq!(loaded.paste_click_mode_normalized(), "single_click");
+    }
+
+    #[test]
+    fn default_paste_click_mode_is_double_click() {
+        assert_eq!(AppSettings::default().paste_click_mode, "double_click");
+        assert_eq!(default_paste_click_mode(), "double_click");
+    }
+
+    #[test]
+    fn unknown_paste_click_mode_normalizes_to_default() {
+        let settings = AppSettings {
+            paste_click_mode: "bogus".into(),
+            ..Default::default()
+        };
+
+        // Raw persisted value is preserved verbatim by serde (no enum validation);
+        // the normalized accessor is the single source of truth for consumers.
+        assert_eq!(settings.paste_click_mode, "bogus");
+        assert_eq!(settings.paste_click_mode_normalized(), "double_click");
     }
 
     #[test]

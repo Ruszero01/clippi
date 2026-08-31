@@ -176,6 +176,203 @@ fn modified_double_click_kind(modifiers: Modifiers) -> Option<ModifiedPasteModif
     }
 }
 
+/// Paste-click gesture mode, normalized from the persisted
+/// `paste_click_mode` setting. `DoubleClick` is the default and must round-trip
+/// to the legacy behavior; `SingleClick` is the opt-in single-click paste mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasteClickMode {
+    DoubleClick,
+    SingleClick,
+}
+
+impl PasteClickMode {
+    /// Normalize the persisted `paste_click_mode` string to a mode. The settings
+    /// accessor `paste_click_mode_normalized` already falls back to the default
+    /// on unknown values, so this only distinguishes the two known modes.
+    fn from_settings(value: &str) -> Self {
+        if value == "single_click" {
+            PasteClickMode::SingleClick
+        } else {
+            PasteClickMode::DoubleClick
+        }
+    }
+}
+
+/// Resolved modifier intent for a card click gesture. This is the semantic
+/// bucket the dispatch matrix switches on; `classify_card_modifier` derives it
+/// from the raw GPUI `Modifiers` so the two spreadsheet columns (paste format
+/// and selection routing) stay consistent. The classification mirrors the
+/// legacy selection precedence (`additive_selection_modifier` first, then
+/// `shift`, else single select) so double-click mode never changes behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CardModifier {
+    /// No modifier key held.
+    None,
+    /// Bare additive modifier (Ctrl on Windows/Linux, Cmd on macOS): additive
+    /// selection and bitmap paste intent.
+    Primary,
+    /// Bare Shift: range selection and plain-text paste intent.
+    Shift,
+    /// Additive (Ctrl/Cmd) combined with other modifiers (Ctrl+Shift, Ctrl+Alt, …):
+    /// additive selection; never a paste.
+    AdditiveCombo,
+    /// Shift combined with non-additive modifiers (Shift+Alt, Shift+Fn, …):
+    /// range selection (double-click mode); never a paste (single-click mode).
+    ShiftCombo,
+    /// Any other modifier or combination (Alt, Fn, Win/Super, …): no action.
+    Other,
+}
+
+/// Classify raw GPUI modifiers into the `CardModifier` buckets. Keeps the
+/// format mapping (`primary_modifier_pressed`/`secondary()`) and the legacy
+/// selection routing (`additive_selection_modifier`) consistent across modes.
+fn classify_card_modifier(modifiers: Modifiers) -> CardModifier {
+    let count = modifiers.number_of_modifiers();
+    if count == 0 {
+        return CardModifier::None;
+    }
+    if count == 1 {
+        if additive_selection_modifier(modifiers) {
+            return CardModifier::Primary;
+        }
+        if modifiers.shift {
+            return CardModifier::Shift;
+        }
+        return CardModifier::Other;
+    }
+    if additive_selection_modifier(modifiers) {
+        return CardModifier::AdditiveCombo;
+    }
+    if modifiers.shift {
+        return CardModifier::ShiftCombo;
+    }
+    CardModifier::Other
+}
+
+/// Outcome of dispatching a card click, produced by `resolve_card_click_action`.
+/// Each arm maps to a single existing selection or paste call — never a second
+/// state system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CardClickAction {
+    /// Consume the click without selecting or pasting.
+    Noop,
+    /// Make this item the single selection (clears any multi-selection).
+    SelectSingle,
+    /// Toggle-add/remove this item from the selection (Ctrl/Cmd+click).
+    ToggleSelect,
+    /// Range-select from the anchor to this item (Shift+click).
+    RangeSelect,
+    /// Paste this single item with default full formatting.
+    PasteDefault,
+    /// Paste this single item as plain text.
+    PastePlain,
+    /// Paste this single image item as a bitmap.
+    PasteBitmap,
+}
+
+/// Table-driven dispatcher for a card click (04-spec §2.2 / §2.3) and the
+/// cross-mode contracts (§2.4). Pure: no GPUI context, no repository handle.
+///
+/// Inputs are the resolved decision bits so this is directly unit-testable:
+/// - `mode`: `SingleClick` applies the §2.3 matrix; `DoubleClick` applies the
+///   §2.2 single-click selection semantics (double-click *paste* stays in
+///   `handle_double_click` / `double_click_paste_default`, untouched).
+/// - `clicked_is_selected`: whether the clicked item is in the selection *at
+///   click time* — read before any selection mutation (§2.4 short-judge).
+/// - `selected_count`: the click-time selection size.
+/// - `modifier`: the resolved modifier intent.
+/// - `is_image`: whether the clicked item is an `ContentType::Image`.
+///
+/// Encoded §2.4 contracts: paste only when the clicked item is already selected
+/// AND the selection is single (=1) — in a multi-selection (>1) the click
+/// gesture is selection management ONLY and never returns a Paste* arm (batch
+/// paste is available only through the float/hover-toolbar `batch_paste`);
+/// Ctrl/Cmd bitmap only for image items (a non-image returns `Noop`, never an
+/// empty paste); any non-bare/combination modifier returns `Noop` and never
+/// forms a paste candidate.
+fn resolve_card_click_action(
+    mode: PasteClickMode,
+    clicked_is_selected: bool,
+    selected_count: usize,
+    modifier: CardModifier,
+    is_image: bool,
+) -> CardClickAction {
+    match mode {
+        // Double-click mode preserves the legacy single-click selection
+        // semantics (04-spec §2.2): additive toggles, shift ranges, everything
+        // else single-selects. Paste happens only on the paired double-click
+        // event (handle_double_click / double_click_paste_default), never here.
+        PasteClickMode::DoubleClick => match modifier {
+            // Bare additive (Ctrl/Cmd) or additive+other (Ctrl+Shift, Ctrl+Alt)
+            // follow the legacy additive-first toggle branch.
+            CardModifier::Primary | CardModifier::AdditiveCombo => CardClickAction::ToggleSelect,
+            // Bare Shift or Shift+non-additive follow the legacy range branch.
+            CardModifier::Shift | CardModifier::ShiftCombo => CardClickAction::RangeSelect,
+            // No modifier, or Alt/Fn/Win-Super alone, fall to the legacy
+            // single-select branch. This is still a selection, not a paste —
+            // the "no paste / no candidate" guarantee for these modifiers
+            // is enforced in handle_double_click.
+            CardModifier::None | CardModifier::Other => CardClickAction::SelectSingle,
+        },
+        // Single-click mode applies the §2.3 matrix.
+        PasteClickMode::SingleClick => {
+            // Multi-selection (>1): the click gesture is selection management
+            // ONLY and never pastes — batch paste is via the float button
+            // (`batch_paste`) alone (04-spec v2 §2.3 multi-select table, §2.4).
+            if selected_count > 1 {
+                return match modifier {
+                    // No modifier → clear the multi-selection and single-select
+                    // the clicked item (regardless of its current state).
+                    CardModifier::None => CardClickAction::SelectSingle,
+                    // Bare Ctrl/Cmd → toggle this item's selection membership.
+                    CardModifier::Primary => CardClickAction::ToggleSelect,
+                    // Bare Shift → range-select from the anchor to this item.
+                    CardModifier::Shift => CardClickAction::RangeSelect,
+                    // Any combination or other modifier → no action, never a
+                    // paste, never a candidate (§2.4/§5).
+                    CardModifier::AdditiveCombo
+                    | CardModifier::ShiftCombo
+                    | CardModifier::Other => CardClickAction::Noop,
+                };
+            }
+            // Single-select state (=1) — §2.3 single-select table, unchanged.
+            match modifier {
+                CardModifier::None => {
+                    if clicked_is_selected {
+                        CardClickAction::PasteDefault
+                    } else {
+                        // Single-select the clicked item, never paste an unselected one.
+                        CardClickAction::SelectSingle
+                    }
+                }
+                CardModifier::Primary => {
+                    if clicked_is_selected {
+                        if is_image {
+                            CardClickAction::PasteBitmap
+                        } else {
+                            CardClickAction::Noop
+                        }
+                    } else {
+                        CardClickAction::ToggleSelect
+                    }
+                }
+                CardModifier::Shift => {
+                    if clicked_is_selected {
+                        CardClickAction::PastePlain
+                    } else {
+                        CardClickAction::RangeSelect
+                    }
+                }
+                // Any combination or other modifier (Ctrl+Shift, Alt, Fn, Win/Super,
+                // …) → no action, never a paste, never a candidate (§2.4/§5).
+                CardModifier::AdditiveCombo | CardModifier::ShiftCombo | CardModifier::Other => {
+                    CardClickAction::Noop
+                }
+            }
+        }
+    }
+}
+
 impl EventEmitter<ClipboardListEvent> for ClipboardListView {}
 
 /// The clipboard list view entity.
@@ -835,6 +1032,84 @@ impl ClipboardListView {
             return;
         }
 
+        let mode = PasteClickMode::from_settings(
+            &self.state.read(cx).settings.paste_click_mode_normalized(),
+        );
+        match mode {
+            PasteClickMode::SingleClick => self.handle_card_click_single(index, modifiers, cx),
+            PasteClickMode::DoubleClick => self.handle_card_click_double(index, modifiers, cx),
+        }
+    }
+
+    /// Single-click paste mode dispatch (04-spec §2.3). The decision reads the
+    /// click-time selection state first (§2.4 short-judge), resolves a single
+    /// action via the pure `resolve_card_click_action`, then executes exactly
+    /// that action — it never re-runs a selection change that undoes a decided
+    /// paste. `handle_double_click` is a no-op in this mode, so any gesture
+    /// (including two fast clicks) produces at most one paste.
+    fn handle_card_click_single(
+        &mut self,
+        index: usize,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = self.items.get(index) else {
+            return;
+        };
+        let item_id = item.id;
+        // Short-judge: read selection state NOW, before any mutation.
+        let clicked_is_selected = self.selected_ids.contains(&item_id);
+        let selected_count = self.selected_ids.len();
+        let is_image = item.content_type == ContentType::Image;
+        let mode = PasteClickMode::from_settings(
+            &self.state.read(cx).settings.paste_click_mode_normalized(),
+        );
+        let action = resolve_card_click_action(
+            mode,
+            clicked_is_selected,
+            selected_count,
+            classify_card_modifier(modifiers),
+            is_image,
+        );
+
+        // Single-click mode never uses the modified-double-click candidate; a
+        // stale candidate from a prior mode switch must not survive here.
+        self.modified_double_click_candidate = None;
+
+        match action {
+            CardClickAction::Noop => {}
+            CardClickAction::SelectSingle => self.select_index_without_scroll(index, cx),
+            CardClickAction::ToggleSelect => self.toggle_index(index, cx),
+            CardClickAction::RangeSelect => self.range_select_to_index(index, cx),
+            // Default paste reuses the legacy default-paste path, which also
+            // redirects a single transfer entry to open/download instead of
+            // pasting (§2.4). In single-click mode this is reached only for an
+            // already-selected single item; a multi-selection never returns a
+            // Paste here (batch is via the float button `batch_paste` alone).
+            CardClickAction::PasteDefault => {
+                self.double_click_paste_default(index, cx);
+            }
+            CardClickAction::PastePlain => {
+                self.state.update(cx, |s, _cx| s.paste_item_plain(item_id));
+                self.sync_items_from_state_for_usage(cx);
+            }
+            CardClickAction::PasteBitmap => {
+                self.state
+                    .update(cx, |s, _cx| s.paste_image_as_bitmap(item_id));
+                self.sync_items_from_state_for_usage(cx);
+            }
+        }
+    }
+
+    /// Double-click (default) mode: legacy single-click selection plus modified
+    /// double-click candidate arbitration. Kept byte-for-byte identical to the
+    /// pre-single-click behavior so §2.2 never regresses.
+    fn handle_card_click_double(
+        &mut self,
+        index: usize,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
         let before_ids = self.selected_ids.clone();
         let was_unique_selected = self.selected_ids.len() == 1
             && self
@@ -863,7 +1138,12 @@ impl ClipboardListView {
         };
     }
 
-    /// Default double-click behavior (no modifiers): paste with full formatting.
+    /// Default paste behavior (no modifiers): paste with full formatting.
+    ///
+    /// Shared by the double-click default gesture and single-click paste mode:
+    /// multi-selection batch-pastes all selected items; a single selected item
+    /// pastes with full formatting, except a single transfer entry (unmodified)
+    /// which opens/downloads instead of pasting (§2.4).
     fn double_click_paste_default(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.selected_ids.len() > 1 {
             let ids = self.selected_ids.clone();
@@ -893,7 +1173,19 @@ impl ClipboardListView {
     /// Double-click with modifiers: paste only when the first click left the
     /// selection unchanged (candidate established); otherwise consume the click
     /// and keep the first click's selection result.
+    ///
+    /// In single-click paste mode this is a no-op: the first (single) click
+    /// already performed the paste, so the second click of a fast double-click
+    /// must not paste again (§2.4 single paste per gesture).
     fn handle_double_click(&mut self, index: usize, modifiers: Modifiers, cx: &mut Context<Self>) {
+        let mode = PasteClickMode::from_settings(
+            &self.state.read(cx).settings.paste_click_mode_normalized(),
+        );
+        if mode == PasteClickMode::SingleClick {
+            self.modified_double_click_candidate = None;
+            return;
+        }
+
         match modified_double_click_kind(modifiers) {
             // No modifiers at all — existing default paste, never gated by candidate.
             None if modifiers.number_of_modifiers() == 0 => {
@@ -2556,11 +2848,12 @@ impl Render for ClipboardListView {
 #[cfg(test)]
 mod tests {
     use super::{
-        can_incrementally_sync_usage, collect_selectable_ids, item_id_at, item_index,
-        item_is_pending, reorder_usage_pairs,
+        can_incrementally_sync_usage, classify_card_modifier, collect_selectable_ids, item_id_at,
+        item_index, item_is_pending, reorder_usage_pairs, resolve_card_click_action,
+        CardClickAction, CardModifier, PasteClickMode,
     };
     use crate::core::types::{ClipboardItem, ContentType};
-    use gpui::Pixels;
+    use gpui::{Modifiers, Pixels};
 
     fn test_item(id: i64, updated_secs: i64, favorite: bool) -> ClipboardItem {
         let ts = chrono::Utc::now() - chrono::Duration::seconds(updated_secs);
@@ -2787,5 +3080,758 @@ mod tests {
         let second = collect_selectable_ids(&items);
         assert_eq!(first, second);
         assert_eq!(first, vec![10, 20, 30]);
+    }
+
+    // --- Pure click-dispatch smoke tests (main §2.3 matrix is Justice j2). ---
+    // `resolve_card_click_action` is table-driven and GPUI-Context-free; these
+    // cover every §2.3 row and the §2.4 contracts so the pure function has a
+    // self-contained behavioral proof even before the dedicated matrix tests.
+
+    use CardClickAction::*;
+    use CardModifier::*;
+
+    /// Shorthand for `resolve_card_click_action`, avoiding repeated 5-arg calls in
+    /// the sweep tests below.
+    fn dispatch(
+        mode: PasteClickMode,
+        selected: bool,
+        count: usize,
+        modifier: CardModifier,
+        is_image: bool,
+    ) -> CardClickAction {
+        resolve_card_click_action(mode, selected, count, modifier, is_image)
+    }
+
+    /// Exhaustive match over the closed `CardClickAction` variant set: `true` only
+    /// for a paste arm, `false` for a selection/Noop arm. Because the variant list
+    /// is closed, this compiles ONLY while `PasteBatch` is absent from the enum —
+    /// a hard, compile-time guarantee that the click dispatcher no longer builds a
+    /// batch-paste arm (batch paste is reachable through the hover-toolbar float
+    /// button `batch_paste`, a widget-outer path that never routes here).
+    fn paste_arm(action: CardClickAction) -> bool {
+        match action {
+            CardClickAction::PasteDefault
+            | CardClickAction::PastePlain
+            | CardClickAction::PasteBitmap => true,
+            CardClickAction::Noop
+            | CardClickAction::SelectSingle
+            | CardClickAction::ToggleSelect
+            | CardClickAction::RangeSelect => false,
+        }
+    }
+
+    #[test]
+    fn classify_card_modifier_buckets_match_legacy_routing() {
+        assert_eq!(classify_card_modifier(Modifiers::none()), None);
+        // Bare Ctrl on Windows/Linux = additive selection + bitmap intent.
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                control: true,
+                ..Default::default()
+            }),
+            Primary
+        );
+        // Bare Shift = range + plain-text intent.
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                shift: true,
+                ..Default::default()
+            }),
+            Shift
+        );
+        // Ctrl+Shift = additive combo (never a paste).
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            }),
+            AdditiveCombo
+        );
+        // Shift+Alt = range combo (never a paste in single mode).
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                shift: true,
+                alt: true,
+                ..Default::default()
+            }),
+            ShiftCombo
+        );
+        // Alt / Fn / Win-Super alone → Other (no action).
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                alt: true,
+                ..Default::default()
+            }),
+            Other
+        );
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                function: true,
+                ..Default::default()
+            }),
+            Other
+        );
+        assert_eq!(
+            classify_card_modifier(Modifiers {
+                platform: true,
+                ..Default::default()
+            }),
+            Other
+        );
+    }
+
+    #[test]
+    fn single_click_selected_paste_matrix() {
+        let single = PasteClickMode::SingleClick;
+        // Selected + no modifier: single (=1) → default paste; multi (>1) →
+        // single-select the clicked item (never a paste — batch is float-button only).
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, None, true),
+            PasteDefault
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 3, None, false),
+            SelectSingle
+        );
+        // Selected + Shift: single (=1) → plain paste; multi (>1) → range select.
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Shift, false),
+            PastePlain
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 3, Shift, false),
+            RangeSelect
+        );
+        // Selected + Ctrl/Cmd: bitmap only for images.
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, true),
+            PasteBitmap
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, false),
+            Noop
+        );
+    }
+
+    #[test]
+    fn single_click_unselected_never_pastes() {
+        let single = PasteClickMode::SingleClick;
+        // Unselected (single or multi before) + no modifier → single select.
+        assert_eq!(
+            resolve_card_click_action(single, false, 1, None, false),
+            SelectSingle
+        );
+        assert_eq!(
+            resolve_card_click_action(single, false, 4, None, false),
+            SelectSingle
+        );
+        // Unselected + Ctrl/Cmd → toggle add; Unselected + Shift → range select.
+        assert_eq!(
+            resolve_card_click_action(single, false, 1, Primary, true),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(single, false, 1, Shift, false),
+            RangeSelect
+        );
+    }
+
+    #[test]
+    fn single_click_other_combos_are_noop_and_never_candidate() {
+        let single = PasteClickMode::SingleClick;
+        // Ctrl+Shift, Shift+Alt, Alt/Fn/Win-Super → no action in either state.
+        for (selected, card_mod) in [
+            (true, AdditiveCombo),
+            (true, ShiftCombo),
+            (true, Other),
+            (false, AdditiveCombo),
+            (false, ShiftCombo),
+            (false, Other),
+        ] {
+            assert_eq!(
+                resolve_card_click_action(single, selected, 2, card_mod, true),
+                Noop
+            );
+        }
+    }
+
+    #[test]
+    fn double_click_mode_preserves_legacy_single_click_selection() {
+        let dbl = PasteClickMode::DoubleClick;
+        // Legacy single-click selection semantics: additive toggles, shift
+        // ranges, everything else single-selects. Paste is only on the paired
+        // double-click event, so no paste action ever escapes here.
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, None, false),
+            SelectSingle
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, Primary, false),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, false, 1, Shift, false),
+            RangeSelect
+        );
+        // Ctrl+Shift stays on the additive toggle branch (legacy precedence).
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, AdditiveCombo, false),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, false, 1, ShiftCombo, false),
+            RangeSelect
+        );
+        // Alt / Fn / Win-Super alone fall to single-select (legacy else branch).
+        assert_eq!(
+            resolve_card_click_action(dbl, false, 1, Other, false),
+            SelectSingle
+        );
+    }
+
+    // ─── Justice j2: 分派矩阵 / 跨模式契约 / 双击回归对照 ───────────────────
+    // `resolve_card_click_action` is the observable, GPUI-context-free dispatcher.
+    // These cover 04-spec §2.3 (single-click matrix), §2.4 (cross-mode contracts)
+    // and §2.2 (double-click mode regression). They complement, never replace,
+    // the War w2 smoke tests above.
+
+    /// §2.3 full single-click grid: selected/unselected × None/Shift/Primary ×
+    /// single(vs multi) × image/text. Every row is asserted explicitly.
+    #[test]
+    fn single_click_matrix_2_3_full_grid() {
+        let single = PasteClickMode::SingleClick;
+        // Selected + no modifier: single (=1) → default paste; multi (>1) →
+        // single-select the clicked item (batch is float-button only). The
+        // multi-select rows below reflect the §2.3 multi-select table.
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, None, true),
+            PasteDefault
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, None, false),
+            PasteDefault
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 3, None, true),
+            SelectSingle
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 3, None, false),
+            SelectSingle
+        );
+        // Selected + Shift: single (=1) → plain-text paste; multi (>1) → range.
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Shift, true),
+            PastePlain
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 3, Shift, false),
+            RangeSelect
+        );
+        // Selected + Ctrl/Cmd: single (=1) → bitmap (image) or Noop (text);
+        // multi (>1) → toggle select (never paste).
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, true),
+            PasteBitmap
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, false),
+            Noop
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 4, Primary, true),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 4, Primary, false),
+            ToggleSelect
+        );
+        // Unselected + no modifier: single-select the item (clears a multi-selection).
+        assert_eq!(
+            resolve_card_click_action(single, false, 1, None, true),
+            SelectSingle
+        );
+        assert_eq!(
+            resolve_card_click_action(single, false, 4, None, false),
+            SelectSingle
+        );
+        // Unselected + Ctrl/Cmd → toggle add; Unselected + Shift → range select.
+        assert_eq!(
+            resolve_card_click_action(single, false, 1, Primary, true),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(single, false, 3, Shift, false),
+            RangeSelect
+        );
+    }
+
+    /// §2.4: a modified (Shift/Ctrl) gesture on a multi-selected item is
+    /// selection management only — never a paste in any format (batch is
+    /// float-button only).
+    #[test]
+    fn single_click_modifier_plus_multi_select_never_batches() {
+        let single = PasteClickMode::SingleClick;
+        // Shift + selected + multi (>1) → range select (regardless of format).
+        assert_eq!(
+            resolve_card_click_action(single, true, 4, Shift, true),
+            RangeSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 4, Shift, false),
+            RangeSelect
+        );
+        // Ctrl/Cmd + selected + multi (>1) → toggle select (regardless of format).
+        assert_eq!(
+            resolve_card_click_action(single, true, 4, Primary, true),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 4, Primary, false),
+            ToggleSelect
+        );
+    }
+
+    /// §2.4 / §5: Ctrl/Cmd bitmap paste applies only to image items in the
+    /// single-select (=1) state; a non-image single item resolves to `Noop`
+    /// (never an empty paste). In a multi-selection (>1) Ctrl/Cmd is selection
+    /// management only and never pastes (toggle select).
+    #[test]
+    fn single_click_bitmap_only_for_image_items() {
+        let single = PasteClickMode::SingleClick;
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, true),
+            PasteBitmap
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, false),
+            Noop
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 5, Primary, true),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 5, Primary, false),
+            ToggleSelect
+        );
+    }
+
+    /// §2.4: an unselected item is never pasted. Every modifier × count × format
+    /// combination resolves to a selection or Noop — never a Paste* arm.
+    #[test]
+    fn single_click_unselected_combinations_never_paste() {
+        let single = PasteClickMode::SingleClick;
+        for (count, is_image) in [
+            (1usize, false),
+            (1, true),
+            (2, false),
+            (2, true),
+            (5, false),
+        ] {
+            assert_eq!(
+                resolve_card_click_action(single, false, count, None, is_image),
+                SelectSingle
+            );
+            assert_eq!(
+                resolve_card_click_action(single, false, count, Primary, is_image),
+                ToggleSelect
+            );
+            assert_eq!(
+                resolve_card_click_action(single, false, count, Shift, is_image),
+                RangeSelect
+            );
+            assert_eq!(
+                resolve_card_click_action(single, false, count, AdditiveCombo, is_image),
+                Noop
+            );
+            assert_eq!(
+                resolve_card_click_action(single, false, count, ShiftCombo, is_image),
+                Noop
+            );
+            assert_eq!(
+                resolve_card_click_action(single, false, count, Other, is_image),
+                Noop
+            );
+        }
+    }
+
+    /// §2.4 / §5: other modifier combinations (Ctrl+Shift, Shift+Alt, Alt, Fn,
+    /// Win/Super alone, Ctrl+Alt) classify into the combo/Other buckets and never
+    /// resolve to a paste arm in single-click mode, in either selection state.
+    #[test]
+    fn classify_and_resolve_other_modifier_combos_never_paste() {
+        let single = PasteClickMode::SingleClick;
+        for modifiers in [
+            Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            }, // Ctrl+Shift → AdditiveCombo
+            Modifiers {
+                control: true,
+                alt: true,
+                ..Default::default()
+            }, // Ctrl+Alt → AdditiveCombo
+            Modifiers {
+                shift: true,
+                alt: true,
+                ..Default::default()
+            }, // Shift+Alt → ShiftCombo
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            }, // Alt alone → Other
+            Modifiers {
+                function: true,
+                ..Default::default()
+            }, // Fn alone → Other
+            Modifiers {
+                platform: true,
+                ..Default::default()
+            }, // Win/Super alone → Other
+        ] {
+            let bucket = classify_card_modifier(modifiers);
+            // Selected (single and multi) and unselected all resolve to Noop.
+            assert_eq!(
+                resolve_card_click_action(single, true, 1, bucket, true),
+                Noop
+            );
+            assert_eq!(
+                resolve_card_click_action(single, true, 3, bucket, false),
+                Noop
+            );
+            assert_eq!(
+                resolve_card_click_action(single, false, 1, bucket, true),
+                Noop
+            );
+            assert!(!matches!(
+                bucket,
+                CardModifier::None | CardModifier::Primary | CardModifier::Shift
+            ));
+        }
+    }
+
+    /// §2.4 single-paste-per-gesture: one click on the (single) already-selected
+    /// item resolves to exactly one paste action, deterministically. Two fast
+    /// clicks replay the identical input tuple, so they cannot fan out to two
+    /// different pastes; `handle_double_click` is a no-op in single-click mode.
+    #[test]
+    fn single_click_single_paste_per_gesture() {
+        let single = PasteClickMode::SingleClick;
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, None, true),
+            PasteDefault
+        );
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, None, false),
+            PasteDefault
+        );
+        let first = resolve_card_click_action(single, true, 1, None, false);
+        let second = resolve_card_click_action(single, true, 1, None, false);
+        assert_eq!(first, second);
+        assert_eq!(second, PasteDefault);
+    }
+
+    /// §2.4 short-judge non-perturbation: for a clicked item that is already
+    /// selected, the resolution is a paste or a clean Noop — never a selection
+    /// mutation (SelectSingle would re-select; a Toggle would deselect the sole
+    /// item) that could undo the click-time decision.
+    #[test]
+    fn single_click_short_judge_never_mutates_selection_for_selected() {
+        let single = PasteClickMode::SingleClick;
+        for (modifier, is_image) in [
+            (None, false),
+            (None, true),
+            (Shift, false),
+            (Shift, true),
+            (Primary, true),
+        ] {
+            let action = resolve_card_click_action(single, true, 1, modifier, is_image);
+            assert!(
+                matches!(action, PasteDefault | PastePlain | PasteBitmap),
+                "selected+single should paste, got {action:?} (modifier={modifier:?}, is_image={is_image})"
+            );
+        }
+        // Ctrl/Cmd on a selected non-image item is a clean Noop, not a deselect.
+        assert_eq!(
+            resolve_card_click_action(single, true, 1, Primary, false),
+            Noop
+        );
+    }
+
+    /// §2.2 double-click mode regression: the pure dispatcher models the legacy
+    /// single-click *selection* semantics (04-spec §2.2 para 2) — additive
+    /// toggles, shift ranges, else single-select. Paste is delivered on the
+    /// paired double-click event (`handle_double_click` / `double_click_paste_default`),
+    /// which is GPUI-context-bound and out of scope for this pure function, so
+    /// the dispatcher MUST never emit a Paste* arm here (no accidental
+    /// single-click paste regression), and the selection routing must match the
+    /// legacy behavior one-by-one.
+    #[test]
+    fn double_click_mode_dispatcher_is_selection_only_and_matches_legacy() {
+        let dbl = PasteClickMode::DoubleClick;
+        let single = PasteClickMode::SingleClick;
+        for (selected, count, is_image) in [
+            (true, 1usize, false),
+            (true, 1, true),
+            (true, 3, false),
+            (false, 1, false),
+        ] {
+            for modifier in [None, Primary, Shift, AdditiveCombo, ShiftCombo, Other] {
+                let action = resolve_card_click_action(dbl, selected, count, modifier, is_image);
+                assert!(
+                    !matches!(action, PasteDefault | PastePlain | PasteBitmap),
+                    "double-click dispatcher must never paste on a single click, got {action:?} (selected={selected}, count={count}, modifier={modifier:?})"
+                );
+            }
+        }
+        // Legacy routing, one-by-one.
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, None, false),
+            SelectSingle
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, Primary, false),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, Shift, false),
+            RangeSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, AdditiveCombo, false),
+            ToggleSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, ShiftCombo, false),
+            RangeSelect
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, true, 1, Other, false),
+            SelectSingle
+        );
+        // §2.4 orthogonality: for an *unselected* item the modifier→selection
+        // routing is identical between modes (selection-only, never a paste).
+        assert_eq!(
+            resolve_card_click_action(dbl, false, 1, Primary, false),
+            resolve_card_click_action(single, false, 1, Primary, true)
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, false, 1, Shift, false),
+            resolve_card_click_action(single, false, 1, Shift, false)
+        );
+        assert_eq!(
+            resolve_card_click_action(dbl, false, 1, None, false),
+            resolve_card_click_action(single, false, 1, None, false)
+        );
+    }
+
+    /// §2.4 pending/transfer exemption: pending placeholders are excluded from
+    /// the selectable/paste route (the per-card guard in `handle_card_click`
+    /// returns before dispatch), while a transfer entry is *not* pending — it
+    /// reaches the dispatcher, where the no-modifier default gesture redirects
+    /// to open/download instead of pasting (in `double_click_paste_default`).
+    #[test]
+    fn pending_and_transfer_exemptions_before_dispatch() {
+        let mut transfer = test_item(9, 0, false);
+        transfer.id = -9;
+        transfer.meta_type = "transfer".to_string();
+        let items = vec![
+            pending_item(1),
+            test_item(10, 0, false),
+            transfer,
+            test_item(20, 0, false),
+        ];
+        let selectable = collect_selectable_ids(&items);
+        assert!(
+            !selectable.contains(&-1),
+            "pending placeholder must be excluded"
+        );
+        assert!(
+            selectable.contains(&-9),
+            "transfer entry is selectable, not pending"
+        );
+        assert!(selectable.contains(&10));
+        assert!(selectable.contains(&20));
+        assert!(item_is_pending(&items[0]));
+        assert!(!item_is_pending(&items[2]));
+    }
+
+    // ─── Justice j3: v2 多选态收紧验证（04-spec v2 §2.3 单选态+多选态、§2.4 多选态点击不粘贴） ───
+    // 这些是对兵部 w3 已校正既有断言的**补全**，不删除 w3 修复的测试；每个测试提供
+    // `resolve_card_click_action`（GPUI-Context-free 纯分派器）的独立机器保证。
+
+    /// v2 §2.3 multi-select table + §2.4 core "multi-select click never pastes":
+    /// for every (selected × count>1 × image/text) combination the dispatcher is
+    /// selection management ONLY — None→SelectSingle (clears the multi-selection and
+    /// single-selects the clicked item), Primary→ToggleSelect, Shift→RangeSelect,
+    /// and every Combo/Other bucket→Noop. `PasteBatch` is a deleted variant (no
+    /// longer constructed by the dispatcher); the exhaustive `paste_arm` proves it
+    /// cannot be reintroduced without a compile error, and it returns false for
+    /// every multi-select input. Batch paste is reachable ONLY through the
+    /// hover-toolbar float button `batch_paste`, never through `CardClickAction`.
+    #[test]
+    fn multi_select_click_never_pastes_and_batch_is_floating_only() {
+        let single = PasteClickMode::SingleClick;
+        for &selected in &[true, false] {
+            for &count in &[2usize, 3, 4, 5] {
+                for &is_image in &[true, false] {
+                    for modifier in [None, Primary, Shift, AdditiveCombo, ShiftCombo, Other] {
+                        let action = dispatch(single, selected, count, modifier, is_image);
+                        assert!(
+                            !paste_arm(action),
+                            "multi-select must never paste (batch is float-button only), got {action:?} (selected={selected}, count={count}, is_image={is_image}, modifier={modifier:?})"
+                        );
+                    }
+                    assert_eq!(
+                        dispatch(single, selected, count, None, is_image),
+                        SelectSingle
+                    );
+                    assert_eq!(
+                        dispatch(single, selected, count, Primary, is_image),
+                        ToggleSelect
+                    );
+                    assert_eq!(
+                        dispatch(single, selected, count, Shift, is_image),
+                        RangeSelect
+                    );
+                    assert_eq!(
+                        dispatch(single, selected, count, AdditiveCombo, is_image),
+                        Noop
+                    );
+                    assert_eq!(
+                        dispatch(single, selected, count, ShiftCombo, is_image),
+                        Noop
+                    );
+                    assert_eq!(dispatch(single, selected, count, Other, is_image), Noop);
+                }
+            }
+        }
+    }
+
+    /// v2 §2.3/§2.4 invariance: the dispatcher yields a Paste* arm ONLY when the
+    /// clicked item is already selected AND the selection is single (=1), with the
+    /// format arm constrained by modifier/image (bitmap only for image items).
+    /// Sweeping the whole (selected × count × modifier × is_image) space proves
+    /// multi-select (>1) and unselected clicks never paste.
+    #[test]
+    fn single_select_paste_requires_clicked_selected_and_count_one() {
+        let single = PasteClickMode::SingleClick;
+        for &selected in &[true, false] {
+            for &count in &[1usize, 2, 3, 5] {
+                for &is_image in &[true, false] {
+                    for modifier in [None, Primary, Shift, AdditiveCombo, ShiftCombo, Other] {
+                        let action = dispatch(single, selected, count, modifier, is_image);
+                        let expects_paste = selected
+                            && count == 1
+                            && match modifier {
+                                None | Shift => true,
+                                Primary => is_image,
+                                AdditiveCombo | ShiftCombo | Other => false,
+                            };
+                        assert_eq!(
+                            paste_arm(action),
+                            expects_paste,
+                            "paste only when selected && count==1; got {action:?} (selected={selected}, count={count}, is_image={is_image}, modifier={modifier:?})"
+                        );
+                    }
+                }
+            }
+        }
+        // The single-select selected rows that must paste, spelled out.
+        assert_eq!(dispatch(single, true, 1, None, false), PasteDefault);
+        assert_eq!(dispatch(single, true, 1, Shift, false), PastePlain);
+        assert_eq!(dispatch(single, true, 1, Primary, true), PasteBitmap);
+        assert_eq!(dispatch(single, true, 1, Primary, false), Noop);
+    }
+
+    /// v2 §2.2 double-click mode regression: the pure dispatcher models the legacy
+    /// single-click *selection* routing only — additive toggles, shift ranges, else
+    /// single-select — and NEVER emits a Paste* arm (paste is delivered on the
+    /// paired double-click event in `handle_double_click`/`double_click_paste_default`).
+    /// Sweeping selection-state × count × modifier × image proves no single-click
+    /// paste regression, and the legacy routing is matched one-by-one.
+    #[test]
+    fn double_click_dispatcher_selection_only_no_regression() {
+        let dbl = PasteClickMode::DoubleClick;
+        for &selected in &[true, false] {
+            for &count in &[1usize, 2, 3, 5] {
+                for &is_image in &[true, false] {
+                    for modifier in [None, Primary, Shift, AdditiveCombo, ShiftCombo, Other] {
+                        let action = dispatch(dbl, selected, count, modifier, is_image);
+                        assert!(
+                            !paste_arm(action),
+                            "double-click dispatcher must be selection-only, got {action:?} (selected={selected}, count={count}, is_image={is_image}, modifier={modifier:?})"
+                        );
+                    }
+                }
+            }
+        }
+        // Legacy routing, one-by-one (bare and combo buckets).
+        assert_eq!(dispatch(dbl, true, 1, None, false), SelectSingle);
+        assert_eq!(dispatch(dbl, true, 1, Primary, false), ToggleSelect);
+        assert_eq!(dispatch(dbl, true, 1, Shift, false), RangeSelect);
+        assert_eq!(dispatch(dbl, true, 1, AdditiveCombo, false), ToggleSelect);
+        assert_eq!(dispatch(dbl, true, 1, ShiftCombo, false), RangeSelect);
+        assert_eq!(dispatch(dbl, true, 1, Other, false), SelectSingle);
+        // Multi-select in double-click mode stays selection-only (no batch here).
+        assert_eq!(dispatch(dbl, true, 3, None, false), SelectSingle);
+    }
+
+    /// v2 §2.4/§5: the combo/Other `CardModifier` buckets (Ctrl+Shift, Shift+Alt,
+    /// Alt, Fn, Win/Super, and any combination) resolve to `Noop` for every
+    /// selection-state × count × image combination in single-click mode — never a
+    /// paste, never a candidate. Pure-resolve-layer complement to
+    /// `classify_and_resolve_other_modifier_combos_never_paste`.
+    #[test]
+    fn combo_other_modifiers_resolve_noop_in_single_click() {
+        let single = PasteClickMode::SingleClick;
+        for bucket in [AdditiveCombo, ShiftCombo, Other] {
+            for &(selected, count, is_image) in &[
+                (true, 1usize, false),
+                (true, 1, true),
+                (true, 3, false),
+                (true, 2, true),
+                (false, 1, false),
+                (false, 4, true),
+            ] {
+                let action = dispatch(single, selected, count, bucket, is_image);
+                assert_eq!(action, Noop);
+                assert!(!paste_arm(action));
+            }
+        }
+    }
+
+    /// v2 §2.4 exemption: a pending placeholder is excluded from the selectable
+    /// set (the only click-dispatch candidates), so it never reaches the paste
+    /// dispatcher and cannot be pasted. A transfer entry is NOT pending — it is
+    /// selectable, reaches the dispatcher, and (being single) routes to
+    /// open/download instead of paste under a no-modifier default gesture
+    /// (`double_click_paste_default`).
+    #[test]
+    fn pending_placeholder_never_pastes_and_transfer_reaches_dispatch() {
+        let mut transfer = test_item(9, 0, false);
+        transfer.id = -9;
+        transfer.meta_type = "transfer".to_string();
+        let items = vec![pending_item(1), test_item(10, 20, false), transfer];
+        let pending_flags: Vec<bool> = items.iter().map(item_is_pending).collect();
+        assert_eq!(pending_flags, vec![true, false, false]);
+        // Pending is excluded from the selectable/dispatch set → cannot be pasted.
+        assert!(!collect_selectable_ids(&items).contains(&-1));
+        // Transfer is selectable → reaches dispatch; it is not pending.
+        assert!(collect_selectable_ids(&items).contains(&-9));
+        assert!(item_is_pending(&items[0]));
+        assert!(!item_is_pending(&items[2]));
+        // No click may produce a paste arm in double-click mode (selection only).
+        let dbl = PasteClickMode::DoubleClick;
+        for &selected in &[true, false] {
+            for &count in &[1usize, 2, 3] {
+                for modifier in [None, Primary, Shift, AdditiveCombo, ShiftCombo, Other] {
+                    assert!(!paste_arm(dispatch(dbl, selected, count, modifier, false)));
+                }
+            }
+        }
     }
 }

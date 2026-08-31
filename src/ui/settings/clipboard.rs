@@ -20,6 +20,7 @@ impl SettingsPanel {
         let sort_by_created = app.settings.sort_by_created;
         let search_favorites_first = app.settings.search_favorites_first;
         let card_height_mode = app.settings.card_height_mode.clone();
+        let paste_click_mode = app.settings.paste_click_mode_normalized();
         let show_source_app = app.settings.show_source_app;
         let auto_scroll_to_top = app.settings.auto_scroll_to_top;
         let copy_as_plain_text = app.settings.copy_as_plain_text;
@@ -64,6 +65,33 @@ impl SettingsPanel {
                     move |key, _window, _cx| {
                         state.update(_cx, |s, _cx| {
                             s.settings.card_height_mode = key.to_string();
+                            s.settings.save();
+                        });
+                        this.update(_cx, |_panel, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: false,
+                                scroll_to_top: false,
+                            });
+                            cx.notify();
+                        });
+                    },
+                )
+            })
+            // --- Paste click mode (2-option group: single / double) ---
+            .child({
+                let state = state.clone();
+                let this = this.clone();
+                self.setting_row_with_options(
+                    I18nKey::SettingPasteClickMode.text(),
+                    I18nKey::DescPasteClickMode.text(),
+                    &[
+                        ("double_click", I18nKey::PasteClickModeDouble.text()),
+                        ("single_click", I18nKey::PasteClickModeSingle.text()),
+                    ],
+                    &paste_click_mode,
+                    move |key, _window, _cx| {
+                        state.update(_cx, |s, _cx| {
+                            s.settings.paste_click_mode = key.to_string();
                             s.settings.save();
                         });
                         this.update(_cx, |_panel, cx| {
