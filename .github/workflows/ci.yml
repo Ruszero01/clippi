@@ -1,8 +1,7 @@
 name: Verify
 
 on:
-  push:
-    branches: [main]
+  # Called by the release workflow only when a version tag is pushed.
   workflow_call:
 
 permissions:
