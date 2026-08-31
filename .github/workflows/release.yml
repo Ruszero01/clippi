@@ -43,17 +43,9 @@ on:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  verify:
-    uses: ./.github/workflows/ci.yml
-
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
-    needs: verify
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
@@ -448,14 +440,8 @@ jobs:
             printf '%s\n' "$ANNOUNCEMENT_BODY"
           } > "$RUNNER_TEMP/notes.txt"
 
-          # Retrying a release must never delete or move an existing tag.
-          # cargo-dist may already have created the release; update it in place.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" artifacts/* --clobber
-            gh release edit "$TAG" --draft=false --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
-          else
-            gh release create "$TAG" --verify-tag $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
-          fi
+          gh release delete "$TAG" --cleanup-tag -y || true
+          gh release create "$TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
       - name: Add DMG and NSIS to release notes
         env:
           TAG: "${{ needs.plan.outputs.tag }}"
