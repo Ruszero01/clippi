@@ -17,7 +17,11 @@ pub fn preserve_clipboard_html_document(html: &str) -> String {
         parse_cf_html_offset(header, "StartHTML:"),
         parse_cf_html_offset(header, "EndHTML:"),
     ) {
-        (Some(start), Some(end)) if start >= markup_start && valid_byte_range(html, start, end) => {
+        (Some(start), Some(end))
+            if start >= markup_start
+                && valid_html_range(html, start, end)
+                && html[start..].starts_with('<') =>
+        {
             (start, end)
         }
         _ => (markup_start, html.len()),
@@ -31,7 +35,7 @@ pub fn preserve_clipboard_html_document(html: &str) -> String {
     ) {
         if fragment_start >= start
             && fragment_end <= end
-            && valid_byte_range(html, fragment_start, fragment_end)
+            && valid_html_range(html, fragment_start, fragment_end)
         {
             return format!(
                 "{}<!--StartFragment-->{}<!--EndFragment-->{}",
@@ -46,6 +50,55 @@ pub fn preserve_clipboard_html_document(html: &str) -> String {
 
 fn valid_byte_range(text: &str, start: usize, end: usize) -> bool {
     start <= end && end <= text.len() && text.is_char_boundary(start) && text.is_char_boundary(end)
+}
+
+// CF_HTML offsets can be in bounds yet split a tag or comment. Inserting
+// fragment markers there corrupts the document and exposes markup as text.
+fn valid_html_range(html: &str, start: usize, end: usize) -> bool {
+    if !valid_byte_range(html, start, end) {
+        return false;
+    }
+    let bytes = html.as_bytes();
+    let mut cursor = 0;
+    while let Some(relative) = html[cursor..].find('<') {
+        let open = cursor + relative;
+        if open >= end {
+            break;
+        }
+        let Some(next) = bytes.get(open + 1) else {
+            break;
+        };
+        if !next.is_ascii_alphabetic() && !matches!(next, b'/' | b'!' | b'?') {
+            cursor = open + 1;
+            continue;
+        }
+        let close = if html[open..].starts_with("<!--") {
+            html[open + 4..].find("-->").map(|i| open + 4 + i + 3)
+        } else {
+            let mut quote = None;
+            let mut close = None;
+            for (i, &byte) in bytes.iter().enumerate().skip(open + 1) {
+                match (quote, byte) {
+                    (Some(expected), actual) if actual == expected => quote = None,
+                    (None, b'\'' | b'"') => quote = Some(byte),
+                    (None, b'>') => {
+                        close = Some(i + 1);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            close
+        };
+        let Some(close) = close else {
+            return false;
+        };
+        if (open < start && start < close) || (open < end && end < close) {
+            return false;
+        }
+        cursor = close;
+    }
+    true
 }
 
 /// Encode HTML as CF_HTML, preserving the selected fragment and its context.
@@ -101,7 +154,7 @@ pub fn encode_cf_html(html: &str) -> String {
 pub fn clipboard_html_for_macos(html: &str) -> String {
     let document = preserve_clipboard_html_document(html);
     if fragment_marker_range(&document).is_none() {
-        return document;
+        return strip_fragment_markers(&document);
     }
     let head = find_case_insensitive(&document, "<head")
         .and_then(|start| {
@@ -151,11 +204,7 @@ pub fn normalize_clipboard_html(html: &str) -> String {
             ) {
                 // Offsets are byte positions; never slice through a UTF-8
                 // codepoint. Invalid ranges degrade to marker/body extraction.
-                if start <= end
-                    && end <= html.len()
-                    && html.is_char_boundary(start)
-                    && html.is_char_boundary(end)
-                {
+                if start >= pos && valid_html_range(html, start, end) {
                     return strip_fragment_markers(&html[start..end]).trim().to_string();
                 }
             }
@@ -234,9 +283,20 @@ fn find_fragment_comment(html: &str, name: &str) -> Option<(usize, usize)> {
 /// markers exist and are in order. An empty fragment is valid and yields an
 /// empty range.
 fn fragment_marker_range(html: &str) -> Option<(usize, usize)> {
-    let (_, start_end) = find_fragment_comment(html, "StartFragment")?;
-    let (end_start, _) = find_fragment_comment(&html[start_end..], "EndFragment")?;
-    Some((start_end, start_end + end_start))
+    let (start_open, start_end) = find_fragment_comment(html, "StartFragment")?;
+    let (end_start, end_end) = find_fragment_comment(&html[start_end..], "EndFragment")?;
+    let end_start = start_end + end_start;
+    let end_end = start_end + end_end;
+    // Also reject malformed markers persisted by older capture code. Their
+    // removal in the body fallback restores tags split by marker insertion.
+    let unmarked = format!(
+        "{}{}{}",
+        &html[..start_open],
+        &html[start_end..end_start],
+        &html[end_end..],
+    );
+    valid_html_range(&unmarked, start_open, start_open + end_start - start_end)
+        .then_some((start_end, end_start))
 }
 
 /// Content inside `<body>...</body>`, when both tags exist.
@@ -688,6 +748,57 @@ lang=EN-US><o:p></o:p></span></span></b></p>
             normalize_clipboard_html(&payload),
             "<table><tr><td class=et2>测试文本</td></tr></table>"
         );
+    }
+
+    #[test]
+    fn numeric_fragment_offsets_must_not_split_table_tags() {
+        let document = "<html><head><style>.et2{color:red}</style></head><body><!--StartFragment--><table border=0 cellpadding=0 cellspacing=0><tr><td class=et2>测试文本</td></tr></table><!--EndFragment--></body></html>";
+        let header = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n";
+        let table_start = document.find("<table").unwrap();
+        let table_end = document.find("</table>").unwrap() + "</table>".len();
+        for (start, end) in [(table_start + 1, table_end), (table_start, table_end - 1)] {
+            let payload = format!(
+                "Version:1.0\r\nStartHTML:{:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n{document}",
+                header.len(), header.len() + document.len(), header.len() + start, header.len() + end,
+            );
+            let expected = &document[table_start..table_end];
+            assert_eq!(normalize_clipboard_html(&payload), expected);
+            let stored = preserve_clipboard_html_document(&payload);
+            assert_eq!(stored, document);
+            assert_eq!(visible_text(&stored), "测试文本");
+            assert_eq!(normalize_clipboard_html(&encode_cf_html(&stored)), expected);
+        }
+    }
+
+    #[test]
+    fn malformed_stored_markers_do_not_expose_table_markup() {
+        let table = "<table border=0 cellpadding=0 cellspacing=0><tr><td class=et2>测试文本</td></tr></table>";
+        for (start, end) in [(1, table.len()), (0, table.len() - 1)] {
+            // Reproduce the exact marker insertion used by the released code.
+            let stored = format!(
+                "<html><head><style>.et2{{color:red}}</style></head><body>{}<!--StartFragment-->{}<!--EndFragment-->{}</body></html>",
+                &table[..start], &table[start..end], &table[end..],
+            );
+            assert_eq!(normalize_clipboard_html(&stored), table);
+            assert_eq!(visible_text(&stored), "测试文本");
+            let encoded = encode_cf_html(&stored);
+            assert_eq!(normalize_clipboard_html(&encoded), table);
+            assert!(encoded.contains("<style>.et2{color:red}</style>"));
+            let mac_html = super::clipboard_html_for_macos(&stored);
+            assert!(mac_html.contains(table));
+            assert_eq!(visible_text(&mac_html), "测试文本");
+        }
+    }
+
+    #[test]
+    fn html_boundaries_distinguish_attributes_comments_and_text_selections() {
+        let html = "<body><span title='a > b'>测试文本</span><!-- comment > here --></body>";
+        let attr = html.find("b'").unwrap();
+        let comment = html.find("here").unwrap();
+        let text = html.find("测试文本").unwrap();
+        assert!(!super::valid_html_range(html, attr, html.len()));
+        assert!(!super::valid_html_range(html, 0, comment));
+        assert!(super::valid_html_range(html, text, text + "测试".len()));
     }
 
     #[test]

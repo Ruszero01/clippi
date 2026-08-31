@@ -1384,6 +1384,22 @@ mod tests {
     }
 
     #[test]
+    fn table_preview_recovers_tags_split_by_stored_fragment_markers() {
+        let stored = "<html><head><style>.et2{color:#ff6600}</style></head><body><<!--StartFragment-->table border=0 cellpadding=0 cellspacing=0><tr><td class=et2>测试文本</td></tr></table><!--EndFragment--></body></html>";
+        let lines = parse_styled_html_lines_full(stored).unwrap();
+        let text: String = lines
+            .iter()
+            .flatten()
+            .map(|span| span.text.as_str())
+            .collect();
+        assert_eq!(text, "测试文本");
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|span| span.text == "测试文本" && span.color == Some(rgb(0xFF6600))));
+    }
+
+    #[test]
     fn inline_style_overrides_class_rule() {
         let html = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2 style="color:#00ff00">测试文本</td></tr></table></body></html>"#;
         let lines = parse_styled_html_lines_full(html).unwrap();
