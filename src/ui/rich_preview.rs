@@ -851,13 +851,19 @@ fn semantic_tag_defaults(tag_name: &str) -> ParsedInlineStyle {
 }
 
 /// Parse only the inline `style="..."` attribute (plus the classic HTML
-/// `color="..."` attribute) of a tag — no semantic tag defaults.
+/// `color="..."` / `bgcolor="..."` attributes) of a tag — no semantic tag
+/// defaults.
 fn parse_inline_style_attr(tag: &str) -> ParsedInlineStyle {
     let mut style = html_attribute(tag, "style")
         .map(parse_style_declarations)
         .unwrap_or_default();
     if style.color.is_none() {
         style.color = parse_html_color_attr(tag);
+    }
+    if style.background_color.is_none() {
+        style.background_color = html_attribute(tag, "bgcolor")
+            .map(str::trim)
+            .and_then(parse_css_color);
     }
     style
 }
@@ -1010,7 +1016,8 @@ fn parse_rule_selector(selector: &str, body: &str) -> Option<(String, ParsedInli
 }
 
 /// Parse the whitelisted declarations (`color`, `font-weight`, `font-style`,
-/// `background-color`) from a rule body, stripping `!important`.
+/// `background-color`, and a color-only `background` shorthand) from a rule
+/// body, stripping `!important`.
 fn parse_style_declarations(body: &str) -> ParsedInlineStyle {
     let mut style = ParsedInlineStyle::default();
     for decl in body.split(';') {
@@ -1027,11 +1034,20 @@ fn parse_style_declarations(body: &str) -> ParsedInlineStyle {
             "color" => style.color = parse_css_color(value),
             "font-weight" => style.font_weight = parse_css_font_weight(value),
             "font-style" => style.font_style = parse_css_font_style(value),
-            "background-color" => style.background_color = parse_css_color(value),
+            "background-color" | "background" => {
+                style.background_color = parse_css_background_color(value)
+            }
             _ => {}
         }
     }
     style
+}
+
+/// Extract the color from the common clipboard `background` shorthand.
+/// Spreadsheet HTML normally emits a single color, while this also accepts a
+/// color token among other shorthand components. Images/gradients are ignored.
+fn parse_css_background_color(value: &str) -> Option<Rgba> {
+    parse_css_color(value).or_else(|| value.split_ascii_whitespace().find_map(parse_css_color))
 }
 
 /// Remove a trailing `!important` marker so the value parses as a normal
@@ -1528,6 +1544,34 @@ mod tests {
         assert_eq!(lines[0][0].font_weight, None);
         assert_eq!(lines[0][0].font_style, None);
         assert_eq!(lines[0][0].background_color, None);
+    }
+
+    #[test]
+    fn table_cell_background_shorthand_is_rendered() {
+        let html = r#"<style>.filled { color:#000; background:#f4b183; }</style><table><tr><td class=filled>test</td></tr></table>"#;
+        let lines = parse_styled_html_lines_full(html).unwrap();
+        let span = lines
+            .iter()
+            .flatten()
+            .find(|span| span.text == "test")
+            .unwrap();
+
+        assert_eq!(span.background_color, Some(rgb(0xF4B183)));
+    }
+
+    #[test]
+    fn table_cell_bgcolor_attribute_is_rendered() {
+        let lines = parse_styled_html_lines_full(
+            r##"<table><tr><td bgcolor="#f4b183">test</td></tr></table>"##,
+        )
+        .unwrap();
+        let span = lines
+            .iter()
+            .flatten()
+            .find(|span| span.text == "test")
+            .unwrap();
+
+        assert_eq!(span.background_color, Some(rgb(0xF4B183)));
     }
 
     #[test]
