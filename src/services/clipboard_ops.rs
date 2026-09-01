@@ -35,7 +35,7 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
             let contents = vec![ClipboardContent::Files(paths)];
             let _ = Clipboard::set(ctx, contents);
         } else if copy_as_plain_text {
-            let _ = Clipboard::set_text(ctx, item.full_text.clone());
+            let _ = Clipboard::set_text(ctx, plain_text_for_item(item));
         } else {
             let mut contents = vec![ClipboardContent::Text(item.full_text.clone())];
             let rich = RichData::from_json(&item.rich_data);
@@ -59,7 +59,17 @@ pub fn write_item_to_clipboard(item: &ClipboardItem, copy_as_plain_text: bool) {
 /// Unlike the global rich-text setting, this operation intentionally converts
 /// image and file items into their backing paths.
 pub fn write_item_as_plain_text_to_clipboard(item: &ClipboardItem) {
-    let text = if item.content_type == ContentType::Image && !item.image_path.is_empty() {
+    let text = plain_text_for_item(item);
+    let _ = write_text_to_clipboard(&text);
+}
+
+/// Resolve the plain-text representation used by all copy/paste paths.
+///
+/// This is intentionally evaluated at paste time as well as capture time so
+/// clipboard history recorded before the WPS/Excel multiline fix is repaired
+/// without requiring a database migration or a fresh copy.
+pub fn plain_text_for_item(item: &ClipboardItem) -> String {
+    if item.content_type == ContentType::Image && !item.image_path.is_empty() {
         item.image_path.clone()
     } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
         let file_data = crate::core::types::FileData::from_json(&item.file_data);
@@ -70,9 +80,12 @@ pub fn write_item_as_plain_text_to_clipboard(item: &ClipboardItem) {
             .collect::<Vec<_>>()
             .join("\n")
     } else {
-        item.full_text.clone()
-    };
-    let _ = write_text_to_clipboard(&text);
+        let rich = RichData::from_json(&item.rich_data);
+        rich.html
+            .as_deref()
+            .and_then(crate::core::html_text::spreadsheet_plain_text)
+            .unwrap_or_else(|| item.full_text.clone())
+    }
 }
 
 /// Decode an image file for compatibility paste targets that require bitmap data.
@@ -148,5 +161,37 @@ pub fn verify_clipboard_image(timeout_ms: u64) -> bool {
             return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_excel_history_item_is_normalized_when_pasted_as_plain_text() {
+        let html = r#"<html xmlns:x="urn:schemas-microsoft-com:office:excel"><body>
+<!--StartFragment--><table><tr><td x:str>表格测试纯文本<br>表格测试纯文本</td></tr></table><!--EndFragment-->
+</body></html>"#;
+        let rich = RichData {
+            html: Some(html.into()),
+            ..Default::default()
+        };
+        let item = ClipboardItem::new_text(
+            1,
+            "\"表格测试纯文本\r\n表格测试纯文本\"",
+            ContentType::RichText,
+            None,
+            Some(&rich),
+        );
+
+        assert_eq!(plain_text_for_item(&item), "表格测试纯文本\n表格测试纯文本");
+    }
+
+    #[test]
+    fn ordinary_quoted_history_text_is_preserved() {
+        let item =
+            ClipboardItem::new_text(1, "\"用户原始文本\"", ContentType::PlainText, None, None);
+        assert_eq!(plain_text_for_item(&item), "\"用户原始文本\"");
     }
 }

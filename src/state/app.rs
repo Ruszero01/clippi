@@ -1505,7 +1505,11 @@ impl AppState {
         self.touch_item_usage(&item);
         let is_file = item.content_type == ContentType::File
             || (item.content_type == ContentType::Image && !item.image_path.is_empty());
-        let expected = item.full_text.clone();
+        let expected = if copy_as_plain_text {
+            crate::services::clipboard_ops::plain_text_for_item(&item)
+        } else {
+            item.full_text.clone()
+        };
         self.write_item_to_clipboard_internal(&item, copy_as_plain_text);
 
         if !expected.is_empty() && !is_file {
@@ -1598,19 +1602,7 @@ impl AppState {
         self.touch_item_usage(&item);
         let is_file_or_image = item.content_type == ContentType::File
             || (item.content_type == ContentType::Image && !item.image_path.is_empty());
-        let expected = if item.content_type == ContentType::Image && !item.image_path.is_empty() {
-            item.image_path.clone()
-        } else if item.content_type == ContentType::File && !item.file_data.is_empty() {
-            let file_data = FileData::from_json(&item.file_data);
-            file_data
-                .files
-                .iter()
-                .map(|f| f.path.clone())
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            item.full_text.clone()
-        };
+        let expected = crate::services::clipboard_ops::plain_text_for_item(&item);
         self.write_item_as_plain_text_to_clipboard_internal(&item);
 
         if !expected.is_empty() {
@@ -1704,7 +1696,11 @@ impl AppState {
                 std::thread::sleep(std::time::Duration::from_millis(60));
             }
 
-            let expected = item.full_text.clone();
+            let expected = if copy_as_plain_text {
+                crate::services::clipboard_ops::plain_text_for_item(item)
+            } else {
+                item.full_text.clone()
+            };
             crate::services::clipboard_ops::write_item_to_clipboard(item, copy_as_plain_text);
 
             // --- Verify clipboard before pasting ---

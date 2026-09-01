@@ -359,6 +359,104 @@ pub fn visible_text(html: &str) -> String {
     decode_html_entities(&out).trim().to_string()
 }
 
+/// Extract a tab/newline-delimited plain-text representation from an
+/// Excel-compatible clipboard table (Microsoft Excel and WPS).
+///
+/// Spreadsheet applications quote `CF_UNICODETEXT` fields that contain an
+/// in-cell newline. The HTML flavor retains the actual cell structure, so it
+/// is a safer source for "paste as plain text" than stripping quotes from an
+/// otherwise arbitrary text payload.
+pub fn spreadsheet_plain_text(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let is_excel_html = lower.contains("urn:schemas-microsoft-com:office:excel")
+        || lower.contains("content=\"microsoft excel\"")
+        || lower.contains("content='microsoft excel'");
+    if !is_excel_html {
+        return None;
+    }
+
+    let fragment = normalize_clipboard_html(html);
+    let fragment_lower = fragment.to_ascii_lowercase();
+    if !fragment_lower.contains("<table") || !fragment_lower.contains("<td") {
+        return None;
+    }
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut cell: Option<String> = None;
+    let mut cursor = 0;
+
+    while cursor < fragment.len() {
+        let Some(relative_open) = fragment[cursor..].find('<') else {
+            if let Some(value) = cell.as_mut() {
+                value.push_str(&decode_html_entities(&fragment[cursor..]));
+            }
+            break;
+        };
+        let open = cursor + relative_open;
+        if let Some(value) = cell.as_mut() {
+            value.push_str(&decode_html_entities(&fragment[cursor..open]));
+        }
+
+        let Some(relative_close) = fragment[open..].find('>') else {
+            break;
+        };
+        let close = open + relative_close;
+        let raw_tag = fragment[open + 1..close].trim();
+        if !raw_tag.starts_with('!') && !raw_tag.starts_with('?') {
+            let closing = raw_tag.starts_with('/');
+            let name = raw_tag
+                .trim_start_matches('/')
+                .split_ascii_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/')
+                .to_ascii_lowercase();
+            match (closing, name.as_str()) {
+                (false, "td" | "th") => cell = Some(String::new()),
+                (false, "br") => {
+                    if let Some(value) = cell.as_mut() {
+                        value.push('\n');
+                    }
+                }
+                (true, "td" | "th") => {
+                    if let Some(value) = cell.take() {
+                        row.push(normalize_spreadsheet_cell(&value));
+                    }
+                }
+                (true, "tr") if !row.is_empty() => rows.push(std::mem::take(&mut row)),
+                _ => {}
+            }
+        }
+        cursor = close + 1;
+    }
+
+    if let Some(value) = cell.take() {
+        row.push(normalize_spreadsheet_cell(&value));
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+
+    Some(
+        rows.into_iter()
+            .map(|cells| cells.join("\t"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+fn normalize_spreadsheet_cell(value: &str) -> String {
+    value
+        .split('\n')
+        .map(|line| line.trim_matches(|ch: char| ch.is_whitespace()).to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn has_visible_match(html: &str, predicate: impl Fn(&str) -> bool) -> bool {
     let text = visible_text(html);
     !text.is_empty() && predicate(&text)
@@ -374,12 +472,42 @@ fn is_block_break_tag(tag: &str) -> bool {
 }
 
 fn decode_html_entities(text: &str) -> String {
-    text.replace("&nbsp;", " ")
+    let named = text
+        .replace("&nbsp;", " ")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&amp;", "&")
         .replace("&quot;", "\"")
-        .replace("&#39;", "'")
+        .replace("&#39;", "'");
+    decode_numeric_html_entities(&named)
+}
+
+fn decode_numeric_html_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("&#") {
+        out.push_str(&rest[..start]);
+        let entity = &rest[start + 2..];
+        let Some(end) = entity.find(';') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let digits = &entity[..end];
+        let parsed = digits
+            .strip_prefix('x')
+            .or_else(|| digits.strip_prefix('X'))
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .or_else(|| digits.parse::<u32>().ok())
+            .and_then(char::from_u32);
+        if let Some(ch) = parsed {
+            out.push(ch);
+        } else {
+            out.push_str(&rest[start..start + 2 + end + 1]);
+        }
+        rest = &entity[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -857,5 +985,37 @@ lang=EN-US><o:p></o:p></span></span></b></p>
             normalize_clipboard_html(&preserve_clipboard_html_document(&payload)),
             "中文"
         );
+    }
+
+    #[test]
+    fn excel_multiline_cell_plain_text_has_no_transport_quotes() {
+        let html = r#"<html xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head><meta name=Generator content="Microsoft Excel"></head><body>
+<!--StartFragment--><table>&#x20;<tr><td x:str>表格测试纯文本<br>表格测试纯文本</td></tr></table><!--EndFragment-->
+</body></html>"#;
+
+        assert_eq!(
+            spreadsheet_plain_text(html).as_deref(),
+            Some("表格测试纯文本\n表格测试纯文本")
+        );
+    }
+
+    #[test]
+    fn excel_table_preserves_rows_columns_and_decodes_numeric_entities() {
+        let html = r#"<html xmlns:x='urn:schemas-microsoft-com:office:excel'><body>
+<!--StartFragment--><table><tr><td>A&#x20;B</td><td>C</td></tr>
+<tr><td>D<br>E</td><td>&#34;F&#34;</td></tr></table><!--EndFragment-->
+</body></html>"#;
+
+        assert_eq!(
+            spreadsheet_plain_text(html).as_deref(),
+            Some("A B\tC\nD\nE\t\"F\"")
+        );
+    }
+
+    #[test]
+    fn ordinary_html_is_not_treated_as_a_spreadsheet() {
+        let html = "<html><body><table><tr><td>\"用户文本\"</td></tr></table></body></html>";
+        assert_eq!(spreadsheet_plain_text(html), None);
     }
 }

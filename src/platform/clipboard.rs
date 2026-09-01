@@ -650,17 +650,20 @@ pub(crate) fn classify_clipboard_for_plain_paste(ctx: &ClipboardContext) -> Clip
         } else {
             None
         };
-        let html_text = if has_rich {
-            read_clipboard_rich_data(ctx)
-                .and_then(|rich| rich.html)
-                .and_then(|html| {
-                    let visible = crate::core::html_text::visible_text(&html);
-                    (!visible.is_empty()).then_some(visible)
-                })
-        } else {
-            None
-        };
-        if let Some(text) = text.or(html_text) {
+        let rich_html = has_rich
+            .then(|| read_clipboard_rich_data(ctx))
+            .flatten()
+            .and_then(|rich| rich.html);
+        let spreadsheet_text = rich_html
+            .as_deref()
+            .and_then(crate::core::html_text::spreadsheet_plain_text);
+        let html_text = rich_html.as_deref().and_then(|html| {
+            let visible = crate::core::html_text::visible_text(html);
+            (!visible.is_empty()).then_some(visible)
+        });
+        // Excel/WPS quote plain-text fields containing in-cell newlines.
+        // Prefer their structured HTML table representation when available.
+        if let Some(text) = spreadsheet_text.or(text).or(html_text) {
             return ClipboardContentClass::Text(text);
         }
         // Text formats exist but produced nothing readable → rule 4.
@@ -959,7 +962,11 @@ fn detect_text_content_with_readers(
     // text flavor must not discard a spreadsheet's HTML in favor of its bitmap.
     // The rich reader checks format availability before opening the clipboard.
     let rich_data = read_rich();
-    let text = text.or_else(|| {
+    let spreadsheet_text = rich_data
+        .as_ref()
+        .and_then(|rich| rich.html.as_deref())
+        .and_then(crate::core::html_text::spreadsheet_plain_text);
+    let text = spreadsheet_text.or(text).or_else(|| {
         rich_data
             .as_ref()?
             .html
@@ -1854,6 +1861,27 @@ mod rich_capture_tests {
         assert_eq!(item.full_text, text);
         assert_eq!(item.display_kind(), DisplayKind::Html);
         assert_eq!(RichData::from_json(&item.rich_data).html, rich.html);
+    }
+
+    #[test]
+    fn excel_multiline_transport_quotes_are_replaced_by_table_text() {
+        let html = r#"<html xmlns:x="urn:schemas-microsoft-com:office:excel"><body>
+<!--StartFragment--><table><tr><td x:str>表格测试纯文本<br>表格测试纯文本</td></tr></table><!--EndFragment-->
+</body></html>"#;
+        let rich = RichData {
+            html: Some(html.into()),
+            ..Default::default()
+        };
+        let item = detect_text_content_with_readers(
+            true,
+            || Some("\"表格测试纯文本\r\n表格测试纯文本\"".into()),
+            || Some(rich),
+            &None,
+        )
+        .unwrap();
+
+        assert_eq!(item.full_text, "表格测试纯文本\n表格测试纯文本");
+        assert_eq!(item.display_kind(), DisplayKind::Html);
     }
 
     #[test]
