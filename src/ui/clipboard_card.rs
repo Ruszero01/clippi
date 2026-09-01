@@ -1446,18 +1446,44 @@ impl RenderOnce for ClipboardCard {
         };
         let image_name = image_display_name(&item);
         let meta_type = item.meta_type.clone();
-        // --- Cached source-path / image availability ---
-        // One background-probed lookup per path, shared by the content preview
-        // and the size label below (None = still unknown, not "missing").
+        // --- Unified cached item validity ---
+        // The card and cleanup share the same item classifier. Path probes are
+        // cached so rendering never blocks; an unfinished probe is Unknown and
+        // therefore never receives the stale label.
         let is_native_path =
             meta_type == "path" && crate::core::types::path_is_native(&item.full_text);
-        let path_missing = is_native_path
-            && !item.full_text.trim().starts_with("\\\\")
-            && crate::services::file_status::cached_file_exists(item.full_text.trim())
-                == Some(false);
+        let validity_candidate = crate::core::cache_cleanup::StaleItemCandidate {
+            id: item.id,
+            content_hash: item.content_hash,
+            updated_at: item.updated_at,
+            content_type: item.content_type,
+            full_text: item.full_text.clone(),
+            image_path: item.image_path.clone(),
+            file_data: item.file_data.clone(),
+            meta_type: item.meta_type.clone(),
+            is_favorite: item.is_favorite,
+            existence_observed_at: item.existence_observed_at.clone(),
+            sync_pending: image_is_waiting_for_sync(&item),
+            observation: None,
+        };
+        let item_status =
+            crate::core::cache_cleanup::classify_item_status_with(&validity_candidate, |path| {
+                crate::services::file_status::cached_path_status(path).unwrap_or(
+                    crate::core::types::PathStatus::Unknown {
+                        reason: crate::core::types::PathStatusReason::ProbeTimeout,
+                    },
+                )
+            });
+        let item_is_stale = matches!(
+            item_status,
+            crate::core::cache_cleanup::ItemStatus::DefinitelyMissing
+        );
+        let path_missing = meta_type == "path" && item_is_stale;
         let image_missing = content_type == ContentType::Image
-            && !item.image_path.is_empty()
-            && crate::services::file_status::cached_file_exists(&item.image_path) == Some(false);
+            && matches!(
+                crate::services::file_status::cached_path_status(&item.image_path),
+                Some(crate::core::types::PathStatus::DefinitelyMissing)
+            );
         let tags = item.tags.clone();
         let transfer_file_data = if content_type == ContentType::File || meta_type == "transfer" {
             FileData::from_json(&item.file_data)
@@ -1470,16 +1496,11 @@ impl RenderOnce for ClipboardCard {
                 .files
                 .first()
                 .is_none_or(|file| file.path.is_empty());
-        let single_file_missing = remote_host.is_none()
-            && transfer_file_data.files.len() == 1
-            && transfer_file_data.files.first().is_some_and(|file| {
-                crate::services::file_status::cached_file_exists(&file.path) == Some(false)
-            });
         // Transfer entries never become a stale source: a missing local copy is
         // re-downloadable from the backend, and the dedicated cloud/local pill
         // reflects the resolved status. Only ordinary clipboard sources keep
         // the stale marker (preview + size label).
-        let source_file_missing = !transfer_file_data.is_transfer() && single_file_missing;
+        let source_file_missing = content_type == ContentType::File && item_is_stale;
         let remote_path_preview = match content_type {
             ContentType::Image if remote_host.is_some() => {
                 Some((image_name.clone(), item.image_path.clone()))
@@ -2184,8 +2205,7 @@ impl RenderOnce for ClipboardCard {
             } else {
                 match content_type {
                     ContentType::Image => {
-                        let img_not_loaded = image_missing && image_is_waiting_for_sync(&item);
-                        let img_stale = image_missing && !img_not_loaded;
+                        let img_stale = item_is_stale;
                         // Show previews only when the full image exists locally. Synced images
                         // regenerate thumbnails after the blob is downloaded.
                         if let Some(preview_img_path) =
@@ -2610,7 +2630,7 @@ impl RenderOnce for ClipboardCard {
                     let img_not_loaded = image_missing && image_is_waiting_for_sync(&item);
                     if img_not_loaded {
                         Some(I18nKey::CardImageNotLoaded.text().to_string())
-                    } else if image_missing {
+                    } else if item_is_stale {
                         size_label_danger = true;
                         Some(I18nKey::CardStaleFile.text().to_string())
                     } else if img_w > 0 && img_h > 0 {

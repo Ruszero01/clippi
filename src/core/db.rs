@@ -2134,40 +2134,6 @@ impl Database {
         Ok((candidates, skipped))
     }
 
-    /// Insert or replace the persisted stale-item observation for an item.
-    pub fn save_stale_observation(
-        &self,
-        observation: &crate::core::cache_cleanup::StaleObservation,
-    ) -> SqlResult<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO stale_item_observations \
-             (item_id, content_hash, item_updated_at, first_missing_at, last_checked_at, \
-              consecutive_missing_count, last_status, last_reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                observation.item_id,
-                observation.content_hash as i64,
-                observation.item_updated_at.to_rfc3339(),
-                observation.first_missing_at.to_rfc3339(),
-                observation.last_checked_at.to_rfc3339(),
-                observation.consecutive_missing_count as i64,
-                observation.last_status,
-                observation.last_reason,
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Remove the persisted stale-item observation for an item (present
-    /// again, identity changed, or item deleted).
-    pub fn clear_stale_observation(&self, item_id: i64) -> SqlResult<()> {
-        self.conn.execute(
-            "DELETE FROM stale_item_observations WHERE item_id = ?1",
-            params![item_id],
-        )?;
-        Ok(())
-    }
-
     /// Delete confirmed-stale items in a transaction with identity re-check.
     ///
     /// Each candidate is re-checked within the transaction using
@@ -2181,18 +2147,7 @@ impl Database {
     ) -> SqlResult<DeleteItemsResult> {
         use crate::core::types::ContentType;
 
-        type StaleDeleteRow = (
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            i32,
-            String,
-            String,
-            bool,
-        );
+        type StaleDeleteRow = (String, String, String, String);
 
         if confirmed.is_empty() {
             return Ok(DeleteItemsResult::default());
@@ -2210,10 +2165,14 @@ impl Database {
             let tx = self.conn.unchecked_transaction()?;
 
             for item in chunk {
-                // Re-check identity + safety guards and read fields in one query.
+                // Re-check database identity + invariant safety guards and read
+                // the fields needed for deletion. Filesystem validity has
+                // already been established by the stale scan; repeating that
+                // classification here can make an eligible item impossible to
+                // clean when an external application's temporary file changes
+                // between the scan and this transaction.
                 let mut stmt = tx.prepare(
-                    "SELECT updated_at, content_type, full_text, image_path, file_data, meta_type, \
-                            is_favorite, custom_hotkey, existence_observed_at, sync_pending \
+                    "SELECT updated_at, content_type, file_data, custom_hotkey \
                      FROM clipboard_items \
                      WHERE id = ?1 AND content_hash = ?2 \
                        AND is_favorite = 0 AND meta_type != 'transfer'",
@@ -2226,29 +2185,11 @@ impl Database {
                             row.get(1)?,
                             row.get(2).unwrap_or_default(),
                             row.get(3).unwrap_or_default(),
-                            row.get(4).unwrap_or_default(),
-                            row.get(5).unwrap_or_default(),
-                            row.get(6).unwrap_or_default(),
-                            row.get(7).unwrap_or_default(),
-                            row.get(8).unwrap_or_default(),
-                            row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                         ))
                     })
                     .optional()?;
 
-                let Some((
-                    updated_at_str,
-                    content_type_str,
-                    full_text,
-                    image_path,
-                    file_data,
-                    meta_type,
-                    is_favorite,
-                    custom_hotkey,
-                    existence_observed_at,
-                    sync_pending,
-                )) = row
-                else {
+                let Some((updated_at_str, content_type_str, file_data, custom_hotkey)) = row else {
                     continue; // Record changed — skip this item.
                 };
                 drop(stmt);
@@ -2261,29 +2202,6 @@ impl Database {
                 }
 
                 let content_type = ContentType::from_str(&content_type_str);
-                let candidate = StaleItemCandidate {
-                    id: item.id,
-                    content_hash: item.content_hash,
-                    updated_at,
-                    content_type,
-                    full_text,
-                    image_path,
-                    file_data: file_data.clone(),
-                    meta_type,
-                    is_favorite: is_favorite != 0,
-                    existence_observed_at,
-                    sync_pending,
-                    observation: None,
-                };
-                // The filesystem re-check must still classify the item as
-                // definitely missing before the delete is committed.
-                if !matches!(
-                    crate::core::cache_cleanup::classify_item_status(&candidate),
-                    crate::core::cache_cleanup::ItemStatus::DefinitelyMissing
-                ) {
-                    continue;
-                }
-
                 if !custom_hotkey.is_empty() {
                     hotkey_ids.push(item.id);
                 }
@@ -3394,13 +3312,7 @@ mod tests {
             .parse::<chrono::DateTime<chrono::Utc>>()
             .unwrap();
 
-        // Observation phase 1: missing but not eligible.
-        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
-        crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
-        assert_eq!(stats.stale_items, 0);
-        assert_eq!(count_items(&db), 1);
-
-        // The record changes between the scan and the delete: the
+        // The record changes after classification but before deletion: the
         // in-transaction identity re-check must skip it.
         let confirmed = vec![crate::core::cache_cleanup::ConfirmedStaleItem {
             id: db.get_by_hash(201).unwrap().unwrap().id,
@@ -3417,24 +3329,12 @@ mod tests {
         assert_eq!(skipped.deleted_items, 0);
         assert_eq!(count_items(&db), 1);
 
-        // The identity change restarts the observation: the next scan is a
-        // fresh first-missing observation again.
+        // The next unified classification sees the current row as stale and
+        // deletes it immediately, reporting paths for transfer refresh.
         let mut stats = crate::core::cache_cleanup::CleanupStats::default();
         crate::core::cache_cleanup::run_stale_scan(
             &db,
-            t0 + chrono::Duration::hours(25),
-            None,
-            &mut stats,
-        );
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_items, 0);
-
-        // A further scan beyond the (restarted) grace period deletes the
-        // item, with the deleted file paths reported for transfer refresh.
-        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
-        crate::core::cache_cleanup::run_stale_scan(
-            &db,
-            t0 + chrono::Duration::hours(49),
+            t0 + chrono::Duration::seconds(1),
             None,
             &mut stats,
         );
@@ -3445,6 +3345,50 @@ mod tests {
             vec![missing_file.to_string_lossy().into_owned()]
         );
         assert_eq!(count_items(&db), 0);
+    }
+
+    #[test]
+    fn stale_delete_trusts_scan_result_without_reclassifying_filesystem() {
+        let (path, db) = temp_db("stale-no-reclassify");
+        let temporary_file = path.parent().unwrap().join("screenshot-temp.png");
+        let file_data = FileData {
+            files: vec![crate::core::types::FileInfo {
+                name: "screenshot-temp.png".into(),
+                path: temporary_file.to_string_lossy().into_owned(),
+                is_dir: false,
+            }],
+            transfer: false,
+            remote_hash: String::new(),
+        }
+        .to_json();
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, file_data, \
+                  meta_type, existence_observed_at) \
+                 VALUES ('file', 'screenshot-temp.png', 202, ?1, ?1, ?2, '', ?3)",
+                params!["2026-07-28T00:00:00Z", file_data, "2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+
+        let updated_at = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let confirmed = vec![crate::core::cache_cleanup::ConfirmedStaleItem {
+            id: db.get_by_hash(202).unwrap().unwrap().id,
+            content_hash: 202,
+            expected_updated_at: updated_at,
+        }];
+
+        // The scan owns validity classification. Even if filesystem state
+        // changes before the transaction, deletion only checks that the same
+        // database row is still non-favorite and non-transfer.
+        std::fs::write(&temporary_file, b"temporary screenshot").unwrap();
+        let result = db.delete_stale_items(&confirmed, None).unwrap();
+
+        assert_eq!(result.deleted_items, 1);
+        assert!(db.get_by_hash(202).unwrap().is_none());
+        std::fs::remove_file(temporary_file).unwrap();
     }
 
     #[test]
@@ -3545,7 +3489,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_observation_timestamps_are_treated_as_no_history() {
+    fn obsolete_observation_timestamps_do_not_gate_stale_cleanup() {
         let (_path, db) = temp_db("stale-corrupt-obs");
         let images_dir = crate::core::paths::images_dir();
         let missing = images_dir.join(format!(
@@ -3576,8 +3520,7 @@ mod tests {
             )
             .unwrap();
 
-        // The corrupt observation is treated as absent: the next scan
-        // restarts the counter instead of deleting the item.
+        // Observation history is ignored by validity and cleanup.
         let candidates = db.find_stale_item_candidates().unwrap().0;
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].observation.is_none());
@@ -3590,14 +3533,13 @@ mod tests {
             ..crate::core::cache_cleanup::CleanupStats::default()
         };
         crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_eligible, 0);
-        assert_eq!(stats.stale_items, 0);
-        assert_eq!(count_items(&db), 1);
+        assert_eq!(stats.stale_eligible, 1);
+        assert_eq!(stats.stale_items, 1);
+        assert_eq!(count_items(&db), 0);
     }
 
     #[test]
-    fn corrupt_observation_count_is_treated_as_no_history() {
+    fn obsolete_observation_count_does_not_gate_stale_cleanup() {
         let (_path, db) = temp_db("stale-corrupt-count");
         let images_dir = crate::core::paths::images_dir();
         let missing = images_dir.join(format!(
@@ -3629,7 +3571,7 @@ mod tests {
             )
             .unwrap();
 
-        // Out-of-range count → observation treated as absent.
+        // Legacy observation data has no effect on the shared status.
         let candidates = db.find_stale_item_candidates().unwrap().0;
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].observation.is_none());
@@ -3642,10 +3584,9 @@ mod tests {
             ..crate::core::cache_cleanup::CleanupStats::default()
         };
         crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_eligible, 0);
-        assert_eq!(stats.stale_items, 0);
-        assert_eq!(count_items(&db), 1);
+        assert_eq!(stats.stale_eligible, 1);
+        assert_eq!(stats.stale_items, 1);
+        assert_eq!(count_items(&db), 0);
     }
 
     #[test]
@@ -3772,24 +3713,12 @@ mod tests {
             .parse::<chrono::DateTime<chrono::Utc>>()
             .unwrap();
 
-        // Observation phase 1: the local image is first-missing; the synced
-        // image is protected (PendingSync) and never counted as missing.
+        // The local image is stale and deleted immediately; the synced image
+        // is protected (PendingSync) and survives.
         let mut stats = crate::core::cache_cleanup::CleanupStats::default();
         crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
         assert_eq!(stats.stale_scanned, 2);
-        assert_eq!(stats.stale_first_missing, 1);
         assert_eq!(stats.stale_protected, 1);
-        assert_eq!(stats.stale_items, 0);
-
-        // Observation phase 2 beyond grace: the local image is deleted;
-        // the pending-sync image survives.
-        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
-        crate::core::cache_cleanup::run_stale_scan(
-            &db,
-            t0 + chrono::Duration::hours(25),
-            None,
-            &mut stats,
-        );
         assert_eq!(stats.stale_items, 1);
         assert!(db.get_by_hash(301).unwrap().is_none());
         assert!(db.get_by_hash(302).unwrap().is_some());

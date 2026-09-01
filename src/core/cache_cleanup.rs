@@ -4,28 +4,22 @@
 //! Each cleanup task is a standalone function. `run_cleanup_with_options`
 //! orchestrates all of them; callers go through that single entry point.
 //!
-//! Stale-item cleanup follows the four-state design (docs/stale-item-cleanup-design.md):
-//! paths are classified as Present / DefinitelyMissing / Unknown / Protected
-//! instead of a `bool`, missing observations are persisted per item, and only
-//! items with two consecutive missing observations beyond a grace period are
-//! eligible for deletion. No existence evidence at capture time means an item
-//! is never auto-deleted.
+//! Item validity follows the shared four-state design: paths are classified as
+//! Present / DefinitelyMissing / Unknown / Protected instead of a `bool`.
+//! The UI and cleanup use the same classifier; cleanup simply removes
+//! non-favorite items classified as DefinitelyMissing.
 
 use crate::core::db::Database;
 use crate::core::types::{PathObjectKind, PathStatus, PathStatusReason};
-use chrono::{DateTime, Duration, Utc};
+#[cfg(test)]
+use chrono::Duration;
+use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 /// 30-day expiry for sync tombstones.
 const TOMBSTONE_EXPIRY_DAYS: i64 = 30;
-
-/// Minimum consecutive missing observations before stale deletion.
-const STALE_MIN_OBSERVATIONS: u32 = 2;
-
-/// Grace period between the first missing observation and deletion eligibility.
-const STALE_GRACE_PERIOD: Duration = Duration::hours(24);
 
 // ── Configuration types ────────────────────────────────────────────────
 
@@ -71,14 +65,12 @@ pub struct CleanupStats {
     pub stale_scanned: u32,
     /// Candidates whose paths are all present.
     pub stale_present: u32,
-    /// Candidates observed missing for the first time this cycle.
-    pub stale_first_missing: u32,
-    /// Candidates observed missing but not yet eligible (observation window).
+    /// Legacy metric retained for log compatibility; always zero.
     pub stale_pending_confirmation: u32,
     /// Candidates eligible for deletion this cycle (sent to the delete step).
     pub stale_eligible: u32,
-    /// Candidates kept because of a protection reason (favorite, sync, remote,
-    /// removable volume, unknown origin, ...).
+    /// Candidates kept because of a protection reason (sync, remote, removable
+    /// volume, unknown origin, ...). Favorite policy is applied by the query.
     pub stale_protected: u32,
     /// Candidates kept because the path could not be verified.
     pub stale_unknown: u32,
@@ -130,7 +122,7 @@ pub struct StaleItemCandidate {
 pub enum ItemStatus {
     /// At least one path exists, or the item carries no path at all.
     Present,
-    /// Every path is definitely missing and all gates passed.
+    /// Every path is definitely missing under the shared validity rules.
     DefinitelyMissing,
     /// Currently unverifiable — never deleted.
     Unknown { reason: PathStatusReason },
@@ -691,10 +683,13 @@ fn item_status_from_path(status: PathStatus) -> ItemStatus {
 /// Aggregate multiple path statuses (design §9.3):
 /// any Present → Present; otherwise any Unknown/Protected → first blocking
 /// status; only all DefinitelyMissing → DefinitelyMissing.
-fn aggregate_path_statuses(paths: &[String]) -> ItemStatus {
+fn aggregate_path_statuses_with(
+    paths: &[String],
+    probe: &mut impl FnMut(&str) -> PathStatus,
+) -> ItemStatus {
     let mut blocking: Option<ItemStatus> = None;
     for path in paths {
-        match probe_path_status(path) {
+        match probe(path) {
             PathStatus::Present { .. } => return ItemStatus::Present,
             PathStatus::DefinitelyMissing => {}
             PathStatus::Unknown { reason } => {
@@ -710,14 +705,17 @@ fn aggregate_path_statuses(paths: &[String]) -> ItemStatus {
 
 /// Classify a whole candidate item. This is the single classifier used by the
 /// stale scan, the final in-transaction re-check and (in later phases) the UI.
-pub(crate) fn classify_item_status(candidate: &StaleItemCandidate) -> ItemStatus {
+pub(crate) fn classify_item_status_with(
+    candidate: &StaleItemCandidate,
+    mut probe: impl FnMut(&str) -> PathStatus,
+) -> ItemStatus {
     use crate::core::types::{ContentType, FileData};
 
-    if candidate.is_favorite {
-        return ItemStatus::Protected {
-            reason: PathStatusReason::Favorite,
-        };
-    }
+    // Favorite is deletion policy, not item validity. A favorite may still be
+    // shown as stale, while cleanup independently preserves it.
+    let _ = candidate.is_favorite;
+    // Legacy observation rows are intentionally irrelevant to validity.
+    let _ = &candidate.observation;
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -744,13 +742,19 @@ pub(crate) fn classify_item_status(candidate: &StaleItemCandidate) -> ItemStatus
                     reason: PathStatusReason::InvalidMetadata,
                 };
             }
-            // No capture-time existence evidence → legacy/unknown origin.
-            if candidate.existence_observed_at.is_empty() {
-                return ItemStatus::Protected {
+            let status = aggregate_path_statuses_with(&paths, &mut probe);
+            // Provenance only gates a genuinely missing result. Remote,
+            // offline and otherwise protected paths retain their precise
+            // classification instead of being mislabeled as stale/unknown.
+            if matches!(status, ItemStatus::DefinitelyMissing)
+                && candidate.existence_observed_at.is_empty()
+            {
+                ItemStatus::Protected {
                     reason: PathStatusReason::OriginUnknown,
-                };
+                }
+            } else {
+                status
             }
-            aggregate_path_statuses(&paths)
         }
         ContentType::Image => {
             if candidate.image_path.is_empty() {
@@ -765,32 +769,40 @@ pub(crate) fn classify_item_status(candidate: &StaleItemCandidate) -> ItemStatus
                     // Sync-owned image: the blob may still be downloaded by a
                     // later sync pass. A present file means the download has
                     // completed; anything else stays protected.
-                    return match probe_path_status(&candidate.image_path) {
+                    return match probe(&candidate.image_path) {
                         PathStatus::Present { .. } => ItemStatus::Present,
                         _ => ItemStatus::Protected {
                             reason: PathStatusReason::PendingSync,
                         },
                     };
                 }
-                item_status_from_path(probe_path_status(&candidate.image_path))
+                item_status_from_path(probe(&candidate.image_path))
             } else {
                 // External image path (e.g. screenshot tool temp file).
-                if candidate.existence_observed_at.is_empty() {
-                    return ItemStatus::Protected {
+                let status = item_status_from_path(probe(&candidate.image_path));
+                if matches!(status, ItemStatus::DefinitelyMissing)
+                    && candidate.existence_observed_at.is_empty()
+                {
+                    ItemStatus::Protected {
                         reason: PathStatusReason::OriginUnknown,
-                    };
+                    }
+                } else {
+                    status
                 }
-                item_status_from_path(probe_path_status(&candidate.image_path))
             }
         }
         _ => {
             if candidate.meta_type == "path" && !candidate.full_text.is_empty() {
-                if candidate.existence_observed_at.is_empty() {
-                    return ItemStatus::Protected {
+                let status = item_status_from_path(probe(&candidate.full_text));
+                if matches!(status, ItemStatus::DefinitelyMissing)
+                    && candidate.existence_observed_at.is_empty()
+                {
+                    ItemStatus::Protected {
                         reason: PathStatusReason::NeverObservedExisting,
-                    };
+                    }
+                } else {
+                    status
                 }
-                item_status_from_path(probe_path_status(&candidate.full_text))
             } else {
                 ItemStatus::Unknown {
                     reason: PathStatusReason::InvalidMetadata,
@@ -800,98 +812,21 @@ pub(crate) fn classify_item_status(candidate: &StaleItemCandidate) -> ItemStatus
     }
 }
 
-// ── Observation state machine ─────────────────────────────────────────
-
-/// Update the persisted observation for a DefinitelyMissing candidate and
-/// return the refreshed observation. A changed item identity (hash or
-/// updated_at) restarts the observation from scratch.
-fn apply_missing_observation(
-    candidate: &StaleItemCandidate,
-    now: DateTime<Utc>,
-) -> StaleObservation {
-    let existing = candidate.observation.as_ref();
-    let identity_changed = existing.is_none_or(|observation| {
-        observation.content_hash != candidate.content_hash
-            || observation.item_updated_at != candidate.updated_at
-    });
-    if identity_changed {
-        StaleObservation {
-            item_id: candidate.id,
-            content_hash: candidate.content_hash,
-            item_updated_at: candidate.updated_at,
-            first_missing_at: now,
-            last_checked_at: now,
-            consecutive_missing_count: 1,
-            last_status: "missing".to_string(),
-            last_reason: String::new(),
-        }
-    } else if let Some(mut observation) = existing.cloned() {
-        observation.consecutive_missing_count =
-            observation.consecutive_missing_count.saturating_add(1);
-        observation.last_checked_at = now;
-        observation.last_status = "missing".to_string();
-        observation.last_reason = String::new();
-        observation
-    } else {
-        StaleObservation {
-            item_id: candidate.id,
-            content_hash: candidate.content_hash,
-            item_updated_at: candidate.updated_at,
-            first_missing_at: now,
-            last_checked_at: now,
-            consecutive_missing_count: 1,
-            last_status: "missing".to_string(),
-            last_reason: String::new(),
-        }
-    }
-}
-
-fn status_labels(status: &ItemStatus) -> (String, String) {
-    match status {
-        ItemStatus::Present => ("present".to_string(), String::new()),
-        ItemStatus::DefinitelyMissing => ("missing".to_string(), String::new()),
-        ItemStatus::Unknown { reason } => ("unknown".to_string(), reason_label(*reason)),
-        ItemStatus::Protected { reason } => ("protected".to_string(), reason_label(*reason)),
-    }
-}
-
-/// Persist the reason behind an Unknown/Protected result for observability.
-/// Missing counters are never touched, and an identity change clears the
-/// stale observation. Returns `false` when a database write failed so the
-/// caller can mark the round incomplete.
-fn persist_observation_reason(
-    db: &Database,
-    candidate: &StaleItemCandidate,
-    status: &ItemStatus,
-    now: DateTime<Utc>,
-) -> bool {
-    let Some(mut observation) = candidate.observation.clone() else {
-        return true; // No missing history — nothing to update.
-    };
-    if observation.content_hash != candidate.content_hash
-        || observation.item_updated_at != candidate.updated_at
-    {
-        // Identity changed: the observation belongs to an earlier version.
-        return db.clear_stale_observation(candidate.id).is_ok();
-    }
-    observation.last_checked_at = now;
-    (observation.last_status, observation.last_reason) = status_labels(status);
-    db.save_stale_observation(&observation).is_ok()
-}
-
-fn reason_label(reason: PathStatusReason) -> String {
-    format!("{reason:?}")
+/// Classify an item using the authoritative filesystem probe. This validity
+/// result deliberately does not include deletion policy such as favorites;
+/// callers decide separately whether a stale item may be removed.
+pub(crate) fn classify_item_status(candidate: &StaleItemCandidate) -> ItemStatus {
+    classify_item_status_with(candidate, probe_path_status)
 }
 
 // ── Stale-item scan ───────────────────────────────────────────────────
 
-/// Run one stale-item scan: classify candidates, update the persisted
-/// observation state, and delete only items that survived the double
-/// confirmation and grace period. Writes sync tombstones in the same
-/// transaction as each delete.
+/// Classify path-backed items and delete the non-favorite rows whose shared
+/// item status is `DefinitelyMissing`. UI stale labels use the same classifier;
+/// this phase adds no independent grace period or confirmation policy.
 pub(crate) fn run_stale_scan(
     db: &Database,
-    now: DateTime<Utc>,
+    _now: DateTime<Utc>,
     sync_scope: Option<&CleanupSyncScope>,
     stats: &mut CleanupStats,
 ) {
@@ -912,52 +847,20 @@ pub(crate) fn run_stale_scan(
         match status {
             ItemStatus::Present => {
                 stats.stale_present += 1;
-                if let Err(error) = db.clear_stale_observation(candidate.id) {
-                    log::warn!(
-                        "run_stale_scan: failed to clear observation for item {}: {error}",
-                        candidate.id
-                    );
-                    stats.scan_complete = false;
-                }
             }
             ItemStatus::DefinitelyMissing => {
-                let observation = apply_missing_observation(candidate, now);
-                if let Err(error) = db.save_stale_observation(&observation) {
-                    log::warn!(
-                        "run_stale_scan: failed to save observation for item {}: {error}",
-                        candidate.id
-                    );
-                    stats.scan_complete = false;
-                    continue;
-                }
-                let elapsed = now.signed_duration_since(observation.first_missing_at);
-                let eligible = observation.consecutive_missing_count >= STALE_MIN_OBSERVATIONS
-                    && elapsed >= STALE_GRACE_PERIOD;
-                if eligible {
-                    stats.stale_eligible += 1;
-                    confirmed.push(ConfirmedStaleItem {
-                        id: candidate.id,
-                        content_hash: candidate.content_hash,
-                        expected_updated_at: candidate.updated_at,
-                    });
-                } else {
-                    stats.stale_pending_confirmation += 1;
-                    if observation.consecutive_missing_count == 1 {
-                        stats.stale_first_missing += 1;
-                    }
-                }
+                stats.stale_eligible += 1;
+                confirmed.push(ConfirmedStaleItem {
+                    id: candidate.id,
+                    content_hash: candidate.content_hash,
+                    expected_updated_at: candidate.updated_at,
+                });
             }
             ItemStatus::Unknown { .. } => {
                 stats.stale_unknown += 1;
-                if !persist_observation_reason(db, candidate, &status, now) {
-                    stats.scan_complete = false;
-                }
             }
             ItemStatus::Protected { .. } => {
                 stats.stale_protected += 1;
-                if !persist_observation_reason(db, candidate, &status, now) {
-                    stats.scan_complete = false;
-                }
             }
         }
     }
@@ -1659,10 +1562,8 @@ mod tests {
     }
 
     #[test]
-    fn stale_requires_two_observations_and_grace_period() {
-        let dir = temp_dir("stale-gate");
-        let images = dir.join("images");
-        std::fs::create_dir_all(&images).unwrap();
+    fn stale_status_is_deleted_without_cleanup_confirmation_gate() {
+        let dir = temp_dir("stale-direct");
         let (_db_path, db) = temp_database(&dir);
 
         // External image: path missing, capture evidence present.
@@ -1678,25 +1579,9 @@ mod tests {
 
         let t0 = "2026-07-28T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
 
-        // First observation: first missing, not eligible.
         let mut stats = CleanupStats::default();
         run_stale_scan(&db, t0, None, &mut stats);
         assert_eq!(stats.stale_scanned, 1);
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_pending_confirmation, 1);
-        assert_eq!(stats.stale_items, 0);
-        assert_eq!(db.count_all_items_for_test(), 1);
-
-        // Second observation within the grace period: pending, not eligible.
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(1), None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 0);
-        assert_eq!(stats.stale_pending_confirmation, 1);
-        assert_eq!(stats.stale_items, 0);
-
-        // Third observation beyond the grace period: eligible and deleted.
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(25), None, &mut stats);
         assert_eq!(stats.stale_eligible, 1);
         assert_eq!(stats.stale_items, 1);
         assert_eq!(db.count_all_items_for_test(), 0);
@@ -1706,8 +1591,8 @@ mod tests {
     }
 
     #[test]
-    fn present_observation_resets_missing_history() {
-        let dir = temp_dir("stale-reset");
+    fn present_item_is_kept_until_shared_status_becomes_stale() {
+        let dir = temp_dir("stale-transition");
         let (_db_path, db) = temp_database(&dir);
 
         // Image that exists during the first scan, then disappears.
@@ -1733,71 +1618,13 @@ mod tests {
         assert_eq!(stats.stale_present, 1);
         assert_eq!(stats.stale_items, 0);
 
-        // File disappears → first missing observation.
+        // Once the same shared classifier reports stale, cleanup removes it
+        // immediately; there is no separate observation state machine.
         std::fs::remove_file(&image).unwrap();
         let mut stats = CleanupStats::default();
         run_stale_scan(&db, t0 + Duration::hours(25), None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_items, 0);
-
-        // File returns → observation cleared.
-        std::fs::write(&image, b"png").unwrap();
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(26), None, &mut stats);
-        assert_eq!(stats.stale_present, 1);
-
-        // File disappears again → counting restarts from zero.
-        std::fs::remove_file(&image).unwrap();
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(50), None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_items, 0);
-
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(75), None, &mut stats);
         assert_eq!(stats.stale_eligible, 1);
         assert_eq!(stats.stale_items, 1);
-
-        drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn item_update_restarts_missing_observation() {
-        let dir = temp_dir("stale-update");
-        let (_db_path, db) = temp_database(&dir);
-
-        let missing = dir.join("external.png");
-        insert_image_item(
-            &db,
-            503,
-            &missing.to_string_lossy(),
-            "SnippingTool",
-            "2026-07-28T00:00:00Z",
-            "2026-07-28T00:00:00Z",
-        );
-
-        let t0 = "2026-07-28T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0, None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 1);
-
-        // Re-capture (updated_at changes) → observation restarts.
-        insert_image_item(
-            &db,
-            503,
-            &missing.to_string_lossy(),
-            "SnippingTool",
-            "2026-07-28T00:00:00Z",
-            "2026-07-28T01:00:00Z",
-        );
-
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(25), None, &mut stats);
-        assert_eq!(stats.stale_first_missing, 1);
-        assert_eq!(stats.stale_eligible, 0);
-        assert_eq!(stats.stale_items, 0);
 
         drop(db);
         std::fs::remove_dir_all(dir).unwrap();
@@ -1825,15 +1652,10 @@ mod tests {
 
         let t0 = "2026-07-28T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
 
-        // Observation phase 1: item stays, thumbnail stays (still referenced).
+        // The item is classified and deleted in this pass, then orphan
+        // reclamation removes the now-unreferenced thumbnail.
         let mut stats = CleanupStats::default();
         run_stale_scan(&db, t0, None, &mut stats);
-        assert!(images.join(format!("thumb_{hash}.png")).exists());
-
-        // Observation phase 2 beyond grace: item deleted in the same pass,
-        // then orphan reclamation removes the now-unreferenced thumbnail.
-        let mut stats = CleanupStats::default();
-        run_stale_scan(&db, t0 + Duration::hours(25), None, &mut stats);
         assert_eq!(stats.stale_items, 1);
         assert_eq!(db.count_all_items_for_test(), 0);
         clean_orphan_images_in(&db, &images, &mut stats);
@@ -1871,41 +1693,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_database_failures_mark_scan_incomplete() {
-        let dir = temp_dir("stale-db-fail");
-        let (_db_path, db) = temp_database(&dir);
-
-        let missing = dir.join("external.png");
-        insert_image_item(
-            &db,
-            505,
-            &missing.to_string_lossy(),
-            "SnippingTool",
-            "2026-07-28T00:00:00Z",
-            "2026-07-28T00:00:00Z",
-        );
-        let t0 = "2026-07-28T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-
-        // Every observation write fails → the round must be incomplete.
-        db.execute_batch_for_test(
-            "CREATE TRIGGER reject_observation \
-             BEFORE INSERT ON stale_item_observations \
-             BEGIN SELECT RAISE(ABORT, 'reject'); END;",
-        )
-        .unwrap();
-        let mut stats = CleanupStats {
-            scan_complete: true,
-            ..CleanupStats::default()
-        };
-        run_stale_scan(&db, t0, None, &mut stats);
-        assert!(!stats.scan_complete);
-        assert_eq!(stats.stale_items, 0);
-
-        drop(db);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn stale_delete_failure_marks_scan_incomplete() {
         let dir = temp_dir("stale-delete-fail");
         let (_db_path, db) = temp_database(&dir);
@@ -1921,15 +1708,7 @@ mod tests {
         );
         let t0 = "2026-07-28T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
 
-        // First observation succeeds normally.
-        let mut stats = CleanupStats {
-            scan_complete: true,
-            ..CleanupStats::default()
-        };
-        run_stale_scan(&db, t0, None, &mut stats);
-        assert!(stats.scan_complete);
-
-        // The final delete fails → the round must be incomplete.
+        // Deletion failure still marks the cleanup round incomplete.
         db.execute_batch_for_test(
             "CREATE TRIGGER reject_stale_delete \
              BEFORE DELETE ON clipboard_items \
@@ -1940,7 +1719,7 @@ mod tests {
             scan_complete: true,
             ..CleanupStats::default()
         };
-        run_stale_scan(&db, t0 + Duration::hours(25), None, &mut stats);
+        run_stale_scan(&db, t0, None, &mut stats);
         assert!(!stats.scan_complete);
         assert_eq!(stats.stale_eligible, 1);
         assert_eq!(stats.stale_items, 0);
