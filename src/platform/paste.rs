@@ -274,46 +274,29 @@ fn is_extended_key(vk: u16) -> bool {
 /// Send the paste keystroke via SendInput.
 #[cfg(target_os = "windows")]
 fn send_paste_keystroke(shortcut: &PasteShortcut) {
-    // A global hotkey (e.g. Alt+Shift+V) fires while its modifier keys are still
-    // physically held, so a naive Ctrl+V is delivered as Alt+Shift+Ctrl+V — which
-    // most apps ignore. That's why the user has to hold then release the combo
-    // together for the paste to land. Release any currently-held modifier that is
-    // NOT part of the paste shortcut first, so the injected paste is always clean.
-    let extra_held: Vec<u16> = [VK_CONTROL, VK_SHIFT, VK_MENU_KEY, VK_LWIN_KEY]
+    // A click or global hotkey can reach here while its modifier is still
+    // physically held. Submit releases, the resolved paste shortcut, and
+    // modifier restores as one SendInput batch. Windows serializes a batch
+    // without interleaving physical input, so Ctrl+V cannot become Ctrl+Shift+V.
+    let held: Vec<u16> = [VK_CONTROL, VK_SHIFT, VK_MENU_KEY, VK_LWIN_KEY]
         .into_iter()
-        .filter(|vk| {
-            !shortcut.modifiers.contains(vk) && unsafe { GetAsyncKeyState(*vk as i32) } < 0
-        })
+        .filter(|vk| unsafe { GetAsyncKeyState(*vk as i32) } < 0)
         .collect();
-    if !extra_held.is_empty() {
-        // SAFETY: `SendInput` with a fully-initialised INPUT array is the standard
-        // Windows API for synthesizing keyboard input.
-        unsafe {
-            let mut releases: Vec<INPUT> =
-                (0..extra_held.len()).map(|_| std::mem::zeroed()).collect();
-            for (i, &vk) in extra_held.iter().enumerate() {
-                set_key_input(&mut releases[i], vk, true);
-            }
-            SendInput(
-                releases.len() as u32,
-                releases.as_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            );
-        }
-        // Let the target process the released modifiers (e.g. leave the "Alt
-        // menu" accelerator mode) before the paste keystroke is injected.
-        std::thread::sleep(std::time::Duration::from_millis(15));
-    }
 
-    // SAFETY: `SendInput` with a correctly-initialised INPUT array is the standard
-    // Windows API for synthesizing keyboard input. All INPUT structs are fully
-    // initialised via zeroed() + field assignment before the call, and the array
-    // size matches the count parameter.
+    // SAFETY: every INPUT is fully initialized before SendInput, and the array
+    // length matches the count parameter.
     unsafe {
-        let input_count = (shortcut.modifiers.len() + 1) * 2;
+        let shortcut_event_count = (shortcut.modifiers.len() + 1) * 2;
+        let input_count = held.len() + shortcut_event_count + held.len();
         let mut inputs: Vec<INPUT> = (0..input_count).map(|_| std::mem::zeroed()).collect();
         let mut idx = 0;
 
+        // Temporarily clear all physical modifiers, including modifiers also
+        // used by the resolved shortcut; that shortcut is injected afresh below.
+        for &vk in &held {
+            set_key_input(&mut inputs[idx], vk, true);
+            idx += 1;
+        }
         for &vk in &shortcut.modifiers {
             set_key_input(&mut inputs[idx], vk, false);
             idx += 1;
@@ -326,12 +309,24 @@ fn send_paste_keystroke(shortcut: &PasteShortcut) {
             set_key_input(&mut inputs[idx], vk, true);
             idx += 1;
         }
+        // Keep the logical state aligned with keys the user is still holding;
+        // their later physical key-up will release them normally.
+        for &vk in &held {
+            set_key_input(&mut inputs[idx], vk, false);
+            idx += 1;
+        }
 
-        SendInput(
+        let inserted = SendInput(
             inputs.len() as u32,
             inputs.as_ptr(),
             std::mem::size_of::<INPUT>() as i32,
         );
+        if inserted != inputs.len() as u32 {
+            log::warn!(
+                "SendInput inserted {inserted}/{} paste events",
+                inputs.len()
+            );
+        }
     }
 }
 
