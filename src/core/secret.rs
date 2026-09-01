@@ -483,6 +483,14 @@ fn is_repeating(s: &str) -> bool {
 /// Presence of directory separators (`\` or `/`) plus a file extension
 /// is a strong signal that this is not a password.
 fn looks_like_file_path(s: &str) -> bool {
+    // Markdown inline links/images wrap their destination in punctuation, so
+    // the extension is not necessarily at the end of the clipboard text.
+    // Only treat a complete inline construct as path-like; this avoids making
+    // arbitrary password punctuation a filename signal.
+    if let Some(destination) = markdown_inline_destination(s) {
+        return looks_like_file_path(destination) || looks_like_plain_filename(destination);
+    }
+
     // Windows absolute path: C:\... or D:/...
     if s.len() >= 3
         && s.as_bytes()[0].is_ascii_alphabetic()
@@ -510,7 +518,36 @@ fn looks_like_file_path(s: &str) -> bool {
             }
         }
     }
-    false
+    looks_like_plain_filename(s)
+}
+
+/// Return the destination when the whole value is a Markdown inline link or
+/// image such as `![](./assets/photo-01.jpg)` or `[label](manual-v2.pdf)`.
+fn markdown_inline_destination(s: &str) -> Option<&str> {
+    let open = s.find("](")?;
+    if !s.ends_with(')') || !(s.starts_with("![") || s.starts_with('[')) {
+        return None;
+    }
+    let destination = &s[open + 2..s.len() - 1];
+    if destination.is_empty() || destination.contains(['(', ')']) {
+        return None;
+    }
+    Some(destination)
+}
+
+/// Recognise a bare filename without also accepting general high-entropy
+/// strings. The suffix must look like a conventional extension and the stem
+/// is limited to characters normally used in filenames.
+fn looks_like_plain_filename(s: &str) -> bool {
+    let Some((stem, ext)) = s.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && (1..=10).contains(&ext.len())
+        && ext.chars().all(|c| c.is_ascii_alphabetic())
+        && stem
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '(' | ')' | '[' | ']'))
 }
 
 fn sort_and_merge_ranges(ranges: &mut Vec<std::ops::Range<usize>>) {
@@ -1368,6 +1405,34 @@ mod tests {
             detect_secret("/home/user/projects/my-app/src/main.rs").is_none(),
             "Unix absolute path should not be detected as secret"
         );
+    }
+
+    #[test]
+    fn reject_markdown_resource_references_as_secret() {
+        for text in [
+            "![](./per-01/ja.jpg)",
+            "![preview](assets/screenshot-02.png)",
+            "[manual](manual-v2.pdf)",
+        ] {
+            assert!(
+                detect_secret(text).is_none(),
+                "Markdown resource reference should not be detected as secret: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn reject_plain_filenames_as_secret() {
+        for text in [
+            "release-notes-01.md",
+            "screenshot_2026.png",
+            "archive-v2.tar",
+        ] {
+            assert!(
+                detect_secret(text).is_none(),
+                "filename should not be detected as secret: {text}"
+            );
+        }
     }
 
     #[test]
