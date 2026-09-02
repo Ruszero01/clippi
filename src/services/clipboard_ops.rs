@@ -81,10 +81,14 @@ pub fn plain_text_for_item(item: &ClipboardItem) -> String {
             .join("\n")
     } else {
         let rich = RichData::from_json(&item.rich_data);
-        rich.html
-            .as_deref()
-            .and_then(crate::core::html_text::spreadsheet_plain_text)
-            .unwrap_or_else(|| item.full_text.clone())
+        if crate::core::html_text::has_spreadsheet_multiline_transport_quotes(&item.full_text) {
+            rich.html
+                .as_deref()
+                .and_then(crate::core::html_text::spreadsheet_plain_text)
+                .unwrap_or_else(|| item.full_text.clone())
+        } else {
+            item.full_text.clone()
+        }
     }
 }
 
@@ -193,5 +197,24 @@ mod tests {
         let item =
             ClipboardItem::new_text(1, "\"用户原始文本\"", ContentType::PlainText, None, None);
         assert_eq!(plain_text_for_item(&item), "\"用户原始文本\"");
+    }
+
+    #[test]
+    fn ordinary_excel_plain_text_remains_authoritative() {
+        let html = r#"<html xmlns:x="urn:schemas-microsoft-com:office:excel"><body>
+<table><tr><td> HTML value </td></tr></table></body></html>"#;
+        let rich = RichData {
+            html: Some(html.into()),
+            ..Default::default()
+        };
+        let item = ClipboardItem::new_text(
+            1,
+            "  system value  ",
+            ContentType::RichText,
+            None,
+            Some(&rich),
+        );
+
+        assert_eq!(plain_text_for_item(&item), "  system value  ");
     }
 }

@@ -449,6 +449,32 @@ pub fn spreadsheet_plain_text(html: &str) -> Option<String> {
     )
 }
 
+/// Whether a spreadsheet's plain-text flavor contains a quoted field spanning
+/// multiple lines. Excel/WPS use CSV-style quotes as transport escaping for an
+/// in-cell newline; those quotes are not user content and should be repaired
+/// from the accompanying HTML table.
+pub fn has_spreadsheet_multiline_transport_quotes(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut quoted = false;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' if quoted && bytes.get(index + 1) == Some(&b'"') => {
+                // Escaped literal quote inside a quoted spreadsheet field.
+                index += 2;
+                continue;
+            }
+            b'"' => quoted = !quoted,
+            b'\n' | b'\r' if quoted => return true,
+            _ => {}
+        }
+        index += 1;
+    }
+
+    false
+}
+
 fn normalize_spreadsheet_cell(value: &str) -> String {
     value
         .split('\n')
@@ -1017,5 +1043,24 @@ lang=EN-US><o:p></o:p></span></span></b></p>
     fn ordinary_html_is_not_treated_as_a_spreadsheet() {
         let html = "<html><body><table><tr><td>\"用户文本\"</td></tr></table></body></html>";
         assert_eq!(spreadsheet_plain_text(html), None);
+    }
+
+    #[test]
+    fn only_multiline_quoted_fields_need_spreadsheet_transport_repair() {
+        assert!(has_spreadsheet_multiline_transport_quotes(
+            "\"line one\r\nline two\"\tvalue"
+        ));
+        assert!(has_spreadsheet_multiline_transport_quotes(
+            "first\t\"line one\nline two\""
+        ));
+        assert!(!has_spreadsheet_multiline_transport_quotes(
+            "\"quoted text\"\tvalue"
+        ));
+        assert!(!has_spreadsheet_multiline_transport_quotes(
+            "ordinary\nmultiline text"
+        ));
+        assert!(!has_spreadsheet_multiline_transport_quotes(
+            "\"escaped \"\"quote\"\"\"\tvalue"
+        ));
     }
 }

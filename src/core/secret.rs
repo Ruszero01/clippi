@@ -544,10 +544,97 @@ fn looks_like_plain_filename(s: &str) -> bool {
     };
     !stem.is_empty()
         && (1..=10).contains(&ext.len())
-        && ext.chars().all(|c| c.is_ascii_alphabetic())
+        && is_common_file_extension(ext)
         && stem
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '(' | ')' | '[' | ']'))
+}
+
+/// Keep the standalone-password exemption limited to extensions users
+/// commonly copy as filenames or resource references. Treating every alphabetic
+/// suffix as a file extension lets password-like values invent an arbitrary
+/// suffix solely to bypass detection.
+fn is_common_file_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "txt"
+            | "md"
+            | "markdown"
+            | "rtf"
+            | "pdf"
+            | "doc"
+            | "docx"
+            | "xls"
+            | "xlsx"
+            | "ppt"
+            | "pptx"
+            | "csv"
+            | "tsv"
+            | "json"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "ini"
+            | "log"
+            | "html"
+            | "htm"
+            | "css"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "rs"
+            | "py"
+            | "java"
+            | "c"
+            | "h"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "go"
+            | "swift"
+            | "kt"
+            | "kts"
+            | "sh"
+            | "zsh"
+            | "fish"
+            | "sql"
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "tif"
+            | "tiff"
+            | "svg"
+            | "ico"
+            | "heic"
+            | "mp3"
+            | "wav"
+            | "flac"
+            | "m4a"
+            | "aac"
+            | "ogg"
+            | "mp4"
+            | "mov"
+            | "mkv"
+            | "avi"
+            | "webm"
+            | "zip"
+            | "rar"
+            | "7z"
+            | "tar"
+            | "gz"
+            | "bz2"
+            | "xz"
+            | "dmg"
+            | "pkg"
+            | "exe"
+            | "msi"
+            | "app"
+    )
 }
 
 fn sort_and_merge_ranges(ranges: &mut Vec<std::ops::Range<usize>>) {
@@ -1431,6 +1518,21 @@ mod tests {
             assert!(
                 detect_secret(text).is_none(),
                 "filename should not be detected as secret: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn arbitrary_alpha_suffix_does_not_bypass_password_detection() {
+        assert!(detect_secret("StrongPassword123.qwerty").is_some());
+    }
+
+    #[test]
+    fn common_resource_extensions_are_case_insensitive() {
+        for text in ["Preview-2026.JPEG", "Release_Notes.PDF", "archive-v2.TAR"] {
+            assert!(
+                detect_secret(text).is_none(),
+                "common filename should not be detected as secret: {text}"
             );
         }
     }

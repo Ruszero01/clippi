@@ -654,9 +654,15 @@ pub(crate) fn classify_clipboard_for_plain_paste(ctx: &ClipboardContext) -> Clip
             .then(|| read_clipboard_rich_data(ctx))
             .flatten()
             .and_then(|rich| rich.html);
-        let spreadsheet_text = rich_html
+        let spreadsheet_text = text
             .as_deref()
-            .and_then(crate::core::html_text::spreadsheet_plain_text);
+            .is_none_or(crate::core::html_text::has_spreadsheet_multiline_transport_quotes)
+            .then(|| {
+                rich_html
+                    .as_deref()
+                    .and_then(crate::core::html_text::spreadsheet_plain_text)
+            })
+            .flatten();
         let html_text = rich_html.as_deref().and_then(|html| {
             let visible = crate::core::html_text::visible_text(html);
             (!visible.is_empty()).then_some(visible)
@@ -962,10 +968,16 @@ fn detect_text_content_with_readers(
     // text flavor must not discard a spreadsheet's HTML in favor of its bitmap.
     // The rich reader checks format availability before opening the clipboard.
     let rich_data = read_rich();
-    let spreadsheet_text = rich_data
-        .as_ref()
-        .and_then(|rich| rich.html.as_deref())
-        .and_then(crate::core::html_text::spreadsheet_plain_text);
+    let spreadsheet_text = text
+        .as_deref()
+        .is_none_or(crate::core::html_text::has_spreadsheet_multiline_transport_quotes)
+        .then(|| {
+            rich_data
+                .as_ref()
+                .and_then(|rich| rich.html.as_deref())
+                .and_then(crate::core::html_text::spreadsheet_plain_text)
+        })
+        .flatten();
     let text = spreadsheet_text.or(text).or_else(|| {
         rich_data
             .as_ref()?
