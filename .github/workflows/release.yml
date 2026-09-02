@@ -394,7 +394,6 @@ jobs:
         shell: bash
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
-          ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
           TAG: "${{ needs.plan.outputs.tag }}"
@@ -433,15 +432,22 @@ jobs:
           fi
 
           # Write and read notes from a file to avoid quoting breaking things.
+          # The notes section always comes from RELEASES.md above. cargo-dist
+          # auto-detects RELEASES.md as a changelog when it has no BOM and then
+          # embeds the same notes ahead of its download table in
+          # ANNOUNCEMENT_BODY; append only the "## Download" table so the notes
+          # are never duplicated regardless of that detection.
           {
             printf '## Release Notes\n\n'
             cat "$RELEASE_NOTES"
             printf '\n'
-            printf '%s\n' "$ANNOUNCEMENT_BODY"
+            printf '%s\n' "$ANNOUNCEMENT_BODY" | sed -n '/^## Download/,$p'
           } > "$RUNNER_TEMP/notes.txt"
 
           gh release delete "$TAG" --cleanup-tag -y || true
-          gh release create "$TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          # Title follows the repo convention of the tag name (v0.4.4, v0.4.5)
+          # instead of cargo-dist's changelog-derived "Version 0.4.5".
+          gh release create "$TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$TAG" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
       - name: Add DMG and NSIS to release notes
         env:
           TAG: "${{ needs.plan.outputs.tag }}"
