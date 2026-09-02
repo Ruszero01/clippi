@@ -465,6 +465,97 @@ pub fn request_accessibility_permission() -> bool {
 #[cfg(target_os = "macos")]
 const SLEEP_MS: u64 = 100;
 
+#[cfg(any(target_os = "macos", test))]
+const MACOS_KEY_V: u16 = 0x09;
+#[cfg(any(target_os = "macos", test))]
+const MACOS_KEY_COMMAND: u16 = 0x37;
+
+#[cfg(any(target_os = "macos", test))]
+const MACOS_FLAG_SHIFT: u8 = 1 << 0;
+#[cfg(any(target_os = "macos", test))]
+const MACOS_FLAG_CONTROL: u8 = 1 << 1;
+#[cfg(any(target_os = "macos", test))]
+const MACOS_FLAG_OPTION: u8 = 1 << 2;
+#[cfg(any(target_os = "macos", test))]
+const MACOS_FLAG_COMMAND: u8 = 1 << 3;
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MacModifierKey {
+    key_code: u16,
+    flag: u8,
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MacKeyEvent {
+    key_code: u16,
+    key_down: bool,
+    flags: u8,
+}
+
+/// Build a self-contained paste sequence around the modifiers the user is
+/// physically holding. Modifier events carry the state from immediately before
+/// their transition, matching Quartz's flags-changed event convention.
+#[cfg(any(target_os = "macos", test))]
+fn macos_paste_events(held: &[MacModifierKey]) -> Vec<MacKeyEvent> {
+    let mut active = held.to_vec();
+    let mut events = Vec::with_capacity(held.len() * 2 + 4);
+
+    for modifier in held {
+        events.push(MacKeyEvent {
+            key_code: modifier.key_code,
+            key_down: false,
+            flags: macos_active_flags(&active),
+        });
+        if let Some(index) = active.iter().position(|active| active == modifier) {
+            active.remove(index);
+        }
+    }
+
+    events.extend([
+        MacKeyEvent {
+            key_code: MACOS_KEY_COMMAND,
+            key_down: true,
+            flags: 0,
+        },
+        MacKeyEvent {
+            key_code: MACOS_KEY_V,
+            key_down: true,
+            flags: MACOS_FLAG_COMMAND,
+        },
+        MacKeyEvent {
+            key_code: MACOS_KEY_V,
+            key_down: false,
+            flags: MACOS_FLAG_COMMAND,
+        },
+        MacKeyEvent {
+            key_code: MACOS_KEY_COMMAND,
+            key_down: false,
+            flags: MACOS_FLAG_COMMAND,
+        },
+    ]);
+
+    active.clear();
+    for modifier in held {
+        events.push(MacKeyEvent {
+            key_code: modifier.key_code,
+            key_down: true,
+            flags: macos_active_flags(&active),
+        });
+        active.push(*modifier);
+    }
+
+    events
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_active_flags(active: &[MacModifierKey]) -> u8 {
+    active
+        .iter()
+        .fold(0, |flags, modifier| flags | modifier.flag)
+}
+
 #[cfg(target_os = "macos")]
 pub fn restore_paste_target() {
     if let Some(pid) = crate::platform::focus::get_last_non_clippi_pid() {
@@ -519,37 +610,101 @@ fn send_cmd_v() {
         return;
     }
 
-    let source = core_graphics::event_source::CGEventSource::new(
-        core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
-    );
+    use core_graphics::event::{CGEvent, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    extern "C" {
+        fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+    }
+
+    // Include both sides of every ordinary modifier. Querying individual key
+    // states lets us restore the exact physical keys after the paste.
+    let modifier_keys = [
+        MacModifierKey {
+            key_code: 0x38,
+            flag: MACOS_FLAG_SHIFT,
+        },
+        MacModifierKey {
+            key_code: 0x3C,
+            flag: MACOS_FLAG_SHIFT,
+        },
+        MacModifierKey {
+            key_code: 0x3B,
+            flag: MACOS_FLAG_CONTROL,
+        },
+        MacModifierKey {
+            key_code: 0x3E,
+            flag: MACOS_FLAG_CONTROL,
+        },
+        MacModifierKey {
+            key_code: 0x3A,
+            flag: MACOS_FLAG_OPTION,
+        },
+        MacModifierKey {
+            key_code: 0x3D,
+            flag: MACOS_FLAG_OPTION,
+        },
+        MacModifierKey {
+            key_code: MACOS_KEY_COMMAND,
+            flag: MACOS_FLAG_COMMAND,
+        },
+        MacModifierKey {
+            key_code: 0x36,
+            flag: MACOS_FLAG_COMMAND,
+        },
+    ];
+    let held: Vec<_> = modifier_keys
+        .into_iter()
+        // SAFETY: state 0 is kCGEventSourceStateCombinedSessionState and all
+        // queried values are documented macOS virtual key codes.
+        .filter(|modifier| unsafe { CGEventSourceKeyState(0, modifier.key_code) })
+        .collect();
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
     let Ok(source) = source else { return };
 
-    let cmd_flag = core_graphics::event::CGEventFlags::CGEventFlagCommand;
-    let hid = core_graphics::event::CGEventTapLocation::HID;
+    // Construct the complete sequence before posting anything, so a creation
+    // failure cannot leave the user's modifier state partially released.
+    let events: Result<Vec<_>, ()> = macos_paste_events(&held)
+        .into_iter()
+        .map(|planned| {
+            let event =
+                CGEvent::new_keyboard_event(source.clone(), planned.key_code, planned.key_down)?;
+            event.set_flags(macos_cg_flags(planned.flags));
+            Ok(event)
+        })
+        .collect();
+    let Ok(events) = events else {
+        log::warn!("Failed to construct the macOS Cmd+V event sequence");
+        return;
+    };
 
-    // --- Cmd down — modifiers were NOT active before pressing Cmd ---
-    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x37, true)
-    {
-        event.post(hid);
+    // Quartz has no SendInput-style atomic array API. Posting a prebuilt
+    // sequence back-to-back is the closest equivalent and minimizes the window
+    // for interleaved physical input.
+    for event in events {
+        event.post(CGEventTapLocation::HID);
     }
-    // --- V down — Cmd IS held ---
-    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, true)
-    {
-        event.set_flags(cmd_flag);
-        event.post(hid);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cg_flags(flags: u8) -> core_graphics::event::CGEventFlags {
+    use core_graphics::event::CGEventFlags;
+
+    let mut result = CGEventFlags::CGEventFlagNull;
+    if flags & MACOS_FLAG_SHIFT != 0 {
+        result |= CGEventFlags::CGEventFlagShift;
     }
-    // --- V up — Cmd IS held ---
-    if let Ok(event) =
-        core_graphics::event::CGEvent::new_keyboard_event(source.clone(), 0x09, false)
-    {
-        event.set_flags(cmd_flag);
-        event.post(hid);
+    if flags & MACOS_FLAG_CONTROL != 0 {
+        result |= CGEventFlags::CGEventFlagControl;
     }
-    // --- Cmd up — Cmd WAS held before releasing ---
-    if let Ok(event) = core_graphics::event::CGEvent::new_keyboard_event(source, 0x37, false) {
-        event.set_flags(cmd_flag);
-        event.post(hid);
+    if flags & MACOS_FLAG_OPTION != 0 {
+        result |= CGEventFlags::CGEventFlagAlternate;
     }
+    if flags & MACOS_FLAG_COMMAND != 0 {
+        result |= CGEventFlags::CGEventFlagCommand;
+    }
+    result
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -563,12 +718,89 @@ pub fn paste_sync(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcut
 
 #[cfg(test)]
 mod tests {
-    use super::should_request_accessibility_permission;
+    use super::{
+        macos_paste_events, should_request_accessibility_permission, MacKeyEvent, MacModifierKey,
+        MACOS_FLAG_COMMAND, MACOS_FLAG_SHIFT, MACOS_KEY_COMMAND, MACOS_KEY_V,
+    };
 
     #[test]
     fn accessibility_prompt_is_requested_once_when_permission_is_missing() {
         assert!(should_request_accessibility_permission(false, false));
         assert!(!should_request_accessibility_permission(false, true));
         assert!(!should_request_accessibility_permission(true, false));
+    }
+
+    #[test]
+    fn macos_paste_without_held_modifiers_is_clean_cmd_v() {
+        assert_eq!(
+            macos_paste_events(&[]),
+            vec![
+                MacKeyEvent {
+                    key_code: MACOS_KEY_COMMAND,
+                    key_down: true,
+                    flags: 0
+                },
+                MacKeyEvent {
+                    key_code: MACOS_KEY_V,
+                    key_down: true,
+                    flags: MACOS_FLAG_COMMAND
+                },
+                MacKeyEvent {
+                    key_code: MACOS_KEY_V,
+                    key_down: false,
+                    flags: MACOS_FLAG_COMMAND
+                },
+                MacKeyEvent {
+                    key_code: MACOS_KEY_COMMAND,
+                    key_down: false,
+                    flags: MACOS_FLAG_COMMAND
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn macos_paste_releases_and_restores_held_shift() {
+        let shift = MacModifierKey {
+            key_code: 0x38,
+            flag: MACOS_FLAG_SHIFT,
+        };
+        let events = macos_paste_events(&[shift]);
+
+        assert_eq!(
+            events.first(),
+            Some(&MacKeyEvent {
+                key_code: shift.key_code,
+                key_down: false,
+                flags: MACOS_FLAG_SHIFT,
+            })
+        );
+        assert_eq!(&events[1..5], macos_paste_events(&[]));
+        assert_eq!(
+            events.last(),
+            Some(&MacKeyEvent {
+                key_code: shift.key_code,
+                key_down: true,
+                flags: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn macos_paste_preserves_both_sides_of_same_modifier() {
+        let left = MacModifierKey {
+            key_code: 0x38,
+            flag: MACOS_FLAG_SHIFT,
+        };
+        let right = MacModifierKey {
+            key_code: 0x3C,
+            flag: MACOS_FLAG_SHIFT,
+        };
+        let events = macos_paste_events(&[left, right]);
+
+        assert_eq!(events[0].flags, MACOS_FLAG_SHIFT);
+        assert_eq!(events[1].flags, MACOS_FLAG_SHIFT);
+        assert_eq!(events[6].flags, 0);
+        assert_eq!(events[7].flags, MACOS_FLAG_SHIFT);
     }
 }
