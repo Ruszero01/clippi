@@ -458,6 +458,17 @@ mod info_row_tests {
         assert_eq!(estimate_card_height(&item, "medium"), 96.0);
         assert_eq!(estimate_card_height(&item, "high"), 128.0);
     }
+
+    #[test]
+    fn note_only_forces_compact_height_in_auto_mode() {
+        let mut item = ClipboardItem::new_text(1, "content", ContentType::PlainText, None, None);
+        item.note = "note".to_string();
+
+        assert_eq!(estimate_card_height(&item, "auto"), 68.0);
+        assert_eq!(estimate_card_height(&item, "low"), 68.0);
+        assert_eq!(estimate_card_height(&item, "medium"), 96.0);
+        assert_eq!(estimate_card_height(&item, "high"), 128.0);
+    }
 }
 
 /// Get a content type iconfont glyph for display.
@@ -1098,7 +1109,7 @@ fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
 
 /// Compute estimated card height for the virtual list.
 pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32 {
-    if !item.note.is_empty() {
+    if card_height_mode == "auto" && !item.note.is_empty() {
         return 68.0;
     }
     if card_height_mode == "low" {
@@ -2060,8 +2071,8 @@ impl RenderOnce for ClipboardCard {
             )
         } else {
             // No note, or note present + hovering with show_original → render full content.
-            // Card height is clamped to 68px by estimate_card_height when note exists,
-            // and overflow_hidden on the base div naturally clips oversized content.
+            // In auto mode, cards with notes are clamped to 68px by
+            // estimate_card_height. The base div clips oversized content.
             let content_kind = item.display_kind();
             // Link and Path rendering (now sub-types of PlainText via meta_type)
             // must be checked before the catch-all PlainText arm below.
