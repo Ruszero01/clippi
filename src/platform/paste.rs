@@ -472,9 +472,9 @@ const MACOS_KEY_COMMAND: u16 = 0x37;
 
 #[cfg(any(target_os = "macos", test))]
 const MACOS_FLAG_SHIFT: u8 = 1 << 0;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const MACOS_FLAG_CONTROL: u8 = 1 << 1;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const MACOS_FLAG_OPTION: u8 = 1 << 2;
 #[cfg(any(target_os = "macos", test))]
 const MACOS_FLAG_COMMAND: u8 = 1 << 3;
