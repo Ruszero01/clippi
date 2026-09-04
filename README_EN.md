@@ -32,9 +32,10 @@
 
 ## Why Clippi?
 
-- GPUI native GPU rendering: No webview process required, combining low resource usage with polished aesthetics.
-- Fast Rust backend: Responsive performance with excellent cross-platform capability.
-- Multi-backend cloud sync: Supports OneDrive / iCloud / WebDAV with a low-barrier, extensible architecture.
+- No webview runtime dependency: low memory usage when idle, high performance with polished aesthetics.
+- Multi-tag system: assign multiple tags to entries, with multiple tag filtering modes.
+- Dual-window mode: quick paste from a non-focusing fast window without interrupting your input, with clear task separation.
+- Multi-backend sync architecture: supports OneDrive / iCloud / WebDAV and other sync methods.
 
 ## What Can Clippi Do?
 
