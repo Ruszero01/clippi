@@ -5,8 +5,14 @@
 
   # Clippi
 
-  轻量级剪贴板管理器 · 基于 Rust + GPUI 构建<br>
-  支持 Windows 和 macOS
+  **简洁 · 轻量 · 开源** 的原生剪贴板管理器<br>
+  基于 Rust + GPUI 构建，支持 Windows 和 macOS
+
+  <p>
+    <a href="https://clippi.rains-ailurus.cn/">🌐 官方网站</a> ·
+    <a href="https://github.com/Ruszero01/clippi/releases">⬇️ 下载</a> ·
+    <a href="https://github.com/Ruszero01/clippi">GitHub</a>
+  </p>
 
   <p>
     <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
@@ -30,14 +36,19 @@
 
 ---
 
+> Clippi 是一款轻量、开源的剪贴板历史管理工具：它默默记录你的复制内容，支持搜索、标签筛选、图片 OCR、二维码识别、批量操作和跨设备同步，让复制内容真正成为可整理、可复用、可搜索的资产。
+
+---
+
 ## 为什么选择 Clippi？
 
-- 无需 webview 运行时依赖，静默时内存占用低，高性能兼顾美观性
-- 多标签系统，支持为条目添加多个标签，并支持多种标签筛选模式
-- 双窗口模式，无焦点快速窗口粘贴时不打断输入状态，分工明确
-- 多后端同步架构，支持 OneDrive/iCloud/WebDAV 等同步方式
+- **无 WebView 依赖**：使用 Rust + GPUI 构建原生界面，静默时内存占用低，性能与美观兼得
+- **多标签系统**：支持为条目添加多个标签，并提供多种标签筛选模式
+- **双窗口模式**：无焦点快速粘贴窗口不打断当前输入状态，分工明确
+- **多后端同步架构**：支持 OneDrive / iCloud / WebDAV 等同步方式
+- **隐私保护**：对邮箱、手机号等敏感内容进行脱敏预览，减少屏幕上的隐私暴露
 
-## Clippi 能做什么？
+## 功能亮点
 
 ### 剪贴板监控
 
@@ -57,6 +68,7 @@
 
 - 双击卡片快速粘贴
 - 多类型条目编辑
+- 收藏与备注：收藏常用片段，并为条目添加备注
 - 多选批量操作：批量粘贴（换行分隔）、批量收藏、批量删除、批量标签
 - 类型组合筛选：自由搭配多个筛选规则
 - 关键词搜索 — 同时匹配文本内容和标签名
@@ -111,9 +123,18 @@
 - 仅收藏条目同步模式
 - 异步连接测试
 
-## 构建
+## 快速开始
+
+### 下载安装
+
+- 访问 [官方网站](https://clippi.rains-ailurus.cn/) 或 [GitHub Releases](https://github.com/Ruszero01/clippi/releases) 下载最新版本
+- 支持 Windows 与 macOS 安装包 / dmg
+
+### 从源码构建
 
 ```bash
+git clone https://github.com/Ruszero01/clippi.git
+cd clippi
 cargo build
 cargo run
 ```
@@ -139,3 +160,17 @@ Clippi 的快速粘贴功能需要辅助功能权限来模拟按键输入：
 3. 如果 Clippi 不在列表中，点击 `+` 按钮手动添加，路径为 `/Applications/Clippi.app`
 
 > 未授予辅助功能权限时，快速粘贴（双击卡片/Enter 键粘贴）将无法工作，但你仍然可以使用右键菜单手动复制粘贴。
+
+---
+
+## 相关链接
+
+- [官方网站](https://clippi.rains-ailurus.cn/)
+- [官方文档](https://clippi.rains-ailurus.cn/docs.html)
+- [GitHub 仓库](https://github.com/Ruszero01/clippi)
+- [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
+- [问题反馈](https://github.com/Ruszero01/clippi/issues)
+
+## License
+
+[MIT](LICENSE)

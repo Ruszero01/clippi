@@ -5,8 +5,14 @@
 
   # Clippi
 
-  Lightweight Clipboard Manager · Built with Rust + GPUI<br>
-  Available for Windows and macOS
+  **Simple · Lightweight · Open Source** Native Clipboard Manager<br>
+  Built with Rust + GPUI, available for Windows and macOS
+
+  <p>
+    <a href="https://clippi.rains-ailurus.cn/">🌐 Official Website</a> ·
+    <a href="https://github.com/Ruszero01/clippi/releases">⬇️ Download</a> ·
+    <a href="https://github.com/Ruszero01/clippi">GitHub</a>
+  </p>
 
   <p>
     <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
@@ -30,26 +36,31 @@
 
 ---
 
+> Clippi is a lightweight, open-source clipboard history manager: it silently records everything you copy, then helps you search, filter, OCR images, detect QR codes, batch-process entries, and sync across devices — turning copied content into an organized, reusable, searchable asset.
+
+---
+
 ## Why Clippi?
 
-- No webview runtime dependency: low memory usage when idle, high performance with polished aesthetics.
-- Multi-tag system: assign multiple tags to entries, with multiple tag filtering modes.
-- Dual-window mode: quick paste from a non-focusing fast window without interrupting your input, with clear task separation.
-- Multi-backend sync architecture: supports OneDrive / iCloud / WebDAV and other sync methods.
+- **No WebView dependency**: a native Rust + GPUI interface with low idle memory usage and high performance
+- **Multi-tag system**: add multiple tags to entries and use versatile tag filtering modes
+- **Dual-window mode**: a focus-free quick-paste window never interrupts your current input
+- **Multi-backend sync architecture**: OneDrive / iCloud / WebDAV and other sync methods
+- **Privacy protection**: masked previews for sensitive content such as email addresses and phone numbers
 
-## What Can Clippi Do?
+## Features
 
 ### Clipboard Monitoring
 
 ![clipboard](./docs/images/clipboard.png)
 
-- Multi-format content detection: Plain text, Rich text, Files, Images, Links, Paths, Colors, Phone numbers, Email addresses
-- Content hash deduplication: Re-copying the same content updates the timestamp without creating duplicate entries
+- Multi-format content detection: plain text, rich text, files, images, links, paths, colors, phone numbers, email addresses
+- Content hash deduplication: re-copying the same content updates the timestamp without creating duplicate entries
 - Color normalization dedup: `#FF8000` ≡ `rgb(255,128,0)`, prevents duplicates
-- Image OCR: Keyword search and paste OCR-extracted text
-- QR code detection: Recognizes QR codes with one-click navigation
-- Hotkey blacklist: Disable global hotkey in specified applications
-- Plain text copy mode: Discard rich formatting and keep plain text only
+- Image OCR: keyword search and paste OCR-extracted text
+- QR code detection: recognizes QR codes with one-click navigation
+- Hotkey blacklist: disable global hotkeys in specified applications
+- Plain text copy mode: discard rich formatting and keep plain text only
 
 ### Content Management
 
@@ -57,12 +68,13 @@
 
 - Double-click cards for quick paste
 - Multi-type entry editing
-- Multi-select batch operations: Batch paste (newline-separated), batch favorite, batch delete, batch tag
-- Combined type filters: Freely mix multiple filter rules
+- Favorites & notes: pin favorite snippets and add notes to entries
+- Multi-select batch operations: batch paste (newline-separated), batch favorite, batch delete, batch tag
+- Combined type filters: freely mix multiple filter rules
 - Keyword search — matches both text content and tag names
-- Tag filtering — Switchable AND/OR logic across multiple tags
-- Sorting: By creation time / By last used time
-- Sensitive info preview masking: Email shows first 2 chars + domain, phone shows first 3 + last 4 digits
+- Tag filtering — switchable AND/OR logic across multiple tags
+- Sorting: by creation time / by last used time
+- Sensitive info preview masking: email shows first 2 chars + domain, phone shows first 3 + last 4 digits
 
 ### Tag System
 
@@ -70,9 +82,9 @@
 
 - Create / Edit / Delete tags, 12 preset colors
 - Tag association with clipboard entries (many-to-many)
-- Side tag bar: Pin filter tags to the left side of window, with expand/collapse animation and pinning
-- Tag filter panel + Tag picker panel (both support tag CRUD)
-- Single-item / Batch tag assignment and removal
+- Side tag bar: pin filter tags to the left side of the window, with expand/collapse animation and pinning
+- Tag filter panel + tag picker panel (both support tag CRUD)
+- Single-item / batch tag assignment and removal
 - Cross-device tag synchronization (with color conflict resolution)
 
 ### Window & Interaction
@@ -83,15 +95,15 @@
 - Window pin-on-top mode
 - Auto-hide on focus loss
 - Multi-monitor support (cursor's monitor)
-- Three popup positions: Center / Follow mouse / Remember position
-- Dark / Light theme, auto-detect system dark mode
+- Three popup positions: center / follow mouse / remember position
+- Dark / light theme with automatic system dark mode detection
 
 ### Display Options
 
 ![display](./docs/images/display.png)
 
 - Source app info display (clipboard source application name and icon)
-- Card height modes: Tall / Medium / Short / Auto
+- Card height modes: tall / medium / short / auto
 - Show original content on hover (when notes exist)
 - Plain text copy
 
@@ -99,9 +111,9 @@
 
 ![sync](./docs/images/sync.png)
 
-- Multi-backend architecture: Supports multiple sync services simultaneously, each with independent toggle and interval
-- Local folder backend: Sync via OneDrive / iCloud folders
-- WebDAV backend: Supports WebDAV servers, ETag caching + Basic Auth
+- Multi-backend architecture: supports multiple sync services simultaneously, each with independent toggle and interval
+- Local folder backend: sync via OneDrive / iCloud folders
+- WebDAV backend: supports WebDAV servers, ETag caching + Basic Auth
 - Auto-detect OneDrive (Windows + macOS) and iCloud (macOS) preset paths
 - Cross-device delete & unfavorite propagation (tombstone mechanism, 30-day window)
 - Last-writer-wins (LWW) conflict resolution
@@ -111,9 +123,18 @@
 - Favorites-only sync mode
 - Async connection test
 
-## Build
+## Quick Start
+
+### Download
+
+- Get the latest version from the [Official Website](https://clippi.rains-ailurus.cn/) or [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
+- Installers / DMGs are available for Windows and macOS
+
+### Build from Source
 
 ```bash
+git clone https://github.com/Ruszero01/clippi.git
+cd clippi
 cargo build
 cargo run
 ```
@@ -122,7 +143,7 @@ cargo run
 
 ## macOS Users Notice
 
-Clippi is not signed with an Apple Developer certificate (not enrolled in Apple Developer Program). On first launch or after each update, macOS Gatekeeper will block the app from running. Please follow the steps below:
+Clippi is not signed with an Apple Developer certificate (not enrolled in Apple Developer Program). On first launch or after each update, macOS Gatekeeper may block the app from running. Please follow the steps below:
 
 ### First Install / After Update
 
@@ -139,3 +160,17 @@ Clippi's quick paste feature requires Accessibility permission to simulate keyst
 3. If Clippi is not in the list, click the `+` button and add it manually from `/Applications/Clippi.app`
 
 > Without Accessibility permission, quick paste (double-click card / Enter key paste) will not work, but you can still copy and paste manually via the right-click menu.
+
+---
+
+## Links
+
+- [Official Website](https://clippi.rains-ailurus.cn/)
+- [Official Docs](https://clippi.rains-ailurus.cn/docs.html)
+- [GitHub Repository](https://github.com/Ruszero01/clippi)
+- [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
+- [Issue Tracker](https://github.com/Ruszero01/clippi/issues)
+
+## License
+
+[MIT](LICENSE)
