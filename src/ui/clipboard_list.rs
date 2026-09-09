@@ -615,9 +615,12 @@ impl ClipboardListView {
         cx.notify();
     }
 
-    /// Reload local items from AppState without resetting UI state.
+    /// Reload local items from AppState without resetting valid UI state.
     /// Use after mutations (toggle_favorite, tag ops, delete) to keep the list
     /// in sync. Items retain their current order; re-sort on next window open.
+    /// Selections/hover rows are re-mapped by ID, and stale selections for
+    /// deleted/removed items are repaired so the list never keeps a dead
+    /// multi-select state.
     pub(crate) fn sync_items_from_state(&mut self, cx: &mut Context<Self>) {
         self.state
             .update(cx, |state, _| state.clear_usage_sync_request());
@@ -625,8 +628,98 @@ impl ClipboardListView {
         self.pending_images = self.state.read(cx).pending_images.clone();
         let combined = self.combined_with_pending(app_items);
         self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
+
+        // Capture the previous interaction positions by stable item ID before
+        // replacing the list. Deletion shifts indices, so keeping stale indices
+        // can leave a dead multi-selection that hover-to-select refuses to
+        // replace (it only auto-selects when at most one item is selected).
+        let previous_selected_id = item_id_at(&self.items, self.selected_index);
+        let previous_anchor_id = item_id_at(&self.items, self.anchor_index);
+        let previous_hovered_id = item_id_at(&self.items, self.hovered_index);
+        let previous_selected_index = self.selected_index;
+
         self.items = combined;
+        self.reconcile_selection_after_items_changed(
+            previous_selected_id,
+            previous_anchor_id,
+            previous_hovered_id,
+            previous_selected_index,
+            cx,
+        );
         cx.notify();
+    }
+
+    /// After `items` are reloaded from AppState, keep the list's selection in
+    /// sync with AppState and drop IDs that no longer exist (e.g. deleted).
+    ///
+    /// Valid multi-selections are preserved. If every selected item vanished,
+    /// select the row at the same visual index when possible, otherwise the
+    /// first selectable item, so the list never keeps a stale multi-select
+    /// count that prevents hover-driven selection.
+    fn reconcile_selection_after_items_changed(
+        &mut self,
+        previous_selected_id: Option<i64>,
+        previous_anchor_id: Option<i64>,
+        previous_hovered_id: Option<i64>,
+        previous_selected_index: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let app_selected = self.state.read(cx).selected_ids.clone();
+        let available_ids: HashSet<i64> = self
+            .items
+            .iter()
+            .filter(|item| !item_is_pending(item))
+            .map(|item| item.id)
+            .collect();
+        let kept_ids: Vec<i64> = app_selected
+            .into_iter()
+            .filter(|id| available_ids.contains(id))
+            .collect();
+        let first_kept_index = kept_ids
+            .first()
+            .and_then(|&id| item_index(&self.items, Some(id)));
+
+        self.selected_ids = kept_ids;
+        self.selected_count = self.selected_ids.len();
+
+        if !self.selected_ids.is_empty() {
+            // Preserve the active/anchor rows when they are still selected;
+            // otherwise fall back to the first surviving selected row.
+            let active_index = item_index(&self.items, previous_selected_id)
+                .filter(|index| self.selected_ids.contains(&self.items[*index].id))
+                .or(first_kept_index);
+            let anchor_index = item_index(&self.items, previous_anchor_id)
+                .filter(|index| self.selected_ids.contains(&self.items[*index].id))
+                .or(first_kept_index);
+            self.selected_index = active_index;
+            self.anchor_index = anchor_index;
+
+            // If AppState still contains selected IDs that are not visible in
+            // this list, mirror the pruned set back so both stay consistent.
+            if self.selected_ids.len() != self.state.read(cx).selected_ids.len() {
+                let ids = self.selected_ids.clone();
+                self.state.update(cx, |state, _cx| state.range_select(&ids));
+            }
+        } else {
+            self.selected_index = None;
+            self.anchor_index = None;
+
+            // All previously selected items disappeared. Keep the UI usable by
+            // selecting the same visual row if it is still a real item, else
+            // the first selectable item.
+            let fallback_index = previous_selected_index
+                .filter(|index| *index < self.items.len())
+                .filter(|index| !item_is_pending(&self.items[*index]))
+                .or_else(|| self.items.iter().position(|item| !item_is_pending(item)));
+            if let Some(index) = fallback_index {
+                self.select_index_without_scroll(index, cx);
+            }
+        }
+
+        // Re-map the hovered row by ID too; a deleted item must not leave a
+        // stale index pointing at a different card after the list shifts.
+        self.hovered_index = item_index(&self.items, previous_hovered_id)
+            .filter(|index| !item_is_pending(&self.items[*index]));
     }
 
     /// Prepend synthesized, non-persisted pending image placeholders so they
