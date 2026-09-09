@@ -511,11 +511,11 @@ define_i18n! {
 
     // ─── Config sync ───
     ConfigSyncTitle:            ("配置同步", "Config Sync"),
-    ConfigSyncDesc:             ("手动将通用设置保存到同步后端，或应用云端设置。", "Manually save or apply portable settings via a sync backend."),
-    ConfigSyncTargetBackend:    ("目标后端", "Target backend"),
+    ConfigSyncDesc:             ("同步通用设置", "Sync common settings"),
+    ConfigSyncTargetBackend:    ("后端", "Backend"),
     ConfigSyncNoBackend:        ("请先添加同步后端", "Please add a sync backend first"),
-    ConfigSyncUpload:           ("上传本地配置", "Upload config"),
-    ConfigSyncApply:            ("应用云端配置", "Apply cloud config"),
+    ConfigSyncUpload:           ("上传配置", "Upload config"),
+    ConfigSyncApply:            ("应用配置", "Apply config"),
     ConfigSyncUploading:        ("上传中...", "Uploading..."),
     ConfigSyncDownloading:      ("下载中...", "Downloading..."),
     ConfigSyncConfirmUploadTitle:("确认上传配置", "Confirm Upload"),

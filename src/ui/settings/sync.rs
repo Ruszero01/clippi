@@ -203,6 +203,7 @@ impl SettingsPanel {
                                         div()
                                             .flex_1()
                                             .min_w(px(0.))
+                                            .mr(px(8.))
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
@@ -341,14 +342,6 @@ impl SettingsPanel {
                                         .child(label)
                                 })),
                         )
-                        .child(
-                            div()
-                                .px(px(14.))
-                                .pb(px(8.))
-                                .text_size(px(9.))
-                                .text_color(text_3)
-                                .child(I18nKey::TransferProtocolUpgradeRequired.text()),
-                        )
                     }),
             )
             .child({
@@ -400,28 +393,25 @@ impl SettingsPanel {
                     .border_color(divider)
                     .child(
                         div()
-                            .overflow_hidden()
-                            .rounded_t(px(10.))
+                            .h(px(40.))
                             .px(px(14.))
-                            .py(px(10.))
                             .flex()
-                            .flex_col()
+                            .items_center()
                             .gap(px(6.))
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(text_1)
-                                            .child(I18nKey::ConfigSyncTitle.text()),
-                                    ),
+                                    .flex_shrink_0()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::ConfigSyncTitle.text()),
                             )
                             .child(
                                 div()
+                                    .min_w(px(0.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
                                     .text_size(px(10.))
                                     .text_color(text_2)
                                     .child(I18nKey::ConfigSyncDesc.text()),
@@ -429,26 +419,20 @@ impl SettingsPanel {
                     )
                     .child(div().h(px(1.)).bg(divider))
                     .child({
-
                         div()
                             .px(px(14.))
                             .py(px(8.))
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(text_2)
-                                    .child(I18nKey::ConfigSyncTargetBackend.text()),
-                            )
                             .child({
                                 let this = cx.entity().clone();
                                 div()
-                                    .flex_1()
-                                    .h(px(22.))
-                                    .px(px(8.))
-                                    .rounded(px(4.))
+                                    .flex_shrink_0()
+                                    .w(relative(0.5))
+                                    .h(px(28.))
+                                    .px(px(10.))
+                                    .rounded(px(6.))
                                     .border(px(1.))
                                     .border_color(if menu_open { accent } else { divider })
                                     .bg(surface)
@@ -459,6 +443,16 @@ impl SettingsPanel {
                                     .text_color(if no_backends { text_3 } else { accent })
                                     .cursor(if ids.len() <= 1 { CursorStyle::Arrow } else { CursorStyle::PointingHand })
                                     .opacity(if no_backends { 0.45 } else { 1.0 })
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .pr(px(9.))
+                                            .mr(px(9.))
+                                            .border_r(px(1.))
+                                            .border_color(divider)
+                                            .text_color(text_2)
+                                            .child(I18nKey::ConfigSyncTargetBackend.text()),
+                                    )
                                     .child(
                                         div()
                                             .flex_1()
@@ -475,7 +469,6 @@ impl SettingsPanel {
                                     .when(ids.len() > 1, |el| {
                                         el.child(
                                             div()
-                                                .ml(px(2.))
                                                 .flex_shrink_0()
                                                 .font_family("iconfont")
                                                 .text_size(px(8.))
@@ -497,33 +490,32 @@ impl SettingsPanel {
                                         }
                                     })
                             })
-                    })
-                    .child(div().h(px(1.)).bg(divider))
-                    .child(
-                        div()
-                            .px(px(14.))
-                            .py(px(8.))
-                            .flex()
-                            .gap(px(6.))
                             .child({
                                 let _wm = wm.clone();
                                 let selected = selected_id.clone();
                                 let backend_name = selected_name.clone();
                                 let this = cx.entity().clone();
                                 div()
+                                    .id("config-sync-upload")
                                     .flex_1()
+                                    .min_w(px(0.))
                                     .h(px(28.))
                                     .rounded(px(6.))
                                     .bg(accent)
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(10.))
                                     .text_color(rgb(0xffffff))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .cursor(if buttons_disabled { CursorStyle::Arrow } else { CursorStyle::PointingHand })
                                     .opacity(if buttons_disabled { 0.45 } else { 1.0 })
-                                    .child(if busy { I18nKey::ConfigSyncUploading.text() } else { I18nKey::ConfigSyncUpload.text() })
+                                    .tooltip(|window, cx| {
+                                        Tooltip::element(move |_window, _cx| {
+                                            div().text_size(px(10.)).child(I18nKey::ConfigSyncUpload.text())
+                                        })
+                                        .build(window, cx)
+                                    })
+                                    .child(I18nKey::ConfigSyncUpload.text())
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         if buttons_disabled {
                                             return;
@@ -544,19 +536,26 @@ impl SettingsPanel {
                                 let selected = selected_id.clone();
                                 let this = cx.entity().clone();
                                 div()
+                                    .id("config-sync-download")
                                     .flex_1()
+                                    .min_w(px(0.))
                                     .h(px(28.))
                                     .rounded(px(6.))
                                     .bg(accent_soft)
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(10.))
                                     .text_color(accent)
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .cursor(if buttons_disabled { CursorStyle::Arrow } else { CursorStyle::PointingHand })
                                     .opacity(if buttons_disabled { 0.45 } else { 1.0 })
-                                    .child(if busy { I18nKey::ConfigSyncDownloading.text() } else { I18nKey::ConfigSyncApply.text() })
+                                    .tooltip(|window, cx| {
+                                        Tooltip::element(move |_window, _cx| {
+                                            div().text_size(px(10.)).child(I18nKey::ConfigSyncApply.text())
+                                        })
+                                        .build(window, cx)
+                                    })
+                                    .child(I18nKey::ConfigSyncApply.text())
                                     .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                         if buttons_disabled {
                                             return;
@@ -575,37 +574,42 @@ impl SettingsPanel {
                                             });
                                         }
                                     })
-                            }),
-                    )
+                            })
+                    })
                     .when(menu_open, |card| {
                         let ids = ids.clone();
                         let names = names.clone();
                         let selected = selected_id.clone();
                         let this = cx.entity().clone();
                         card.child(
-                            div()
-                                .absolute()
-                                .top(px(92.))
-                                .left(px(60.))
-                                .right(px(14.))
-                                .rounded(px(6.))
-                                .border(px(1.))
-                                .border_color(divider)
-                                .bg(surface)
-                                .shadow_lg()
-                                .p(px(4.))
-                                .occlude()
-                                .children(ids.iter().enumerate().map(|(i, id)| {
+                            deferred(
+                                div()
+                                    .absolute()
+                                    .top(px(79.))
+                                    .left(px(14.))
+                                    .right(relative(0.5))
+                                    .rounded(px(8.))
+                                    .border(px(1.))
+                                    .border_color(divider)
+                                    .bg(surface)
+                                    .shadow_lg()
+                                    .p(px(5.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .occlude()
+                                    .children(ids.iter().enumerate().map(|(i, id)| {
                                     let name = names[i].clone();
                                     let id = id.clone();
                                     let active = Some(&id) == selected.as_ref();
                                     let this = this.clone();
                                     div()
-                                        .h(px(24.))
-                                        .rounded(px(4.))
-                                        .px(px(8.))
+                                        .h(px(28.))
+                                        .rounded(px(5.))
+                                        .px(px(10.))
                                         .flex()
                                         .items_center()
+                                        .justify_between()
                                         .text_size(px(10.))
                                         .text_color(if active { accent } else { text_1 })
                                         .bg(if active { accent_soft } else { rgba(0x00000000) })
@@ -624,8 +628,28 @@ impl SettingsPanel {
                                                 cx.notify();
                                             });
                                         })
-                                        .child(name)
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.))
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .child(name),
+                                        )
+                                        .when(active, |row| {
+                                            row.child(
+                                                div()
+                                                    .ml(px(6.))
+                                                    .flex_shrink_0()
+                                                    .font_family("iconfont")
+                                                    .text_size(px(10.))
+                                                    .child("\u{e611}"),
+                                            )
+                                        })
                                 })),
+                            )
+                            .with_priority(1),
                         )
                     })
             })

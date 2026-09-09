@@ -6,6 +6,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::Input;
+use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::migrate_database;
@@ -626,8 +627,8 @@ impl SettingsPanel {
                             .child(
                                 div()
                                     .flex()
-                                    .flex_col()
-                                    .gap(px(1.))
+                                    .items_center()
+                                    .gap(px(5.))
                                     .child(
                                         div()
                                             .text_size(px(11.))
@@ -636,9 +637,31 @@ impl SettingsPanel {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(10.))
+                                            .id("cleanup-stale-items-help")
+                                            .w(px(14.))
+                                            .h(px(14.))
+                                            .rounded_full()
+                                            .border(px(1.))
+                                            .border_color(text_3)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(9.))
+                                            .font_weight(FontWeight::BOLD)
                                             .text_color(text_3)
-                                            .child(I18nKey::DescCleanupStaleItems.text()),
+                                            .cursor(CursorStyle::Arrow)
+                                            .tooltip(|window, cx| {
+                                                Tooltip::element(move |_window, _cx| {
+                                                    div().text_size(px(10.)).child(
+                                                        I18nKey::DescCleanupStaleItems.text(),
+                                                    )
+                                                })
+                                                .build(window, cx)
+                                            })
+                                            .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .child("?"),
                                     ),
                             )
                     })
