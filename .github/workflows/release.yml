@@ -409,7 +409,10 @@ jobs:
               bucket.put_object_from_file(
                   object_key,
                   local_path,
-                  headers={"Content-Type": content_type},
+                  headers={
+                      "Content-Type": content_type,
+                      "x-oss-object-acl": "public-read",
+                  },
               )
               uploaded.append(remote_name)
 

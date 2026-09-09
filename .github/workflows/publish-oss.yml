@@ -1,0 +1,73 @@
+name: Publish website installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub Release tag to publish
+        required: true
+        default: v0.4.6
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+    steps:
+      - name: Download release installers
+        run: |
+          mkdir artifacts
+          gh release download "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --dir artifacts \
+            --pattern 'Clippi_*_x64-setup.exe' \
+            --pattern 'Clippi_aarch64.dmg' \
+            --pattern 'Clippi_x86_64.dmg'
+
+      - name: Upload public website files to OSS
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --quiet oss2
+          python3 - <<'PY'
+          import glob
+          import os
+
+          import oss2
+
+          auth = oss2.Auth(
+              os.environ["OSS_ACCESS_KEY_ID"].strip(),
+              os.environ["OSS_ACCESS_KEY_SECRET"].strip(),
+          )
+          bucket = oss2.Bucket(
+              auth,
+              "https://oss-cn-shanghai.aliyuncs.com",
+              "rains-ailurus-cn",
+          )
+          uploads = [
+              ("Clippi_*_x64-setup.exe", "Clippi_Setup.exe", "application/octet-stream"),
+              ("Clippi_aarch64.dmg", "Clippi_aarch64.dmg", "application/x-apple-diskimage"),
+              ("Clippi_x86_64.dmg", "Clippi_x64.dmg", "application/x-apple-diskimage"),
+          ]
+          for pattern, remote_name, content_type in uploads:
+              matches = glob.glob(f"artifacts/{pattern}")
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected one match for {pattern}, found {len(matches)}")
+              object_key = f"clippi/releases/{remote_name}"
+              bucket.put_object_from_file(
+                  object_key,
+                  matches[0],
+                  headers={
+                      "Content-Type": content_type,
+                      "x-oss-object-acl": "public-read",
+                  },
+              )
+              acl = bucket.get_object_acl(object_key).acl
+              if acl != oss2.OBJECT_ACL_PUBLIC_READ:
+                  raise SystemExit(f"Unexpected ACL for {object_key}: {acl}")
+              print(f"Published {object_key} with public-read ACL")
+          PY
