@@ -491,8 +491,10 @@ jobs:
               in_section = 0
               found = 0
             }
+            # Consume the full input so sed does not fail with SIGPIPE under pipefail.
+            found && !in_section { next }
             /^# +Version[[:space:]]+/ {
-              if (in_section) exit
+              if (in_section) { in_section = 0; next }
               pattern = "^# +Version[[:space:]]+v?" version "([[:space:]]|$)"
               if ($0 ~ pattern) {
                 in_section = 1
@@ -501,7 +503,7 @@ jobs:
               }
             }
             /^---[[:space:]]*$/ {
-              if (in_section) exit
+              if (in_section) { in_section = 0; next }
             }
             in_section {
               print
