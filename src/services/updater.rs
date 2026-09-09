@@ -18,6 +18,11 @@ pub fn download_and_prepare(
     let temp_dir = super::install::update_temp_dir();
     let _ = std::fs::create_dir_all(&temp_dir);
 
+    // The asset name comes from an external manifest/release. Reject anything
+    // that is not a plain file name before joining it onto the temp directory.
+    if !super::update::is_safe_asset_name(&info.asset_name) {
+        return Err(format!("Invalid update asset name: {}", info.asset_name));
+    }
     let dest_path = temp_dir.join(&info.asset_name);
 
     // 1. Download
@@ -32,10 +37,14 @@ pub fn download_and_prepare(
         },
     )?;
 
-    // 2. Verify
+    // 2. Verify. The OSS manifest embeds the hash, which avoids a second
+    // request and any window where the checksum file and installer disagree.
     phase_callback(UpdatePhase::Verifying);
 
-    let expected_hash = super::downloader::fetch_checksum(&info.checksum_url)?;
+    let expected_hash = match info.sha256.as_deref() {
+        Some(hash) => hash.to_string(),
+        None => super::downloader::fetch_checksum(&info.checksum_url)?,
+    };
     super::downloader::verify_sha256(&dest_path, &expected_hash)?;
 
     // 3. Prepare the platform artifact. Installation happens only after the

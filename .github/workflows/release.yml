@@ -336,11 +336,12 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
-  # Upload the stable installer filenames used by the official website to Alibaba Cloud OSS.
-  # The object prefix follows the existing site URL:
+  # Publish installers and the auto-update manifest to Alibaba Cloud OSS.
+  # Versioned objects keep update downloads stable; the stable aliases keep the
+  # existing website URL working:
   # https://rains-ailurus-cn.oss-cn-shanghai.aliyuncs.com/clippi/releases/<file>
   upload-to-oss:
-    name: Upload installers to OSS
+    name: Publish installers and update manifest to OSS
     needs:
       - plan
       - build-local-artifacts
@@ -348,6 +349,16 @@ jobs:
     # Only publish stable version tags, after all build artifacts are available.
     if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && !fromJson(needs.plan.outputs.val).announcement_is_prerelease && needs.build-local-artifacts.result == 'success' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') }}
     runs-on: ubuntu-22.04
+    # Shared with publish-oss.yml so only one OSS publisher runs at a time.
+    # `queue: max` keeps every triggered release queued instead of letting a
+    # third run cancel the pending one (the default is `queue: single`).
+    # OSS has no reliable compare-and-delete, so this concurrency group is the
+    # primary cross-workflow mutual exclusion; scripts/publish_oss.py keeps a
+    # secondary lock object.
+    concurrency:
+      group: clippi-oss-publish
+      cancel-in-progress: false
+      queue: max
     env:
       OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
       OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
@@ -355,6 +366,10 @@ jobs:
       OSS_BUCKET: "rains-ailurus-cn"
       OSS_PREFIX: "clippi/releases"
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - name: Download local release artifacts
         uses: actions/download-artifact@v7
         with:
@@ -362,67 +377,24 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Upload stable release files to Alibaba Cloud OSS
+      - name: Extract release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME##*/}"
+          VERSION="${VERSION#v}"
+          bash scripts/extract_release_notes.sh "$VERSION" RELEASES.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Publish installers and update manifest to Alibaba Cloud OSS
         shell: bash
         run: |
           set -euo pipefail
           python3 -m pip install --user --quiet oss2
-          python3 - <<'PY'
-          import glob
-          import os
-          import sys
-
-          import oss2
-
-          access_key_id = os.environ.get("OSS_ACCESS_KEY_ID", "").strip()
-          access_key_secret = os.environ.get("OSS_ACCESS_KEY_SECRET", "").strip()
-          if not access_key_id or not access_key_secret:
-              sys.exit("Missing OSS_ACCESS_KEY_ID or OSS_ACCESS_KEY_SECRET repository secret")
-
-          endpoint = os.environ["OSS_ENDPOINT"].strip()
-          if not endpoint.startswith(("http://", "https://")):
-              endpoint = "https://" + endpoint
-
-          auth = oss2.Auth(access_key_id, access_key_secret)
-          bucket = oss2.Bucket(auth, endpoint, os.environ["OSS_BUCKET"].strip())
-          prefix = os.environ["OSS_PREFIX"].strip().strip("/")
-          if not prefix:
-              sys.exit("OSS_PREFIX must not be empty")
-
-          # Map the versioned/arch-named build output to the stable file names used
-          # by the official website download links.
-          uploads = [
-              ("Clippi_*_x64-setup.exe", "Clippi_Setup.exe", "application/octet-stream"),
-              ("Clippi_aarch64.dmg", "Clippi_aarch64.dmg", "application/x-apple-diskimage"),
-              ("Clippi_x86_64.dmg", "Clippi_x64.dmg", "application/x-apple-diskimage"),
-          ]
-
-          uploaded = []
-          for pattern, remote_name, content_type in uploads:
-              matches = sorted(glob.glob(f"artifacts/{pattern}"))
-              if not matches:
-                  print(f"::warning::No artifact matched {pattern}; skipping {remote_name}")
-                  continue
-              local_path = matches[0]
-              object_key = f"{prefix}/{remote_name}"
-              print(f"Uploading {local_path} -> oss://{bucket.bucket_name}/{object_key}")
-              bucket.put_object_from_file(
-                  object_key,
-                  local_path,
-                  headers={
-                      "Content-Type": content_type,
-                      "x-oss-object-acl": "public-read",
-                  },
-              )
-              uploaded.append(remote_name)
-
-          required = {"Clippi_Setup.exe", "Clippi_aarch64.dmg", "Clippi_x64.dmg"}
-          missing = sorted(required - set(uploaded))
-          if missing:
-              sys.exit(f"Not all stable OSS files were uploaded; missing: {', '.join(missing)}")
-
-          print("OSS upload complete: " + ", ".join(sorted(uploaded)))
-          PY
+          python3 scripts/publish_oss.py \
+            --artifacts artifacts \
+            --tag "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md
   # Determines if we should publish/announce
   host:
     needs:
@@ -489,32 +461,7 @@ jobs:
           VERSION="${TAG#v}"
           RELEASE_NOTES="$RUNNER_TEMP/release-notes.md"
 
-          LC_ALL=C sed $'1s/^\xEF\xBB\xBF//' RELEASES.md | awk -v version="$VERSION" '
-            BEGIN {
-              in_section = 0
-              found = 0
-            }
-            # Consume the full input so sed does not fail with SIGPIPE under pipefail.
-            found && !in_section { next }
-            /^# +Version[[:space:]]+/ {
-              if (in_section) { in_section = 0; next }
-              pattern = "^# +Version[[:space:]]+v?" version "([[:space:]]|$)"
-              if ($0 ~ pattern) {
-                in_section = 1
-                found = 1
-                next
-              }
-            }
-            /^---[[:space:]]*$/ {
-              if (in_section) { in_section = 0; next }
-            }
-            in_section {
-              print
-            }
-            END {
-              if (!found) exit 1
-            }
-          ' | sed '/./,$!d' > "$RELEASE_NOTES"
+          bash scripts/extract_release_notes.sh "$VERSION" RELEASES.md > "$RELEASE_NOTES"
 
           if [ ! -s "$RELEASE_NOTES" ]; then
             echo "No release notes found for Version $VERSION in RELEASES.md" >&2

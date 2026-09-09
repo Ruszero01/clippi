@@ -15,6 +15,10 @@ clippi.toml
 # macOS
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+
 # Claude Code
 .claude/
 CLAUDE.md

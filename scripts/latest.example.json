@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "version": "0.4.7",
+  "tag": "v0.4.7",
+  "published_at": "2026-09-09T06:28:33Z",
+  "notes": "",
+  "assets": {
+    "windows-x86_64": {
+      "name": "Clippi_Setup.exe",
+      "path": "v0.4.7/Clippi_Setup.exe",
+      "size": 14,
+      "sha256": "8ba67ba3cb224a45d37bbb154795ce4c8e9a9c377ae0c5734c4cb1e567f7ecfe"
+    },
+    "macos-aarch64": {
+      "name": "Clippi_aarch64.dmg",
+      "path": "v0.4.7/Clippi_aarch64.dmg",
+      "size": 12,
+      "sha256": "a3119c2b279fc249325ff6cd14e6263b8ed239004ea4249b017d38994d549f26"
+    },
+    "macos-x86_64": {
+      "name": "Clippi_x64.dmg",
+      "path": "v0.4.7/Clippi_x64.dmg",
+      "size": 14,
+      "sha256": "cd0b8098f2966827e3dfc9330ec0c6669a9101c48c761aba9cb597824fea8c32"
+    }
+  }
+}
+

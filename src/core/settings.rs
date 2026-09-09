@@ -176,6 +176,12 @@ pub struct AppSettings {
     pub auto_check_updates: bool,
     #[serde(default)]
     pub update_last_check_at: String,
+    /// Update channel: "auto" (OSS first, GitHub fallback) | "oss" | "github".
+    /// Advanced override only — not exposed in the settings UI and defaults to
+    /// "auto". Local-only on purpose: network conditions differ per device, so
+    /// this is intentionally not part of `PortableSettingsV1`.
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
     #[serde(default = "default_auto_fetch_url_title")]
     pub auto_fetch_url_title: bool, // auto-fetch page title for link items
     #[serde(default = "default_copy_sound_enabled")]
@@ -232,6 +238,10 @@ fn default_transfer_retention_days() -> u32 {
 
 fn default_auto_check_updates() -> bool {
     true
+}
+
+fn default_update_channel() -> String {
+    "auto".to_string()
 }
 
 fn default_auto_fetch_url_title() -> bool {
@@ -315,6 +325,7 @@ impl Default for AppSettings {
             latest_hotkeys: default_latest_hotkeys(),
             auto_check_updates: true,
             update_last_check_at: String::new(),
+            update_channel: default_update_channel(),
             auto_fetch_url_title: true,
             copy_sound_enabled: true,
             copy_sound_file: default_copy_sound_file(),

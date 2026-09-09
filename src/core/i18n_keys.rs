@@ -308,6 +308,7 @@ define_i18n! {
     ToastUpdateError:   ("更新失败: {0}", "Update failed: {0}"),
     UpdateErrNetwork:   ("网络不可用", "Network unavailable"),
     UpdateErrServer:    ("更新服务器暂不可用", "Update server unavailable"),
+    UpdateErrChannelUnavailable: ("更新渠道暂不可用", "Update channel unavailable"),
     UpdateErrResponse:  ("更新信息异常", "Invalid update information"),
     UpdateErrVersion:   ("版本信息异常", "Invalid version information"),
     UpdateErrPackage:   ("更新包不可用", "Update package unavailable"),
