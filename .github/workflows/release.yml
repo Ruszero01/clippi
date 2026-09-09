@@ -345,8 +345,8 @@ jobs:
       - plan
       - build-local-artifacts
       - build-global-artifacts
-    # Only publish on version tags, after all build artifacts are available.
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-local-artifacts.result == 'success' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') }}
+    # Only publish stable version tags, after all build artifacts are available.
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && !fromJson(needs.plan.outputs.val).announcement_is_prerelease && needs.build-local-artifacts.result == 'success' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') }}
     runs-on: ubuntu-22.04
     env:
       OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}

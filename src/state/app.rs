@@ -989,6 +989,7 @@ impl AppState {
                 item.updated_at = updated.updated_at;
             }
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     pub fn batch_add_tag(&mut self, ids: &[i64], tag_id: i64) {
@@ -1015,6 +1016,7 @@ impl AppState {
                 }
             }
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     pub fn batch_remove_tag(&mut self, ids: &[i64], tag_id: i64) {
@@ -1041,6 +1043,7 @@ impl AppState {
                 }
             }
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     pub fn clear_item_tags(&mut self, item_id: i64) {
@@ -1063,6 +1066,7 @@ impl AppState {
                 item.updated_at = updated.updated_at;
             }
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     pub fn clear_tags_for_items(&mut self, ids: &[i64]) {
@@ -1089,6 +1093,7 @@ impl AppState {
                 }
             }
         }
+        self.refresh_titlebar_filter_availability();
     }
 
     fn order_by(&self) -> &'static str {
@@ -3928,6 +3933,40 @@ mod tests {
     fn setup_tag(state: &mut AppState) -> i64 {
         // Create a tag
         state.db.create_tag("test-tag", "#FF0000").unwrap()
+    }
+
+    #[test]
+    fn tag_mutations_refresh_clearable_history_counts() {
+        let (mut state, _dirty) = test_state();
+        let tag_id = setup_tag(&mut state);
+        let item = make_item(1, ContentType::PlainText, false, "history");
+        state.db.upsert(&item).unwrap();
+        let id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
+        state.reload_items();
+
+        let assert_counts = |state: &AppState, expected| {
+            assert_eq!(state.clearable_history_count(), 1);
+            assert_eq!(state.clearable_non_tagged_history_count(), expected);
+            assert_eq!(
+                state.clearable_non_favorite_non_tagged_history_count(),
+                expected
+            );
+        };
+        assert_counts(&state, 1);
+        state.toggle_item_tag(id, tag_id);
+        assert_counts(&state, 0);
+        state.toggle_item_tag(id, tag_id);
+        assert_counts(&state, 1);
+        state.batch_add_tag(&[id], tag_id);
+        assert_counts(&state, 0);
+        state.batch_remove_tag(&[id], tag_id);
+        assert_counts(&state, 1);
+        state.batch_add_tag(&[id], tag_id);
+        state.clear_item_tags(id);
+        assert_counts(&state, 1);
+        state.batch_add_tag(&[id], tag_id);
+        state.clear_tags_for_items(&[id]);
+        assert_counts(&state, 1);
     }
 
     // ── delete_tag ─────────────────────────────────
