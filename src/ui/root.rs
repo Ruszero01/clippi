@@ -93,6 +93,7 @@ pub struct RootView {
     /// Root-level clear-data dialog state, outside the clipped settings list.
     clear_data_confirm: bool,
     clear_data_include_favorites: bool,
+    clear_data_include_tagged: bool,
     _wm_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
@@ -699,6 +700,7 @@ impl RootView {
                     SettingsEvent::ShowClearDataConfirm => {
                         this.clear_data_confirm = true;
                         this.clear_data_include_favorites = false;
+                        this.clear_data_include_tagged = false;
                         cx.notify();
                     }
                 },
@@ -785,6 +787,7 @@ impl RootView {
             needs_auto_focus: true,
             clear_data_confirm: false,
             clear_data_include_favorites: false,
+            clear_data_include_tagged: false,
             _wm_subscription,
             _subscriptions,
             _appearance_subscription: Some(appearance_sub),
@@ -2166,14 +2169,16 @@ impl Render for RootView {
             // --- Root-level clear-data ConfirmDialog ---
             .when(clear_data_confirm_visible, |root| {
                 let include_favorites = self.clear_data_include_favorites;
+                let include_tagged = self.clear_data_include_tagged;
                 let app_state = self.state.clone();
-                let items_count = if include_favorites {
-                    app_state.read(cx).clearable_history_count()
-                } else {
-                    app_state.read(cx).clearable_non_favorite_history_count()
+                let state = app_state.read(cx);
+                let items_count = match (include_favorites, include_tagged) {
+                    (false, false) => state.clearable_non_favorite_non_tagged_history_count(),
+                    (true, false) => state.clearable_non_tagged_history_count(),
+                    (false, true) => state.clearable_non_favorite_history_count(),
+                    (true, true) => state.clearable_history_count(),
                 };
-                let has_enabled_sync = app_state
-                    .read(cx)
+                let has_enabled_sync = state
                     .settings
                     .sync_backends
                     .iter()
@@ -2211,6 +2216,20 @@ impl Render for RootView {
                                         }
                                     },
                                 )
+                                .option(
+                                    I18nKey::ConfirmClearDataIncludeTagged.text(),
+                                    include_tagged,
+                                    {
+                                        let root_entity = root_entity.clone();
+                                        move |_window, cx| {
+                                            root_entity.update(cx, |root, cx| {
+                                                root.clear_data_include_tagged =
+                                                    !root.clear_data_include_tagged;
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                )
                                 .confirm_label(I18nKey::BtnClearData.text())
                                 .danger(true)
                                 .theme(self.theme.clone())
@@ -2219,7 +2238,7 @@ impl Render for RootView {
                                     let app_state = app_state.clone();
                                     move |_window, cx| {
                                         let accepted = wm.update(cx, |wm, cx| {
-                                            wm.request_clear_data(include_favorites, cx)
+                                            wm.request_clear_data(include_favorites, include_tagged, cx)
                                         });
                                         root_entity.update(cx, |root, cx| {
                                             root.clear_data_confirm = false;

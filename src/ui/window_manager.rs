@@ -1100,7 +1100,12 @@ impl WindowManager {
     }
 
     /// Request a clear-clipboard operation from the settings UI.
-    pub fn request_clear_data(&mut self, include_favorites: bool, cx: &mut Context<Self>) -> bool {
+    pub fn request_clear_data(
+        &mut self,
+        include_favorites: bool,
+        include_tagged: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.maintenance_job_running {
             return false;
         }
@@ -1117,19 +1122,22 @@ impl WindowManager {
             let result = match crate::core::db::Database::open(&db_path.to_string_lossy()) {
                 Ok(db) => {
                     // Clear clipboard history in a transaction.
-                    let clear_result =
-                        match db.clear_clipboard_history(&device_name, include_favorites) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                log::error!("request_clear_data: clear failed: {e}");
-                                if let Ok(mut slot) = pending_result.lock() {
-                                    *slot = Some(DataMaintenanceResult::Failed(format!(
-                                        "Clear failed: {e}"
-                                    )));
-                                }
-                                return;
+                    let clear_result = match db.clear_clipboard_history(
+                        &device_name,
+                        include_favorites,
+                        include_tagged,
+                    ) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            log::error!("request_clear_data: clear failed: {e}");
+                            if let Ok(mut slot) = pending_result.lock() {
+                                *slot = Some(DataMaintenanceResult::Failed(format!(
+                                    "Clear failed: {e}"
+                                )));
                             }
-                        };
+                            return;
+                        }
+                    };
 
                     // Post-clear cache maintenance.
                     let maintenance = crate::core::cache_cleanup::run_cache_maintenance(&db);

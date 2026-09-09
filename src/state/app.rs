@@ -71,8 +71,15 @@ pub struct AppState {
     pub has_favorite_items: bool,
     /// Number of non-transfer clipboard rows affected by "clear data".
     pub clearable_history_count: u32,
-    /// Number of non-favorite, non-transfer rows affected by the default clear action.
+    /// Number of non-favorite, non-transfer rows affected when clearing
+    /// tagged items but not favorites.
     pub clearable_non_favorite_history_count: u32,
+    /// Number of non-transfer rows affected when clearing favorites but not
+    /// tagged items.
+    pub clearable_non_tagged_history_count: u32,
+    /// Number of non-transfer rows affected by the default clear action
+    /// (favorites and tagged items both retained).
+    pub clearable_non_favorite_non_tagged_history_count: u32,
     /// Whether remote transfer station files exist (controls titlebar button visibility).
     pub has_transfer_files: bool,
     /// Whether the transfer station filter/view is active.
@@ -340,6 +347,9 @@ impl AppState {
             has_favorite_items: stats.has_favorite_items,
             clearable_history_count: stats.clearable_history_count,
             clearable_non_favorite_history_count: stats.clearable_non_favorite_history_count,
+            clearable_non_tagged_history_count: stats.clearable_non_tagged_history_count,
+            clearable_non_favorite_non_tagged_history_count: stats
+                .clearable_non_favorite_non_tagged_history_count,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
@@ -397,6 +407,9 @@ impl AppState {
                 self.clearable_history_count = stats.clearable_history_count;
                 self.clearable_non_favorite_history_count =
                     stats.clearable_non_favorite_history_count;
+                self.clearable_non_tagged_history_count = stats.clearable_non_tagged_history_count;
+                self.clearable_non_favorite_non_tagged_history_count =
+                    stats.clearable_non_favorite_non_tagged_history_count;
             }
             Err(e) => log::error!("Failed to refresh titlebar stats: {e}"),
         }
@@ -445,6 +458,14 @@ impl AppState {
 
     pub fn clearable_non_favorite_history_count(&self) -> u32 {
         self.clearable_non_favorite_history_count
+    }
+
+    pub fn clearable_non_tagged_history_count(&self) -> u32 {
+        self.clearable_non_tagged_history_count
+    }
+
+    pub fn clearable_non_favorite_non_tagged_history_count(&self) -> u32 {
+        self.clearable_non_favorite_non_tagged_history_count
     }
 
     fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
@@ -2765,6 +2786,8 @@ mod tests {
             has_favorite_items: false,
             clearable_history_count: 0,
             clearable_non_favorite_history_count: 0,
+            clearable_non_tagged_history_count: 0,
+            clearable_non_favorite_non_tagged_history_count: 0,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),

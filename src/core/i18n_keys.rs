@@ -244,6 +244,7 @@ define_i18n! {
     ConfirmClearDataMsg:    ("将永久删除 {0} 条剪贴板历史。此操作不可撤销，但不会删除源文件。",
                              "This will permanently delete {0} clipboard items. This cannot be undone, but source files will not be deleted."),
     ConfirmClearDataIncludeFavorites: ("包含收藏项", "Include favorites"),
+    ConfirmClearDataIncludeTagged: ("包含标签项", "Include tagged items"),
     ConfirmClearDataSyncWarning: ("删除结果将同步到已启用的同步后端。", "Deletions will be synced to enabled sync backends."),
     ToastClearDataDone:     ("已清空 {0} 条剪贴板历史", "Cleared {0} clipboard items"),
     ToastClearDataEmpty:    ("没有可清空的数据", "No data to clear"),

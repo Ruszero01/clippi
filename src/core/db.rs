@@ -27,6 +27,8 @@ pub struct TitlebarStats {
     pub has_favorite_items: bool,
     pub clearable_history_count: u32,
     pub clearable_non_favorite_history_count: u32,
+    pub clearable_non_tagged_history_count: u32,
+    pub clearable_non_favorite_non_tagged_history_count: u32,
 }
 
 pub struct Database {
@@ -475,6 +477,20 @@ impl Database {
                 COUNT(CASE WHEN meta_type != 'transfer' THEN 1 END),
                 COUNT(CASE
                     WHEN meta_type != 'transfer' AND is_favorite = 0 THEN 1
+                END),
+                COUNT(CASE
+                    WHEN meta_type != 'transfer'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM item_tags
+                         WHERE item_tags.item_id = clipboard_items.id
+                     ) THEN 1
+                END),
+                COUNT(CASE
+                    WHEN meta_type != 'transfer' AND is_favorite = 0
+                     AND NOT EXISTS (
+                         SELECT 1 FROM item_tags
+                         WHERE item_tags.item_id = clipboard_items.id
+                     ) THEN 1
                 END)
              FROM clipboard_items",
             [],
@@ -484,6 +500,8 @@ impl Database {
                     has_favorite_items: row.get::<_, i64>(1)? != 0,
                     clearable_history_count: row.get::<_, i64>(2)? as u32,
                     clearable_non_favorite_history_count: row.get::<_, i64>(3)? as u32,
+                    clearable_non_tagged_history_count: row.get::<_, i64>(4)? as u32,
+                    clearable_non_favorite_non_tagged_history_count: row.get::<_, i64>(5)? as u32,
                 })
             },
         )
@@ -2261,6 +2279,10 @@ impl Database {
 
     /// Clear all non-transfer clipboard history in a single transaction.
     ///
+    /// Items that are favorites or tagged are retained unless their matching
+    /// `include_*` flag is set. An item that is both favorite and tagged is
+    /// deleted only when both flags are enabled.
+    ///
     /// Writes deletion tombstones for all protocol-syncable content types
     /// (text, rich_text, image) to prevent history from flowing back from
     /// other devices. File items are excluded from tombstones but still
@@ -2269,16 +2291,22 @@ impl Database {
         &self,
         device_name: &str,
         include_favorites: bool,
+        include_tagged: bool,
     ) -> SqlResult<ClearClipboardResult> {
         let now = chrono::Utc::now().to_rfc3339();
 
         let tx = self.conn.unchecked_transaction()?;
 
-        // Read all non-transfer items before deletion.
+        // Read all non-transfer items before deletion. Tagged items are
+        // protected unless the user explicitly opts into deleting them.
         let mut stmt = tx.prepare(
             "SELECT id, content_hash, content_type, is_favorite, custom_hotkey, file_data \
              FROM clipboard_items \
-             WHERE meta_type != 'transfer' AND (?1 OR is_favorite = 0)",
+             WHERE meta_type != 'transfer' \
+               AND (?1 OR is_favorite = 0) \
+               AND (?2 OR NOT EXISTS ( \
+                   SELECT 1 FROM item_tags WHERE item_tags.item_id = clipboard_items.id \
+               ))",
         )?;
 
         struct ItemRow {
@@ -2291,7 +2319,7 @@ impl Database {
         }
 
         let rows: Vec<ItemRow> = stmt
-            .query_map(params![include_favorites], |row| {
+            .query_map(params![include_favorites, include_tagged], |row| {
                 let is_fav: i32 = row.get(3)?;
                 Ok(ItemRow {
                     id: row.get(0)?,
@@ -3199,6 +3227,8 @@ mod tests {
         assert!(!stats.has_favorite_items);
         assert_eq!(stats.clearable_history_count, 0);
         assert_eq!(stats.clearable_non_favorite_history_count, 0);
+        assert_eq!(stats.clearable_non_tagged_history_count, 0);
+        assert_eq!(stats.clearable_non_favorite_non_tagged_history_count, 0);
     }
 
     #[test]
@@ -3249,9 +3279,13 @@ mod tests {
         let stats = db.load_titlebar_stats().unwrap();
         assert_eq!(stats.clearable_history_count, 3);
         assert_eq!(stats.clearable_non_favorite_history_count, 2);
+        assert_eq!(stats.clearable_non_tagged_history_count, 2);
+        assert_eq!(stats.clearable_non_favorite_non_tagged_history_count, 1);
         assert!(stats.has_hotkey_items);
         assert!(stats.has_favorite_items);
-        let result = db.clear_clipboard_history("test-device", true).unwrap();
+        let result = db
+            .clear_clipboard_history("test-device", true, true)
+            .unwrap();
 
         assert_eq!(result.deleted_items, 3);
         assert_eq!(result.deleted_favorites, 1);
@@ -3404,12 +3438,132 @@ mod tests {
             )
             .unwrap();
 
-        let result = db.clear_clipboard_history("test-device", false).unwrap();
+        let result = db
+            .clear_clipboard_history("test-device", false, false)
+            .unwrap();
 
         assert_eq!(result.deleted_items, 1);
         assert_eq!(result.deleted_favorites, 0);
         assert!(db.get_by_hash(401).unwrap().is_none());
         assert!(db.get_by_hash(402).unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_clipboard_history_preserves_tagged_items_by_default() {
+        let (_path, db) = temp_db("clear-preserve-tagged");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, is_favorite) \
+                 VALUES ('plain_text', 'plain', 501, ?1, ?1, 0), \
+                        ('plain_text', 'tagged', 502, ?1, ?1, 0), \
+                        ('plain_text', 'favorite', 503, ?1, ?1, 1)",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+        let tag_id = insert_tag(&db, "protected", "#FF0000", "2026-07-28T00:00:00Z");
+        let tagged_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 502",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let favorite_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 503",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        tag_item(&db, tagged_id, tag_id);
+        tag_item(&db, favorite_id, tag_id);
+
+        let result = db
+            .clear_clipboard_history("test-device", false, false)
+            .unwrap();
+
+        assert_eq!(result.deleted_items, 1);
+        assert_eq!(result.deleted_favorites, 0);
+        assert!(db.get_by_hash(501).unwrap().is_none());
+        assert!(db.get_by_hash(502).unwrap().is_some());
+        assert!(db.get_by_hash(503).unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_clipboard_history_include_tagged_deletes_tagged_items() {
+        let (_path, db) = temp_db("clear-include-tagged");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, is_favorite) \
+                 VALUES ('plain_text', 'plain', 601, ?1, ?1, 0), \
+                        ('plain_text', 'tagged', 602, ?1, ?1, 0), \
+                        ('plain_text', 'favorite', 603, ?1, ?1, 1)",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+        let tag_id = insert_tag(&db, "included", "#FF0000", "2026-07-28T00:00:00Z");
+        let tagged_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 602",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        tag_item(&db, tagged_id, tag_id);
+
+        // Include tagged items but not favorites: tagged non-favorite is
+        // deleted while the untagged favorite stays.
+        let result = db
+            .clear_clipboard_history("test-device", false, true)
+            .unwrap();
+
+        assert_eq!(result.deleted_items, 2);
+        assert_eq!(result.deleted_favorites, 0);
+        assert!(db.get_by_hash(601).unwrap().is_none());
+        assert!(db.get_by_hash(602).unwrap().is_none());
+        assert!(db.get_by_hash(603).unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_clipboard_history_include_favorites_does_not_override_tag_protection() {
+        let (_path, db) = temp_db("clear-fav-does-not-remove-tagged");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, is_favorite) \
+                 VALUES ('plain_text', 'normal', 701, ?1, ?1, 0), \
+                        ('plain_text', 'tagged-favorite', 702, ?1, ?1, 1), \
+                        ('plain_text', 'favorite', 703, ?1, ?1, 1)",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+        let tag_id = insert_tag(&db, "fav-tag", "#FF0000", "2026-07-28T00:00:00Z");
+        let tagged_favorite_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = 702",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        tag_item(&db, tagged_favorite_id, tag_id);
+
+        // Favorites may be included while tagged items remain protected.
+        // A favorite that is also tagged therefore must stay.
+        let result = db
+            .clear_clipboard_history("test-device", true, false)
+            .unwrap();
+
+        assert_eq!(result.deleted_items, 2);
+        assert_eq!(result.deleted_favorites, 1);
+        assert!(db.get_by_hash(701).unwrap().is_none());
+        assert!(db.get_by_hash(702).unwrap().is_some());
+        assert!(db.get_by_hash(703).unwrap().is_none());
     }
 
     #[test]
