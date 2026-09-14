@@ -2848,7 +2848,14 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         {
-            if self.main_compacted_state.is_some() {
+            // A hidden window is always left either compacted with its state
+            // recorded, or at full size. The `is_some()` branch below covers
+            // the former; the size check also catches a window whose compaction
+            // state was dropped after a failed restore, which would otherwise
+            // be shown at 1×1.
+            if self.main_compacted_state.is_some()
+                || self.macos_window_is_hidden_sized(self.ns_window)
+            {
                 // Restore the full size before making the window visible to
                 // avoid a 1×1 flash (doc §3.3).
                 self.restore_main_macos_window(cx);
@@ -3385,8 +3392,14 @@ impl WindowManager {
                 // the resize before ordering front (doc §3.4).
                 self.restore_quick_macos_window(x, y, quick_h, cx);
             } else {
-                self.position_quick_macos_window(x, y, quick_h);
-                self.show_quick_macos_window();
+                // The popup can still be hidden-sized here (compaction
+                // explicitly disabled, or a restore that failed to confirm).
+                // Defect #87: applying the frame synchronously re-enters GPUI
+                // from `setFrameSize:` while this update holds the app borrow,
+                // so the resize callback is dropped and GPUI's viewport stays
+                // 1×1 — the popup then paints only its outline. Reuse the same
+                // deferred, confirm-before-show path as the compacted case.
+                self.show_quick_macos_window_deferred(x, y, quick_h, cx);
             }
         }
 
@@ -3937,6 +3950,17 @@ impl WindowManager {
             .is_some_and(|(cw, ch)| (cw - w).abs() <= 1.0 && (ch - h).abs() <= 1.0)
     }
 
+    /// True when the window still carries the 1×1 surface left behind by hidden
+    /// -surface compaction. Used to route a show through the restore path when
+    /// the recorded compaction state is gone (failed restore, disabled
+    /// compaction): showing a 1×1 window would leave GPUI's viewport at 1×1 and
+    /// paint nothing but the window outline (issue #87).
+    #[cfg(target_os = "macos")]
+    fn macos_window_is_hidden_sized(&self, ns_window: isize) -> bool {
+        self.macos_window_content_size(ns_window)
+            .is_some_and(|(w, h)| w <= 1.0 && h <= 1.0)
+    }
+
     /// Compact the hidden main window to 1×1 so GPUI's MetalRenderer drops its
     /// large drawable-sized intermediate textures (doc §3.2). The resize is
     /// requested through the GPUI path; a background task confirms it reached
@@ -4197,8 +4221,9 @@ impl WindowManager {
 
     /// Compact the hidden Quick Paste window to 1×1 (doc §3.4), mirroring
     /// `compact_main_macos_window`. The dynamic height is always re-applied by
-    /// `position_quick_macos_window` on the next show, so only the minimum
-    /// size needs to be restored then.
+    /// `show_quick_macos_window_deferred` on the next show, which re-applies
+    /// the dynamic height through GPUI's resize path; only the minimum size
+    /// needs to be restored here.
     #[cfg(target_os = "macos")]
     fn compact_quick_macos_window(&mut self, cx: &mut Context<Self>) {
         let Some(window_handle) = self.quick_window else {
@@ -4280,10 +4305,11 @@ impl WindowManager {
         }));
     }
 
-    /// Restore the Quick Paste window before showing it (doc §3.4).
-    /// `position_quick_macos_window` applies the size synchronously via
-    /// AppKit, so the confirmation is usually immediate; only a pathological
-    /// case falls back to a short poll.
+    /// Restore the Quick Paste window's compacted minimum size (doc §4.3) and
+    /// hand off to the deferred show. The minimum size is restored first so
+    /// AppKit cannot clamp the resize below; setting a minimum size never
+    /// resizes the window, so it cannot re-enter GPUI and is safe to do inside
+    /// this update.
     #[cfg(target_os = "macos")]
     fn restore_quick_macos_window(&mut self, x: i32, y: i32, height: f32, cx: &mut Context<Self>) {
         if self.quick_ns_window == 0 {
@@ -4295,11 +4321,6 @@ impl WindowManager {
         let Some(state) = self.quick_compacted_state.take() else {
             return;
         };
-        // Invalidate stale compaction tasks.
-        self._quick_compact_task = None;
-        self.surface_generation = self.surface_generation.wrapping_add(1);
-        let restore_generation = self.surface_generation;
-
         if let Some(_mtm) = objc2::MainThreadMarker::new() {
             // SAFETY: our own NSWindow pointer, main thread only.
             let window = unsafe { &*(self.quick_ns_window as *const objc2_app_kit::NSWindow) };
@@ -4308,23 +4329,93 @@ impl WindowManager {
                 state.content_min_size.1,
             ));
         }
-        self.position_quick_macos_window(x, y, height);
+        self.show_quick_macos_window_deferred(x, y, height, cx);
+    }
 
-        let target_w = QUICK_WINDOW_WIDTH as f64;
-        let target_h = height as f64;
-        if self.macos_window_content_size_is(self.quick_ns_window, target_w, target_h) {
-            // Synchronous restore confirmed — show immediately.
-            log::debug!("surface restore: quick size confirmed synchronously");
-            self.show_quick_macos_window();
+    /// Apply the Quick Paste frame and order the popup front — deferred out of
+    /// the current `WindowManager` update.
+    ///
+    /// AppKit reports a frame change synchronously (`setFrameSize:` for a
+    /// resize, `windowDidMove:` for a move) and GPUI's macOS backend forwards
+    /// both into `App::update`. Run while the poll loop already holds the app
+    /// borrow, that nested update fails with `RefCell already borrowed` and is
+    /// dropped. A dropped *resize* is fatal: the native window reaches the new
+    /// size while GPUI's `viewport_size` stays at the old one, so after
+    /// hidden-surface compaction every later frame is laid out into a 1×1
+    /// viewport and culled down to a single quad — the "outline only" popup of
+    /// issue #87.
+    ///
+    /// The size is therefore requested through GPUI's own platform path, which
+    /// dispatches `setContentSize:` to the main queue instead of calling it
+    /// inline, so AppKit's `setFrameSize:` runs after the current update
+    /// released the borrow and `on_resize` can update `viewport_size`. The
+    /// origin still goes through AppKit, where a dropped `windowDidMove:` costs
+    /// nothing — see `position_quick_macos_window_origin`.
+    ///
+    /// The work runs from `cx.spawn()` after yielding, mirroring the Windows
+    /// quick-window path, and the popup is ordered front only once the resize
+    /// has been confirmed so it can never flash at the compacted size.
+    #[cfg(target_os = "macos")]
+    fn show_quick_macos_window_deferred(
+        &mut self,
+        x: i32,
+        y: i32,
+        height: f32,
+        cx: &mut Context<Self>,
+    ) {
+        if self.quick_ns_window == 0 {
             return;
         }
-
-        // Defensive path: poll briefly, then show regardless so the popup can
-        // never be stuck hidden.
-        log::warn!("surface restore: quick size not confirmed synchronously; polling");
+        // Invalidate any in-flight compaction or restore for this window.
+        self._quick_compact_task = None;
+        self.surface_generation = self.surface_generation.wrapping_add(1);
+        let generation = self.surface_generation;
         let ns_window = self.quick_ns_window;
+        let target_w = QUICK_WINDOW_WIDTH as f64;
+        let target_h = height as f64;
+
         self._quick_restore_task = Some(cx.spawn(async move |weak_self, cx| {
-            let deadline = Instant::now() + Duration::from_millis(50);
+            // Yield until the WindowManager update that handled the hotkey has
+            // released GPUI's app borrow; every step below re-enters GPUI and
+            // would otherwise be dropped (see
+            // `show_quick_macos_window_deferred`).
+            Timer::after(Duration::from_millis(1)).await;
+
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let should_apply = this
+                .update(cx, |wm, _cx| {
+                    wm.quick_visible && wm.surface_generation == generation
+                })
+                .unwrap_or(false);
+            if !should_apply {
+                return; // superseded, or hidden before the frame landed
+            }
+
+            // Size through GPUI's own path. `PlatformWindow::resize` on macOS
+            // dispatches `setContentSize:` to the main queue instead of calling
+            // it inline, so AppKit's `setFrameSize:` runs *after* the current
+            // update released the app borrow and GPUI's `on_resize` can update
+            // `viewport_size`. Calling AppKit's resize directly here would
+            // re-enter the borrow we are currently inside.
+            let window_handle = this.update(cx, |wm, _cx| wm.quick_window).ok().flatten();
+            if let Some(handle) = window_handle {
+                let _ = cx.update_window(handle, |_view, window, _cx| {
+                    window.resize(size(px(QUICK_WINDOW_WIDTH), px(height)));
+                });
+            }
+            // Reposition through AppKit. `setFrameTopLeftPoint:` fires
+            // `windowDidMove:`, which is also dropped while borrowed — harmless,
+            // because the popup reads nothing from that callback.
+            this.update(cx, |wm, _cx| wm.position_quick_macos_window_origin(x, y))
+                .ok();
+
+            // Confirm the native size before showing so the popup can never
+            // flash at the compacted 1×1 (or stale) size. The deadline keeps it
+            // from being stuck hidden and disables compaction if a resize
+            // misbehaves.
+            let deadline = Instant::now() + Duration::from_millis(100);
             loop {
                 Timer::after(Duration::from_millis(5)).await;
                 let Some(this) = weak_self.upgrade() else {
@@ -4332,7 +4423,7 @@ impl WindowManager {
                 };
                 let decision = this
                     .update(cx, |wm, _cx| {
-                        if !wm.quick_visible || wm.surface_generation != restore_generation {
+                        if !wm.quick_visible || wm.surface_generation != generation {
                             return Some(false);
                         }
                         if wm.macos_window_content_size_is(ns_window, target_w, target_h) {
@@ -4340,8 +4431,8 @@ impl WindowManager {
                         } else if Instant::now() >= deadline {
                             wm.macos_compaction_disabled = true;
                             log::warn!(
-                                "surface restore: quick resize not confirmed within 50ms; \
-                                 compaction disabled (gen {restore_generation})"
+                                "quick show: resize not confirmed within 100ms; \
+                                 compaction disabled (gen {generation})"
                             );
                             Some(true)
                         } else {
@@ -4352,7 +4443,7 @@ impl WindowManager {
                 match decision {
                     Some(true) => {
                         let _ = this.update(cx, |wm, _cx| {
-                            if wm.quick_visible && wm.surface_generation == restore_generation {
+                            if wm.quick_visible && wm.surface_generation == generation {
                                 wm.show_quick_macos_window();
                             }
                         });
@@ -4398,8 +4489,17 @@ impl WindowManager {
         }
     }
 
+    /// Move the Quick Paste window's top-left origin through AppKit.
+    ///
+    /// AppKit reports the move synchronously via `windowDidMove:`, which GPUI
+    /// forwards to `App::update`. That nested update is dropped when this runs
+    /// while the app borrow is held, but the popup keeps no state from the move
+    /// callback, so the loss is harmless. The *size* must never be changed this
+    /// way: a dropped `setFrameSize:` leaves GPUI's `viewport_size` stale, which
+    /// is exactly the issue #87 failure (see
+    /// `show_quick_macos_window_deferred`).
     #[cfg(target_os = "macos")]
-    fn position_quick_macos_window(&self, x: i32, y: i32, height: f32) {
+    fn position_quick_macos_window_origin(&self, x: i32, y: i32) {
         if self.quick_ns_window == 0 {
             return;
         }
@@ -4409,10 +4509,6 @@ impl WindowManager {
         let top = primary_height - y as f64;
         unsafe {
             let window = &*(self.quick_ns_window as *const objc2_app_kit::NSWindow);
-            window.setContentSize(objc2_foundation::NSSize::new(
-                QUICK_WINDOW_WIDTH as f64,
-                height as f64,
-            ));
             window.setFrameTopLeftPoint(objc2_foundation::NSPoint::new(x as f64, top));
         }
     }
