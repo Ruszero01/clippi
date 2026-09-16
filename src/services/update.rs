@@ -43,7 +43,8 @@ pub struct UpdateInfo {
 /// User-selected update channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateChannel {
-    /// Prefer the official OSS mirror, fall back to GitHub when unavailable.
+    /// Ask the official OSS mirror and GitHub, then use whichever can serve the
+    /// newest version (preferring the mirror when both agree).
     Auto,
     /// Official OSS mirror only.
     Oss,
@@ -89,7 +90,8 @@ pub enum UpdateErrorKind {
     Network,
     Server,
     /// The selected channel (e.g. the OSS manifest) is not published yet or
-    /// not publicly readable. `Auto` treats this as "try the other channel".
+    /// not publicly readable. `Auto` treats this as "use the other channel's
+    /// answer".
     ChannelUnavailable,
     InvalidResponse,
     Version,
@@ -233,9 +235,10 @@ impl UpdateChecker {
 
     /// Resolve the latest release for the selected channel.
     ///
-    /// `Auto` prefers the official OSS manifest and only falls back to GitHub
-    /// when OSS is unavailable, so users in mainland China get a fast path
-    /// without losing GitHub as a safety net.
+    /// `Auto` asks the OSS mirror and GitHub at the same time and keeps the
+    /// newest version either of them can serve, so a fast mirror is used when it
+    /// is current and a stale or unreachable mirror can never hide a release
+    /// that GitHub already has.
     pub fn check_full(
         &self,
         channel: UpdateChannel,
@@ -243,8 +246,47 @@ impl UpdateChecker {
         match channel {
             UpdateChannel::Oss => self.check_oss(),
             UpdateChannel::GitHub => self.check_github(),
-            UpdateChannel::Auto => with_auto_fallback(self.check_oss(), || self.check_github()),
+            UpdateChannel::Auto => {
+                let (oss, github) = self.check_both();
+                select_newest_available(oss, github)
+            }
         }
+    }
+
+    /// Ask both channels for their latest release at the same time.
+    ///
+    /// The two requests are independent and their failures are usually
+    /// unrelated (a reachable mirror with an unreachable GitHub, or the other
+    /// way round), so running them in series would add a second connect/read
+    /// timeout to every check instead of overlapping them.
+    fn check_both(&self) -> (ChannelOutcome, ChannelOutcome) {
+        let (oss, github) = std::thread::scope(|scope| {
+            let oss = scope.spawn(|| self.check_oss());
+            let github = scope.spawn(|| self.check_github());
+            (oss.join(), github.join())
+        });
+        let outcomes = (
+            ChannelOutcome {
+                source: UpdateSource::Oss,
+                result: join_channel(oss),
+            },
+            ChannelOutcome {
+                source: UpdateSource::GitHub,
+                result: join_channel(github),
+            },
+        );
+        // A failing channel stays invisible to the user as long as the other one
+        // answers, so record it here for update-issue reports.
+        for outcome in [&outcomes.0, &outcomes.1] {
+            if let Err(error) = &outcome.result {
+                log::warn!(
+                    "[update] {} channel failed ({}); using the other channel",
+                    channel_label(outcome.source),
+                    error.detail()
+                );
+            }
+        }
+        outcomes
     }
 
     /// Official OSS manifest check.
@@ -342,35 +384,108 @@ impl UpdateChecker {
     }
 }
 
-/// Auto-channel policy: OSS first, GitHub only when OSS is unavailable.
-fn with_auto_fallback(
-    oss: Result<Option<UpdateInfo>, UpdateCheckError>,
-    github: impl FnOnce() -> Result<Option<UpdateInfo>, UpdateCheckError>,
+/// One channel's answer, kept next to the channel that produced it so a failure
+/// can be reported without guessing which side it came from.
+struct ChannelOutcome {
+    source: UpdateSource,
+    result: Result<Option<UpdateInfo>, UpdateCheckError>,
+}
+
+/// A channel thread that panicked left no answer; report it as a network-level
+/// failure so the other channel still decides the outcome.
+fn join_channel(
+    joined: std::thread::Result<Result<Option<UpdateInfo>, UpdateCheckError>>,
 ) -> Result<Option<UpdateInfo>, UpdateCheckError> {
-    match oss {
-        Ok(result) => Ok(result),
-        Err(oss_error) => {
-            log::warn!(
-                "[update] OSS channel unavailable ({}), falling back to GitHub",
-                oss_error.detail()
-            );
-            github().map_err(|github_error| combine_channel_errors(oss_error, github_error))
+    joined.unwrap_or_else(|_| {
+        Err(UpdateCheckError::new(
+            UpdateErrorKind::Network,
+            "update channel check panicked",
+        ))
+    })
+}
+
+/// `Auto` policy: keep the newest version any channel can serve, and ignore a
+/// channel only when it did not answer at all.
+///
+/// This deliberately does not stop at the first usable channel: a mirror whose
+/// manifest is reachable but stale answers "up to date" while GitHub already has
+/// the next release, and an unreachable mirror must never block the channel that
+/// works. A channel that answers with no update is therefore only conclusive
+/// when no other channel offers one.
+///
+/// Ties keep the first channel — the OSS mirror, the fast path in mainland
+/// China — so both channels agreeing on a version still downloads from there.
+fn select_newest_available(
+    oss: ChannelOutcome,
+    github: ChannelOutcome,
+) -> Result<Option<UpdateInfo>, UpdateCheckError> {
+    let mut newest: Option<(UpdateInfo, semver::Version)> = None;
+    let mut up_to_date = false;
+    let mut failures: Vec<(UpdateSource, UpdateCheckError)> = Vec::new();
+
+    for outcome in [oss, github] {
+        match outcome.result {
+            Ok(Some(info)) => match semver::Version::parse(&info.latest_version) {
+                Ok(version) => {
+                    let newer = match &newest {
+                        Some((_, current)) => version.cmp(current).is_gt(),
+                        None => true,
+                    };
+                    if newer {
+                        newest = Some((info, version));
+                    }
+                }
+                // Both parsers validate the version before returning, so this
+                // only guards a future manifest shape.
+                Err(error) => failures.push((
+                    outcome.source,
+                    UpdateCheckError::new(UpdateErrorKind::Version, error.to_string()),
+                )),
+            },
+            Ok(None) => up_to_date = true,
+            Err(error) => failures.push((outcome.source, error)),
         }
+    }
+
+    if let Some((info, _)) = newest {
+        return Ok(Some(info));
+    }
+    if up_to_date {
+        return Ok(None);
+    }
+    Err(combine_channel_failures(&failures))
+}
+
+fn channel_label(source: UpdateSource) -> &'static str {
+    match source {
+        UpdateSource::Oss => "OSS",
+        UpdateSource::GitHub => "GitHub",
     }
 }
 
-fn combine_channel_errors(oss: UpdateCheckError, github: UpdateCheckError) -> UpdateCheckError {
-    // Prefer the primary channel's error unless it is only "channel
-    // unavailable", in which case GitHub's error is the more informative one.
-    let kind = if oss.kind() == UpdateErrorKind::ChannelUnavailable {
-        github.kind()
-    } else {
-        oss.kind()
+/// Fold the per-channel failures into the single error the caller sees. The
+/// first channel's error is preferred unless it only means "channel
+/// unavailable", in which case the other channel's error is the informative one.
+fn combine_channel_failures(failures: &[(UpdateSource, UpdateCheckError)]) -> UpdateCheckError {
+    let Some((_, primary)) = failures.first() else {
+        return UpdateCheckError::new(
+            UpdateErrorKind::Network,
+            "no update channel answered".to_string(),
+        );
     };
-    UpdateCheckError::new(
-        kind,
-        format!("OSS: {}; GitHub: {}", oss.detail(), github.detail()),
-    )
+    let kind = if primary.kind() == UpdateErrorKind::ChannelUnavailable {
+        failures
+            .get(1)
+            .map_or(primary.kind(), |(_, error)| error.kind())
+    } else {
+        primary.kind()
+    };
+    let detail = failures
+        .iter()
+        .map(|(source, error)| format!("{}: {}", channel_label(*source), error.detail()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    UpdateCheckError::new(kind, detail)
 }
 
 fn classify_github_query_error(error: ureq::Error) -> UpdateCheckError {
@@ -762,9 +877,9 @@ mod tests {
         assert!(!err.user_message().contains("api.github.com"));
     }
 
-    fn sample_update_info(source: UpdateSource) -> UpdateInfo {
+    fn update_info_at(source: UpdateSource, version: &str) -> UpdateInfo {
         UpdateInfo {
-            latest_version: "9.9.9".to_string(),
+            latest_version: version.to_string(),
             release_notes: String::new(),
             download_url: "https://example.invalid/installer.exe".to_string(),
             checksum_url: String::new(),
@@ -772,6 +887,20 @@ mod tests {
             asset_size: 42,
             sha256: Some("a".repeat(64)),
             source,
+        }
+    }
+
+    fn oss_outcome(result: Result<Option<UpdateInfo>, UpdateCheckError>) -> ChannelOutcome {
+        ChannelOutcome {
+            source: UpdateSource::Oss,
+            result,
+        }
+    }
+
+    fn github_outcome(result: Result<Option<UpdateInfo>, UpdateCheckError>) -> ChannelOutcome {
+        ChannelOutcome {
+            source: UpdateSource::GitHub,
+            result,
         }
     }
 
@@ -985,63 +1114,139 @@ mod tests {
     }
 
     #[test]
-    fn auto_channel_does_not_query_github_when_oss_succeeds() {
-        let called = std::cell::Cell::new(false);
-        let result = with_auto_fallback(Ok(Some(sample_update_info(UpdateSource::Oss))), || {
-            called.set(true);
-            Ok(None)
-        });
-        assert_eq!(result.unwrap().unwrap().source, UpdateSource::Oss);
-        assert!(!called.get());
+    fn auto_channel_keeps_the_mirror_when_both_channels_agree() {
+        let result = select_newest_available(
+            oss_outcome(Ok(Some(update_info_at(UpdateSource::Oss, "0.4.7")))),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.7")))),
+        );
+        // Same version on both sides — the fast mirror serves the download.
+        let info = result.unwrap().unwrap();
+        assert_eq!(info.source, UpdateSource::Oss);
+        assert_eq!(info.latest_version, "0.4.7");
     }
 
     #[test]
-    fn auto_channel_falls_back_to_github_when_oss_unavailable() {
-        let result = with_auto_fallback(
-            Err(UpdateCheckError::new(
+    fn auto_channel_takes_the_newest_version_even_when_the_mirror_answers_first() {
+        // 0.4.10 must beat 0.4.9 numerically, not as text.
+        let result = select_newest_available(
+            oss_outcome(Ok(Some(update_info_at(UpdateSource::Oss, "0.4.9")))),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.10")))),
+        );
+        let info = result.unwrap().unwrap();
+        assert_eq!(info.source, UpdateSource::GitHub);
+        assert_eq!(info.latest_version, "0.4.10");
+
+        // …and the mirror still wins when it is the one that is ahead.
+        let result = select_newest_available(
+            oss_outcome(Ok(Some(update_info_at(UpdateSource::Oss, "0.5.0")))),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.10")))),
+        );
+        assert_eq!(result.unwrap().unwrap().source, UpdateSource::Oss);
+    }
+
+    #[test]
+    fn auto_channel_ignores_a_mirror_that_answers_up_to_date_from_a_stale_manifest() {
+        let result = select_newest_available(
+            oss_outcome(Ok(None)),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.7")))),
+        );
+        let info = result.unwrap().unwrap();
+        assert_eq!(info.source, UpdateSource::GitHub);
+        assert_eq!(info.latest_version, "0.4.7");
+    }
+
+    #[test]
+    fn auto_channel_uses_the_reachable_channel_when_the_other_fails() {
+        let result = select_newest_available(
+            oss_outcome(Err(UpdateCheckError::new(
                 UpdateErrorKind::ChannelUnavailable,
                 "HTTP 403",
-            )),
-            || Ok(Some(sample_update_info(UpdateSource::GitHub))),
+            ))),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.7")))),
+        );
+        assert_eq!(result.unwrap().unwrap().source, UpdateSource::GitHub);
+
+        let result = select_newest_available(
+            oss_outcome(Ok(Some(update_info_at(UpdateSource::Oss, "0.4.7")))),
+            github_outcome(Err(UpdateCheckError::new(
+                UpdateErrorKind::Network,
+                "dns failure",
+            ))),
+        );
+        assert_eq!(result.unwrap().unwrap().source, UpdateSource::Oss);
+    }
+
+    #[test]
+    fn auto_channel_reports_up_to_date_only_when_no_channel_has_an_update() {
+        let result = select_newest_available(oss_outcome(Ok(None)), github_outcome(Ok(None)));
+        assert!(result.unwrap().is_none());
+        // One channel erroring must not turn "up to date" into a failure.
+        let result = select_newest_available(
+            oss_outcome(Err(UpdateCheckError::new(UpdateErrorKind::Network, "dns"))),
+            github_outcome(Ok(None)),
+        );
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn auto_channel_falls_back_to_the_other_channel_when_a_version_is_unusable() {
+        let mut broken = update_info_at(UpdateSource::Oss, "0.4.7");
+        broken.latest_version = "not-a-version".to_string();
+        let result = select_newest_available(
+            oss_outcome(Ok(Some(broken))),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.7")))),
         );
         assert_eq!(result.unwrap().unwrap().source, UpdateSource::GitHub);
     }
 
     #[test]
     fn auto_channel_prefers_primary_oss_error_over_github_error() {
-        let error = with_auto_fallback(
-            Err(UpdateCheckError::new(
+        let error = select_newest_available(
+            oss_outcome(Err(UpdateCheckError::new(
                 UpdateErrorKind::InvalidResponse,
                 "bad manifest",
-            )),
-            || {
-                Err(UpdateCheckError::new(
-                    UpdateErrorKind::Network,
-                    "dns failure",
-                ))
-            },
+            ))),
+            github_outcome(Err(UpdateCheckError::new(
+                UpdateErrorKind::Network,
+                "dns failure",
+            ))),
         )
         .unwrap_err();
         assert_eq!(error.kind(), UpdateErrorKind::InvalidResponse);
+        assert!(error.detail().contains("OSS:"));
+        assert!(error.detail().contains("GitHub:"));
     }
 
     #[test]
-    fn auto_channel_reports_network_failure_when_both_channels_fail() {
-        let error = with_auto_fallback(
-            Err(UpdateCheckError::new(
+    fn auto_channel_reports_network_failure_when_the_mirror_is_unavailable() {
+        let error = select_newest_available(
+            oss_outcome(Err(UpdateCheckError::new(
                 UpdateErrorKind::ChannelUnavailable,
                 "HTTP 403",
-            )),
-            || {
-                Err(UpdateCheckError::new(
-                    UpdateErrorKind::Network,
-                    "dns failure",
-                ))
-            },
+            ))),
+            github_outcome(Err(UpdateCheckError::new(
+                UpdateErrorKind::Network,
+                "dns failure",
+            ))),
         )
         .unwrap_err();
         assert_eq!(error.kind(), UpdateErrorKind::Network);
         assert!(error.detail().contains("OSS:"));
         assert!(error.detail().contains("GitHub:"));
+    }
+
+    #[test]
+    fn a_panicking_channel_leaves_the_decision_to_the_other_one() {
+        let joined = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| -> Result<Option<UpdateInfo>, UpdateCheckError> {
+                panic!("channel check exploded");
+            });
+            handle.join()
+        });
+        let result = select_newest_available(
+            oss_outcome(join_channel(joined)),
+            github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.7")))),
+        );
+        assert_eq!(result.unwrap().unwrap().source, UpdateSource::GitHub);
     }
 }

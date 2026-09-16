@@ -5520,8 +5520,9 @@ impl WindowManager {
         {
             return;
         }
-        // Update channel defaults to "auto" (OSS first, GitHub fallback). It is
-        // an advanced override and deliberately not exposed in the settings UI.
+        // Update channel defaults to "auto": both channels are queried and the
+        // newest version either can serve is used. It is an advanced override and
+        // deliberately not exposed in the settings UI.
         let channel =
             update::UpdateChannel::from_setting(&self.state.read(cx).settings.update_channel);
         self.state.update(cx, |s, _| {

@@ -180,7 +180,8 @@ pub struct AppSettings {
     pub auto_check_updates: bool,
     #[serde(default)]
     pub update_last_check_at: String,
-    /// Update channel: "auto" (OSS first, GitHub fallback) | "oss" | "github".
+    /// Update channel: "auto" (query the official mirror and GitHub, then use
+    /// the newest version either can serve) | "oss" | "github".
     /// Advanced override only — not exposed in the settings UI and defaults to
     /// "auto". Local-only on purpose: network conditions differ per device, so
     /// this is intentionally not part of `PortableSettingsV1`.
