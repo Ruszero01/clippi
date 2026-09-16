@@ -2849,13 +2849,13 @@ impl WindowManager {
         #[cfg(target_os = "macos")]
         {
             // A hidden window is always left either compacted with its state
-            // recorded, or at full size. The `is_some()` branch below covers
-            // the former; the size check also catches a window whose compaction
-            // state was dropped after a failed restore, which would otherwise
-            // be shown at 1×1.
-            if self.main_compacted_state.is_some()
-                || self.macos_window_is_hidden_sized(self.ns_window)
-            {
+            // recorded, or at full size. The `is_some()` check covers the
+            // former; `recover_lost_compaction_state` additionally claims a
+            // window whose compaction state was dropped but whose surface is
+            // still 1×1, which would otherwise be shown at 1×1. It only reports
+            // success once a usable restore target exists — entering the restore
+            // without one would leave the window unshown.
+            if self.main_compacted_state.is_some() || self.recover_lost_compaction_state() {
                 // Restore the full size before making the window visible to
                 // avoid a 1×1 flash (doc §3.3).
                 self.restore_main_macos_window(cx);
@@ -3959,6 +3959,53 @@ impl WindowManager {
     fn macos_window_is_hidden_sized(&self, ns_window: isize) -> bool {
         self.macos_window_content_size(ns_window)
             .is_some_and(|(w, h)| w <= 1.0 && h <= 1.0)
+    }
+
+    /// Claim a main window that is still at the compacted 1×1 surface while its
+    /// compaction state is gone, by rebuilding the restore target from the last
+    /// confirmed full-size geometry.
+    ///
+    /// Returns `false` when the surface is not hidden-sized or no usable
+    /// geometry was ever captured. That matters: `restore_main_macos_window`
+    /// cannot restore without a target and returns immediately, so the caller
+    /// must keep the plain show path in that case instead of leaving the window
+    /// unshown.
+    #[cfg(target_os = "macos")]
+    fn recover_lost_compaction_state(&mut self) -> bool {
+        if self.main_compacted_state.is_some() || !self.macos_window_is_hidden_sized(self.ns_window)
+        {
+            return false;
+        }
+        if self.saved_w <= 1.0 || self.saved_h <= 1.0 {
+            log::warn!(
+                "surface restore: main window is 1×1 with no saved full-size geometry; \
+                 showing it as-is"
+            );
+            return false;
+        }
+        let Some(_mtm) = objc2::MainThreadMarker::new() else {
+            log::warn!("surface restore: main-thread marker unavailable; showing the window as-is");
+            return false;
+        };
+        // The minimum size is only ever relaxed while a compaction state exists,
+        // so with the state gone the window still holds its original minimum.
+        // SAFETY: our own NSWindow pointer, main thread only.
+        let window = unsafe { &*(self.ns_window as *const objc2_app_kit::NSWindow) };
+        let min_size = window.contentMinSize();
+        log::warn!(
+            "surface restore: main window left at 1×1 without compaction state; \
+             restoring {:.0}×{:.0} from saved geometry",
+            self.saved_w,
+            self.saved_h
+        );
+        self.main_compacted_state = Some(MacosCompactedWindowState {
+            content_size: (self.saved_w as f64, self.saved_h as f64),
+            content_min_size: (min_size.width, min_size.height),
+            saved_geometry: (self.saved_x, self.saved_y, self.saved_w, self.saved_h),
+            // Replaced by the restore before any task compares generations.
+            generation: 0,
+        });
+        true
     }
 
     /// Compact the hidden main window to 1×1 so GPUI's MetalRenderer drops its
