@@ -92,7 +92,10 @@ impl TypeFilterConfigPanel {
         self.filter_bar.update(cx, |_b, cx| cx.notify());
     }
 
-    fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Drop an in-progress drag without committing it. Returns whether a drag
+    /// was active, so callers can treat it as a handled Escape. The row is still
+    /// animated back into its slot.
+    pub(crate) fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
         let drag = self.drag.take();
         let cancelled = drag.is_some();
         if let Some(drag) = drag.filter(|drag| drag.moved) {

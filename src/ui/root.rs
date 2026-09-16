@@ -274,6 +274,13 @@ impl RootView {
                     this.sidebar.update(cx, |sidebar, cx| {
                         sidebar.cancel_drag(cx);
                     });
+                    // The filter-type panel keeps its drag state in the entity,
+                    // which outlives the panel being hidden, so a drag in flight
+                    // when the window hides must be dropped explicitly: its row
+                    // would otherwise stay offset under the pointer and the next
+                    // mouse-up would still commit the move.
+                    this.type_filter_config_panel
+                        .update(cx, |panel, cx| panel.cancel_drag(cx));
                     cx.defer(move |cx| {
                         let _ = main_window.update(cx, |_, window, cx| {
                             cx.stop_active_drag(window);
@@ -1220,6 +1227,7 @@ impl Render for RootView {
         }
 
         let sidebar_for_escape = self.sidebar.clone();
+        let filter_config_for_escape = self.type_filter_config_panel.clone();
         let root_focus = self.focus_handle.clone();
         let root_this = cx.entity().clone();
         let root_list = list_view.clone();
@@ -1233,6 +1241,8 @@ impl Render for RootView {
             .capture_key_down(move |ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key == "escape"
                     && (sidebar_for_escape.update(cx, |sidebar, cx| sidebar.cancel_drag(cx))
+                        || filter_config_for_escape
+                            .update(cx, |panel, cx| panel.cancel_drag(cx))
                         || cx.stop_active_drag(window)) {
                     cx.stop_propagation();
                 }

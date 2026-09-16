@@ -1423,10 +1423,6 @@ impl ClipboardListView {
         anchor_y: f32,
         cx: &mut Context<Self>,
     ) {
-        if !self.tag_picker_visible {
-            // A fresh picker opens on the first rows, whatever the old one scrolled to.
-            self.tag_picker_scroll.reset();
-        }
         self.tag_picker_visible = true;
         self.tag_picker_x = self.fixed_tag_picker_x();
         self.tag_picker_y = anchor_y;
