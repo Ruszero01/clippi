@@ -154,6 +154,10 @@ pub struct AppSettings {
     pub language: String, // "zh_CN" or "en", empty = follow system
     #[serde(default)]
     pub pinned_tag_ids: Vec<i64>, // tag IDs pinned to sidebar
+    /// Local display order shared by tag panels and the sidebar. Stable UIDs
+    /// avoid assigning a saved position to a different tag after a DB switch.
+    #[serde(default)]
+    pub tag_order: Vec<String>,
     #[serde(default = "default_ocr_enabled")]
     pub ocr_enabled: bool, // image OCR auto-detection toggle
     #[serde(default = "default_qr_enabled")]
@@ -314,6 +318,7 @@ impl Default for AppSettings {
             clipboard_app_blacklist: Vec::new(),
             language: String::new(),
             pinned_tag_ids: Vec::new(),
+            tag_order: Vec::new(),
             ocr_enabled: false,
             qr_enabled: true,
             hide_taskbar_icon: false,
@@ -817,6 +822,13 @@ pub fn merge_configs(source: &AppSettings, target: &AppSettings, new_db_path: &s
     }
     merged.pinned_tag_ids = pinned;
 
+    // Preserve source ordering and append tags known only to the target.
+    for uid in &target.tag_order {
+        if !merged.tag_order.contains(uid) {
+            merged.tag_order.push(uid.clone());
+        }
+    }
+
     // ── paste_shortcuts: merge by app_name (source takes precedence) ──
     let source_apps: Vec<&str> = source
         .paste_shortcuts
@@ -871,6 +883,24 @@ pub fn capture_gate(source_app_name: &str, blacklist: &[String], startup_done: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tag_order_defaults_for_old_settings_and_merges_by_uid() {
+        let source = AppSettings {
+            tag_order: vec!["b".into(), "a".into()],
+            ..Default::default()
+        };
+        let target = AppSettings {
+            tag_order: vec!["a".into(), "c".into()],
+            ..Default::default()
+        };
+        let merged = merge_configs(&source, &target, ":memory:");
+        assert_eq!(merged.tag_order, vec!["b", "a", "c"]);
+        let mut value = toml::Value::try_from(&source).unwrap();
+        value.as_table_mut().unwrap().remove("tag_order");
+        let old: AppSettings = value.try_into().unwrap();
+        assert!(old.tag_order.is_empty());
+    }
 
     #[test]
     fn merge_configs_scalar_from_source() {

@@ -269,6 +269,21 @@ fn shrink_item_for_list(item: &mut ClipboardItem) {
     item.rich_data = preview.to_json();
 }
 
+/// Keep database order for new tags, appended after explicitly ordered tags.
+fn sort_tags(tags: &mut [TagInfo], order: &[String]) {
+    let positions: std::collections::HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(index, uid)| (uid.as_str(), index))
+        .collect();
+    tags.sort_by_key(|tag| {
+        positions
+            .get(tag.uid.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+}
+
 /// Stable reorder for usage-time updates, mirroring the database sort.
 /// `created_at` ordering keeps positions; favorites-first keyword searches
 /// reorder only inside each favorite group (all favorites lead the list).
@@ -323,11 +338,12 @@ impl AppState {
                 Vec::new()
             });
 
-        let tags = db.get_all_tags().unwrap_or_else(|e| {
+        let mut tags = db.get_all_tags().unwrap_or_else(|e| {
             log::error!("Failed to load tags: {e}");
             Vec::new()
         });
 
+        sort_tags(&mut tags, &settings.tag_order);
         let sync = SyncState::from_settings(&settings);
         let stats = db.load_titlebar_stats().unwrap_or_else(|e| {
             log::error!("Failed to load titlebar stats: {e}");
@@ -669,8 +685,35 @@ impl AppState {
     /// Reload tags from database.
     pub fn reload_tags(&mut self) {
         match self.db.get_all_tags() {
-            Ok(tags) => self.tags = tags,
+            Ok(mut tags) => {
+                sort_tags(&mut tags, &self.settings.tag_order);
+                self.tags = tags;
+            }
             Err(e) => log::error!("Failed to reload tags: {e}"),
+        }
+    }
+
+    /// Move within the full list even when the UI shows only search matches
+    /// or sidebar tags. Unmoved tags keep their relative order.
+    pub fn reorder_tag(&mut self, source_id: i64, target_id: i64, after: bool) {
+        let source = self.tags.iter().position(|tag| tag.id == source_id);
+        let target = self.tags.iter().position(|tag| tag.id == target_id);
+        if let (Some(source), Some(target)) = (source, target) {
+            if crate::core::reorder::move_relative(&mut self.tags, source, target, after) {
+                self.settings.tag_order = self.tags.iter().map(|tag| tag.uid.clone()).collect();
+                self.settings.save();
+            }
+        }
+    }
+
+    pub fn reorder_type_filter(&mut self, source_key: &str, target_key: &str, after: bool) {
+        let entries = &mut self.settings.type_filter_config;
+        let source = entries.iter().position(|entry| entry.key == source_key);
+        let target = entries.iter().position(|entry| entry.key == target_key);
+        if let (Some(source), Some(target)) = (source, target) {
+            if crate::core::reorder::move_relative(entries, source, target, after) {
+                self.settings.save();
+            }
         }
     }
 
@@ -734,6 +777,7 @@ impl AppState {
         match self.db.delete_tag(tag_id) {
             Ok(_) => {
                 if let Some(tag) = tag {
+                    self.settings.tag_order.retain(|uid| uid != &tag.uid);
                     let now = chrono::Utc::now().to_rfc3339();
                     let device = crate::services::backends::local_folder::hostname();
                     if let Err(e) = self
@@ -2829,6 +2873,114 @@ mod tests {
             update_phase: UpdatePhase::Idle,
         };
         (state, dirty)
+    }
+
+    #[test]
+    fn tag_reorder_persists_across_reload_and_keeps_filter_and_pin_state() {
+        let (mut state, dirty) = test_state();
+        for name in ["A", "B", "C", "D"] {
+            state.db.create_tag(name, "FF0000").unwrap();
+        }
+        state.reload_tags();
+        let ids: Vec<_> = state.tags.iter().map(|tag| tag.id).collect();
+        state.filters.tag_ids = vec![ids[0], ids[3]];
+        state.settings.pinned_tag_ids = vec![ids[0]];
+        // Move the last tag before the first from a view showing only those two.
+        state.reorder_tag(ids[3], ids[0], false);
+        let expected = vec![ids[3], ids[0], ids[1], ids[2]];
+        assert_eq!(
+            state.tags.iter().map(|tag| tag.id).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(state.filters.tag_ids, vec![ids[0], ids[3]]);
+        assert_eq!(state.settings.pinned_tag_ids, vec![ids[0]]);
+        assert!(!dirty.load(Ordering::SeqCst));
+        // Round-trip the settings as on restart, then reload the database.
+        let serialized = toml::to_string(&state.settings).unwrap();
+        state.settings = toml::from_str(&serialized).unwrap();
+        state.tags.clear();
+        state.reload_tags();
+        assert_eq!(
+            state.tags.iter().map(|tag| tag.id).collect::<Vec<_>>(),
+            expected
+        );
+        let new_id = state.db.create_tag("E", "00FF00").unwrap();
+        state.reload_tags();
+        assert_eq!(state.tags.last().unwrap().id, new_id);
+        let removed_uid = state.tags[0].uid.clone();
+        assert!(state.delete_tag(ids[3]));
+        assert!(!state.settings.tag_order.contains(&removed_uid));
+        assert_eq!(
+            state.tags.iter().map(|tag| tag.id).collect::<Vec<_>>(),
+            vec![ids[0], ids[1], ids[2], new_id]
+        );
+    }
+
+    #[test]
+    fn tag_reorder_ignores_stale_ids_and_preserves_unknown_uid_order() {
+        let (mut state, _) = test_state();
+        let first = state.db.create_tag("A", "FF0000").unwrap();
+        let second = state.db.create_tag("B", "00FF00").unwrap();
+        state.reload_tags();
+        state.settings.tag_order = vec![
+            "deleted-or-another-database".into(),
+            state
+                .tags
+                .iter()
+                .find(|tag| tag.id == second)
+                .unwrap()
+                .uid
+                .clone(),
+        ];
+        state.reload_tags();
+        assert_eq!(
+            state.tags.iter().map(|tag| tag.id).collect::<Vec<_>>(),
+            vec![second, first]
+        );
+        let order = state.settings.tag_order.clone();
+        state.reorder_tag(-1, first, true);
+        state.reorder_tag(first, -1, false);
+        state.reorder_tag(first, first, true);
+        assert_eq!(state.settings.tag_order, order);
+    }
+
+    #[test]
+    fn type_filter_reorder_preserves_visibility_and_active_filter() {
+        use crate::core::settings::TypeFilterEntry;
+        let (mut state, _) = test_state();
+        state.settings.type_filter_config = vec![
+            TypeFilterEntry {
+                key: "text".into(),
+                visible: true,
+            },
+            TypeFilterEntry {
+                key: "image".into(),
+                visible: false,
+            },
+            TypeFilterEntry {
+                key: "link".into(),
+                visible: true,
+            },
+        ];
+        state.filters.toggle_type("text");
+        state.reorder_type_filter("text", "link", true);
+        let entries = &state.settings.type_filter_config;
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["image", "link", "text"]
+        );
+        assert!(!entries[0].visible);
+        assert!(entries[2].visible);
+        assert!(state.filters.is_type_active("text"));
+        let saved = entries.clone();
+        state.reorder_type_filter("missing", "text", false);
+        assert_eq!(state.settings.type_filter_config, saved);
+        let settings: AppSettings =
+            toml::from_str(&toml::to_string(&state.settings).unwrap()).unwrap();
+        assert_eq!(settings.type_filter_config, saved);
     }
 
     /// Insert a plain-text item with a controlled timestamp offset (seconds in

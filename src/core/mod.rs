@@ -14,6 +14,7 @@ pub mod ocr;
 pub mod paste_plain;
 pub mod paths;
 pub mod qr;
+pub mod reorder;
 pub mod search;
 pub mod secret;
 pub mod settings;

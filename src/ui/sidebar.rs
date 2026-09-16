@@ -7,7 +7,9 @@
 //! --- - unchecked, unpinned tags slide slightly right and fade out; ---
 //! --- - left click toggles a visible tag filter, right click toggles pin. ---
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
@@ -28,6 +30,24 @@ const ROW_HEIGHT: f32 = 24.0;
 /// Bottom padding to keep the last row from touching the window edge.
 const SIDEBAR_BOTTOM_PADDING: f32 = 8.0;
 
+/// A reorder preview is local to the sidebar until the button is released.
+struct SidebarDrag {
+    id: i64,
+    ids: Vec<i64>,
+    start: Point<Pixels>,
+    grab_y: f32,
+    top: f32,
+    target: usize,
+    moved: bool,
+}
+
+fn drag_position(pointer_y: f32, grab_y: f32, count: usize) -> (f32, usize) {
+    let last = count.saturating_sub(1);
+    let top = (pointer_y - grab_y).clamp(0., last as f32 * ROW_HEIGHT);
+    let slot = ((top / ROW_HEIGHT).round() as usize).min(last);
+    (top, slot)
+}
+
 /// Sidebar entity for displaying and managing tags.
 pub struct Sidebar {
     state: Entity<AppState>,
@@ -36,6 +56,9 @@ pub struct Sidebar {
     unchecked_unpinned_since: HashMap<i64, Instant>,
     transition_generations: HashMap<i64, u64>,
     dark_mode: bool,
+    drag: Option<SidebarDrag>,
+    settling: Option<(i64, f32, Instant)>,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
 impl Sidebar {
@@ -52,7 +75,63 @@ impl Sidebar {
             unchecked_unpinned_since: HashMap::new(),
             transition_generations: HashMap::new(),
             dark_mode,
+            drag: None,
+            settling: None,
+            bounds: Rc::new(Cell::new(Bounds::default())),
         }
+    }
+
+    pub fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        let drag = self.drag.take();
+        let cancelled = drag.is_some();
+        if let Some(drag) = drag.filter(|drag| drag.moved) {
+            self.settling = Some((drag.id, drag.top, Instant::now()));
+        }
+        if cancelled {
+            cx.notify();
+        }
+        cancelled
+    }
+
+    fn move_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
+        if !drag.moved && (position - drag.start).magnitude() <= 4. {
+            return;
+        }
+        drag.moved = true;
+        (drag.top, drag.target) = drag_position(
+            f32::from(position.y - self.bounds.get().top()),
+            drag.grab_y,
+            drag.ids.len(),
+        );
+        cx.notify();
+    }
+
+    fn finish_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        // Include the final pointer position even when no last move event arrived.
+        self.move_drag(position, cx);
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        if drag.moved {
+            self.settling = Some((drag.id, drag.top, Instant::now()));
+            if let Some(source) = drag.ids.iter().position(|id| *id == drag.id) {
+                self.state.update(cx, |state, cx| {
+                    state.reorder_tag(drag.id, drag.ids[drag.target], source < drag.target);
+                    cx.notify();
+                });
+            }
+        } else if self.bounds.get().contains(&position) {
+            let items = self.state.update(cx, |state, _| {
+                state.toggle_tag_filter(drag.id);
+                state.visible_items()
+            });
+            self.list_view
+                .update(cx, |list, cx| list.set_items(items, cx));
+        }
+        cx.notify();
     }
 
     /// Update theme (called when user changes theme in settings).
@@ -116,7 +195,7 @@ impl Render for Sidebar {
         let max_visible = (available_height / ROW_HEIGHT).floor() as usize;
 
         let hidden_count = display_tags.len().saturating_sub(max_visible);
-        if hidden_count > 0 && max_visible > 1 {
+        if hidden_count > 0 {
             // Keep last slot for the "+N" overflow indicator row.
             let overflow_start = max_visible.saturating_sub(1);
             let overflow_tags: Vec<_> = display_tags.drain(overflow_start..).collect();
@@ -129,21 +208,91 @@ impl Render for Sidebar {
         }
         // ── end collapse ──
 
+        let visible_ids: Vec<_> = display_tags.iter().map(|tag| tag.id).collect();
+        if self
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.ids != visible_ids)
+        {
+            self.cancel_drag(cx);
+        }
+        let mut preview_ids = visible_ids.clone();
+        let dragging_id = self
+            .drag
+            .as_ref()
+            .filter(|drag| drag.moved)
+            .map(|drag| drag.id);
+        let dragged_top = self.drag.as_ref().map(|drag| drag.top).unwrap_or(0.);
+        let settling = self.settling;
+        if self
+            .settling
+            .is_some_and(|(_, _, start)| start.elapsed() >= Duration::from_millis(140))
+        {
+            self.settling = None;
+        }
+        if let Some(drag) = &self.drag {
+            if let Some(source) = preview_ids.iter().position(|id| *id == drag.id) {
+                preview_ids.remove(source);
+                preview_ids.insert(drag.target, drag.id);
+            }
+        }
+        // Paint the dragged row last, inside the clipped sidebar, above its siblings.
+        display_tags.sort_by_key(|tag| Some(tag.id) == dragging_id);
+        let rows_height = visible_ids.len() as f32 * ROW_HEIGHT;
+        let sidebar_bounds = self.bounds.clone();
+        let sidebar_for_move = cx.entity();
+        let sidebar_for_up = cx.entity();
+        let sidebar_for_press = cx.entity();
         let dark = self.dark_mode;
         let text_1 = if dark { rgb(0xeaebec) } else { rgb(0x1a1c2e) };
         let row_bg_default = if dark { rgb(0x2a2b2e) } else { rgb(0xf5f6fa) };
         let row_bg_hover = if dark { rgb(0x353638) } else { rgb(0xeceef4) };
         let state_for_click = self.state.clone();
-        let list_for_click = self.list_view.clone();
         let sidebar_for_notify = cx.entity().clone();
         let duration = Duration::from_millis(250);
 
         div()
+            .relative()
             .w(px(56.))
+            .h(px(
+                rows_height + if hidden_count > 0 { ROW_HEIGHT } else { 0. }
+            ))
+            .overflow_hidden()
             .bg(rgba(0x00000000))
-            .flex()
-            .flex_col()
-            .gap(px(2.))
+            .child(
+                canvas(
+                    move |bounds, _, _| sidebar_bounds.set(bounds),
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture
+                                && sidebar_for_move.read(cx).drag.is_some()
+                            {
+                                sidebar_for_move.update(cx, |sidebar, cx| {
+                                    if event.pressed_button == Some(MouseButton::Left) {
+                                        sidebar.move_drag(event.position, cx);
+                                    } else {
+                                        sidebar.cancel_drag(cx);
+                                    }
+                                });
+                                cx.stop_propagation();
+                            }
+                        });
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture
+                                && event.button == MouseButton::Left
+                                && sidebar_for_up.read(cx).drag.is_some()
+                            {
+                                sidebar_for_up.update(cx, |sidebar, cx| {
+                                    sidebar.finish_drag(event.position, cx)
+                                });
+                                cx.stop_propagation();
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             .children(display_tags.into_iter().map(move |tag| {
                 let checked = active_tag_ids.contains(&tag.id);
                 let pinned = pinned_tag_ids.contains(&tag.id);
@@ -163,8 +312,6 @@ impl Render for Sidebar {
                 let transition_generation =
                     transition_generations.get(&tag_id).copied().unwrap_or(0);
                 let tag_key = (tag_id as u64).wrapping_add(transition_generation << 32);
-                let state_for_left = state_for_click.clone();
-                let list_for_left = list_for_click.clone();
                 let state_for_right = state_for_click.clone();
                 let sidebar_for_right = sidebar_for_notify.clone();
 
@@ -221,57 +368,107 @@ impl Render for Sidebar {
                 });
                 let bar_height = *bar_height_transition.evaluate(window, cx);
 
-                let row = div()
-                    .ml(row_x)
-                    .w(px(56.))
-                    .h(px(22.))
-                    .opacity(opacity)
-                    .rounded(px(4.))
-                    .bg(row_bg_default)
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(5.))
+                let original_slot = visible_ids.iter().position(|id| *id == tag_id).unwrap_or(0);
+                let target_slot = preview_ids
+                    .iter()
+                    .position(|id| *id == tag_id)
+                    .unwrap_or(original_slot);
+                let y_transition = window
+                    .use_keyed_transition(
+                        ("sidebar-tag-y", tag_id as u64),
+                        cx,
+                        Duration::from_millis(140),
+                        move |_, _| px(original_slot as f32 * ROW_HEIGHT),
+                    )
+                    .with_easing(ease_in_out);
+                y_transition.update(cx, |value, cx| {
+                    let target = px(target_slot as f32 * ROW_HEIGHT);
+                    if *value != target {
+                        *value = target;
+                        cx.notify();
+                    }
+                });
+                let animated_y = *y_transition.evaluate(window, cx);
+                let row_y = if Some(tag_id) == dragging_id {
+                    px(dragged_top)
+                } else if let Some((_, top, started)) = settling.filter(|(id, _, _)| *id == tag_id)
+                {
+                    let delta = (started.elapsed().as_secs_f32() / 0.14).min(1.);
+                    if delta < 1. {
+                        window.request_animation_frame();
+                    }
+                    px(top + (target_slot as f32 * ROW_HEIGHT - top) * ease_in_out(delta))
+                } else {
+                    animated_y
+                };
+
+                let row_visual = std::rc::Rc::new(move || {
+                    div()
+                        .w(px(56.))
+                        .h(px(22.))
+                        .opacity(opacity)
+                        .rounded(px(4.))
+                        .bg(row_bg_default)
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(5.))
+                        .child(div().w(px(3.)).h(bar_height).rounded(px(2.)).bg(bar_color))
+                        .child(
+                            div()
+                                .w(px(43.))
+                                .h(px(22.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(text_1)
+                                .opacity(text_opacity)
+                                .overflow_hidden()
+                                .child(label.clone()),
+                        )
+                });
+
+                let row = row_visual()
+                    .id(("sidebar-tag", tag_id as u64))
+                    .absolute()
+                    .left(row_x)
+                    .top(row_y)
+                    .when(Some(tag_id) == dragging_id, |row| row.bg(row_bg_hover))
                     .cursor(if interactable {
                         CursorStyle::PointingHand
                     } else {
                         CursorStyle::Arrow
                     })
-                    .when(interactable, move |row| {
+                    .when(interactable, |row| {
                         row.hover(move |style| style.bg(row_bg_hover))
-                    })
-                    .child(div().w(px(3.)).h(bar_height).rounded(px(2.)).bg(bar_color))
-                    .child(
-                        div()
-                            .w(px(43.))
-                            .h(px(22.))
-                            .flex()
-                            .items_center()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(text_1)
-                            .opacity(text_opacity)
-                            .overflow_hidden()
-                            .child(label),
-                    );
+                    });
 
                 if interactable {
-                    row.on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                        let items = state_for_left.update(cx, |state, _cx| {
-                            state.toggle_tag_filter(tag_id);
-                            state.visible_items()
-                        });
-                        list_for_left.update(cx, |list, cx| list.set_items(items, cx));
-                    })
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        move |_ev, _window, cx| {
-                            state_for_right.update(cx, |state, _cx| {
-                                state.toggle_pinned_tag(tag_id);
+                    let sidebar = sidebar_for_press.clone();
+                    let ids = visible_ids.clone();
+                    row.on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                        cx.stop_propagation();
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.settling = None;
+                            sidebar.drag = Some(SidebarDrag {
+                                id: tag_id,
+                                ids: ids.clone(),
+                                start: event.position,
+                                grab_y: f32::from(
+                                    event.position.y - sidebar.bounds.get().top() - row_y,
+                                ),
+                                top: f32::from(row_y),
+                                target: original_slot,
+                                moved: false,
                             });
-                            sidebar_for_right.update(cx, |_sidebar, cx| cx.notify());
-                        },
-                    )
+                            cx.notify();
+                        });
+                    })
+                    .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                        state_for_right.update(cx, |state, _| state.toggle_pinned_tag(tag_id));
+                        sidebar_for_right.update(cx, |_, cx| cx.notify());
+                    })
                 } else {
                     row
                 }
@@ -290,21 +487,27 @@ impl Render for Sidebar {
                 let text_2 = if dark { rgb(0x919496) } else { rgb(0x7c809a) };
                 // 38px = 36px visible + 2px overlap to prevent gap with main panel edge
                 parent.child(
-                    div().w(px(38.)).flex().justify_end().child(
-                        div()
-                            .h(px(18.))
-                            .rounded_l(px(9.))
-                            .bg(pill_bg)
-                            .border(px(1.))
-                            .border_color(pill_border)
-                            .px(px(5.))
-                            .flex()
-                            .items_center()
-                            .text_size(px(9.))
-                            .text_color(text_2)
-                            .cursor(CursorStyle::PointingHand)
-                            .child(format!("+{hidden_count}")),
-                    ),
+                    div()
+                        .absolute()
+                        .top(px(rows_height))
+                        .w(px(38.))
+                        .flex()
+                        .justify_end()
+                        .child(
+                            div()
+                                .h(px(18.))
+                                .rounded_l(px(9.))
+                                .bg(pill_bg)
+                                .border(px(1.))
+                                .border_color(pill_border)
+                                .px(px(5.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(9.))
+                                .text_color(text_2)
+                                .cursor(CursorStyle::PointingHand)
+                                .child(format!("+{hidden_count}")),
+                        ),
                 )
             })
     }
@@ -329,30 +532,15 @@ fn ordered_sidebar_tags(
     pinned_tag_ids: &[i64],
     unchecked_unpinned_since: &HashMap<i64, Instant>,
 ) -> Vec<TagInfo> {
-    let mut ordered = Vec::new();
-
-    for pinned_id in pinned_tag_ids {
-        if let Some(tag) = tags.iter().find(|tag| tag.id == *pinned_id) {
-            ordered.push(tag.clone());
-        }
-    }
-
-    for tag in tags {
-        if active_tag_ids.contains(&tag.id) && !pinned_tag_ids.contains(&tag.id) {
-            ordered.push(tag.clone());
-        }
-    }
-
-    for tag in tags {
-        if unchecked_unpinned_since.contains_key(&tag.id)
-            && !active_tag_ids.contains(&tag.id)
-            && !pinned_tag_ids.contains(&tag.id)
-        {
-            ordered.push(tag.clone());
-        }
-    }
-
-    ordered
+    // Pinning controls visibility, while the shared tag order controls position.
+    tags.iter()
+        .filter(|tag| {
+            pinned_tag_ids.contains(&tag.id)
+                || active_tag_ids.contains(&tag.id)
+                || unchecked_unpinned_since.contains_key(&tag.id)
+        })
+        .cloned()
+        .collect()
 }
 
 fn ease_in_out(delta: f32) -> f32 {
@@ -360,5 +548,42 @@ fn ease_in_out(delta: f32) -> f32 {
         2.0 * delta * delta
     } else {
         1.0 - (-2.0 * delta + 2.0).powi(2) / 2.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{drag_position, ordered_sidebar_tags};
+    use crate::core::types::TagInfo;
+    use std::{collections::HashMap, time::Instant};
+
+    #[test]
+    fn sidebar_drag_clamps_to_rows_and_respects_the_grab_offset() {
+        assert_eq!(drag_position(-100., 8., 4), (0., 0));
+        assert_eq!(drag_position(1000., 8., 4), (72., 3));
+        assert_eq!(drag_position(43., 8., 4), (35., 1));
+        assert_eq!(drag_position(45., 8., 4), (37., 2));
+        assert_eq!(drag_position(500., 8., 1), (0., 0));
+        assert_eq!(drag_position(500., 8., 0), (0., 0));
+    }
+
+    #[test]
+    fn sidebar_keeps_shared_order_for_pinned_active_and_fading_tags() {
+        let tags: Vec<_> = [4, 2, 1, 3, 5]
+            .into_iter()
+            .map(|id| TagInfo {
+                id,
+                uid: id.to_string(),
+                name: id.to_string(),
+                color: "FF0000".into(),
+                updated_at: String::new(),
+            })
+            .collect();
+        let fading = HashMap::from([(1, Instant::now())]);
+        let ordered = ordered_sidebar_tags(&tags, &[2, 4], &[3, 4], &fading);
+        assert_eq!(
+            ordered.iter().map(|tag| tag.id).collect::<Vec<_>>(),
+            [4, 2, 1, 3]
+        );
     }
 }

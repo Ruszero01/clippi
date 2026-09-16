@@ -20,6 +20,7 @@ use crate::core::types::{tag_preset_colors, TagInfo};
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
+use super::components::reorder::{drag_source, drop_target, ReorderDrag, ReorderKey};
 use super::filter_bar::FilterBar;
 use super::theme::ClippiTheme;
 
@@ -378,22 +379,32 @@ impl Render for TagFilterPanel {
                                 .gap(px(4.))
                                 .children(row.into_iter().map(|(tag, checked, pinned)| {
                                     let tag_id = tag.id;
-                                    let tag_color = parse_hex_to_rgba(&tag.color);
-                                    let tag_name = tag.name.clone();
                                     let tag_name_for_delete = tag.name.clone();
                                     let tag_name_edit = tag.name.clone();
                                     let tag_color_hex = tag.color.clone();
                                     let this = this.clone();
-                                    div()
-                                        .w(px(140.))
-                                        .h(px(30.))
-                                        .rounded(px(5.))
-                                        .bg(if checked { active_bg } else { rgba(0x00000000) })
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(5.))
-                                        .px(px(6.))
+                                    let preview_tag = tag.clone();
+                                    let preview_theme = theme.clone();
+                                    let drag =
+                                        ReorderDrag::new(ReorderKey::Tag(tag_id), move || {
+                                            filter_tag_cell(
+                                                &preview_tag,
+                                                checked,
+                                                pinned,
+                                                &preview_theme,
+                                            )
+                                            .child(small_btn_visual(
+                                                "\u{e679}",
+                                                preview_theme.text_3,
+                                            ))
+                                            .child(small_btn_visual(
+                                                "\u{e696}",
+                                                preview_theme.text_3,
+                                            ))
+                                            .into_any_element()
+                                        });
+                                    let row = filter_tag_cell(&tag, checked, pinned, &theme)
+                                        .id(("filter-tag", tag_id as u64))
                                         .cursor(CursorStyle::PointingHand)
                                         .hover(move |style| {
                                             if checked {
@@ -402,7 +413,7 @@ impl Render for TagFilterPanel {
                                                 style.bg(btn_hover)
                                             }
                                         })
-                                        .on_mouse_down(MouseButton::Left, {
+                                        .on_click({
                                             let this = this.clone();
                                             move |_ev, _window, cx| {
                                                 this.update(cx, |panel, cx| {
@@ -410,46 +421,6 @@ impl Render for TagFilterPanel {
                                                 });
                                             }
                                         })
-                                        .child(if pinned {
-                                            // Pin icon replacing color dot for pinned tags
-                                            div()
-                                                .w(px(10.))
-                                                .h(px(10.))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .text_size(px(12.))
-                                                .font_family("iconfont")
-                                                .text_color(tag_color)
-                                                .child("\u{e633}")
-                                        } else {
-                                            div()
-                                                .w(px(10.))
-                                                .h(px(10.))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .child(
-                                                    div()
-                                                        .w(px(8.))
-                                                        .h(px(8.))
-                                                        .rounded_full()
-                                                        .bg(tag_color),
-                                                )
-                                        })
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .text_size(px(11.))
-                                                .font_weight(if checked {
-                                                    FontWeight::SEMIBOLD
-                                                } else {
-                                                    FontWeight::default()
-                                                })
-                                                .text_color(if checked { accent } else { text_1 })
-                                                .truncate()
-                                                .child(tag_name),
-                                        )
                                         .child(small_btn(
                                             "\u{e679}",
                                             text_3,
@@ -500,7 +471,24 @@ impl Render for TagFilterPanel {
                                                     })
                                                 }
                                             },
-                                        ))
+                                        ));
+                                    drop_target(
+                                        drag_source(row, drag),
+                                        ReorderKey::Tag(tag_id),
+                                        true,
+                                        &theme,
+                                        move |source, after, _, cx| {
+                                            if let ReorderKey::Tag(source) = source {
+                                                this.update(cx, |panel, cx| {
+                                                    panel.state.update(cx, |state, cx| {
+                                                        state.reorder_tag(*source, tag_id, after);
+                                                        cx.notify();
+                                                    });
+                                                    cx.notify();
+                                                });
+                                            }
+                                        },
+                                    )
                                 }))
                         }),
                     )),
@@ -516,6 +504,58 @@ impl Render for TagFilterPanel {
                 )
             })
     }
+}
+
+fn filter_tag_cell(tag: &TagInfo, checked: bool, pinned: bool, theme: &ClippiTheme) -> Div {
+    let active_bg = theme.accent_overlay();
+    let tag_color = parse_hex_to_rgba(&tag.color);
+    let accent = theme.accent;
+    let text_1 = theme.text_1;
+    let tag_name = tag.name.clone();
+    div()
+        .w(px(140.))
+        .h(px(30.))
+        .rounded(px(5.))
+        .bg(if checked { active_bg } else { rgba(0x00000000) })
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(5.))
+        .px(px(6.))
+        .child(if pinned {
+            // Pin icon replacing color dot for pinned tags
+            div()
+                .w(px(10.))
+                .h(px(10.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(12.))
+                .font_family("iconfont")
+                .text_color(tag_color)
+                .child("\u{e633}")
+        } else {
+            div()
+                .w(px(10.))
+                .h(px(10.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tag_color))
+        })
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(11.))
+                .font_weight(if checked {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::default()
+                })
+                .text_color(if checked { accent } else { text_1 })
+                .truncate()
+                .child(tag_name),
+        )
 }
 
 // --- TagEditPanel render helper ---
@@ -734,7 +774,10 @@ fn icon_btn(
                 .text_color(color)
                 .child(icon),
         )
-        .on_mouse_down(MouseButton::Left, move |_e, w, cx| handler(w, cx))
+        .on_mouse_down(MouseButton::Left, move |_e, w, cx| {
+            cx.stop_propagation();
+            handler(w, cx);
+        })
 }
 
 fn small_btn(
@@ -745,6 +788,16 @@ fn small_btn(
     danger_hover_bg: Rgba,
     handler: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Div {
+    small_btn_visual(icon, color)
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |style| style.bg(if danger { danger_hover_bg } else { hover_bg }))
+        .on_mouse_down(MouseButton::Left, move |_e, w, cx| {
+            cx.stop_propagation();
+            handler(w, cx);
+        })
+}
+
+fn small_btn_visual(icon: &'static str, color: Rgba) -> Div {
     div()
         .w(px(18.))
         .h(px(18.))
@@ -752,14 +805,6 @@ fn small_btn(
         .flex()
         .items_center()
         .justify_center()
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |style| {
-            if danger {
-                style.bg(danger_hover_bg)
-            } else {
-                style.bg(hover_bg)
-            }
-        })
         .child(
             div()
                 .font_family("iconfont")
@@ -767,8 +812,6 @@ fn small_btn(
                 .text_color(color)
                 .child(icon),
         )
-        .occlude()
-        .on_mouse_down(MouseButton::Left, move |_e, w, cx| handler(w, cx))
 }
 
 fn parse_hex_to_rgba(hex: &str) -> Rgba {

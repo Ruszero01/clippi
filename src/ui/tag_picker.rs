@@ -16,7 +16,9 @@ use crate::core::i18n_keys::I18nKey;
 
 use crate::core::types::TagInfo;
 
+use super::components::reorder::{drag_source, drop_target, ReorderDrag, ReorderKey};
 use super::theme::ClippiTheme;
+type ReorderHandler = Rc<dyn Fn(i64, i64, bool, &mut Window, &mut App)>;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum TagState {
@@ -31,6 +33,7 @@ pub struct TagPickerPanel {
     is_batch: bool,
     create_input: Entity<InputState>,
     on_toggle: Option<TagToggleHandler>,
+    on_reorder: Option<ReorderHandler>,
     on_clear: Option<PanelHandler>,
     on_close: Option<PanelHandler>,
     on_create: Option<CreateTagHandler>,
@@ -49,11 +52,20 @@ impl TagPickerPanel {
             is_batch,
             create_input,
             on_toggle: None,
+            on_reorder: None,
             on_clear: None,
             on_close: None,
             on_create: None,
             theme,
         }
+    }
+
+    pub fn on_reorder(
+        mut self,
+        handler: impl Fn(i64, i64, bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_reorder = Some(Rc::new(handler));
+        self
     }
 
     pub fn on_toggle(
@@ -87,6 +99,7 @@ impl RenderOnce for TagPickerPanel {
             is_batch,
             create_input,
             on_toggle,
+            on_reorder,
             on_clear,
             on_close,
             on_create,
@@ -295,6 +308,8 @@ impl RenderOnce for TagPickerPanel {
                         .child(div().pr(px(8.)).flex().flex_col().gap(px(4.)).children(
                             rows.into_iter().map(|row| {
                                 let on_toggle = on_toggle.clone();
+                                let on_reorder = on_reorder.clone();
+                                let theme = theme.clone();
                                 div()
                                     .flex()
                                     .flex_row()
@@ -303,11 +318,51 @@ impl RenderOnce for TagPickerPanel {
                                         let cell_colors = TagCellColors {
                                             active_bg,
                                             input_bg,
-                                            hover_bg: btn_hover,
                                             accent,
                                             text_1,
                                         };
-                                        tag_cell(tag, state, on_toggle.clone(), &cell_colors)
+                                        let target_id = tag.id;
+                                        let preview_tag = tag.clone();
+                                        let preview_colors = cell_colors;
+                                        let drag =
+                                            ReorderDrag::new(ReorderKey::Tag(tag.id), move || {
+                                                tag_cell(
+                                                    preview_tag.clone(),
+                                                    state,
+                                                    &preview_colors,
+                                                )
+                                                .into_any_element()
+                                            });
+                                        let row = tag_cell(tag, state, &cell_colors)
+                                            .id(("picker-tag", target_id as u64))
+                                            .cursor(CursorStyle::PointingHand)
+                                            .hover(move |style| {
+                                                style.bg(if state != TagState::None {
+                                                    active_bg
+                                                } else {
+                                                    btn_hover
+                                                })
+                                            })
+                                            .when_some(on_toggle.clone(), |row, handler| {
+                                                row.on_click(move |_, window, cx| {
+                                                    cx.stop_propagation();
+                                                    handler(target_id, state, window, cx);
+                                                })
+                                            });
+                                        let on_reorder = on_reorder.clone();
+                                        drop_target(
+                                            drag_source(row, drag),
+                                            ReorderKey::Tag(target_id),
+                                            true,
+                                            &theme,
+                                            move |source, after, window, cx| {
+                                                if let (ReorderKey::Tag(source), Some(handler)) =
+                                                    (source, &on_reorder)
+                                                {
+                                                    handler(*source, target_id, after, window, cx);
+                                                }
+                                            },
+                                        )
                                     }))
                             }),
                         )),
@@ -357,21 +412,15 @@ fn icon_button(
     }
 }
 
+#[derive(Clone, Copy)]
 struct TagCellColors {
     active_bg: Rgba,
     input_bg: Rgba,
-    hover_bg: Rgba,
     accent: Rgba,
     text_1: Rgba,
 }
 
-fn tag_cell(
-    tag: TagInfo,
-    state: TagState,
-    on_toggle: Option<TagToggleHandler>,
-    colors: &TagCellColors,
-) -> Div {
-    let tag_id = tag.id;
+fn tag_cell(tag: TagInfo, state: TagState, colors: &TagCellColors) -> Div {
     let active = state != TagState::None;
     let tag_color = color_from_hex(&tag.color, colors.accent);
     let state_dot = if active {
@@ -380,7 +429,7 @@ fn tag_cell(
         rgba(0x00000000)
     };
 
-    let cell = div()
+    div()
         .w(px(140.))
         .h(px(30.))
         .rounded(px(5.))
@@ -394,14 +443,6 @@ fn tag_cell(
         .flex_row()
         .items_center()
         .gap(px(5.))
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |style| {
-            style.bg(if active {
-                colors.active_bg
-            } else {
-                colors.hover_bg
-            })
-        })
         .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tag_color))
         .child(
             div()
@@ -424,16 +465,7 @@ fn tag_cell(
                 .items_center()
                 .justify_center()
                 .child(div().w(px(5.)).h(px(5.)).rounded_full().bg(state_dot)),
-        );
-
-    if let Some(handler) = on_toggle {
-        cell.on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-            cx.stop_propagation();
-            handler(tag_id, state, window, cx);
-        })
-    } else {
-        cell
-    }
+        )
 }
 
 fn color_from_hex(hex: &str, fallback: Rgba) -> Rgba {

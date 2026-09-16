@@ -163,6 +163,7 @@ impl RootView {
             cx.new(|cx| TypeFilterConfigPanel::new(state.clone(), filter_bar.clone(), window, cx));
 
         // Subscribe to WindowManager events for clipboard changes and pin state.
+        let main_window = window.window_handle();
         let _wm_subscription = cx.subscribe(
             &window_manager,
             move |this, _wm, event: &WindowManagerEvent, cx| match event {
@@ -270,12 +271,21 @@ impl RootView {
                     });
                 }
                 WindowManagerEvent::WindowHidden => {
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.cancel_drag(cx);
+                    });
+                    cx.defer(move |cx| {
+                        let _ = main_window.update(cx, |_, window, cx| {
+                            cx.stop_active_drag(window);
+                        });
+                    });
                     this.needs_auto_focus = true;
                     // Drop any pending tag deletion so the dialog can't
                     // reappear when the window is shown again.
                     this.pending_tag_delete = None;
                     this.filter_bar.update(cx, |bar, cx| {
                         bar.close_tag_panel(cx);
+                        bar.close_filter_config(cx);
                     });
                     _wm.update(cx, |wm, _cx| {
                         wm.cancel_paste_shortcut_recording();
@@ -456,6 +466,11 @@ impl RootView {
         let titlebar_for_events = titlebar.clone();
         let backend_panel = settings_panel.read(cx).backend_panel();
         let _subscriptions = vec![
+            cx.observe(&state, |this, _, cx| {
+                this.sidebar.update(cx, |_, cx| cx.notify());
+                this.tag_filter_panel.update(cx, |_, cx| cx.notify());
+                cx.notify();
+            }),
             cx.observe(&search_box, |_this, _, cx| {
                 cx.notify();
             }),
@@ -1204,6 +1219,7 @@ impl Render for RootView {
             }
         }
 
+        let sidebar_for_escape = self.sidebar.clone();
         let root_focus = self.focus_handle.clone();
         let root_this = cx.entity().clone();
         let root_list = list_view.clone();
@@ -1214,6 +1230,13 @@ impl Render for RootView {
             .relative()
             .size_full()
             .track_focus(&root_focus)
+            .capture_key_down(move |ev: &KeyDownEvent, window, cx| {
+                if ev.keystroke.key == "escape"
+                    && (sidebar_for_escape.update(cx, |sidebar, cx| sidebar.cancel_drag(cx))
+                        || cx.stop_active_drag(window)) {
+                    cx.stop_propagation();
+                }
+            })
             .on_key_down(move |ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
@@ -1632,6 +1655,15 @@ impl Render for RootView {
                         .occlude()
                         .child(
                             TagPickerPanel::new(rows, is_batch, create_input, self.theme.clone())
+                                .on_reorder({
+                                    let state = self.state.clone();
+                                    move |source, target, after, _, cx| {
+                                        state.update(cx, |state, cx| {
+                                            state.reorder_tag(source, target, after);
+                                            cx.notify();
+                                        });
+                                    }
+                                })
                                 .on_toggle({
                                     let l = list_for_panel.clone();
                                     move |tag_id, state, _window, cx| {
