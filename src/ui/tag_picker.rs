@@ -9,14 +9,16 @@ type CreateTagHandler = Rc<dyn Fn(String, &mut gpui::Window, &mut gpui::App)>;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, ScrollbarAxis};
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 
 use crate::core::types::TagInfo;
 
-use super::components::reorder::{drag_source, drop_target, ReorderDrag, ReorderKey};
+use super::components::reorder::{
+    drag_source, drop_target, DragAutoScroll, ReorderDrag, ReorderKey,
+};
 use super::theme::ClippiTheme;
 type ReorderHandler = Rc<dyn Fn(i64, i64, bool, &mut Window, &mut App)>;
 
@@ -37,6 +39,8 @@ pub struct TagPickerPanel {
     on_clear: Option<PanelHandler>,
     on_close: Option<PanelHandler>,
     on_create: Option<CreateTagHandler>,
+    /// Tag grid scroll offset, driven so a reorder drag can auto-scroll it.
+    scroll: DragAutoScroll,
     theme: ClippiTheme,
 }
 
@@ -45,6 +49,7 @@ impl TagPickerPanel {
         tags: Vec<(TagInfo, TagState)>,
         is_batch: bool,
         create_input: Entity<InputState>,
+        scroll: DragAutoScroll,
         theme: ClippiTheme,
     ) -> Self {
         Self {
@@ -56,6 +61,7 @@ impl TagPickerPanel {
             on_clear: None,
             on_close: None,
             on_create: None,
+            scroll,
             theme,
         }
     }
@@ -103,6 +109,7 @@ impl RenderOnce for TagPickerPanel {
             on_clear,
             on_close,
             on_create,
+            scroll,
             theme,
         } = self;
 
@@ -301,71 +308,99 @@ impl RenderOnce for TagPickerPanel {
             .when(!is_empty, |el| {
                 el.child(
                     div()
+                        .relative()
                         .flex()
                         .flex_col()
+                        .size_full()
                         .max_h(px(230.))
-                        .overflow_y_scrollbar()
-                        .child(div().pr(px(8.)).flex().flex_col().gap(px(4.)).children(
-                            rows.into_iter().map(|row| {
-                                let on_toggle = on_toggle.clone();
-                                let on_reorder = on_reorder.clone();
-                                let theme = theme.clone();
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap(px(4.))
-                                    .children(row.into_iter().map(move |(tag, state)| {
-                                        let cell_colors = TagCellColors {
-                                            active_bg,
-                                            input_bg,
-                                            accent,
-                                            text_1,
-                                        };
-                                        let target_id = tag.id;
-                                        let preview_tag = tag.clone();
-                                        let preview_colors = cell_colors;
-                                        let drag =
-                                            ReorderDrag::new(ReorderKey::Tag(tag.id), move || {
-                                                tag_cell(
-                                                    preview_tag.clone(),
-                                                    state,
-                                                    &preview_colors,
-                                                )
-                                                .into_any_element()
-                                            });
-                                        let row = tag_cell(tag, state, &cell_colors)
-                                            .id(("picker-tag", target_id as u64))
-                                            .cursor(CursorStyle::PointingHand)
-                                            .hover(move |style| {
-                                                style.bg(if state != TagState::None {
-                                                    active_bg
-                                                } else {
-                                                    btn_hover
-                                                })
-                                            })
-                                            .when_some(on_toggle.clone(), |row, handler| {
-                                                row.on_click(move |_, window, cx| {
-                                                    cx.stop_propagation();
-                                                    handler(target_id, state, window, cx);
-                                                })
-                                            });
-                                        let on_reorder = on_reorder.clone();
-                                        drop_target(
-                                            drag_source(row, drag),
-                                            ReorderKey::Tag(target_id),
-                                            true,
-                                            &theme,
-                                            move |source, after, window, cx| {
-                                                if let (ReorderKey::Tag(source), Some(handler)) =
-                                                    (source, &on_reorder)
-                                                {
-                                                    handler(*source, target_id, after, window, cx);
-                                                }
-                                            },
-                                        )
-                                    }))
-                            }),
-                        )),
+                        .child(
+                            div()
+                                .id("tag-picker-scroll-area")
+                                .flex()
+                                .flex_col()
+                                .size_full()
+                                .track_scroll(scroll.handle())
+                                .overflow_y_scroll()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .pr(px(8.))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(4.))
+                                        .children(rows.into_iter().map(|row| {
+                                            let on_toggle = on_toggle.clone();
+                                            let on_reorder = on_reorder.clone();
+                                            let theme = theme.clone();
+                                            div().flex().flex_row().gap(px(4.)).children(
+                                                row.into_iter().map(move |(tag, state)| {
+                                                    let cell_colors = TagCellColors {
+                                                        active_bg,
+                                                        input_bg,
+                                                        accent,
+                                                        text_1,
+                                                    };
+                                                    let target_id = tag.id;
+                                                    let preview_tag = tag.clone();
+                                                    let preview_colors = cell_colors;
+                                                    let drag = ReorderDrag::new(
+                                                        ReorderKey::Tag(tag.id),
+                                                        move || {
+                                                            tag_cell(
+                                                                preview_tag.clone(),
+                                                                state,
+                                                                &preview_colors,
+                                                            )
+                                                            .into_any_element()
+                                                        },
+                                                    );
+                                                    let row = tag_cell(tag, state, &cell_colors)
+                                                        .id(("picker-tag", target_id as u64))
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .hover(move |style| {
+                                                            style.bg(if state != TagState::None {
+                                                                active_bg
+                                                            } else {
+                                                                btn_hover
+                                                            })
+                                                        })
+                                                        .when_some(
+                                                            on_toggle.clone(),
+                                                            |row, handler| {
+                                                                row.on_click(
+                                                                    move |_, window, cx| {
+                                                                        cx.stop_propagation();
+                                                                        handler(
+                                                                            target_id, state,
+                                                                            window, cx,
+                                                                        );
+                                                                    },
+                                                                )
+                                                            },
+                                                        );
+                                                    let on_reorder = on_reorder.clone();
+                                                    drop_target(
+                                                        drag_source(row, drag),
+                                                        ReorderKey::Tag(target_id),
+                                                        true,
+                                                        &theme,
+                                                        move |source, after, window, cx| {
+                                                            let ReorderKey::Tag(source) = source;
+                                                            if let Some(handler) = &on_reorder {
+                                                                handler(
+                                                                    source, target_id, after,
+                                                                    window, cx,
+                                                                );
+                                                            }
+                                                        },
+                                                    )
+                                                }),
+                                            )
+                                        })),
+                                ),
+                        )
+                        .child(scroll.viewport_hook())
+                        .scrollbar(scroll.handle(), ScrollbarAxis::Vertical),
                 )
             })
     }

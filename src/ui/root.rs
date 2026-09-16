@@ -1654,7 +1654,13 @@ impl Render for RootView {
                         .top(px(clamped_y))
                         .occlude()
                         .child(
-                            TagPickerPanel::new(rows, is_batch, create_input, self.theme.clone())
+                            TagPickerPanel::new(
+                                rows,
+                                is_batch,
+                                create_input,
+                                list.read(cx).tag_picker_scroll().clone(),
+                                self.theme.clone(),
+                            )
                                 .on_reorder({
                                     let state = self.state.clone();
                                     move |source, target, after, _, cx| {

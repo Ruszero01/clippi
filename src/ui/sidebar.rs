@@ -20,6 +20,7 @@ use crate::core::types::TagInfo;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
+use super::components::reorder::{ease_in_out, row_drag_position};
 use super::theme::ClippiTheme;
 
 /// Sidebar top offset (must match `top(px(65.))` in root.rs).
@@ -42,10 +43,7 @@ struct SidebarDrag {
 }
 
 fn drag_position(pointer_y: f32, grab_y: f32, count: usize) -> (f32, usize) {
-    let last = count.saturating_sub(1);
-    let top = (pointer_y - grab_y).clamp(0., last as f32 * ROW_HEIGHT);
-    let slot = ((top / ROW_HEIGHT).round() as usize).min(last);
-    (top, slot)
+    row_drag_position(pointer_y, grab_y, count, ROW_HEIGHT)
 }
 
 /// Sidebar entity for displaying and managing tags.
@@ -541,14 +539,6 @@ fn ordered_sidebar_tags(
         })
         .cloned()
         .collect()
-}
-
-fn ease_in_out(delta: f32) -> f32 {
-    if delta < 0.5 {
-        2.0 * delta * delta
-    } else {
-        1.0 - (-2.0 * delta + 2.0).powi(2) / 2.0
-    }
 }
 
 #[cfg(test)]

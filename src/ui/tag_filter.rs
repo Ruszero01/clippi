@@ -12,7 +12,7 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, ScrollbarAxis};
 use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
@@ -20,7 +20,9 @@ use crate::core::types::{tag_preset_colors, TagInfo};
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
-use super::components::reorder::{drag_source, drop_target, ReorderDrag, ReorderKey};
+use super::components::reorder::{
+    drag_source, drop_target, DragAutoScroll, ReorderDrag, ReorderKey,
+};
 use super::filter_bar::FilterBar;
 use super::theme::ClippiTheme;
 
@@ -48,6 +50,8 @@ pub struct TagFilterPanel {
     filter_bar: Entity<FilterBar>,
     create_input: Entity<InputState>,
     edit_name_input: Entity<InputState>,
+    /// Tag grid scroll offset, driven so a reorder drag can auto-scroll it.
+    scroll: DragAutoScroll,
     last_edit_tag_id: i64,
     last_lang_version: u64,
 }
@@ -73,6 +77,7 @@ impl TagFilterPanel {
             filter_bar,
             create_input,
             edit_name_input,
+            scroll: DragAutoScroll::new(),
             last_edit_tag_id: -1,
             last_lang_version: crate::core::i18n::lang_version(),
         }
@@ -364,135 +369,172 @@ impl Render for TagFilterPanel {
             })
             .child(div().h(px(1.)).w_full().bg(sep_line))
             // --- Tag list ---
-            .child(
+            .child({
+                let scroll = self.scroll.clone();
                 div()
+                    .id("tag-filter-scroll")
+                    .relative()
                     .flex()
                     .flex_col()
+                    .size_full()
                     .max_h(px(200.))
-                    .overflow_y_scrollbar()
-                    .child(div().pr(px(8.)).flex().flex_col().gap(px(4.)).children(
-                        rows.into_iter().map(|row| {
-                            let this = this_entity.clone();
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap(px(4.))
-                                .children(row.into_iter().map(|(tag, checked, pinned)| {
-                                    let tag_id = tag.id;
-                                    let tag_name_for_delete = tag.name.clone();
-                                    let tag_name_edit = tag.name.clone();
-                                    let tag_color_hex = tag.color.clone();
-                                    let this = this.clone();
-                                    let preview_tag = tag.clone();
-                                    let preview_theme = theme.clone();
-                                    let drag =
-                                        ReorderDrag::new(ReorderKey::Tag(tag_id), move || {
-                                            filter_tag_cell(
-                                                &preview_tag,
-                                                checked,
-                                                pinned,
-                                                &preview_theme,
-                                            )
-                                            .child(small_btn_visual(
-                                                "\u{e679}",
-                                                preview_theme.text_3,
-                                            ))
-                                            .child(small_btn_visual(
-                                                "\u{e696}",
-                                                preview_theme.text_3,
-                                            ))
-                                            .into_any_element()
-                                        });
-                                    let row = filter_tag_cell(&tag, checked, pinned, &theme)
-                                        .id(("filter-tag", tag_id as u64))
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(move |style| {
-                                            if checked {
-                                                style.bg(active_bg)
-                                            } else {
-                                                style.bg(btn_hover)
-                                            }
-                                        })
-                                        .on_click({
-                                            let this = this.clone();
-                                            move |_ev, _window, cx| {
-                                                this.update(cx, |panel, cx| {
-                                                    panel.toggle_filter(tag_id, cx)
-                                                });
-                                            }
-                                        })
-                                        .child(small_btn(
-                                            "\u{e679}",
-                                            text_3,
-                                            false,
-                                            btn_hover,
-                                            danger_hover_bg,
-                                            {
+                    .child(
+                        div()
+                            .id("tag-filter-scroll-area")
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .track_scroll(scroll.handle())
+                            .overflow_y_scroll()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .pr(px(8.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.))
+                                    .children(rows.into_iter().map(|row| {
+                                        let this = this_entity.clone();
+                                        div().flex().flex_row().gap(px(4.)).children(
+                                            row.into_iter().map(|(tag, checked, pinned)| {
+                                                let tag_id = tag.id;
+                                                let tag_name_for_delete = tag.name.clone();
+                                                let tag_name_edit = tag.name.clone();
+                                                let tag_color_hex = tag.color.clone();
                                                 let this = this.clone();
-                                                move |w, cx| {
-                                                    // --- Set edit name input value before updating state ---
-                                                    let input =
-                                                        this.read(cx).edit_name_input.clone();
-                                                    input.update(cx, |input, cx| {
-                                                        input.set_value(&tag_name_edit, w, cx);
-                                                    });
-                                                    this.update(cx, |panel, cx| {
-                                                        panel.state.update(cx, |s, _cx| {
-                                                            s.start_edit_tag(
-                                                                tag_id,
-                                                                &tag_name_edit,
-                                                                &tag_color_hex,
+                                                let preview_tag = tag.clone();
+                                                let preview_theme = theme.clone();
+                                                let drag = ReorderDrag::new(
+                                                    ReorderKey::Tag(tag_id),
+                                                    move || {
+                                                        filter_tag_cell(
+                                                            &preview_tag,
+                                                            checked,
+                                                            pinned,
+                                                            &preview_theme,
+                                                        )
+                                                        .child(small_btn_visual(
+                                                            "\u{e679}",
+                                                            preview_theme.text_3,
+                                                        ))
+                                                        .child(small_btn_visual(
+                                                            "\u{e696}",
+                                                            preview_theme.text_3,
+                                                        ))
+                                                        .into_any_element()
+                                                    },
+                                                );
+                                                let row =
+                                                    filter_tag_cell(&tag, checked, pinned, &theme)
+                                                        .id(("filter-tag", tag_id as u64))
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .hover(move |style| {
+                                                            if checked {
+                                                                style.bg(active_bg)
+                                                            } else {
+                                                                style.bg(btn_hover)
+                                                            }
+                                                        })
+                                                        .on_click({
+                                                            let this = this.clone();
+                                                            move |_ev, _window, cx| {
+                                                                this.update(cx, |panel, cx| {
+                                                                    panel.toggle_filter(tag_id, cx)
+                                                                });
+                                                            }
+                                                        })
+                                                        .child(small_btn(
+                                                            "\u{e679}",
+                                                            text_3,
+                                                            false,
+                                                            btn_hover,
+                                                            danger_hover_bg,
+                                                            {
+                                                                let this = this.clone();
+                                                                move |w, cx| {
+                                                                    // --- Set edit name input value before updating state ---
+                                                                    let input = this
+                                                                        .read(cx)
+                                                                        .edit_name_input
+                                                                        .clone();
+                                                                    input.update(
+                                                                        cx,
+                                                                        |input, cx| {
+                                                                            input.set_value(
+                                                                                &tag_name_edit,
+                                                                                w,
+                                                                                cx,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                    this.update(cx, |panel, cx| {
+                                                                        panel.state.update(
+                                                                            cx,
+                                                                            |s, _cx| {
+                                                                                s.start_edit_tag(
+                                                                                    tag_id,
+                                                                                    &tag_name_edit,
+                                                                                    &tag_color_hex,
+                                                                                );
+                                                                            },
+                                                                        );
+                                                                        panel.last_edit_tag_id =
+                                                                            tag_id;
+                                                                        cx.notify();
+                                                                    });
+                                                                }
+                                                            },
+                                                        ))
+                                                        .child(small_btn(
+                                                            "\u{e696}",
+                                                            text_3,
+                                                            true,
+                                                            btn_hover,
+                                                            danger_hover_bg,
+                                                            {
+                                                                let this = this.clone();
+                                                                let target = TagDeleteTarget {
+                                                                    id: tag_id,
+                                                                    name: tag_name_for_delete,
+                                                                };
+                                                                move |_w, cx| {
+                                                                    this.update(cx, |_panel, cx| {
+                                                                        cx.emit(
+                                                                TagFilterEvent::RequestDeleteTag(
+                                                                    target.clone(),
+                                                                ),
                                                             );
-                                                        });
-                                                        panel.last_edit_tag_id = tag_id;
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            },
-                                        ))
-                                        .child(small_btn(
-                                            "\u{e696}",
-                                            text_3,
-                                            true,
-                                            btn_hover,
-                                            danger_hover_bg,
-                                            {
-                                                let this = this.clone();
-                                                let target = TagDeleteTarget {
-                                                    id: tag_id,
-                                                    name: tag_name_for_delete,
-                                                };
-                                                move |_w, cx| {
-                                                    this.update(cx, |_panel, cx| {
-                                                        cx.emit(TagFilterEvent::RequestDeleteTag(
-                                                            target.clone(),
+                                                                        cx.notify();
+                                                                    })
+                                                                }
+                                                            },
                                                         ));
-                                                        cx.notify();
-                                                    })
-                                                }
-                                            },
-                                        ));
-                                    drop_target(
-                                        drag_source(row, drag),
-                                        ReorderKey::Tag(tag_id),
-                                        true,
-                                        &theme,
-                                        move |source, after, _, cx| {
-                                            if let ReorderKey::Tag(source) = source {
-                                                this.update(cx, |panel, cx| {
-                                                    panel.state.update(cx, |state, cx| {
-                                                        state.reorder_tag(*source, tag_id, after);
-                                                        cx.notify();
-                                                    });
-                                                    cx.notify();
-                                                });
-                                            }
-                                        },
-                                    )
-                                }))
-                        }),
-                    )),
-            )
+                                                drop_target(
+                                                    drag_source(row, drag),
+                                                    ReorderKey::Tag(tag_id),
+                                                    true,
+                                                    &theme,
+                                                    move |source, after, _, cx| {
+                                                        let ReorderKey::Tag(source) = source;
+                                                        this.update(cx, |panel, cx| {
+                                                            panel.state.update(cx, |state, cx| {
+                                                                state.reorder_tag(
+                                                                    source, tag_id, after,
+                                                                );
+                                                                cx.notify();
+                                                            });
+                                                            cx.notify();
+                                                        });
+                                                    },
+                                                )
+                                            }),
+                                        )
+                                    })),
+                            ),
+                    )
+                    .child(scroll.viewport_hook())
+                    .scrollbar(scroll.handle(), ScrollbarAxis::Vertical)
+            })
             .when(rows_is_empty, |el| {
                 el.child(
                     div()

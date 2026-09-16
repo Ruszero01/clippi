@@ -19,6 +19,7 @@ use crate::core::types::{
 use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
+use super::components::reorder::DragAutoScroll;
 use super::search_box::SearchBox;
 use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
@@ -411,6 +412,8 @@ pub struct ClipboardListView {
     note_input: Entity<InputState>,
     /// Shared InputState for the tag picker's create-tag input.
     tag_create_input: Entity<InputState>,
+    /// Scroll offset of the tag picker's tag grid, driven during a reorder drag.
+    tag_picker_scroll: DragAutoScroll,
     /// Per-list image cache so card thumbnails/icons can be released on hide.
     image_cache: Entity<RetainAllImageCache>,
     /// Active confirmation dialog (None = hidden).
@@ -475,6 +478,7 @@ impl ClipboardListView {
             tag_create_input: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(I18nKey::TagCreatePlaceholder.text())
             }),
+            tag_picker_scroll: DragAutoScroll::new(),
             image_cache: RetainAllImageCache::new(cx),
             confirm_dialog: None,
             last_selected_id: None,
@@ -1419,11 +1423,17 @@ impl ClipboardListView {
         anchor_y: f32,
         cx: &mut Context<Self>,
     ) {
+        if !self.tag_picker_visible {
+            // A fresh picker opens on the first rows, whatever the old one scrolled to.
+            self.tag_picker_scroll.reset();
+        }
         self.tag_picker_visible = true;
         self.tag_picker_x = self.fixed_tag_picker_x();
         self.tag_picker_y = anchor_y;
         self.tag_picker_is_batch = is_batch;
         self.tag_picker_item_id = if is_batch { -1 } else { item_id };
+        // Every picker session opens on the first rows, whatever the old one scrolled to.
+        self.tag_picker_scroll.reset();
         cx.notify();
     }
 
@@ -1633,6 +1643,10 @@ impl ClipboardListView {
 
     pub fn tag_create_input(&self) -> &Entity<InputState> {
         &self.tag_create_input
+    }
+
+    pub fn tag_picker_scroll(&self) -> &DragAutoScroll {
+        &self.tag_picker_scroll
     }
 
     pub fn hide_tag_picker(&mut self, cx: &mut Context<Self>) {
