@@ -89,9 +89,10 @@ pub enum UpdatePhase {
 pub enum UpdateErrorKind {
     Network,
     Server,
-    /// The selected channel (e.g. the OSS manifest) is not published yet or
-    /// not publicly readable. `Auto` treats this as "use the other channel's
-    /// answer".
+    /// The selected channel left no answer: not published yet, not publicly
+    /// readable, or its check died before returning. `Auto` treats this as "use
+    /// the other channel's answer". A channel that merely could not reach the
+    /// network keeps its own [`UpdateErrorKind::Network`].
     ChannelUnavailable,
     InvalidResponse,
     Version,
@@ -275,15 +276,27 @@ impl UpdateChecker {
                 result: join_channel(github),
             },
         );
-        // A failing channel stays invisible to the user as long as the other one
-        // answers, so record it here for update-issue reports.
+        // A channel that fails while the other one answers is a diagnostic only:
+        // the result is decided by the channel that responded, so the user must
+        // never see an error for it. When neither channel answered,
+        // `select_newest_available` returns both details to the caller, so the
+        // warning belongs here.
+        let neither_answered = outcomes.0.result.is_err() && outcomes.1.result.is_err();
         for outcome in [&outcomes.0, &outcomes.1] {
             if let Err(error) = &outcome.result {
-                log::warn!(
-                    "[update] {} channel failed ({}); using the other channel",
-                    channel_label(outcome.source),
-                    error.detail()
-                );
+                if neither_answered {
+                    log::warn!(
+                        "[update] both channels failed; {}: {}",
+                        channel_label(outcome.source),
+                        error.detail()
+                    );
+                } else {
+                    log::debug!(
+                        "[update] {} channel failed ({}); the other channel answered",
+                        channel_label(outcome.source),
+                        error.detail()
+                    );
+                }
             }
         }
         outcomes
@@ -391,14 +404,16 @@ struct ChannelOutcome {
     result: Result<Option<UpdateInfo>, UpdateCheckError>,
 }
 
-/// A channel thread that panicked left no answer; report it as a network-level
-/// failure so the other channel still decides the outcome.
+/// A channel thread that panicked left no answer. Report it as an unavailable
+/// channel, not as a network failure: the user must not be told the network is
+/// down because an internal check died, and `combine_channel_failures` then
+/// keeps the other channel's real error kind when both sides fail.
 fn join_channel(
     joined: std::thread::Result<Result<Option<UpdateInfo>, UpdateCheckError>>,
 ) -> Result<Option<UpdateInfo>, UpdateCheckError> {
     joined.unwrap_or_else(|_| {
         Err(UpdateCheckError::new(
-            UpdateErrorKind::Network,
+            UpdateErrorKind::ChannelUnavailable,
             "update channel check panicked",
         ))
     })
@@ -1235,18 +1250,42 @@ mod tests {
         assert!(error.detail().contains("GitHub:"));
     }
 
-    #[test]
-    fn a_panicking_channel_leaves_the_decision_to_the_other_one() {
+    fn panicking_channel_result() -> Result<Option<UpdateInfo>, UpdateCheckError> {
         let joined = std::thread::scope(|scope| {
             let handle = scope.spawn(|| -> Result<Option<UpdateInfo>, UpdateCheckError> {
                 panic!("channel check exploded");
             });
             handle.join()
         });
+        join_channel(joined)
+    }
+
+    #[test]
+    fn a_panicking_channel_leaves_the_decision_to_the_other_one() {
+        let panicked = panicking_channel_result().unwrap_err();
+        // An internal panic is not a network failure; the user must not be told
+        // the network is down because one check died.
+        assert_eq!(panicked.kind(), UpdateErrorKind::ChannelUnavailable);
+        assert!(!panicked.is_network_failure());
+
         let result = select_newest_available(
-            oss_outcome(join_channel(joined)),
+            oss_outcome(panicking_channel_result()),
             github_outcome(Ok(Some(update_info_at(UpdateSource::GitHub, "0.4.7")))),
         );
         assert_eq!(result.unwrap().unwrap().source, UpdateSource::GitHub);
+    }
+
+    #[test]
+    fn a_panicking_primary_channel_does_not_mask_the_other_channels_error_kind() {
+        let error = select_newest_available(
+            oss_outcome(panicking_channel_result()),
+            github_outcome(Err(UpdateCheckError::new(
+                UpdateErrorKind::InvalidResponse,
+                "bad release body",
+            ))),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), UpdateErrorKind::InvalidResponse);
+        assert!(error.detail().contains("GitHub:"));
     }
 }
