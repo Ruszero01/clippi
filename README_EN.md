@@ -9,25 +9,23 @@
   Built with Rust + GPUI, available for Windows and macOS
 
   <p>
-    <a href="https://clippi.rains-ailurus.cn/">🌐 Official Website</a> ·
-    <a href="https://github.com/Ruszero01/clippi/releases">⬇️ Download</a> ·
-    <a href="https://github.com/Ruszero01/clippi">GitHub</a>
+    <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/Website-Visit%20Site-2EA44F?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website"></a>
+    <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/Docs-User%20Guide-0969DA?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Docs"></a>
+    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/badge/Download-Latest%20Release-F97316?style=for-the-badge&logo=github&logoColor=white" alt="Download"></a>
   </p>
 
   <p>
-    <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
-  </p>
-
-  <p>
+    <a href="README.md">中文</a> · <strong>English</strong>
+    &nbsp;|&nbsp;
     <a href="https://github.com/Ruszero01/clippi/issues">Issues</a> ·
     <a href="https://github.com/Ruszero01/clippi/releases">Changelog</a>
   </p>
 
   <p>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
-    <img src="https://img.shields.io/badge/Rust-2021-%23000000?logo=rust" alt="Rust">
-    <img src="https://img.shields.io/badge/GPUI-0.2-%23555555?logo=rust" alt="GPUI">
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue" alt="Platform">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2EA44F?style=flat-square&logo=opensourceinitiative&logoColor=white" alt="License: MIT"></a>
+    <img src="https://img.shields.io/badge/Rust-2021-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021">
+    <img src="https://img.shields.io/badge/GPUI-0.2-555555?style=flat-square&logo=rust&logoColor=white" alt="GPUI 0.2">
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-007EC6?style=flat-square" alt="Platform: Windows | macOS">
     <a href="https://deepwiki.com/Ruszero01/clippi"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
   </p>
 </div>
@@ -166,7 +164,7 @@ Clippi's quick paste feature requires Accessibility permission to simulate keyst
 ## Links
 
 - [Official Website](https://clippi.rains-ailurus.cn/)
-- [Official Docs](https://clippi.rains-ailurus.cn/docs.html)
+- [Official Docs](https://clippi.rains-ailurus.cn/docs)
 - [GitHub Repository](https://github.com/Ruszero01/clippi)
 - [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
 - [Issue Tracker](https://github.com/Ruszero01/clippi/issues)

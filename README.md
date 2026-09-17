@@ -9,25 +9,23 @@
   基于 Rust + GPUI 构建，支持 Windows 和 macOS
 
   <p>
-    <a href="https://clippi.rains-ailurus.cn/">🌐 官方网站</a> ·
-    <a href="https://github.com/Ruszero01/clippi/releases">⬇️ 下载</a> ·
-    <a href="https://github.com/Ruszero01/clippi">GitHub</a>
+    <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/官网-访问网站-2EA44F?style=for-the-badge&logo=googlechrome&logoColor=white" alt="官网"></a>
+    <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/文档-使用指南-0969DA?style=for-the-badge&logo=readthedocs&logoColor=white" alt="文档"></a>
+    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/badge/下载-最新版本-F97316?style=for-the-badge&logo=github&logoColor=white" alt="下载"></a>
   </p>
 
   <p>
-    <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
-  </p>
-
-  <p>
+    <strong>中文</strong> · <a href="README_EN.md">English</a>
+    &nbsp;|&nbsp;
     <a href="https://github.com/Ruszero01/clippi/issues">反馈问题</a> ·
     <a href="https://github.com/Ruszero01/clippi/releases">更新日志</a>
   </p>
 
   <p>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
-    <img src="https://img.shields.io/badge/Rust-2021-%23000000?logo=rust" alt="Rust">
-    <img src="https://img.shields.io/badge/GPUI-0.2-%23555555?logo=rust" alt="GPUI">
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue" alt="Platform">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2EA44F?style=flat-square&logo=opensourceinitiative&logoColor=white" alt="License: MIT"></a>
+    <img src="https://img.shields.io/badge/Rust-2021-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021">
+    <img src="https://img.shields.io/badge/GPUI-0.2-555555?style=flat-square&logo=rust&logoColor=white" alt="GPUI 0.2">
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-007EC6?style=flat-square" alt="Platform: Windows | macOS">
     <a href="https://deepwiki.com/Ruszero01/clippi"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
   </p>
 </div>
@@ -166,7 +164,7 @@ Clippi 的快速粘贴功能需要辅助功能权限来模拟按键输入：
 ## 相关链接
 
 - [官方网站](https://clippi.rains-ailurus.cn/)
-- [官方文档](https://clippi.rains-ailurus.cn/docs.html)
+- [官方文档](https://clippi.rains-ailurus.cn/docs)
 - [GitHub 仓库](https://github.com/Ruszero01/clippi)
 - [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
 - [问题反馈](https://github.com/Ruszero01/clippi/issues)
