@@ -19,16 +19,13 @@ pub struct MergeStats {
     pub tags_updated: usize,
 }
 
-/// Titlebar filter availability + clearable counts, loaded in a single
+/// Titlebar filter availability + clearable count, loaded in a single
 /// database round trip (previously two EXISTS + two COUNT queries).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TitlebarStats {
     pub has_hotkey_items: bool,
     pub has_favorite_items: bool,
     pub clearable_history_count: u32,
-    pub clearable_non_favorite_history_count: u32,
-    pub clearable_non_tagged_history_count: u32,
-    pub clearable_non_favorite_non_tagged_history_count: u32,
 }
 
 pub struct Database {
@@ -55,6 +52,29 @@ const LIST_NOTE_LIMIT: usize = 2048;
 /// outside `0..=MAX` (e.g. a corrupt negative i64 cast to u32) are treated
 /// as no history at all so they can never satisfy the delete threshold.
 const STALE_OBSERVATION_COUNT_MAX: i64 = 1_000;
+
+/// Predicate matching the rows that history retention (item limit and
+/// retention window) may delete. Favorites, tagged items, noted items, and
+/// items with a custom hotkey are user-curated: they neither count toward
+/// `max_items` nor expire, so curating an item is what makes it permanent.
+const RETENTION_DELETABLE_PREDICATE: &str = "meta_type != 'transfer' \
+     AND is_favorite = 0 \
+     AND custom_hotkey = '' \
+     AND note = '' \
+     AND NOT EXISTS ( \
+         SELECT 1 FROM item_tags WHERE item_tags.item_id = clipboard_items.id \
+     )";
+
+/// Predicate selecting the rows a "clear clipboard history" call deletes.
+/// Each `include_*` flag turns one protection off instead of deleting that
+/// category by default, so favorites, tagged items, and noted items survive
+/// unless the user opts in.
+const CLEAR_HISTORY_SELECTION_PREDICATE: &str = "meta_type != 'transfer' \
+     AND (?1 OR is_favorite = 0) \
+     AND (?2 OR NOT EXISTS ( \
+         SELECT 1 FROM item_tags WHERE item_tags.item_id = clipboard_items.id \
+     )) \
+     AND (?3 OR note = '')";
 
 pub fn legacy_tag_uid(name: &str) -> String {
     Uuid::new_v5(
@@ -474,24 +494,7 @@ impl Database {
             "SELECT
                 COALESCE(MAX(custom_hotkey <> ''), 0),
                 COALESCE(MAX(is_favorite = 1), 0),
-                COUNT(CASE WHEN meta_type != 'transfer' THEN 1 END),
-                COUNT(CASE
-                    WHEN meta_type != 'transfer' AND is_favorite = 0 THEN 1
-                END),
-                COUNT(CASE
-                    WHEN meta_type != 'transfer'
-                     AND NOT EXISTS (
-                         SELECT 1 FROM item_tags
-                         WHERE item_tags.item_id = clipboard_items.id
-                     ) THEN 1
-                END),
-                COUNT(CASE
-                    WHEN meta_type != 'transfer' AND is_favorite = 0
-                     AND NOT EXISTS (
-                         SELECT 1 FROM item_tags
-                         WHERE item_tags.item_id = clipboard_items.id
-                     ) THEN 1
-                END)
+                COUNT(CASE WHEN meta_type != 'transfer' THEN 1 END)
              FROM clipboard_items",
             [],
             |row| {
@@ -499,11 +502,25 @@ impl Database {
                     has_hotkey_items: row.get::<_, i64>(0)? != 0,
                     has_favorite_items: row.get::<_, i64>(1)? != 0,
                     clearable_history_count: row.get::<_, i64>(2)? as u32,
-                    clearable_non_favorite_history_count: row.get::<_, i64>(3)? as u32,
-                    clearable_non_tagged_history_count: row.get::<_, i64>(4)? as u32,
-                    clearable_non_favorite_non_tagged_history_count: row.get::<_, i64>(5)? as u32,
                 })
             },
+        )
+    }
+
+    /// Number of non-transfer rows `clear_clipboard_history` would delete for
+    /// the given include flags.
+    pub fn count_clearable_history(
+        &self,
+        include_favorites: bool,
+        include_tagged: bool,
+        include_noted: bool,
+    ) -> SqlResult<u32> {
+        self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM clipboard_items WHERE {CLEAR_HISTORY_SELECTION_PREDICATE}"
+            ),
+            params![include_favorites, include_tagged, include_noted],
+            |row| row.get::<_, i64>(0).map(|count| count as u32),
         )
     }
 
@@ -1390,27 +1407,31 @@ impl Database {
         Ok(())
     }
 
-    /// Prune oldest non-favorite items when total exceeds max_items.
+    /// Prune oldest disposable items while their count exceeds max_items.
     /// Returns the ids of deleted items. max_items == 0 means unlimited.
-    pub fn prune_excess_non_favorites(&self, max_items: u32) -> SqlResult<Vec<i64>> {
+    ///
+    /// Only rows matching `RETENTION_DELETABLE_PREDICATE` are counted and
+    /// deleted; favorites, tagged items, noted items, and items with a custom
+    /// hotkey are kept on top of the limit.
+    pub fn prune_items_over_limit(&self, max_items: u32) -> SqlResult<Vec<i64>> {
         if max_items == 0 {
             return Ok(Vec::new());
         }
-        let non_fav_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer'",
+        let deletable_count: i64 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM clipboard_items WHERE {RETENTION_DELETABLE_PREDICATE}"),
             [],
             |row| row.get(0),
         )?;
-        if non_fav_count <= max_items as i64 {
+        if deletable_count <= max_items as i64 {
             return Ok(Vec::new());
         }
-        let excess = (non_fav_count - max_items as i64) as usize;
+        let excess = (deletable_count - max_items as i64) as usize;
         // Read only the IDs that will actually be deleted instead of loading
-        // every non-favorite row and truncating in memory.
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM clipboard_items WHERE is_favorite = 0 AND meta_type != 'transfer' \
-             ORDER BY created_at ASC LIMIT ?1",
-        )?;
+        // every eligible row and truncating in memory.
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT id FROM clipboard_items WHERE {RETENTION_DELETABLE_PREDICATE} \
+             ORDER BY created_at ASC LIMIT ?1"
+        ))?;
         let pruned_ids: Vec<i64> = stmt
             .query_map([excess as i64], |row| row.get(0))?
             .collect::<SqlResult<Vec<_>>>()?;
@@ -1421,9 +1442,11 @@ impl Database {
         Ok(pruned_ids)
     }
 
-    /// Prune non-favorite items not updated within retention_days.
+    /// Prune items not updated within retention_days.
     /// Returns the deleted items. retention_days == 0 means no limit.
     /// Uses updated_at so frequently re-captured content stays fresh.
+    /// Favorites, tagged items, noted items, and items with a custom hotkey
+    /// never expire.
     #[cfg(test)]
     pub fn prune_expired_items(&self, retention_days: u32) -> SqlResult<Vec<PrunedClipboardItem>> {
         self.prune_expired_items_with_sync_scope(retention_days, None)
@@ -1432,6 +1455,10 @@ impl Database {
 
     /// Prune expired items and write any required sync tombstones in the same
     /// transaction as the item/tag deletions.
+    ///
+    /// Only rows matching `RETENTION_DELETABLE_PREDICATE` expire; favorites,
+    /// tagged items, noted items, and items with a custom hotkey are always
+    /// kept.
     pub fn prune_expired_items_with_sync_scope(
         &self,
         retention_days: u32,
@@ -1442,11 +1469,11 @@ impl Database {
         }
         let cutoff = format!("-{} days", retention_days);
         let tx = self.conn.unchecked_transaction()?;
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare(&format!(
             "SELECT id, content_hash, content_type, is_favorite, custom_hotkey, file_data FROM clipboard_items \
-             WHERE is_favorite = 0 AND meta_type != 'transfer' \
-               AND julianday(updated_at) < julianday('now', ?1)",
-        )?;
+             WHERE {RETENTION_DELETABLE_PREDICATE} \
+               AND julianday(updated_at) < julianday('now', ?1)"
+        ))?;
         let expired_items: Vec<PrunedClipboardItem> = stmt
             .query_map(params![&cutoff], |row| {
                 let content_type: String = row.get(2)?;
@@ -2279,9 +2306,9 @@ impl Database {
 
     /// Clear all non-transfer clipboard history in a single transaction.
     ///
-    /// Items that are favorites or tagged are retained unless their matching
-    /// `include_*` flag is set. An item that is both favorite and tagged is
-    /// deleted only when both flags are enabled.
+    /// Items that are favorites, tagged, or noted are retained unless their
+    /// matching `include_*` flag is set. An item carrying several of those
+    /// markers is deleted only when all of its matching flags are enabled.
     ///
     /// Writes deletion tombstones for all protocol-syncable content types
     /// (text, rich_text, image) to prevent history from flowing back from
@@ -2292,22 +2319,19 @@ impl Database {
         device_name: &str,
         include_favorites: bool,
         include_tagged: bool,
+        include_noted: bool,
     ) -> SqlResult<ClearClipboardResult> {
         let now = chrono::Utc::now().to_rfc3339();
 
         let tx = self.conn.unchecked_transaction()?;
 
-        // Read all non-transfer items before deletion. Tagged items are
+        // Read all non-transfer items before deletion. Categorized items are
         // protected unless the user explicitly opts into deleting them.
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare(&format!(
             "SELECT id, content_hash, content_type, is_favorite, custom_hotkey, file_data \
              FROM clipboard_items \
-             WHERE meta_type != 'transfer' \
-               AND (?1 OR is_favorite = 0) \
-               AND (?2 OR NOT EXISTS ( \
-                   SELECT 1 FROM item_tags WHERE item_tags.item_id = clipboard_items.id \
-               ))",
-        )?;
+             WHERE {CLEAR_HISTORY_SELECTION_PREDICATE}"
+        ))?;
 
         struct ItemRow {
             id: i64,
@@ -2319,17 +2343,20 @@ impl Database {
         }
 
         let rows: Vec<ItemRow> = stmt
-            .query_map(params![include_favorites, include_tagged], |row| {
-                let is_fav: i32 = row.get(3)?;
-                Ok(ItemRow {
-                    id: row.get(0)?,
-                    content_hash: row.get(1)?,
-                    content_type: row.get(2)?,
-                    is_favorite: is_fav != 0,
-                    custom_hotkey: row.get(4).unwrap_or_default(),
-                    file_data: row.get(5).unwrap_or_default(),
-                })
-            })?
+            .query_map(
+                params![include_favorites, include_tagged, include_noted],
+                |row| {
+                    let is_fav: i32 = row.get(3)?;
+                    Ok(ItemRow {
+                        id: row.get(0)?,
+                        content_hash: row.get(1)?,
+                        content_type: row.get(2)?,
+                        is_favorite: is_fav != 0,
+                        custom_hotkey: row.get(4).unwrap_or_default(),
+                        file_data: row.get(5).unwrap_or_default(),
+                    })
+                },
+            )?
             .collect::<SqlResult<Vec<_>>>()?;
         drop(stmt);
 
@@ -2585,6 +2612,26 @@ mod tests {
                 r.get::<_, usize>(0)
             })
             .unwrap()
+    }
+
+    fn item_id(db: &Database, hash: u64) -> i64 {
+        db.conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_hash = ?1",
+                rusqlite::params![hash as i64],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn remaining_texts(db: &Database) -> Vec<String> {
+        db.conn
+            .prepare("SELECT full_text FROM clipboard_items ORDER BY created_at ASC")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect()
     }
 
     fn count_tags(db: &Database) -> usize {
@@ -2908,7 +2955,7 @@ mod tests {
         assert_eq!(count_items(&b), 2);
     }
 
-    // ── prune_excess_non_favorites ──────────────────────────────────────
+    // ── prune_items_over_limit ──────────────────────────────────────────
 
     #[test]
     fn prune_excess_max_items_zero_does_nothing() {
@@ -2916,7 +2963,7 @@ mod tests {
         insert_item(&db, 1, "a", "2025-01-01T00:00:00Z");
         insert_item(&db, 2, "b", "2025-01-01T00:00:00Z");
         assert_eq!(count_items(&db), 2);
-        let removed = db.prune_excess_non_favorites(0).unwrap();
+        let removed = db.prune_items_over_limit(0).unwrap();
         assert!(removed.is_empty());
         assert_eq!(count_items(&db), 2);
     }
@@ -2935,7 +2982,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(db.prune_excess_non_favorites(1).unwrap().is_empty());
+        assert!(db.prune_items_over_limit(1).unwrap().is_empty());
         assert_eq!(db.prune_expired_items(1).unwrap().len(), 1);
         assert_eq!(count_items(&db), 1);
         let remaining_meta: String = db
@@ -2955,7 +3002,7 @@ mod tests {
         insert_item(&db, 3, "newest", "2025-01-03T00:00:00Z");
         assert_eq!(count_items(&db), 3);
 
-        let removed = db.prune_excess_non_favorites(2).unwrap();
+        let removed = db.prune_items_over_limit(2).unwrap();
         assert_eq!(removed.len(), 1);
         // Oldest should be removed.
         let remaining: Vec<String> = db
@@ -2986,7 +3033,7 @@ mod tests {
         assert_eq!(count_items(&db), 3);
 
         // Only 2 non-fav items, limit = 1 → should remove oldest non-fav.
-        let removed = db.prune_excess_non_favorites(1).unwrap();
+        let removed = db.prune_items_over_limit(1).unwrap();
         assert_eq!(removed.len(), 1);
         assert_eq!(count_items(&db), 2);
 
@@ -3010,9 +3057,42 @@ mod tests {
         insert_item(&db, 1, "a", "2025-01-01T00:00:00Z");
         insert_item(&db, 2, "b", "2025-01-01T00:00:00Z");
         assert_eq!(count_items(&db), 2);
-        let removed = db.prune_excess_non_favorites(2).unwrap();
+        let removed = db.prune_items_over_limit(2).unwrap();
         assert!(removed.is_empty());
         assert_eq!(count_items(&db), 2);
+    }
+
+    #[test]
+    fn prune_limit_keeps_curated_items() {
+        let (_path, db) = temp_db("prune-max-protected");
+        insert_item(&db, 1, "tagged", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "hotkey", "2025-01-02T00:00:00Z");
+        insert_item(&db, 3, "noted", "2025-01-03T00:00:00Z");
+        insert_item(&db, 4, "plain_old", "2025-01-04T00:00:00Z");
+        insert_item(&db, 5, "plain_new", "2025-01-05T00:00:00Z");
+        let tag_id = insert_tag(&db, "keep-me", "#FF0000", "2025-01-01T00:00:00Z");
+        let plain_old_id = item_id(&db, 4);
+        tag_item(&db, item_id(&db, 1), tag_id);
+        db.set_item_hotkey(item_id(&db, 2), "Ctrl+Alt+1", "")
+            .unwrap();
+        db.update_note(item_id(&db, 3), "keep this").unwrap();
+
+        // Curated rows are kept on top of the limit, so the two disposable
+        // rows are not pruned at all by a limit of 2.
+        assert!(db.prune_items_over_limit(2).unwrap().is_empty());
+        assert_eq!(count_items(&db), 5);
+
+        let removed = db.prune_items_over_limit(1).unwrap();
+        assert_eq!(removed, vec![plain_old_id]);
+        assert_eq!(
+            remaining_texts(&db),
+            vec![
+                "tagged".to_string(),
+                "hotkey".to_string(),
+                "noted".to_string(),
+                "plain_new".to_string()
+            ]
+        );
     }
 
     // ── prune_expired_items ─────────────────────────────────────────────
@@ -3162,21 +3242,72 @@ mod tests {
     }
 
     #[test]
-    fn prune_expired_returns_custom_hotkey_metadata() {
+    fn prune_expired_keeps_hotkey_items() {
         let (_path, db) = temp_db("prune-exp-hotkey");
         insert_item(&db, 1, "hotkey_old", "2020-01-01T00:00:00Z");
-        db.conn
-            .execute(
-                "UPDATE clipboard_items SET custom_hotkey = 'Ctrl+Alt+1' WHERE content_hash = 1",
-                [],
-            )
+        db.set_item_hotkey(item_id(&db, 1), "Ctrl+Alt+1", "")
             .unwrap();
 
         let removed = db.prune_expired_items(30).unwrap();
 
+        assert!(removed.is_empty());
+        assert_eq!(remaining_texts(&db), vec!["hotkey_old".to_string()]);
+    }
+
+    #[test]
+    fn prune_expired_keeps_tagged_items() {
+        let (_path, db) = temp_db("prune-exp-tagged");
+        insert_item(&db, 1, "tagged_old", "2020-01-01T00:00:00Z");
+        insert_item(&db, 2, "plain_old", "2020-01-01T00:00:00Z");
+        let tag_id = insert_tag(&db, "keep-me", "#FF0000", "2020-01-01T00:00:00Z");
+        tag_item(&db, item_id(&db, 1), tag_id);
+
+        let removed = db.prune_expired_items(30).unwrap();
+
         assert_eq!(removed.len(), 1);
-        assert_eq!(removed[0].content_hash, 1);
-        assert_eq!(removed[0].custom_hotkey, "Ctrl+Alt+1");
+        assert_eq!(removed[0].content_hash, 2);
+        assert_eq!(remaining_texts(&db), vec!["tagged_old".to_string()]);
+    }
+
+    #[test]
+    fn prune_expired_keeps_noted_items() {
+        let (_path, db) = temp_db("prune-exp-noted");
+        insert_item(&db, 1, "noted_old", "2020-01-01T00:00:00Z");
+        db.update_note(item_id(&db, 1), "remember this").unwrap();
+        // update_note refreshes updated_at; reset it so only the note itself
+        // can keep the row alive.
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET updated_at = '2020-01-01T00:00:00Z'",
+                [],
+            )
+            .unwrap();
+        insert_item(&db, 2, "plain_old", "2020-01-01T00:00:00Z");
+
+        let removed = db.prune_expired_items(30).unwrap();
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].content_hash, 2);
+        assert_eq!(remaining_texts(&db), vec!["noted_old".to_string()]);
+    }
+
+    #[test]
+    fn untagging_releases_an_item_to_the_item_limit() {
+        let (_path, db) = temp_db("prune-max-untagged");
+        insert_item(&db, 1, "was_tagged", "2025-01-01T00:00:00Z");
+        insert_item(&db, 2, "plain", "2025-01-02T00:00:00Z");
+        let tag_id = insert_tag(&db, "temporary", "#FF0000", "2025-01-01T00:00:00Z");
+        let tagged_id = item_id(&db, 1);
+        tag_item(&db, tagged_id, tag_id);
+
+        // The tagged row is kept on top of the limit.
+        assert!(db.prune_items_over_limit(1).unwrap().is_empty());
+
+        db.clear_item_tags(tagged_id).unwrap();
+        let removed = db.prune_items_over_limit(1).unwrap();
+
+        assert_eq!(removed, vec![tagged_id]);
+        assert_eq!(remaining_texts(&db), vec!["plain".to_string()]);
     }
 
     #[test]
@@ -3226,9 +3357,6 @@ mod tests {
         assert!(!stats.has_hotkey_items);
         assert!(!stats.has_favorite_items);
         assert_eq!(stats.clearable_history_count, 0);
-        assert_eq!(stats.clearable_non_favorite_history_count, 0);
-        assert_eq!(stats.clearable_non_tagged_history_count, 0);
-        assert_eq!(stats.clearable_non_favorite_non_tagged_history_count, 0);
     }
 
     #[test]
@@ -3278,13 +3406,10 @@ mod tests {
 
         let stats = db.load_titlebar_stats().unwrap();
         assert_eq!(stats.clearable_history_count, 3);
-        assert_eq!(stats.clearable_non_favorite_history_count, 2);
-        assert_eq!(stats.clearable_non_tagged_history_count, 2);
-        assert_eq!(stats.clearable_non_favorite_non_tagged_history_count, 1);
         assert!(stats.has_hotkey_items);
         assert!(stats.has_favorite_items);
         let result = db
-            .clear_clipboard_history("test-device", true, true)
+            .clear_clipboard_history("test-device", true, true, true)
             .unwrap();
 
         assert_eq!(result.deleted_items, 3);
@@ -3439,7 +3564,7 @@ mod tests {
             .unwrap();
 
         let result = db
-            .clear_clipboard_history("test-device", false, false)
+            .clear_clipboard_history("test-device", false, false, false)
             .unwrap();
 
         assert_eq!(result.deleted_items, 1);
@@ -3482,7 +3607,7 @@ mod tests {
         tag_item(&db, favorite_id, tag_id);
 
         let result = db
-            .clear_clipboard_history("test-device", false, false)
+            .clear_clipboard_history("test-device", false, false, false)
             .unwrap();
 
         assert_eq!(result.deleted_items, 1);
@@ -3519,7 +3644,7 @@ mod tests {
         // Include tagged items but not favorites: tagged non-favorite is
         // deleted while the untagged favorite stays.
         let result = db
-            .clear_clipboard_history("test-device", false, true)
+            .clear_clipboard_history("test-device", false, true, false)
             .unwrap();
 
         assert_eq!(result.deleted_items, 2);
@@ -3527,6 +3652,94 @@ mod tests {
         assert!(db.get_by_hash(601).unwrap().is_none());
         assert!(db.get_by_hash(602).unwrap().is_none());
         assert!(db.get_by_hash(603).unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_clipboard_history_preserves_noted_items_by_default() {
+        let (_path, db) = temp_db("clear-preserve-noted");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, note) \
+                 VALUES ('plain_text', 'plain', 801, ?1, ?1, ''), \
+                        ('plain_text', 'noted', 802, ?1, ?1, 'remember this')",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+
+        let result = db
+            .clear_clipboard_history("test-device", false, false, false)
+            .unwrap();
+
+        assert_eq!(result.deleted_items, 1);
+        assert!(db.get_by_hash(801).unwrap().is_none());
+        assert!(db.get_by_hash(802).unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_clipboard_history_include_noted_does_not_override_other_protections() {
+        let (_path, db) = temp_db("clear-include-noted");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, note, is_favorite) \
+                 VALUES ('plain_text', 'plain', 901, ?1, ?1, '', 0), \
+                        ('plain_text', 'noted-favorite', 902, ?1, ?1, 'keep', 1), \
+                        ('plain_text', 'noted', 903, ?1, ?1, 'remember this', 0)",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+
+        // Noted items are included, but the favorite among them stays because
+        // favorites were not included.
+        let result = db
+            .clear_clipboard_history("test-device", false, false, true)
+            .unwrap();
+
+        assert_eq!(result.deleted_items, 2);
+        assert_eq!(result.deleted_favorites, 0);
+        assert!(db.get_by_hash(901).unwrap().is_none());
+        assert!(db.get_by_hash(902).unwrap().is_some());
+        assert!(db.get_by_hash(903).unwrap().is_none());
+    }
+
+    #[test]
+    fn count_clearable_history_matches_the_deleted_set() {
+        let (_path, db) = temp_db("count-clearable");
+        db.conn
+            .execute(
+                "INSERT INTO clipboard_items \
+                 (content_type, full_text, content_hash, created_at, updated_at, is_favorite, note) \
+                 VALUES ('plain_text', 'plain', 1001, ?1, ?1, 0, ''), \
+                        ('plain_text', 'noted', 1002, ?1, ?1, 0, 'note'), \
+                        ('plain_text', 'tagged', 1003, ?1, ?1, 0, ''), \
+                        ('plain_text', 'favorite', 1004, ?1, ?1, 1, ''), \
+                        ('file', 'transfer backing', 1005, ?1, ?1, 0, '')",
+                params!["2026-07-28T00:00:00Z"],
+            )
+            .unwrap();
+        let tag_id = insert_tag(&db, "counted", "#FF0000", "2026-07-28T00:00:00Z");
+        tag_item(&db, item_id(&db, 1003), tag_id);
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET meta_type = 'transfer' WHERE content_hash = 1005",
+                [],
+            )
+            .unwrap();
+
+        let counts = |favorites, tagged, noted| {
+            db.count_clearable_history(favorites, tagged, noted)
+                .unwrap()
+        };
+
+        // Only the unmarked non-transfer row is deletable by default.
+        assert_eq!(counts(false, false, false), 1);
+        assert_eq!(counts(false, false, true), 2);
+        assert_eq!(counts(false, true, false), 2);
+        assert_eq!(counts(true, false, false), 2);
+        assert_eq!(counts(false, true, true), 3);
+        assert_eq!(counts(true, true, false), 3);
+        assert_eq!(counts(true, true, true), 4);
     }
 
     #[test]
@@ -3556,7 +3769,7 @@ mod tests {
         // Favorites may be included while tagged items remain protected.
         // A favorite that is also tagged therefore must stay.
         let result = db
-            .clear_clipboard_history("test-device", true, false)
+            .clear_clipboard_history("test-device", true, false, false)
             .unwrap();
 
         assert_eq!(result.deleted_items, 2);

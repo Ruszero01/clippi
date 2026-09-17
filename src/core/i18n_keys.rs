@@ -233,6 +233,8 @@ define_i18n! {
 
     // ─── Data cleanup (stale items / clear data) ───
     SettingHistoryRetention: ("历史保留", "History retention"),
+    DescRetentionExempt:    ("收藏、标签、备注与带快捷键的条目始终保留",
+                             "Favorites, tagged, noted and hotkey items are always kept"),
     SettingCleanupStaleItems: ("清理已失效条目", "Clean stale items"),
     DescCleanupStaleItems:   ("自动清理已确认失效的本地非收藏条目", "Auto-remove local non-favorite items confirmed stale"),
     SettingClearData:       ("清空数据", "Clear data"),
@@ -245,6 +247,7 @@ define_i18n! {
                              "This will permanently delete {0} clipboard items. This cannot be undone, but source files will not be deleted."),
     ConfirmClearDataIncludeFavorites: ("包含收藏项", "Include favorites"),
     ConfirmClearDataIncludeTagged: ("包含标签项", "Include tagged items"),
+    ConfirmClearDataIncludeNoted: ("包含备注项", "Include noted items"),
     ConfirmClearDataSyncWarning: ("删除结果将同步到已启用的同步后端。", "Deletions will be synced to enabled sync backends."),
     ToastClearDataDone:     ("已清空 {0} 条剪贴板历史", "Cleared {0} clipboard items"),
     ToastClearDataEmpty:    ("没有可清空的数据", "No data to clear"),

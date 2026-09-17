@@ -33,7 +33,8 @@ pub struct CleanupOptions {
     /// Retention days for expired clipboard items.
     /// `None` means skip retention cleanup.
     /// `Some(0)` is valid but a no-op (nothing expires at day 0).
-    /// `Some(days)` with `days > 0` deletes non-favorite items older than N days.
+    /// `Some(days)` with `days > 0` deletes items older than N days, except
+    /// favorites, tagged items, noted items, and items with a custom hotkey.
     pub retention_days: Option<u32>,
     /// Scan for and delete stale file/path items whose source is gone.
     pub clean_stale_items: bool,
@@ -382,7 +383,8 @@ fn clean_expired_tombstones(db: &Database, stats: &mut CleanupStats) {
     }
 }
 
-/// Remove non-favorite clipboard items older than `retention_days`.
+/// Remove clipboard items older than `retention_days`, keeping favorites,
+/// tagged items, noted items, and items with a custom hotkey.
 fn clean_expired_clipboard_items(
     db: &Database,
     retention_days: u32,

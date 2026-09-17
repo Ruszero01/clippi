@@ -338,10 +338,7 @@ impl GpuiClipboardService {
 
         if changed || needs_reload {
             if state.settings.max_items > 0 {
-                if let Err(err) = state
-                    .db
-                    .prune_excess_non_favorites(state.settings.max_items)
-                {
+                if let Err(err) = state.db.prune_items_over_limit(state.settings.max_items) {
                     log::error!("Failed to prune clipboard items: {err}");
                 }
             }

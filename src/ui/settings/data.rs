@@ -530,6 +530,15 @@ impl SettingsPanel {
                                 }
                             })
                     })
+                    // --- Exemption hint ---
+                    .child(
+                        div()
+                            .px(px(14.))
+                            .pb(px(10.))
+                            .text_size(px(10.))
+                            .text_color(text_3)
+                            .child(I18nKey::DescRetentionExempt.text()),
+                    )
             })
             // --- ── Cache cleanup card ── ---
             .child({

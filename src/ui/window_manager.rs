@@ -1104,6 +1104,7 @@ impl WindowManager {
         &mut self,
         include_favorites: bool,
         include_tagged: bool,
+        include_noted: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.maintenance_job_running {
@@ -1126,6 +1127,7 @@ impl WindowManager {
                         &device_name,
                         include_favorites,
                         include_tagged,
+                        include_noted,
                     ) {
                         Ok(r) => r,
                         Err(e) => {

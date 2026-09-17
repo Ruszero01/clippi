@@ -71,15 +71,13 @@ pub struct AppState {
     pub has_favorite_items: bool,
     /// Number of non-transfer clipboard rows affected by "clear data".
     pub clearable_history_count: u32,
-    /// Number of non-favorite, non-transfer rows affected when clearing
-    /// tagged items but not favorites.
-    pub clearable_non_favorite_history_count: u32,
-    /// Number of non-transfer rows affected when clearing favorites but not
-    /// tagged items.
-    pub clearable_non_tagged_history_count: u32,
-    /// Number of non-transfer rows affected by the default clear action
-    /// (favorites and tagged items both retained).
-    pub clearable_non_favorite_non_tagged_history_count: u32,
+    /// Whether the "clear data" dialog includes favorites, tagged items, and
+    /// noted items in the deletion. All three are kept by default.
+    pub clear_data_include_favorites: bool,
+    pub clear_data_include_tagged: bool,
+    pub clear_data_include_noted: bool,
+    /// Row count the "clear data" dialog reports for the current selection.
+    pub clear_data_deletable_count: u32,
     /// Whether remote transfer station files exist (controls titlebar button visibility).
     pub has_transfer_files: bool,
     /// Whether the transfer station filter/view is active.
@@ -362,10 +360,10 @@ impl AppState {
             has_hotkey_items: stats.has_hotkey_items,
             has_favorite_items: stats.has_favorite_items,
             clearable_history_count: stats.clearable_history_count,
-            clearable_non_favorite_history_count: stats.clearable_non_favorite_history_count,
-            clearable_non_tagged_history_count: stats.clearable_non_tagged_history_count,
-            clearable_non_favorite_non_tagged_history_count: stats
-                .clearable_non_favorite_non_tagged_history_count,
+            clear_data_include_favorites: false,
+            clear_data_include_tagged: false,
+            clear_data_include_noted: false,
+            clear_data_deletable_count: 0,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
@@ -421,11 +419,6 @@ impl AppState {
                 self.has_hotkey_items = stats.has_hotkey_items;
                 self.has_favorite_items = stats.has_favorite_items;
                 self.clearable_history_count = stats.clearable_history_count;
-                self.clearable_non_favorite_history_count =
-                    stats.clearable_non_favorite_history_count;
-                self.clearable_non_tagged_history_count = stats.clearable_non_tagged_history_count;
-                self.clearable_non_favorite_non_tagged_history_count =
-                    stats.clearable_non_favorite_non_tagged_history_count;
             }
             Err(e) => log::error!("Failed to refresh titlebar stats: {e}"),
         }
@@ -472,16 +465,55 @@ impl AppState {
         self.clearable_history_count
     }
 
-    pub fn clearable_non_favorite_history_count(&self) -> u32 {
-        self.clearable_non_favorite_history_count
+    pub fn clear_data_include_favorites(&self) -> bool {
+        self.clear_data_include_favorites
     }
 
-    pub fn clearable_non_tagged_history_count(&self) -> u32 {
-        self.clearable_non_tagged_history_count
+    pub fn clear_data_include_tagged(&self) -> bool {
+        self.clear_data_include_tagged
     }
 
-    pub fn clearable_non_favorite_non_tagged_history_count(&self) -> u32 {
-        self.clearable_non_favorite_non_tagged_history_count
+    pub fn clear_data_include_noted(&self) -> bool {
+        self.clear_data_include_noted
+    }
+
+    /// Rows the "clear data" dialog reports for the current selection.
+    pub fn clear_data_deletable_count(&self) -> u32 {
+        self.clear_data_deletable_count
+    }
+
+    /// Reset the "clear data" selection to its defaults (favorites, tagged
+    /// items, and noted items all retained) and refresh the reported count.
+    pub fn reset_clear_data_selection(&mut self) {
+        self.set_clear_data_selection(false, false, false);
+    }
+
+    /// Store the "clear data" selection and refresh the count it reports.
+    ///
+    /// Kept out of `refresh_titlebar_filter_availability` on purpose: that runs
+    /// on every `reload_items()`, and counting the selection scans
+    /// `clipboard_items` with a per-row tag lookup.
+    pub fn set_clear_data_selection(
+        &mut self,
+        include_favorites: bool,
+        include_tagged: bool,
+        include_noted: bool,
+    ) {
+        self.clear_data_include_favorites = include_favorites;
+        self.clear_data_include_tagged = include_tagged;
+        self.clear_data_include_noted = include_noted;
+        self.refresh_clear_data_deletable_count();
+    }
+
+    fn refresh_clear_data_deletable_count(&mut self) {
+        match self.db.count_clearable_history(
+            self.clear_data_include_favorites,
+            self.clear_data_include_tagged,
+            self.clear_data_include_noted,
+        ) {
+            Ok(count) => self.clear_data_deletable_count = count,
+            Err(error) => log::error!("Failed to count clearable history: {error}"),
+        }
     }
 
     fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
@@ -2834,9 +2866,10 @@ mod tests {
             has_hotkey_items: false,
             has_favorite_items: false,
             clearable_history_count: 0,
-            clearable_non_favorite_history_count: 0,
-            clearable_non_tagged_history_count: 0,
-            clearable_non_favorite_non_tagged_history_count: 0,
+            clear_data_include_favorites: false,
+            clear_data_include_tagged: false,
+            clear_data_include_noted: false,
+            clear_data_deletable_count: 0,
             has_transfer_files: false,
             transfer_filter_active: false,
             transfer_entries: Vec::new(),
@@ -4088,7 +4121,7 @@ mod tests {
     }
 
     #[test]
-    fn tag_mutations_refresh_clearable_history_counts() {
+    fn clear_data_count_reflects_tag_mutations_when_the_dialog_opens() {
         let (mut state, _dirty) = test_state();
         let tag_id = setup_tag(&mut state);
         let item = make_item(1, ContentType::PlainText, false, "history");
@@ -4096,29 +4129,28 @@ mod tests {
         let id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
         state.reload_items();
 
-        let assert_counts = |state: &AppState, expected| {
+        // The dialog recomputes its count for the current selection when it
+        // opens, so tag mutations never need to touch the reload path.
+        let assert_counts = |state: &mut AppState, expected| {
             assert_eq!(state.clearable_history_count(), 1);
-            assert_eq!(state.clearable_non_tagged_history_count(), expected);
-            assert_eq!(
-                state.clearable_non_favorite_non_tagged_history_count(),
-                expected
-            );
+            state.reset_clear_data_selection();
+            assert_eq!(state.clear_data_deletable_count(), expected);
         };
-        assert_counts(&state, 1);
+        assert_counts(&mut state, 1);
         state.toggle_item_tag(id, tag_id);
-        assert_counts(&state, 0);
+        assert_counts(&mut state, 0);
         state.toggle_item_tag(id, tag_id);
-        assert_counts(&state, 1);
+        assert_counts(&mut state, 1);
         state.batch_add_tag(&[id], tag_id);
-        assert_counts(&state, 0);
+        assert_counts(&mut state, 0);
         state.batch_remove_tag(&[id], tag_id);
-        assert_counts(&state, 1);
+        assert_counts(&mut state, 1);
         state.batch_add_tag(&[id], tag_id);
         state.clear_item_tags(id);
-        assert_counts(&state, 1);
+        assert_counts(&mut state, 1);
         state.batch_add_tag(&[id], tag_id);
         state.clear_tags_for_items(&[id]);
-        assert_counts(&state, 1);
+        assert_counts(&mut state, 1);
     }
 
     // ── delete_tag ─────────────────────────────────
