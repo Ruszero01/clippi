@@ -36,7 +36,7 @@ use super::components::toast::Toast;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::edit_panel::{EditPanel, EditPanelEvent};
 use super::filter_bar::FilterBar;
-use super::search_box::SearchBox;
+use super::search_box::{SearchBox, SearchBoxEvent};
 use super::settings::hotkey;
 use super::settings::{SettingsEvent, SettingsPanel};
 use super::sidebar::Sidebar;
@@ -480,6 +480,36 @@ impl RootView {
             cx.observe(&search_box, |_this, _, cx| {
                 cx.notify();
             }),
+            cx.subscribe(
+                &search_box,
+                move |this, _search, event: &SearchBoxEvent, cx| {
+                    match event {
+                        SearchBoxEvent::NewItem => {
+                            // Dismiss list overlays first — the editor replaces them.
+                            this.filter_bar.update(cx, |bar, cx| {
+                                bar.close_tag_panel(cx);
+                                bar.close_filter_config(cx);
+                            });
+                            this.list_view.update(cx, |list, cx| {
+                                list.dismiss_context_menu(cx);
+                                list.hide_tag_picker(cx);
+                            });
+                            // Composing an entry targets the clipboard history: leave
+                            // the transfer station first so the created item is
+                            // reachable in the list once the editor closes.
+                            if this.state.read(cx).transfer_filter_active {
+                                this.state.update(cx, |state, _cx| {
+                                    state.toggle_transfer_filter();
+                                });
+                                this.transfer_return_view = None;
+                            }
+                            this.state.update(cx, |state, _cx| state.start_new_item());
+                            this.switch_view("edit");
+                            cx.notify();
+                        }
+                    }
+                },
+            ),
             cx.observe(&filter_bar, |_this, _, cx| {
                 cx.notify();
             }),
@@ -537,10 +567,17 @@ impl RootView {
                         EditPanelEvent::Back => {
                             this.state.update(cx, |state, _cx| state.cancel_edit_item());
                         }
-                        EditPanelEvent::Saved => {
+                        EditPanelEvent::Saved(new_item_id) => {
                             let items = this.state.read(cx).visible_items();
+                            let new_item_id = *new_item_id;
                             this.list_view.update(cx, |list, cx| {
                                 list.set_items(items, cx);
+                                // A new entry is re-sorted into the list after the
+                                // reload; reveal it instead of leaving the user
+                                // wherever the previous selection was.
+                                if let Some(id) = new_item_id {
+                                    list.scroll_to_item_if_visible(id, cx);
+                                }
                             });
                         }
                     }

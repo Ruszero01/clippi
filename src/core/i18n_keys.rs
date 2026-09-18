@@ -297,6 +297,10 @@ define_i18n! {
     EditTooltipBase64Decode:("Base64解码", "Base64 Decode"),
     EditTooltipJsonFormat:  ("JSON格式化", "Format JSON"),
     EditTooltipTrim:        ("文本修剪", "Trim Text"),
+    EditPanelTitleNew:  ("新建条目", "New Entry"),
+    EditNewItem:        ("新建条目", "New entry"),
+    EditEmptyContent:   ("内容不能为空", "Content can't be empty"),
+    EditSaveFailed:     ("保存失败", "Save failed"),
 
     // ─── Tag management ───
     TagNew:             ("新建标签", "New Tag"),

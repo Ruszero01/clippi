@@ -35,6 +35,13 @@ pub struct EditPanel {
     selected_type: String,
     type_menu_open: bool,
     last_item_id: i64,
+    /// `AppState::edit_session` of the session currently loaded into the input.
+    /// Comparing this instead of the item id means re-opening the same item
+    /// after a cancel still reloads the editor (the item id is unchanged).
+    last_session: u64,
+    /// True while the editor composes a new entry — Save inserts a row instead
+    /// of updating one.
+    is_new: bool,
     preview_generation: u64,
     theme: ClippiTheme,
     last_lang_version: u64,
@@ -52,7 +59,9 @@ pub struct EditPanel {
 
 pub enum EditPanelEvent {
     Back,
-    Saved,
+    /// Save succeeded. Carries the created item id when the session was a new
+    /// entry, so the caller can reveal it in the list.
+    Saved(Option<i64>),
 }
 
 impl EventEmitter<EditPanelEvent> for EditPanel {}
@@ -87,6 +96,8 @@ impl EditPanel {
             selected_type: "plain_text".into(),
             type_menu_open: false,
             last_item_id: -1,
+            last_session: 0,
+            is_new: false,
             preview_generation: 0,
             theme,
             last_lang_version: crate::core::i18n::lang_version(),
@@ -106,10 +117,12 @@ impl EditPanel {
     fn sync_from_item(
         &mut self,
         item: &ClipboardItem,
+        session: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.last_item_id = item.id;
+        self.last_session = session;
         let item_type = editor_type_from_item(item);
         self.selected_type = item_type.to_string();
         self.type_menu_open = false;
@@ -143,18 +156,31 @@ impl EditPanel {
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.content_input.read(cx).value().to_string();
+        let editor_type = self.selected_type.clone();
+        if self.is_new {
+            // Rejected saves (blank content, write failure) keep the editor
+            // open; AppState surfaces the reason as a toast.
+            let created = self
+                .state
+                .update(cx, |state, _cx| state.save_new_item(&text, &editor_type));
+            if let Some(id) = created {
+                self.rich_cache = None;
+                cx.emit(EditPanelEvent::Saved(Some(id)));
+            }
+            return;
+        }
+
         let item_id = self.last_item_id;
         if item_id < 0 {
             return;
         }
-        let text = self.content_input.read(cx).value().to_string();
-        let editor_type = self.selected_type.clone();
         let saved = self.state.update(cx, |state, _cx| {
             state.save_edited_item(item_id, &text, &editor_type)
         });
         if saved {
             self.rich_cache = None;
-            cx.emit(EditPanelEvent::Saved);
+            cx.emit(EditPanelEvent::Saved(None));
         }
     }
 }
@@ -170,10 +196,21 @@ impl Render for EditPanel {
             });
         }
 
-        let item = self.state.read(cx).editing_item.clone();
-        if let Some(ref item) = item {
-            if item.id != self.last_item_id {
-                self.sync_from_item(item, window, cx);
+        // The panel is dropped from the tree while another view is active, so a
+        // cancel/close is invisible here — `edit_session` (not the item id) is
+        // what tells us a fresh session must be loaded into the input.
+        let (item, session, is_new) = {
+            let state = self.state.read(cx);
+            (
+                state.editing_item.clone(),
+                state.edit_session,
+                state.editing_is_new,
+            )
+        };
+        self.is_new = is_new;
+        if session != self.last_session {
+            if let Some(item) = item {
+                self.sync_from_item(&item, session, window, cx);
             }
         }
 
@@ -234,7 +271,11 @@ impl Render for EditPanel {
                             .text_size(px(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
-                            .child(I18nKey::EditPanelTitle.text()),
+                            .child(if self.is_new {
+                                I18nKey::EditPanelTitleNew.text()
+                            } else {
+                                I18nKey::EditPanelTitle.text()
+                            }),
                     ),
             )
             .child(

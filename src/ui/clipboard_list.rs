@@ -1749,7 +1749,7 @@ impl ClipboardListView {
     /// Keep an affected item selected and visible when an operation explicitly
     /// needs to relocate it. Tag and hotkey metadata updates do not use this
     /// helper because they must preserve the current scroll offset.
-    fn scroll_to_item_if_visible(&mut self, item_id: i64, cx: &mut Context<Self>) {
+    pub(crate) fn scroll_to_item_if_visible(&mut self, item_id: i64, cx: &mut Context<Self>) {
         if item_id <= 0 {
             return;
         }

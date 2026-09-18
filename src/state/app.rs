@@ -35,6 +35,41 @@ const LIST_RICH_HTML_LIMIT: usize = 4096;
 const LIST_RICH_AUX_LIMIT: usize = 2048;
 const LIST_NOTE_LIMIT: usize = 2048;
 
+/// `editing_item_id` value while the editor is composing an entry that does
+/// not exist in the database yet. Real ids are positive; `-1` means "not
+/// editing".
+pub const NEW_ITEM_ID: i64 = 0;
+
+/// Blank item handed to the edit panel for a new entry. Only `display_kind()`
+/// and the preview key read it — `save_new_item` builds the row that is
+/// actually persisted.
+fn empty_editor_item() -> ClipboardItem {
+    let now = chrono::Utc::now();
+    ClipboardItem {
+        id: NEW_ITEM_ID,
+        content_type: ContentType::PlainText,
+        full_text: String::new(),
+        content_hash: 0,
+        created_at: now,
+        updated_at: now,
+        image_path: String::new(),
+        image_width: 0,
+        image_height: 0,
+        rich_data: String::new(),
+        file_data: String::new(),
+        is_favorite: false,
+        note: String::new(),
+        source_app_name: String::new(),
+        source_app_icon: String::new(),
+        size: 0,
+        tags: Vec::new(),
+        meta_type: String::new(),
+        custom_hotkey: String::new(),
+        custom_hotkey_format: String::new(),
+        existence_observed_at: String::new(),
+    }
+}
+
 /// One page of keyword candidates. `exhausted` tracks the raw database page
 /// independently of the filtered `matches`, so a page whose candidates were
 /// all filtered out still advances the scan instead of being mistaken for
@@ -108,6 +143,14 @@ pub struct AppState {
     /// Clipboard item editing state for the GPUI edit panel.
     pub editing_item_id: i64,
     pub editing_item: Option<ClipboardItem>,
+    /// True while the editor composes a brand-new entry (`editing_item_id ==
+    /// NEW_ITEM_ID`) that has no database row yet.
+    pub editing_is_new: bool,
+    /// Monotonic id of the current edit session, bumped every time the editor
+    /// opens. The edit panel reloads its input from this counter instead of the
+    /// item id, so cancelling and re-opening the *same* item — or starting
+    /// another new entry — still resets the editor content.
+    pub edit_session: u64,
     /// Shared with clipboard listener — set true during batch paste
     /// to prevent recording intermediate writes (newline separators).
     pub batch_pasting: Arc<AtomicBool>,
@@ -379,6 +422,8 @@ impl AppState {
             editing_tag_color: "#3B82F6".into(),
             editing_item_id: -1,
             editing_item: None,
+            editing_is_new: false,
+            edit_session: 0,
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(initial_cleanup_dirty)),
@@ -861,6 +906,8 @@ impl AppState {
             Ok(Some(item)) => {
                 self.editing_item_id = id;
                 self.editing_item = Some(item);
+                self.editing_is_new = false;
+                self.edit_session = self.edit_session.wrapping_add(1);
                 true
             }
             Ok(None) => {
@@ -874,9 +921,91 @@ impl AppState {
         }
     }
 
+    /// Open the editor on an empty entry that has no database row yet. The row
+    /// is created by [`AppState::save_new_item`] when the user saves.
+    pub fn start_new_item(&mut self) {
+        self.editing_item_id = NEW_ITEM_ID;
+        self.editing_item = Some(empty_editor_item());
+        self.editing_is_new = true;
+        self.edit_session = self.edit_session.wrapping_add(1);
+    }
+
     pub fn cancel_edit_item(&mut self) {
         self.editing_item_id = -1;
         self.editing_item = None;
+        self.editing_is_new = false;
+    }
+
+    /// Create a new entry from the editor. Returns the new item id, or `None`
+    /// when the content is blank or the write failed (the caller keeps the
+    /// editor open in that case).
+    pub fn save_new_item(&mut self, text: &str, editor_type: &str) -> Option<i64> {
+        if text.trim().is_empty() {
+            self.show_warning_toast(I18nKey::EditEmptyContent.text());
+            return None;
+        }
+
+        let (content_type, meta_type, rich_data) = Self::storage_for_editor_type(editor_type, text);
+        let now = chrono::Utc::now();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&text, &mut hasher);
+        let content_hash = std::hash::Hasher::finish(&hasher);
+
+        let item = ClipboardItem {
+            id: 0,
+            content_type: ContentType::from_str(content_type),
+            full_text: text.to_string(),
+            content_hash,
+            created_at: now,
+            updated_at: now,
+            image_path: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rich_data,
+            file_data: String::new(),
+            is_favorite: false,
+            note: String::new(),
+            source_app_name: String::new(),
+            source_app_icon: String::new(),
+            size: text.chars().count() as i64,
+            tags: Vec::new(),
+            meta_type: meta_type.to_string(),
+            custom_hotkey: String::new(),
+            custom_hotkey_format: String::new(),
+            existence_observed_at: String::new(),
+        };
+
+        // Upsert by content hash: re-creating existing content refreshes that
+        // entry instead of leaving two rows with the same hash.
+        if let Err(e) = self.db.upsert(&item) {
+            log::error!("save_new_item: upsert failed: {e}");
+            self.show_warning_toast(I18nKey::EditSaveFailed.text());
+            return None;
+        }
+        let new_id = match self.db.get_by_hash(content_hash) {
+            Ok(Some(item)) => item.id,
+            other => {
+                log::error!("save_new_item: get_by_hash returned {other:?}");
+                return None;
+            }
+        };
+
+        if self.should_mark_sync_dirty(&item) {
+            self.sync_dirty.store(true, Ordering::SeqCst);
+        }
+        // A hand-written entry counts toward the item limit exactly like a
+        // captured one, so apply the same prune the capture path runs.
+        if let Err(e) = self.db.prune_items_over_limit(self.settings.max_items) {
+            log::error!("save_new_item: prune failed: {e}");
+        }
+        self.cancel_edit_item();
+        self.reload_items();
+        self.select_single(new_id);
+        log::info!(
+            "save_new_item: created id={new_id} ({editor_type}, {} chars)",
+            item.size
+        );
+        Some(new_id)
     }
 
     pub fn save_edited_item(&mut self, id: i64, text: &str, editor_type: &str) -> bool {
@@ -2885,6 +3014,8 @@ mod tests {
             editing_tag_color: "#3B82F6".into(),
             editing_item_id: -1,
             editing_item: None,
+            editing_is_new: false,
+            edit_session: 0,
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
@@ -4111,6 +4242,100 @@ mod tests {
             !dirty.load(Ordering::SeqCst),
             "non-favorite item in fav-only mode: should NOT set dirty"
         );
+    }
+
+    // ── new-entry editor sessions ──────────────────────────────────
+
+    #[test]
+    fn start_new_item_opens_a_blank_session() {
+        let (mut state, _dirty) = test_state();
+        let before = state.edit_session;
+
+        state.start_new_item();
+
+        assert!(state.editing_is_new);
+        assert_eq!(state.editing_item_id, NEW_ITEM_ID);
+        assert_eq!(state.editing_item.as_ref().unwrap().full_text, "");
+        assert_ne!(state.edit_session, before, "opening must start a session");
+    }
+
+    /// Cancelling and re-opening the same item must start a new session even
+    /// though the item id is unchanged — the edit panel keys off the session.
+    #[test]
+    fn reopening_the_same_item_starts_a_new_session() {
+        let (mut state, _dirty) = test_state();
+        let item = make_item(1, ContentType::PlainText, false, "original");
+        state.db.upsert(&item).unwrap();
+        let id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
+
+        assert!(state.start_edit_item(id));
+        let first = state.edit_session;
+        state.cancel_edit_item();
+        assert!(state.start_edit_item(id));
+
+        assert_ne!(first, state.edit_session);
+    }
+
+    #[test]
+    fn save_new_item_creates_an_entry_and_ends_the_session() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = false;
+        state.start_new_item();
+
+        let id = state.save_new_item("brand new entry", "plain_text");
+
+        assert!(id.is_some());
+        let item = state.db.get_by_id(id.unwrap()).unwrap().unwrap();
+        assert_eq!(item.full_text, "brand new entry");
+        assert_eq!(item.content_type, ContentType::PlainText);
+        assert!(!state.editing_is_new);
+        assert!(state.editing_item.is_none());
+        assert!(
+            state.items.iter().any(|it| it.id == id.unwrap()),
+            "new entry must appear in the reloaded list"
+        );
+        assert!(dirty.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn save_new_item_keeps_the_editor_open_for_blank_content() {
+        let (mut state, _dirty) = test_state();
+        state.start_new_item();
+
+        assert!(state.save_new_item("   \n \t ", "plain_text").is_none());
+        assert!(
+            state.editing_is_new,
+            "editor stays open for a rejected save"
+        );
+        assert!(state.items.is_empty(), "nothing was written");
+    }
+
+    #[test]
+    fn save_new_item_records_the_selected_editor_type() {
+        let (mut state, _dirty) = test_state();
+        state.start_new_item();
+
+        let id = state.save_new_item("<p>hi</p>", "html").unwrap();
+
+        let item = state.db.get_by_id(id).unwrap().unwrap();
+        assert_eq!(item.content_type, ContentType::RichText);
+        assert_eq!(item.meta_type, "html");
+        assert!(RichData::from_json(&item.rich_data).html.is_some());
+    }
+
+    /// Creating content that already exists refreshes that row (upsert by
+    /// content hash) instead of leaving two rows with the same hash.
+    #[test]
+    fn save_new_item_refreshes_existing_content_instead_of_duplicating() {
+        let (mut state, _dirty) = test_state();
+        state.start_new_item();
+        let first = state.save_new_item("duplicate me", "plain_text").unwrap();
+
+        state.start_new_item();
+        let second = state.save_new_item("duplicate me", "plain_text").unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(state.items.len(), 1, "no duplicate row for the same hash");
     }
 
     // ── toggle_item_tag sync_dirty ─────────────────────────────────
