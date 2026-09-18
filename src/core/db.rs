@@ -5,6 +5,7 @@ use crate::core::cache_cleanup::{
     StaleItemCandidate,
 };
 use crate::core::filters::ClipboardFilters;
+use crate::core::html_text::FRAGMENT_MARKER;
 use crate::core::types::{ClipboardItem, ContentType, FileData, TagInfo};
 use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
 use std::path::Path;
@@ -128,12 +129,28 @@ fn item_select_columns() -> String {
 }
 
 fn list_item_select_columns() -> String {
+    // Word/WPS/Excel bury `<!--StartFragment-->` behind tens of KB of Office
+    // XML, so cutting the html from the front would keep metadata only and the
+    // card would render nothing. An overflowing payload whose fragment sits
+    // past half the budget is cut from the fragment instead; anything else
+    // keeps the document head, which carries the embedded stylesheet.
+    // `html_text::preview_html` applies the same rule to the in-memory
+    // previews of keyword pages; keep both sides in lockstep.
+    let html = "coalesce(json_extract(rich_data, '$.html'), '')";
+    let html_preview = format!(
+        "CASE \
+         WHEN length({html}) > {LIST_RICH_HTML_LIMIT} \
+              AND instr({html}, '{FRAGMENT_MARKER}') > {head_reserve} \
+         THEN substr({html}, instr({html}, '{FRAGMENT_MARKER}'), {LIST_RICH_HTML_LIMIT}) \
+         ELSE substr({html}, 1, {LIST_RICH_HTML_LIMIT}) END",
+        head_reserve = LIST_RICH_HTML_LIMIT / 2
+    );
     format!(
         "id, content_type, substr(full_text, 1, {LIST_FULL_TEXT_LIMIT}), content_hash, created_at, updated_at, image_path,
          CASE
              WHEN rich_data = '' OR NOT json_valid(rich_data) THEN ''
              ELSE json_object(
-                 'html', NULLIF(substr(coalesce(json_extract(rich_data, '$.html'), ''), 1, {LIST_RICH_HTML_LIMIT}), ''),
+                 'html', NULLIF({html_preview}, ''),
                  'rtf', NULLIF(substr(coalesce(json_extract(rich_data, '$.rtf'), ''), 1, {LIST_RICH_HTML_LIMIT}), ''),
                  'ocr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.ocr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
                  'qr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.qr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),

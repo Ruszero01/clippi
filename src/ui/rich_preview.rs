@@ -22,11 +22,12 @@ pub struct StyledHtmlSpan {
     pub background_color: Option<Rgba>,
 }
 
-/// Tags whose content must never become visible text. Word documents ship
-/// `<head>`/`<style>` blocks and Office XML whose text (font names, style
-/// rules) would otherwise leak into previews.
+/// Tags whose content must never become visible text: `<head>`/`<style>`
+/// blocks and Office XML whose text (font names, style rules) would otherwise
+/// leak into previews. Shared with the plain-text extractor so both agree on
+/// what counts as metadata.
 fn is_non_visible_tag(tag: &str) -> bool {
-    matches!(tag, "head" | "style" | "script" | "title" | "xml")
+    crate::core::html_text::is_non_visible_tag(tag)
 }
 
 /// Map from a CSS selector (`.class` or bare tag name) to the bounded

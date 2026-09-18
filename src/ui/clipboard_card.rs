@@ -154,6 +154,51 @@ mod info_row_tests {
         ClipboardItem::new_text(1, text, ContentType::RichText, None, Some(&rich))
     }
 
+    /// Visible text the card would render for an item, whatever preview
+    /// flavour it picked.
+    fn preview_visible_text(item: &ClipboardItem) -> String {
+        match rich_preview(item) {
+            RichPreview::StyledHtml { visible_text, .. } => visible_text,
+            RichPreview::Html(html) => crate::core::html_text::visible_text(&html),
+            RichPreview::Markdown(text) | RichPreview::Plain(text) => text,
+        }
+    }
+
+    /// Issue #91: WPS buries the fragment behind ~29 KB of Office XML, so the
+    /// bounded list preview kept metadata only and the card rendered nothing.
+    #[test]
+    fn office_metadata_heavy_preview_renders_the_fragment() {
+        let full = crate::core::html_text::office_fragment_html_fixture();
+        let preview = crate::core::html_text::preview_html(&full, 4096);
+        let item = rich_item(
+            "效果良好",
+            RichData {
+                html: Some(preview),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(preview_visible_text(&item), "效果良好");
+    }
+
+    /// Safety net for previews that are metadata only — a document without a
+    /// fragment marker, or history stored before the anchor rule: the card
+    /// falls back to the captured plain text instead of rendering Office XML.
+    #[test]
+    fn metadata_only_preview_falls_back_to_full_text() {
+        let full = crate::core::html_text::office_fragment_html_fixture();
+        let prefix: String = full.chars().take(4096).collect();
+        let item = rich_item(
+            "效果良好",
+            RichData {
+                html: Some(prefix),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(preview_visible_text(&item), "效果良好");
+    }
+
     #[test]
     fn word_html_with_fragment_renders_styled_preview() {
         let html = r#"<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><style>p.MsoNormal{font-family:"Times New Roman"}</style></head><body lang=ZH-CN><!--StartFragment--><p><span style='color:#ff0000'>带超链接的文字</span></p><!--EndFragment--></body></html>"#;

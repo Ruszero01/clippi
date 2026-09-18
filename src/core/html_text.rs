@@ -1,5 +1,9 @@
 //! Plain visible-text extraction for clipboard HTML.
 
+/// Comment marker that delimits the visible fragment of a full clipboard
+/// document. Word, WPS, Excel and the CF_HTML transport all emit it verbatim.
+pub const FRAGMENT_MARKER: &str = "<!--StartFragment-->";
+
 /// Preserve the complete HTML document from a Windows CF_HTML payload.
 ///
 /// Unlike [`normalize_clipboard_html`], this keeps `<head>` and `<style>` so
@@ -322,11 +326,76 @@ fn strip_fragment_markers(html: &str) -> String {
     out
 }
 
+/// Remove `<!-- ... -->` comments, which includes the conditional comments
+/// Word/WPS wrap their Office XML in.
+///
+/// An unterminated comment swallows the rest of the input: a preview cut in
+/// the middle of a comment has no content after it, and the comment body
+/// (Office XML, `[if gte mso 9]` markers) must never count as visible text.
+fn strip_html_comments(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(open) = rest.find("<!--") {
+        out.push_str(&rest[..open]);
+        let after_open = &rest[open + "<!--".len()..];
+        let Some(close) = after_open.find("-->") else {
+            return out;
+        };
+        rest = &after_open[close + "-->".len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Bound an HTML payload to `limit` characters for the clipboard list preview.
+///
+/// A payload that fits is kept whole: its head carries the `<style>` block the
+/// styled preview reads its class rules from. Word/WPS/Excel documents,
+/// however, bury `<!--StartFragment-->` behind tens of KB of Office XML, so a
+/// leading cut would keep metadata only and the card would render nothing at
+/// all. When such a head exceeds half the budget the cut starts at the marker
+/// instead, so the preview always carries the visible fragment.
+///
+/// [`crate::core::db`]'s list projection applies the identical rule in SQL —
+/// keep both sides in lockstep.
+pub fn preview_html(html: &str, limit: usize) -> String {
+    if html.chars().count() <= limit {
+        return html.to_string();
+    }
+    let start = preview_start_offset(html, limit / 2);
+    let mut preview = html[start..].to_string();
+    if let Some((idx, _)) = preview.char_indices().nth(limit) {
+        preview.truncate(idx);
+    }
+    preview
+}
+
+/// Byte offset the preview starts at: the document head while the head is at
+/// most `head_reserve` characters, otherwise the fragment marker.
+fn preview_start_offset(html: &str, head_reserve: usize) -> usize {
+    match html.find(FRAGMENT_MARKER) {
+        Some(marker) if html[..marker].chars().count() > head_reserve => marker,
+        _ => 0,
+    }
+}
+
+/// Tags whose content is metadata, never clipboard content: Word/WPS ship
+/// `<head>`/`<style>`/Office `<xml>` ahead of the fragment, and their text
+/// (font names, CSS rules) must not leak into previews, search, or plain text.
+pub fn is_non_visible_tag(name: &str) -> bool {
+    matches!(name, "head" | "style" | "script" | "title" | "xml")
+}
+
 pub fn visible_text(html: &str) -> String {
     let html = normalize_clipboard_html(html);
+    let html = strip_html_comments(&html);
     let mut out = String::with_capacity(html.len());
     let mut chars = html.chars().peekable();
     let mut last_was_space = false;
+    // Nesting depth of non-visible containers. While > 0 their text is
+    // metadata, so nothing is emitted — the same rule the styled preview
+    // parser applies.
+    let mut skip_depth = 0usize;
 
     while let Some(ch) = chars.next() {
         if ch == '<' {
@@ -338,10 +407,28 @@ pub fn visible_text(html: &str) -> String {
                 tag.push(next);
             }
             let tag = tag.trim().to_ascii_lowercase();
-            if is_block_break_tag(&tag) {
+            let closing = tag.starts_with('/');
+            let name = tag
+                .trim_start_matches('/')
+                .split(|ch: char| ch.is_whitespace() || ch == '>')
+                .next()
+                .unwrap_or("");
+            if is_non_visible_tag(name) {
+                if closing {
+                    skip_depth = skip_depth.saturating_sub(1);
+                } else {
+                    skip_depth += 1;
+                }
+                continue;
+            }
+            if skip_depth == 0 && is_block_break_tag(&tag) {
                 out.push('\n');
                 last_was_space = true;
             }
+            continue;
+        }
+
+        if skip_depth > 0 {
             continue;
         }
 
@@ -534,6 +621,24 @@ fn decode_numeric_html_entities(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Word/WPS-shaped payload for preview regression tests: tens of KB of Office
+/// XML and a `<style>` block ahead of `<!--StartFragment-->`, mirroring the
+/// clipboard HTML a WPS copy produces (issue #91). The visible fragment is the
+/// last 4 characters of a 29 KB document.
+#[cfg(test)]
+pub(crate) fn office_fragment_html_fixture() -> String {
+    let mut latent_styles = String::new();
+    for index in 0..260 {
+        latent_styles.push_str(&format!(
+            "<w:LsdException Locked=\"false\"  Priority=\"99\"  SemiHidden=\"false\"  Name=\"style {index}\" ></w:LsdException>\n"
+        ));
+    }
+    format!(
+        r#"<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta http-equiv=Content-Type  content="text/html; charset=utf-8" ><meta name=ProgId  content=Word.Document ><meta name=Generator  content="Microsoft Word 14" ><!--[if gte mso 9]><xml><o:DocumentProperties><o:Revision>1</o:Revision><o:Pages>1</o:Pages><o:Lines>1</o:Lines><o:Paragraphs>1</o:Paragraphs></o:DocumentProperties></xml><![endif]--><!--[if gte mso 9]><xml><w:WordDocument><w:BrowserLevel>MicrosoftInternetExplorer4</w:BrowserLevel><w:DrawingGridVerticalSpacing>7.8 磅</w:DrawingGridVerticalSpacing><w:View>Normal</w:View><w:Zoom>0</w:Zoom></w:WordDocument></xml><![endif]--><!--[if gte mso 9]><xml><w:LatentStyles DefLockedState="false"  DefUnhideWhenUsed="true"  DefSemiHidden="true"  DefQFormat="false"  DefPriority="99"  LatentStyleCount="260" >
+{latent_styles}</w:LatentStyles></xml><![endif]--><style>@font-face{{font-family:"Times New Roman";}}p.MsoNormal{{mso-style-name:正文;margin:0pt;font-family:'Times New Roman';font-size:10.5000pt;}}</style></head><body style="tab-interval:21pt;text-justify-trim:punctuation;" ><!--StartFragment--><p class=MsoNormal ><span style="mso-spacerun:'yes';font-family:Arial;font-size:10.5000pt;" ><font face="等线" >效果良好</font></span></p><!--EndFragment--></body></html>"#
+    )
 }
 
 #[cfg(test)]
@@ -887,6 +992,54 @@ lang=EN-US><o:p></o:p></span></span></b></p>
         let text = visible_text(r#"<p><a href="https://example.com">Link text</a></p>"#);
 
         assert_eq!(text, "Link text");
+    }
+
+    #[test]
+    fn visible_text_ignores_comments_and_conditional_office_xml() {
+        // A preview whose fragment was cut away is a document head only; the
+        // Office XML inside Word/WPS conditional comments must not count as
+        // visible text, or the card renders it (or falls back to nothing).
+        let html = r#"<!--[if gte mso 9]><xml><o:DocumentProperties><o:Revision>1</o:Revision></o:DocumentProperties></xml><![endif]--><w:LatentStyles><w:LsdException Name="Normal" /></w:LatentStyles><style>p.MsoNormal{margin:0pt;}</style>"#;
+
+        assert_eq!(visible_text(html), "");
+    }
+
+    #[test]
+    fn visible_text_stops_at_an_unterminated_comment() {
+        let html = "<p>可见文本</p><!--[if gte mso 9]><xml><o:Revision>1</o:Revision>";
+
+        assert_eq!(visible_text(html), "可见文本");
+    }
+
+    #[test]
+    fn preview_html_anchors_office_metadata_heavy_documents_on_the_fragment() {
+        let html = office_fragment_html_fixture();
+        let preview = preview_html(&html, 4096);
+
+        assert!(preview.chars().count() <= 4096);
+        assert!(preview.starts_with(FRAGMENT_MARKER));
+        assert_eq!(visible_text(&preview), "效果良好");
+        assert!(!preview.contains("LatentStyles"));
+    }
+
+    #[test]
+    fn preview_html_keeps_small_heads_so_styles_survive() {
+        let html = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><!--StartFragment--><table><tr><td class=et2>测试文本</td></tr></table><!--EndFragment--></body></html>"#;
+        let payload = format!("{}<!--StartFragment-->{}", "x".repeat(6000), html);
+
+        // The fragment sits past the reserve, so the anchored cut applies.
+        assert!(preview_html(&payload, 4096).starts_with(FRAGMENT_MARKER));
+        // A head small enough to leave content in the budget is kept whole.
+        let small = preview_html(html, 4096);
+        assert_eq!(small, html);
+    }
+
+    #[test]
+    fn preview_html_keeps_documents_that_fit_the_budget() {
+        let html = format!("{}<p>{}</p>", "h".repeat(200), "y".repeat(3800));
+
+        assert!(html.chars().count() <= 4096);
+        assert_eq!(preview_html(&html, 4096), html);
     }
 
     #[test]

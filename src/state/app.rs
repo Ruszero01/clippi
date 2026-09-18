@@ -281,7 +281,7 @@ fn shrink_item_for_list(item: &mut ClipboardItem) {
         html: rich
             .html
             .filter(|text| !text.is_empty())
-            .map(|text| truncated_owned(text, LIST_RICH_HTML_LIMIT)),
+            .map(|text| html_text::preview_html(&text, LIST_RICH_HTML_LIMIT)),
         rtf: rich
             .rtf
             .filter(|text| !text.is_empty())
@@ -4582,6 +4582,91 @@ mod tests {
         assert_eq!(full.full_text.len(), full_text.len());
         assert_eq!(RichData::from_json(&full.rich_data).html.unwrap(), html);
         assert_eq!(full.source_app_icon.len(), 10_000);
+    }
+
+    /// Issue #91: the list preview must keep the visible fragment of a
+    /// Word/WPS payload, and the SQL projection and the in-memory shrink must
+    /// agree on how the payload is bounded.
+    #[test]
+    fn list_reload_keeps_office_fragment_inside_the_rich_preview() {
+        let (mut state, _dirty) = test_state();
+        let html = crate::core::html_text::office_fragment_html_fixture();
+        let mut item = make_item(1, ContentType::RichText, false, "效果良好");
+        item.meta_type = "html".to_string();
+        item.rich_data = RichData {
+            html: Some(html.clone()),
+            ..Default::default()
+        }
+        .to_json();
+        state.db.upsert(&item).unwrap();
+
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        let preview = RichData::from_json(&state.items[0].rich_data).html.unwrap();
+        assert_eq!(
+            preview,
+            html_text::preview_html(&html, LIST_RICH_HTML_LIMIT)
+        );
+        assert_eq!(html_text::visible_text(&preview), "效果良好");
+        assert!(!preview.contains("LatentStyles"));
+    }
+
+    /// The SQL projection (`Database::load_filtered_list`) and
+    /// `html_text::preview_html` bound the payload with one rule; the keyword
+    /// page path loads full rows and shrinks them in memory, so a divergence
+    /// would make the same item render differently per search state.
+    #[test]
+    fn list_projection_and_in_memory_shrink_agree_on_rich_previews() {
+        let shapes = [
+            // Office metadata ahead of the fragment (issue #91).
+            crate::core::html_text::office_fragment_html_fixture(),
+            // Small head: the stylesheet must survive inside the budget.
+            format!(
+                r#"<html><head><style>.et2{{color:#ff6600}}</style></head><body><!--StartFragment--><table><tr><td class=et2>测试文本</td></tr></table><!--EndFragment--></body></html>{}"#,
+                "x".repeat(5000)
+            ),
+            // Fragment past the reserve, stylesheet too large to keep.
+            format!(
+                r#"<html><head><style>.et2{{color:#ff6600}}</style>{}</head><body><!--StartFragment--><p>测试文本</p><!--EndFragment--></body></html>"#,
+                "y".repeat(5000)
+            ),
+            // No fragment marker at all: the leading cut still applies.
+            format!("<p>{}</p>", "z".repeat(9000)),
+            // Payload that fits the budget unchanged.
+            format!("<p>{}</p>", "w".repeat(1000)),
+        ];
+
+        for (index, html) in shapes.iter().enumerate() {
+            let (mut state, _dirty) = test_state();
+            let id = index as i64 + 1;
+            let mut item = make_item(id, ContentType::RichText, false, "测试文本");
+            item.meta_type = "html".to_string();
+            item.rich_data = RichData {
+                html: Some(html.clone()),
+                ..Default::default()
+            }
+            .to_json();
+            state.db.upsert(&item).unwrap();
+
+            state.reload_items();
+
+            let projected = RichData::from_json(&state.items[0].rich_data).html.unwrap();
+            assert_eq!(
+                projected,
+                html_text::preview_html(html, LIST_RICH_HTML_LIMIT),
+                "shape {index} diverged"
+            );
+            assert!(projected.chars().count() <= LIST_RICH_HTML_LIMIT);
+
+            let mut in_memory = item.clone();
+            shrink_item_for_list(&mut in_memory);
+            assert_eq!(
+                RichData::from_json(&in_memory.rich_data).html.unwrap(),
+                projected,
+                "shape {index} diverged between SQL and in-memory shrink"
+            );
+        }
     }
 
     #[test]
