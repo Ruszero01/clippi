@@ -9,13 +9,15 @@
 //! --- Individual settings controls will be added in follow-up work. ---
 //! --- Tab rendering methods (`render_*_tab`) serve as extension points. ---
 
+use crate::ui::font::fs;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::InputState;
-use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use gpui_component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarShow};
 use gpui_transitions::WindowUseTransition;
 
 mod clipboard;
@@ -34,8 +36,10 @@ use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 use crate::ui::add_backend::AddBackendPanel;
 use crate::ui::components::confirm_dialog::ConfirmDialog;
-use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};
-use crate::ui::theme::ClippiTheme;
+use crate::ui::components::slider::{
+    SliderDetent, SliderDragState, SteppedSlider, SteppedSliderColors,
+};
+use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
@@ -61,6 +65,9 @@ pub enum SettingsEvent {
     DataToast(String),
     /// Show the clear-data confirmation at the RootView overlay level.
     ShowClearDataConfirm,
+    /// Font scale or family changed — RootView should recompute cached card
+    /// heights (they bake in the live scale) and re-render the whole tree.
+    FontChanged,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsPanel {}
@@ -128,6 +135,21 @@ pub struct SettingsPanel {
     pub config_sync_apply_confirm_started: Option<Instant>,
     /// Whether the config-sync backend selector dropdown is open.
     pub config_sync_menu_open: bool,
+
+    // ── Font picker ──
+    /// Whether the custom font-family picker overlay is open.
+    pub font_picker_open: bool,
+    /// Lazily-enumerated installed font families (populated the first time the
+    /// picker opens so we never re-scan the system font list on every render).
+    available_fonts: Option<Rc<Vec<String>>>,
+    /// Caller-owned drag state per slider id, so each slider's press/drag
+    /// survives the re-renders every detent commit triggers.
+    slider_drags: HashMap<&'static str, SliderDragState>,
+    /// Frames left to align the font list with the current font after opening.
+    /// The alignment needs the list's measured row bounds, which are only
+    /// available once it has been laid out, so it is retried for a few frames
+    /// and then stops (a settled list must not fight the user's scrolling).
+    font_picker_scroll_frames: u8,
 }
 
 fn tab_names() -> [&'static str; 6] {
@@ -234,6 +256,10 @@ impl SettingsPanel {
             config_sync_apply_confirm_gen: 0,
             config_sync_apply_confirm_started: None,
             config_sync_menu_open: false,
+            font_picker_open: false,
+            available_fonts: None,
+            slider_drags: HashMap::new(),
+            font_picker_scroll_frames: 0,
         }
     }
 
@@ -537,7 +563,7 @@ impl Render for SettingsPanel {
                             .child(
                                 div()
                                     .font_family("iconfont")
-                                    .text_size(px(16.))
+                                    .text_size(fs(16.))
                                     .text_color(theme.text_2)
                                     .child("\u{e62b}"),
                             ),
@@ -545,7 +571,7 @@ impl Render for SettingsPanel {
                     // --- Title (14px, 700 weight, text_1) ---
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(fs(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text_1)
                             .child(I18nKey::SettingsTitle.text()),
@@ -589,6 +615,7 @@ impl Render for SettingsPanel {
                                     panel.set_active_tab(i);
                                     panel.close_app_list_popups();
                                     panel.latest_hotkeys_popup_open = false;
+                                    panel.font_picker_open = false;
                                     cx.emit(SettingsEvent::TabChanged(i));
                                     cx.notify();
                                 });
@@ -596,7 +623,7 @@ impl Render for SettingsPanel {
                             // --- Tab label ---
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .font_weight(if is_active {
                                         FontWeight::BOLD
                                     } else {
@@ -690,6 +717,8 @@ impl Render for SettingsPanel {
                 self.render_delete_backend_dialog(window, cx)
                     .into_any_element(),
             )
+            // --- Font family picker (absolute overlay on root) ---
+            .child(self.render_font_picker(window, cx).into_any_element())
     }
 }
 
@@ -724,7 +753,159 @@ impl SettingsPanel {
         1.0 - (1.0 - delta).powi(3)
     }
 
+    /// A labelled group of settings rows.
+    ///
+    /// The section title sits above a single card that holds every row of the
+    /// group, with hairline dividers between rows — so related settings read as
+    /// one block instead of a wall of separate cards. Rows are rendered without
+    /// their own card chrome (see the `setting_row_*` helpers).
+    ///
+    /// A group holding a single row is self-evident, so it is rendered without a
+    /// title (the row's own label already names it).
+    pub(crate) fn settings_group(&self, title: &str, rows: Vec<AnyElement>) -> impl IntoElement {
+        self.settings_group_with(title, rows, false)
+    }
+
+    /// Like [`Self::settings_group`], but the group stretches to fill the height
+    /// left over by its parent. Used by the version tab, where the release-notes
+    /// area is the only part that scrolls — so the page itself never scrolls and
+    /// there is just one scrollbar.
+    pub(crate) fn settings_group_fill(&self, title: &str, rows: Vec<AnyElement>) -> impl IntoElement {
+        self.settings_group_with(title, rows, true)
+    }
+
+    fn settings_group_with(
+        &self,
+        title: &str,
+        rows: Vec<AnyElement>,
+        stretch: bool,
+    ) -> impl IntoElement {
+        let theme = &self.theme;
+        let divider = theme.divider;
+        let text_3 = theme.text_3;
+        let show_title = rows.len() > 1;
+
+        let mut card = div()
+            .rounded(px(10.))
+            .bg(theme.surface)
+            .border(px(1.))
+            .border_color(divider)
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when(stretch, |card| card.flex_1().min_h(px(0.)));
+        for (i, row) in rows.into_iter().enumerate() {
+            if i > 0 {
+                // Inset hairline: separates rows without boxing each of them.
+                card = card.child(div().h(px(1.)).mx(px(14.)).bg(divider));
+            }
+            card = card.child(row);
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .when(stretch, |group| group.flex_1().min_h(px(0.)))
+            .when(show_title, |group| {
+                group.child(
+                    div()
+                        .px(px(4.))
+                        .text_size(fs(10.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(text_3)
+                        .child(title.to_string()),
+                )
+            })
+            .child(card)
+    }
+
+    /// The bare shell every settings row shares: standard row padding and
+    /// minimum height, no card chrome (the enclosing group provides it). Use it
+    /// directly when a row's control is bespoke, so it still lines up with the
+    /// rows built from the `setting_row_*` helpers.
+    pub(crate) fn row_shell(&self) -> Div {
+        div()
+            .min_h(px(66.))
+            .px(px(14.))
+            .py(px(12.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(10.))
+    }
+
+    /// The label + description column of a settings row.
+    ///
+    /// The label stays on one line (ellipsised); the description wraps and the
+    /// row grows, so text never slides under the control on the right.
+    pub(crate) fn row_text(&self, label: &str, desc: &str) -> Div {
+        let theme = &self.theme;
+        let text_1 = theme.text_1;
+        let text_3 = theme.text_3;
+        div()
+            .flex()
+            .flex_1()
+            .min_w(px(0.))
+            .flex_col()
+            .gap(px(3.))
+            .child(
+                div()
+                    .max_w_full()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(fs(12.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(text_1)
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .text_size(fs(10.))
+                    .line_height(fs(14.))
+                    .text_color(text_3)
+                    .child(desc.to_string()),
+            )
+    }
+
+    /// A tappable row that opens something else (a list, a picker, a dialog):
+    /// label + description on the left, a chevron on the right. Used by the
+    /// blacklist / shortcut / latest-hotkey entries so they share one shape.
+    pub(crate) fn setting_row_opener(
+        &self,
+        label: &str,
+        desc: &str,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let theme = &self.theme;
+        let text_2 = theme.text_2;
+        let hover_bg = theme.titlebar_bg;
+        let on_click = Rc::new(on_click);
+        self.row_shell()
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.bg(hover_bg))
+            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                cx.stop_propagation();
+                on_click(window, cx);
+            })
+            .child(self.row_text(label, desc))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family("iconfont")
+                    .text_size(fs(14.))
+                    .text_color(text_2)
+                    .child("\u{e602}"),
+            )
+    }
+
     /// Render a settings row with an animated toggle switch on the right.
+    ///
+    /// Single-control row: kept on one line, but the description wraps and the
+    /// card grows instead of the text ever sliding under the toggle.
     fn setting_row_with_toggle(
         &mut self,
         label: &str,
@@ -735,52 +916,11 @@ impl SettingsPanel {
         on_toggle: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         let theme = &self.theme;
-        let surface = theme.surface;
         let divider = theme.divider;
         let accent = theme.accent;
-        let text_1 = theme.text_1;
-        let text_3 = theme.text_3;
 
-        div()
-            .h(px(66.))
-            .rounded(px(10.))
-            .bg(surface)
-            .border(px(1.))
-            .border_color(divider)
-            .px(px(14.))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .max_w_full()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(text_1)
-                            .child(label.to_string()),
-                    )
-                    .child(
-                        div()
-                            .max_w_full()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(10.))
-                            .text_color(text_3)
-                            .child(desc.to_string()),
-                    ),
-            )
+        self.row_shell()
+            .child(self.row_text(label, desc))
             .child(div().flex_shrink_0().child(render_toggle(
                 value,
                 label,
@@ -824,7 +964,13 @@ impl SettingsPanel {
         })
     }
 
-    /// Render a settings row with an option button group on the right.
+    /// Render a settings card for option groups (≥2 buttons).
+    ///
+    /// Two-row layout mirroring the copy-sound / sync-backend cards: the
+    /// header holds the label and a description that may wrap to any number of
+    /// lines, a divider separates it from the footer, and the option buttons
+    /// fill the footer row with equal widths. Because the buttons never share a
+    /// line with the text, larger font sizes can't overlap the description.
     fn setting_row_with_options(
         &self,
         label: &str,
@@ -834,7 +980,6 @@ impl SettingsPanel {
         on_select: impl Fn(&'static str, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         let theme = &self.theme;
-        let surface = theme.surface;
         let divider = theme.divider;
         let accent = theme.accent;
         let text_1 = theme.text_1;
@@ -843,53 +988,47 @@ impl SettingsPanel {
         let on_select = std::rc::Rc::new(on_select);
 
         div()
-            .h(px(66.))
-            .rounded(px(10.))
-            .bg(surface)
-            .border(px(1.))
-            .border_color(divider)
-            .px(px(14.))
             .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            // --- Left: label + description ---
+            .flex_col()
+            // --- Header: label + wrapping description ---
             .child(
                 div()
+                    .px(px(14.))
+                    .pt(px(12.))
+                    .pb(px(10.))
                     .flex()
-                    .flex_1()
-                    .min_w(px(0.))
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(3.))
                     .child(
                         div()
                             .max_w_full()
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
                             .child(label.to_string()),
                     )
                     .child(
                         div()
-                            .max_w_full()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(10.))
+                            .w_full()
+                            .text_size(fs(10.))
+                            .line_height(fs(14.))
                             .text_color(text_3)
                             .child(desc.to_string()),
                     ),
             )
-            // --- Right: option buttons ---
+            // --- Divider ---
+            .child(div().h(px(1.)).bg(divider))
+            // --- Footer: equal-width option buttons on their own row ---
             .child(
                 div()
+                    .px(px(10.))
+                    .py(px(9.))
                     .flex()
-                    .flex_shrink_0()
                     .flex_row()
-                    .gap(px(4.))
+                    .gap(px(6.))
                     .children(options.iter().map(|(key, display_label)| {
                         let selected = *key == active_key;
                         let btn_bg = if selected { accent } else { rgba(0x00000000) };
@@ -903,21 +1042,27 @@ impl SettingsPanel {
                         let on_select = on_select.clone();
 
                         div()
-                            .h(px(26.))
+                            .flex_1()
+                            .min_w(px(0.))
+                            .h(px(28.))
                             .rounded(px(7.))
-                            .px(px(8.))
                             .bg(btn_bg)
                             .when(!selected, |d| d.border(px(1.)).border_color(divider))
                             .flex()
                             .items_center()
                             .justify_center()
+                            .overflow_hidden()
                             .cursor(CursorStyle::PointingHand)
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 on_select(key, _window, cx);
                             })
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .max_w_full()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(fs(11.))
                                     .font_weight(btn_weight)
                                     .text_color(btn_text)
                                     .child(*display_label),
@@ -925,6 +1070,484 @@ impl SettingsPanel {
                     })),
             )
     }
+
+    /// The layered palette every slider in the settings shares: track < fill <
+    /// ticks < knob, derived from the theme accent so it adapts to light/dark.
+    pub(crate) fn slider_colors(&self) -> SteppedSliderColors {
+        let theme = &self.theme;
+        let track_off = if theme.bg == rgb(0x191a1b) {
+            rgb(0x3a3b3c)
+        } else {
+            rgb(0xd0d2de)
+        };
+        SteppedSliderColors {
+            accent: theme.accent,
+            fill: mix(track_off, theme.accent, 0.55),
+            track_off,
+            tick_passed: theme.accent,
+            tick_off: mix(track_off, theme.text_2, 0.35),
+            knob_ring: mix(theme.accent, rgb(0xffffff), 0.45),
+            knob_core: mix(theme.accent, rgb(0x000000), 0.22),
+            badge_bg: theme.titlebar_bg,
+            text: theme.text_2,
+        }
+    }
+
+    /// Caller-owned drag state for the slider with `id`, created on first use.
+    pub(crate) fn slider_drag(&mut self, id: &'static str, initial: usize) -> SliderDragState {
+        self.slider_drags
+            .entry(id)
+            .or_insert_with(|| SliderDragState::new(initial))
+            .clone()
+    }
+
+    /// Two-row settings card whose footer hosts a stepped slider (used by the
+    /// font-size entry). Mirrors `setting_row_with_options` layout: wrapping
+    /// header text, a divider, then the slider on its own full-width row.
+    #[allow(clippy::too_many_arguments)]
+    fn setting_row_with_slider(
+        &mut self,
+        label: &str,
+        desc: &str,
+        detents: Vec<SliderDetent>,
+        active: usize,
+        slider_id: &'static str,
+        on_change: impl Fn(usize, &mut Window, &mut App) + 'static,
+        on_preview: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let drag = self.slider_drag(slider_id, active);
+        let theme = &self.theme;
+        let divider = theme.divider;
+        let text_1 = theme.text_1;
+        let text_3 = theme.text_3;
+        let colors = self.slider_colors();
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px(px(14.))
+                    .pt(px(12.))
+                    .pb(px(10.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(fs(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(fs(10.))
+                            .line_height(fs(14.))
+                            .text_color(text_3)
+                            .child(desc.to_string()),
+                    ),
+            )
+            .child(div().h(px(1.)).bg(divider))
+            .child(
+                div()
+                    .px(px(16.))
+                    .pt(px(10.))
+                    .pb(px(8.))
+                    .child(
+                        SteppedSlider::new(slider_id, detents)
+                            .value(active)
+                            .label_inset(18.)
+                            .drag_state(drag)
+                            .colors(colors)
+                            .on_change(on_change)
+                            .on_preview(on_preview),
+                    ),
+            )
+    }
+
+    /// Render a settings row whose right side is a single value button that
+    /// opens a picker (used by the custom-font entry).
+    fn setting_row_with_value(
+        &self,
+        label: &str,
+        desc: &str,
+        value: String,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let theme = &self.theme;
+        let divider = theme.divider;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
+        let on_click = Rc::new(on_click);
+
+        div()
+            .min_h(px(66.))
+            .px(px(14.))
+            .py(px(12.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(10.))
+            // --- Left: label + wrapping description ---
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(fs(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(fs(10.))
+                            .line_height(fs(14.))
+                            .text_color(text_3)
+                            .child(desc.to_string()),
+                    ),
+            )
+            // --- Right: current value + caret (never compresses, never overlaps) ---
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(26.))
+                    .px(px(10.))
+                    .rounded(px(7.))
+                    .border(px(1.))
+                    .border_color(divider)
+                    .cursor(CursorStyle::PointingHand)
+                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                        cx.stop_propagation();
+                        on_click(window, cx);
+                    })
+                    .child(
+                        div()
+                            .max_w(px(150.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(fs(11.))
+                            .text_color(text_2)
+                            .child(value),
+                    )
+                    .child(div().text_size(fs(12.)).text_color(text_3).child("›")),
+            )
+    }
+
+    /// Open the custom-font picker, enumerating installed families on first use
+    /// so the system font list is scanned at most once per panel lifetime.
+    pub fn open_font_picker(&mut self, cx: &mut Context<Self>) {
+        if self.available_fonts.is_none() {
+            self.available_fonts = Some(Rc::new(crate::ui::font::available_families(cx)));
+        }
+        self.close_app_list_popups();
+        self.latest_hotkeys_popup_open = false;
+        self.config_sync_menu_open = false;
+        self.font_picker_open = true;
+        self.font_picker_scroll_frames = 4;
+        cx.notify();
+    }
+
+    /// Close the custom-font picker (state only — the caller must notify).
+    pub fn close_font_picker(&mut self, cx: &mut Context<Self>) {
+        self.font_picker_open = false;
+        cx.notify();
+    }
+
+    /// Apply a chosen font family and notify the window to re-render.
+    fn apply_font_family(&mut self, family: String, cx: &mut Context<Self>) {
+        let state = self.state.clone();
+        state.update(cx, |s, _cx| {
+            s.settings.font_family = family.clone();
+            s.settings.save();
+        });
+        crate::ui::font::set_family(&family);
+        crate::ui::font::apply_to_global_theme(cx);
+        self.font_picker_open = false;
+        cx.emit(SettingsEvent::FontChanged);
+        cx.notify();
+    }
+
+    /// Absolute overlay covering the settings panel: a dim, inset backdrop with
+    /// a centered, size-capped card holding a scrollable (with scrollbar) list
+    /// of font families, each previewed in its own typeface.
+    fn render_font_picker(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        if !self.font_picker_open {
+            return div().into_any_element();
+        }
+        let theme = &self.theme;
+        let surface = theme.surface;
+        let divider = theme.divider;
+        let accent = theme.accent;
+        let text_1 = theme.text_1;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
+        let hover_bg = if theme.bg == rgb(0x191a1b) {
+            rgba(0xffffff10)
+        } else {
+            rgba(0x0000000a)
+        };
+        let fonts = self.available_fonts.clone().unwrap_or_default();
+        let current = crate::ui::font::family();
+        let system_label = I18nKey::FontFamilySystem.text();
+        let sample = I18nKey::FontFamilySample.text();
+        let this = cx.entity().clone();
+
+        // Persistent scroll handle for the family list. On open we align the
+        // row matching the active font with the top of the list, so the current
+        // choice is immediately visible instead of starting at the top of a
+        // long list.
+        let scroll_handle = window
+            .use_keyed_state(
+                ElementId::Name("font-picker-scroll-handle".into()),
+                cx,
+                |_, _| ScrollHandle::default(),
+            )
+            .read(cx)
+            .clone();
+        if self.font_picker_scroll_frames > 0 {
+            self.font_picker_scroll_frames -= 1;
+            let current_index = if current.is_empty() {
+                0
+            } else {
+                fonts
+                    .iter()
+                    .position(|f| *f == current)
+                    .map_or(0, |i| i + 1)
+            };
+            // Compute the offset from the *measured* row bounds instead of
+            // asking the handle to scroll and hoping the request lands: the row
+            // position only exists after layout, and an early offset is what
+            // left the target off screen.
+            if let Some(row) = scroll_handle.bounds_for_item(current_index) {
+                let viewport_top = f32::from(scroll_handle.bounds().top());
+                let row_top = f32::from(row.top());
+                let max_scroll = f32::from(scroll_handle.max_offset().height);
+                let y = px((viewport_top - row_top).clamp(-max_scroll, 0.0));
+                scroll_handle.set_offset(point(px(0.), y));
+            }
+            // Repaint until the alignment has been applied (the row bounds may
+            // not exist on the very first frame).
+            let this = this.clone();
+            window.defer(cx, move |_window, cx| {
+                this.update(cx, |_panel, cx| cx.notify());
+            });
+        }
+
+        let row_bg_transparent = rgba(0x00000000);
+        let row_text_selected = rgb(0xffffff);
+        let mk_entry = |family: String,
+                        display: String,
+                        preview_family: SharedString|
+         -> AnyElement {
+            let selected = family == current;
+            let id = if family.is_empty() {
+                "font-family-system".to_string()
+            } else {
+                format!("font-family-{}", family)
+            };
+            div()
+                .id(SharedString::from(id))
+                .h(px(34.))
+                .flex_shrink_0()
+                .px(px(10.))
+                .mx(px(4.))
+                .rounded(px(6.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .bg(if selected { accent } else { row_bg_transparent })
+                .cursor(CursorStyle::PointingHand)
+                .when(!selected, |d| d.hover(move |s| s.bg(hover_bg)))
+                .on_mouse_down(MouseButton::Left, {
+                    let this = this.clone();
+                    move |_ev, _window, cx| {
+                        let family = family.clone();
+                        this.update(cx, |panel, cx| panel.apply_font_family(family, cx));
+                    }
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .font_family(preview_family.clone())
+                        .text_size(fs(13.))
+                        .text_color(if selected {
+                            row_text_selected
+                        } else {
+                            text_2
+                        })
+                        .child(display),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .ml(px(8.))
+                        .font_family(preview_family)
+                        .text_size(fs(11.))
+                        .text_color(if selected {
+                            row_text_selected
+                        } else {
+                            text_3
+                        })
+                        .child(sample),
+                )
+                .into_any_element()
+        };
+
+        let entries: Vec<AnyElement> = std::iter::once(mk_entry(
+            String::new(),
+            system_label.to_string(),
+            crate::ui::font::SYSTEM_UI_FONT.into(),
+        ))
+        .chain(
+            fonts
+                .iter()
+                .map(|name| mk_entry(name.clone(), name.clone(), SharedString::from(name.clone()))),
+        )
+        .collect();
+
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .p(px(16.))
+            .bg(rgba(0x00000070))
+            .flex()
+            .items_center()
+            .justify_center()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, {
+                let this = this.clone();
+                move |_ev, _window, cx| {
+                    this.update(cx, |panel, cx| panel.close_font_picker(cx));
+                }
+            })
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(320.))
+                    .h_full()
+                    .max_h(px(460.))
+                    .rounded(px(10.))
+                    .bg(surface)
+                    .border(px(1.))
+                    .border_color(divider)
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .cursor(CursorStyle::Arrow)
+                    .on_mouse_down(MouseButton::Left, |_ev, _window, cx| cx.stop_propagation())
+                    // --- Header ---
+                    .child(
+                        div()
+                            .h(px(44.))
+                            .flex_shrink_0()
+                            .px(px(14.))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(fs(13.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::FontFamilyPicker.text()),
+                            )
+                            .child(
+                                div()
+                                    .w(px(24.))
+                                    .h(px(24.))
+                                    .rounded(px(6.))
+                                    .font_family("iconfont")
+                                    .text_size(fs(12.))
+                                    .text_color(text_2)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let this = this.clone();
+                                        move |_ev, _window, cx| {
+                                            this.update(cx, |panel, cx| {
+                                                panel.close_font_picker(cx)
+                                            });
+                                        }
+                                    })
+                                    .child("\u{e7b7}"),
+                            ),
+                    )
+                    .child(div().h(px(1.)).flex_shrink_0().bg(divider))
+                    // --- Scrollable family list + vertical scrollbar ---
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(
+                                div()
+                                    .id("font-picker-scroll")
+                                    .size_full()
+                                    .py(px(4.))
+                                    .pr(px(6.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&scroll_handle)
+                                    .children(entries),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .child(
+                                        Scrollbar::new(&scroll_handle)
+                                            .id("font-picker-scrollbar")
+                                            .axis(ScrollbarAxis::Vertical),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// Clear pending hotkey confirm dialog.
     pub fn clear_hotkey_confirm(&mut self, cx: &mut Context<Self>) {
         self.hotkey_confirm = None;
@@ -936,5 +1559,17 @@ impl SettingsPanel {
         self.recording_paste_shortcut = None;
         self.pending_paste_shortcut = None;
         cx.notify();
+    }
+}
+
+/// Linear blend between two colors; `t` is clamped to 0..=1. Used to derive
+/// the layered slider palette from the theme accent.
+fn mix(from: Rgba, to: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba {
+        r: from.r + (to.r - from.r) * t,
+        g: from.g + (to.g - from.g) * t,
+        b: from.b + (to.b - from.b) * t,
+        a: from.a + (to.a - from.a) * t,
     }
 }

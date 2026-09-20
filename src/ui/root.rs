@@ -300,6 +300,7 @@ impl RootView {
                         panel.clear_paste_shortcut_state(cx);
                         panel.close_app_list_popups();
                         panel.latest_hotkeys_popup_open = false;
+                        panel.font_picker_open = false;
                         panel.hotkey_confirm = None;
                         cx.notify();
                     });
@@ -616,6 +617,7 @@ impl RootView {
                         this.settings_panel.update(cx, |panel, cx| {
                             panel.close_app_list_popups();
                             panel.latest_hotkeys_popup_open = false;
+                            panel.font_picker_open = false;
                             panel.hotkey_confirm = None;
                             cx.notify();
                         });
@@ -656,6 +658,9 @@ impl RootView {
                         // --- resets it — otherwise the window loses transparency. ---
                         gpui_component::Theme::global_mut(cx).background =
                             Hsla::transparent_black();
+                        // --- Theme::change also resets font_size/font_family to ---
+                        // --- defaults; re-push the user's font scale and family. ---
+                        super::font::apply_to_global_theme(cx);
 
                         this.titlebar.update(cx, |titlebar, cx| {
                             titlebar.set_theme(theme.clone(), cx);
@@ -696,6 +701,15 @@ impl RootView {
                                 list_view.refresh_settings_from_state(*scroll_to_top, cx);
                             });
                         }
+                        cx.notify();
+                    }
+                    SettingsEvent::FontChanged => {
+                        // Font scale changed: cached card heights bake it in, so
+                        // recompute the list sizes, then repaint the whole tree
+                        // (every element re-reads the live scale at render time).
+                        this.list_view.update(cx, |list_view, cx| {
+                            list_view.refresh_settings_from_state(false, cx);
+                        });
                         cx.notify();
                     }
                     SettingsEvent::ShowHotkeyConfirm(action) => {
@@ -794,7 +808,8 @@ impl RootView {
                 cx,
             );
             gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
-
+            // --- Theme::change reset font_size/font_family; restore them. ---
+            super::font::apply_to_global_theme(cx);
             // Propagate to child views (mirrors ThemeChanged handler).
             this.titlebar
                 .update(cx, |tb, cx| tb.set_theme(theme.clone(), cx));
@@ -854,6 +869,11 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Keep the gpui-component rem base and font-family cascade in sync on
+        // every render. The component `Root` only applies them on its own
+        // renders, which are independent of this view's invalidations, so a
+        // live font-size/family change needs this refresh at the subtree top.
+        super::font::sync_window_rem_size(window);
         let root_entity = cx.entity().clone();
         let sidebar = self.sidebar.clone();
         let titlebar = self.titlebar.clone();
@@ -1271,6 +1291,7 @@ impl Render for RootView {
         div()
             .relative()
             .size_full()
+            .font_family(gpui_component::Theme::global(cx).font_family.clone())
             .track_focus(&root_focus)
             .capture_key_down(move |ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key == "escape"

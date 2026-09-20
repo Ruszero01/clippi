@@ -1,5 +1,6 @@
 //! Version settings tab — current version, update check, download progress, release notes.
 
+use crate::ui::font::fs;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
@@ -25,7 +26,6 @@ impl SettingsPanel {
         let update_available = app.update_available.clone();
         let auto_check = app.settings.auto_check_updates;
         let current_version = env!("CARGO_PKG_VERSION");
-        let surface = theme.surface;
         let divider = theme.divider;
         let accent = theme.accent;
         let text_1 = theme.text_1;
@@ -39,166 +39,158 @@ impl SettingsPanel {
             && phase != UpdatePhase::Checking
             && phase != UpdatePhase::UpToDate;
 
-        div()
+        // Fill the tab so the page itself never scrolls: with the bottom bar in
+        // place the content area is shorter, and an unbounded page plus the
+        // notes' own scrollbar would give two scrollbars.
+        let mut container = div().flex().flex_col().gap(px(14.)).pt(px(8.)).h_full();
+
+        // --- Updates (release notes appear in the same card when present) ---
+        let mut update_rows: Vec<AnyElement> = vec![div()
+            .relative()
+            .flex_shrink_0()
+            .px(px(10.))
+            .py(px(8.))
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .pt(px(8.))
-            // ── Version info card ──
+            .gap(px(4.))
+            // Version number
             .child(
                 div()
-                    .relative()
-                    .rounded(px(10.))
-                    .bg(surface)
-                    .border(px(1.))
-                    .border_color(divider)
-                    .px(px(10.))
-                    .py(px(8.))
+                    .text_size(fs(13.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(text_1)
+                    .child(format!("Clippi v{}", current_version)),
+            )
+            // Status text (may wrap, below version)
+            .child(
+                div()
+                    .w_full()
+                    .text_size(fs(10.))
+                    .text_color(if matches!(phase, UpdatePhase::Error(_)) {
+                        theme.danger
+                    } else {
+                        accent
+                    })
+                    .child(status_text),
+            )
+            // Action row: auto-check checkbox + action button
+            .child(
+                div()
                     .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    // Version number
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(text_1)
-                            .child(format!("Clippi v{}", current_version)),
-                    )
-                    // Status text (may wrap, below version)
-                    .child(
-                        div()
-                            .w_full()
-                            .text_size(px(10.))
-                            .text_color(if matches!(phase, UpdatePhase::Error(_)) {
-                                theme.danger
-                            } else {
-                                accent
-                            })
-                            .child(status_text),
-                    )
-                    // Action row: auto-check checkbox + action button
-                    .child(
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    // ── Left: compact auto-check checkbox ──
+                    .child({
+                        let this = this.clone();
+                        let check_icon = if auto_check { "\u{e61f}" } else { "\u{e831}" };
+                        let check_color = if auto_check { accent } else { text_3 };
                         div()
                             .flex()
                             .flex_row()
                             .items_center()
-                            .justify_between()
-                            // ── Left: compact auto-check checkbox ──
-                            .child({
-                                let this = this.clone();
-                                let check_icon = if auto_check { "\u{e61f}" } else { "\u{e831}" };
-                                let check_color = if auto_check { accent } else { text_3 };
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .cursor(CursorStyle::PointingHand)
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        this.update(cx, |panel, cx| {
-                                            panel.state.update(cx, |s, _cx| {
-                                                s.settings.auto_check_updates =
-                                                    !s.settings.auto_check_updates;
-                                                s.settings.save();
-                                            });
-                                            cx.notify();
-                                        });
-                                    })
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .font_family("iconfont")
-                                            .text_color(check_color)
-                                            .child(check_icon),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(text_3)
-                                            .child(I18nKey::SettingAutoCheckUpdate.text()),
-                                    )
+                            .gap(px(4.))
+                            .cursor(CursorStyle::PointingHand)
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                this.update(cx, |panel, cx| {
+                                    panel.state.update(cx, |s, _cx| {
+                                        s.settings.auto_check_updates =
+                                            !s.settings.auto_check_updates;
+                                        s.settings.save();
+                                    });
+                                    cx.notify();
+                                });
                             })
-                            // ── Right: action button ──
-                            .child({
-                                let mut btn = div()
-                                    .h(px(28.))
-                                    .rounded(px(7.))
-                                    .px(px(12.))
-                                    .bg(if btn_disabled { divider } else { accent })
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(if btn_disabled {
-                                                text_3
-                                            } else {
-                                                rgb(0xffffff)
-                                            })
-                                            .child(btn_label),
-                                    );
-                                if let (false, Some(handler)) = (btn_disabled, on_click.take()) {
-                                    btn = btn
-                                        .cursor(CursorStyle::PointingHand)
-                                        .on_mouse_down(MouseButton::Left, handler);
-                                }
-                                btn
-                            }),
+                            .child(
+                                div()
+                                    .text_size(fs(12.))
+                                    .font_family("iconfont")
+                                    .text_color(check_color)
+                                    .child(check_icon),
+                            )
+                            .child(
+                                div()
+                                    .text_size(fs(11.))
+                                    .text_color(text_3)
+                                    .child(I18nKey::SettingAutoCheckUpdate.text()),
+                            )
+                    })
+                    // ── Right: action button ──
+                    .child({
+                        let mut btn = div()
+                            .h(px(28.))
+                            .rounded(px(7.))
+                            .px(px(12.))
+                            .bg(if btn_disabled { divider } else { accent })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_size(fs(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(if btn_disabled { text_3 } else { rgb(0xffffff) })
+                                    .child(btn_label),
+                            );
+                        if let (false, Some(handler)) = (btn_disabled, on_click.take()) {
+                            btn = btn
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, handler);
+                        }
+                        btn
+                    }),
+            )
+            // Progress bar (only during download)
+            // GitHub link icon (absolute top-right, doesn't affect card height)
+            .child(
+                div()
+                    .absolute()
+                    .top(px(4.))
+                    .right(px(12.))
+                    .group("gh-icon")
+                    .cursor(CursorStyle::PointingHand)
+                    .on_mouse_down(MouseButton::Left, |_ev, _window, _cx| {
+                        std::thread::spawn(|| {
+                            crate::services::update::open_releases_page(
+                                "https://github.com/Ruszero01/clippi/releases",
+                            );
+                        });
+                    })
+                    // Gray icon (default)
+                    .child(
+                        div()
+                            .text_size(fs(26.))
+                            .font_family("iconfont")
+                            .text_color(text_3)
+                            .child("\u{ea0a}"),
                     )
-                    // Progress bar (only during download)
-                    // GitHub link icon (absolute top-right, doesn't affect card height)
+                    // Green icon (shown on group hover)
                     .child(
                         div()
                             .absolute()
-                            .top(px(4.))
-                            .right(px(12.))
-                            .group("gh-icon")
-                            .cursor(CursorStyle::PointingHand)
-                            .on_mouse_down(MouseButton::Left, |_ev, _window, _cx| {
-                                std::thread::spawn(|| {
-                                    crate::services::update::open_releases_page(
-                                        "https://github.com/Ruszero01/clippi/releases",
-                                    );
-                                });
-                            })
-                            // Gray icon (default)
-                            .child(
-                                div()
-                                    .text_size(px(26.))
-                                    .font_family("iconfont")
-                                    .text_color(text_3)
-                                    .child("\u{ea0a}"),
-                            )
-                            // Green icon (shown on group hover)
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .text_size(px(26.))
-                                    .font_family("iconfont")
-                                    .text_color(accent)
-                                    .opacity(0.0)
-                                    .group_hover("gh-icon", |s| s.opacity(1.0))
-                                    .child("\u{ea0a}"),
-                            ),
-                    )
-                    .when(matches!(phase, UpdatePhase::Downloading { .. }), |el| {
-                        el.child(render_progress_bar(
-                            match phase {
-                                UpdatePhase::Downloading { progress } => progress,
-                                _ => 0,
-                            },
-                            accent,
-                            divider,
-                        ))
-                    }),
+                            .top_0()
+                            .left_0()
+                            .text_size(fs(26.))
+                            .font_family("iconfont")
+                            .text_color(accent)
+                            .opacity(0.0)
+                            .group_hover("gh-icon", |s| s.opacity(1.0))
+                            .child("\u{ea0a}"),
+                    ),
             )
-            // ── Release notes (shown when update found, fills remaining space) ──
-            .when(show_release_notes, |el| {
+            .when(matches!(phase, UpdatePhase::Downloading { .. }), |el| {
+                el.child(render_progress_bar(
+                    match phase {
+                        UpdatePhase::Downloading { progress } => progress,
+                        _ => 0,
+                    },
+                    accent,
+                    divider,
+                ))
+            })
+            .into_any_element()];
+        if show_release_notes {
+            let mut build_notes = |el: Div| {
                 let notes = update_available
                     .as_ref()
                     .map(|i| i.release_notes.clone())
@@ -206,12 +198,8 @@ impl SettingsPanel {
                 if notes.is_empty() {
                     return el;
                 }
-                el.child(
+                el.flex_1().min_h(px(0.)).flex().flex_col().child(
                     div()
-                        .rounded(px(10.))
-                        .bg(surface)
-                        .border(px(1.))
-                        .border_color(divider)
                         .flex()
                         .flex_col()
                         .child(
@@ -224,7 +212,7 @@ impl SettingsPanel {
                                 .border_color(divider)
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(fs(11.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_1)
                                         .child(I18nKey::VersionReleaseNotes.text()),
@@ -243,11 +231,12 @@ impl SettingsPanel {
                                         .unwrap_or(base)
                                 });
                             div()
+                                .flex_1()
+                                .min_h(px(0.))
                                 .px(px(10.))
                                 .py(px(6.))
-                                .max_h(px(200.))
                                 .overflow_y_scrollbar()
-                                .text_size(px(11.))
+                                .text_size(fs(11.))
                                 .text_color(text_2)
                                 .child(
                                     TextView::markdown("version-release-notes", notes, window, cx)
@@ -256,7 +245,18 @@ impl SettingsPanel {
                                 )
                         }),
                 )
-            })
+            };
+            update_rows.push(build_notes(div()).into_any_element());
+        }
+        container = container.child(if show_release_notes {
+            self.settings_group_fill(I18nKey::GroupUpdate.text(), update_rows)
+                .into_any_element()
+        } else {
+            self.settings_group(I18nKey::GroupUpdate.text(), update_rows)
+                .into_any_element()
+        });
+
+        container
     }
 }
 

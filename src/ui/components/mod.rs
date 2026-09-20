@@ -5,6 +5,7 @@ pub mod app_list_dialog;
 pub mod confirm_dialog;
 pub mod reorder;
 pub mod sensitive_text;
+pub mod slider;
 pub mod spinner;
 pub mod toast;
 pub mod toggle;

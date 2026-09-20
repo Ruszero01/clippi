@@ -1,5 +1,6 @@
 //! --- Sync settings tab. ---
 
+use crate::ui::font::fs;
 use std::time::Duration;
 
 use gpui::prelude::*;
@@ -50,107 +51,100 @@ impl SettingsPanel {
             })
             .collect();
 
-        div()
-            .relative()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .pt(px(8.))
+        let mut container = div().flex().flex_col().gap(px(14.)).pt(px(8.));
+
+        // --- Sync settings ---
+        let master_rows: Vec<AnyElement> = vec![div()
+            .overflow_hidden()
             .child(
                 div()
-                    .rounded(px(10.))
-                    .bg(surface)
-                    .border(px(1.))
-                    .border_color(divider)
-                    .overflow_hidden()
+                    .h(px(38.))
+                    .px(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
                     .child(
                         div()
-                            .h(px(38.))
-                            .px(px(14.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.))
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(text_1)
-                                    .child(I18nKey::SyncTabTitle.text()),
-                            )
-                            .child(div().flex_shrink_0().child(render_toggle(
-                                sync.auto_enabled,
-                                "sync-auto-enabled",
-                                ToggleColors {
-                                    accent,
-                                    track_off: divider,
-                                },
-                                &mut self.toggle_states,
-                                window,
-                                cx,
-                                {
-                                    let wm = wm.clone();
-                                    move |_window, cx| {
-                                        wm.update(cx, |wm, cx| {
-                                            wm.toggle_sync_auto_enabled(cx);
-                                        });
-                                    }
-                                },
-                            ))),
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(fs(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(text_1)
+                            .child(I18nKey::SyncTabTitle.text()),
                     )
-                    .when(sync.auto_enabled, |card| {
-                        card.child(div().h(px(1.)).bg(divider)).child(
-                            div()
-                                .h(px(38.))
-                                .px(px(14.))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.))
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .whitespace_nowrap()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(text_1)
-                                        .child(I18nKey::SyncFavoritesOnly.text()),
-                                )
-                                .child(div().flex_shrink_0().child(render_toggle(
-                                    sync.favorites_only,
-                                    "sync-favorites-only",
-                                    ToggleColors {
-                                        accent,
-                                        track_off: divider,
-                                    },
-                                    &mut self.toggle_states,
-                                    window,
-                                    cx,
-                                    {
-                                        let wm = wm.clone();
-                                        move |_window, cx| {
-                                            wm.update(cx, |wm, cx| {
-                                                wm.toggle_sync_favorites_only(cx);
-                                            });
-                                        }
-                                    },
-                                ))),
-                        )
-                    }),
+                    .child(div().flex_shrink_0().child(render_toggle(
+                        sync.auto_enabled,
+                        "sync-auto-enabled",
+                        ToggleColors {
+                            accent,
+                            track_off: divider,
+                        },
+                        &mut self.toggle_states,
+                        window,
+                        cx,
+                        {
+                            let wm = wm.clone();
+                            move |_window, cx| {
+                                wm.update(cx, |wm, cx| {
+                                    wm.toggle_sync_auto_enabled(cx);
+                                });
+                            }
+                        },
+                    ))),
             )
-            .when(sync.auto_enabled, |container| {
+            .when(sync.auto_enabled, |card| {
+                card.child(div().h(px(1.)).bg(divider)).child(
+                    div()
+                        .h(px(38.))
+                        .px(px(14.))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(fs(12.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(text_1)
+                                .child(I18nKey::SyncFavoritesOnly.text()),
+                        )
+                        .child(div().flex_shrink_0().child(render_toggle(
+                            sync.favorites_only,
+                            "sync-favorites-only",
+                            ToggleColors {
+                                accent,
+                                track_off: divider,
+                            },
+                            &mut self.toggle_states,
+                            window,
+                            cx,
+                            {
+                                let wm = wm.clone();
+                                move |_window, cx| {
+                                    wm.update(cx, |wm, cx| {
+                                        wm.toggle_sync_favorites_only(cx);
+                                    });
+                                }
+                            },
+                        ))),
+                )
+            })
+            .into_any_element()];
+        container =
+            container.child(self.settings_group(I18nKey::GroupSyncMaster.text(), master_rows));
+
+        // --- Synced content (only while sync is on) ---
+        if sync.auto_enabled {
+            let mut build_options = |container: Div| {
                 container.child(
                     div()
-                        .rounded(px(10.))
-                        .bg(surface)
-                        .border(px(1.))
-                        .border_color(divider)
                         .overflow_hidden()
                         .child(
                             div()
@@ -166,7 +160,7 @@ impl SettingsPanel {
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
-                                        .text_size(px(12.))
+                                        .text_size(fs(12.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_1)
                                         .child(I18nKey::SyncIncludeImages.text()),
@@ -207,7 +201,7 @@ impl SettingsPanel {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(text_1)
                                             .child(I18nKey::SyncCompressImages.text()),
@@ -234,117 +228,119 @@ impl SettingsPanel {
                             )
                         }),
                 )
-            })
+            };
+            let option_rows: Vec<AnyElement> = vec![build_options(div()).into_any_element()];
+            container =
+                container.child(self.settings_group(I18nKey::GroupSyncOptions.text(), option_rows));
+        }
+
+        // --- Transfer station (single row, no section title) ---
+        let transfer_rows: Vec<AnyElement> = vec![div()
+            .overflow_hidden()
             .child(
                 div()
-                    .rounded(px(10.))
-                    .bg(surface)
-                    .border(px(1.))
-                    .border_color(divider)
-                    .overflow_hidden()
+                    .h(px(38.))
+                    .px(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
                     .child(
                         div()
-                            .h(px(38.))
-                            .px(px(14.))
                             .flex()
                             .items_center()
-                            .justify_between()
+                            .gap(px(6.))
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(text_1)
-                                            .child(I18nKey::TransferStation.text()),
-                                    )
-                                    .when(enabled_backend_count == 0, |row| {
-                                        row.child(
-                                            div()
-                                                .text_size(px(10.))
-                                                .text_color(text_2)
-                                                .child(I18nKey::TransferNoBackend.text()),
-                                        )
-                                    }),
+                                    .text_size(fs(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(text_1)
+                                    .child(I18nKey::TransferStation.text()),
                             )
-                            .child(render_toggle(
-                                transfer_enabled,
-                                "transfer-station-enabled",
-                                ToggleColors {
-                                    accent,
-                                    track_off: divider,
-                                },
-                                &mut self.toggle_states,
-                                window,
-                                cx,
-                                {
-                                    let wm = wm.clone();
-                                    move |_window, cx| {
-                                        wm.update(cx, |wm, cx| {
-                                            wm.toggle_transfer_station(cx);
-                                        });
-                                    }
-                                },
-                            )),
+                            .when(enabled_backend_count == 0, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(fs(10.))
+                                        .text_color(text_2)
+                                        .child(I18nKey::TransferNoBackend.text()),
+                                )
+                            }),
                     )
-                    .when(transfer_enabled, |card| {
-                        card.child(div().h(px(1.)).bg(divider)).child(
+                    .child(render_toggle(
+                        transfer_enabled,
+                        "transfer-station-enabled",
+                        ToggleColors {
+                            accent,
+                            track_off: divider,
+                        },
+                        &mut self.toggle_states,
+                        window,
+                        cx,
+                        {
+                            let wm = wm.clone();
+                            move |_window, cx| {
+                                wm.update(cx, |wm, cx| {
+                                    wm.toggle_transfer_station(cx);
+                                });
+                            }
+                        },
+                    )),
+            )
+            .when(transfer_enabled, |card| {
+                card.child(div().h(px(1.)).bg(divider)).child(
+                    div()
+                        .h(px(38.))
+                        .px(px(14.))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(
                             div()
-                                .h(px(38.))
-                                .px(px(14.))
+                                .w(px(76.))
+                                .text_size(fs(11.))
+                                .text_color(text_2)
+                                .child(I18nKey::TransferRetention.text()),
+                        )
+                        .children([0_u32, 1, 3, 7, 30].into_iter().map(|days| {
+                            let selected = transfer_retention == days;
+                            let wm = wm.clone();
+                            let label = if days == 0 {
+                                I18nKey::TransferKeepForever.text().to_string()
+                            } else {
+                                I18nKey::TransferRetentionDays.fmt(&[&days.to_string()])
+                            };
+                            div()
+                                .flex_1()
+                                .h(px(22.))
+                                .rounded(px(6.))
+                                .bg(if selected { accent } else { rgba(0x00000000) })
+                                .text_size(fs(10.))
+                                .text_color(if selected { rgb(0xffffff) } else { text_2 })
                                 .flex()
                                 .items_center()
-                                .gap(px(4.))
-                                .child(
-                                    div()
-                                        .w(px(76.))
-                                        .text_size(px(11.))
-                                        .text_color(text_2)
-                                        .child(I18nKey::TransferRetention.text()),
-                                )
-                                .children([0_u32, 1, 3, 7, 30].into_iter().map(|days| {
-                                    let selected = transfer_retention == days;
-                                    let wm = wm.clone();
-                                    let label = if days == 0 {
-                                        I18nKey::TransferKeepForever.text().to_string()
+                                .justify_center()
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |style| {
+                                    if selected {
+                                        style.opacity(0.88)
                                     } else {
-                                        I18nKey::TransferRetentionDays.fmt(&[&days.to_string()])
-                                    };
-                                    div()
-                                        .flex_1()
-                                        .h(px(22.))
-                                        .rounded(px(6.))
-                                        .bg(if selected { accent } else { rgba(0x00000000) })
-                                        .text_size(px(10.))
-                                        .text_color(if selected { rgb(0xffffff) } else { text_2 })
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(move |style| {
-                                            if selected {
-                                                style.opacity(0.88)
-                                            } else {
-                                                style.bg(accent_soft)
-                                            }
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_event, _window, cx| {
-                                                wm.update(cx, |wm, cx| {
-                                                    wm.set_transfer_retention_days(days, cx);
-                                                });
-                                            },
-                                        )
-                                        .child(label)
-                                })),
-                        )
-                    }),
-            )
-            .child({
+                                        style.bg(accent_soft)
+                                    }
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                    wm.update(cx, |wm, cx| {
+                                        wm.set_transfer_retention_days(days, cx);
+                                    });
+                                })
+                                .child(label)
+                        })),
+                )
+            })
+            .into_any_element()];
+        container =
+            container.child(self.settings_group(I18nKey::GroupTransfer.text(), transfer_rows));
+
+        // --- Config sync (single row, no section title) ---
+        let config_rows: Vec<AnyElement> = vec![{
                 // ── Config sync card ──
                 let sync = self.state.read(cx).sync.clone();
                 let config_backends: Vec<BackendStatus> = sync
@@ -401,7 +397,7 @@ impl SettingsPanel {
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
                                     .child(I18nKey::ConfigSyncTitle.text()),
@@ -412,7 +408,7 @@ impl SettingsPanel {
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(text_2)
                                     .child(I18nKey::ConfigSyncDesc.text()),
                             ),
@@ -439,7 +435,7 @@ impl SettingsPanel {
                                     .flex()
                                     .items_center()
                                     .justify_between()
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(if no_backends { text_3 } else { accent })
                                     .cursor(if ids.len() <= 1 { CursorStyle::Arrow } else { CursorStyle::PointingHand })
                                     .opacity(if no_backends { 0.45 } else { 1.0 })
@@ -471,7 +467,7 @@ impl SettingsPanel {
                                             div()
                                                 .flex_shrink_0()
                                                 .font_family("iconfont")
-                                                .text_size(px(8.))
+                                                .text_size(fs(8.))
                                                 .text_color(text_3)
                                                 .child("\u{e602}"),
                                         )
@@ -502,7 +498,7 @@ impl SettingsPanel {
                                     .h(px(28.))
                                     .rounded(px(6.))
                                     .bg(accent)
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(rgb(0xffffff))
                                     .flex()
                                     .items_center()
@@ -511,7 +507,7 @@ impl SettingsPanel {
                                     .opacity(if buttons_disabled { 0.45 } else { 1.0 })
                                     .tooltip(|window, cx| {
                                         Tooltip::element(move |_window, _cx| {
-                                            div().text_size(px(10.)).child(I18nKey::ConfigSyncUpload.text())
+                                            div().text_size(fs(10.)).child(I18nKey::ConfigSyncUpload.text())
                                         })
                                         .build(window, cx)
                                     })
@@ -542,7 +538,7 @@ impl SettingsPanel {
                                     .h(px(28.))
                                     .rounded(px(6.))
                                     .bg(accent_soft)
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(accent)
                                     .flex()
                                     .items_center()
@@ -551,7 +547,7 @@ impl SettingsPanel {
                                     .opacity(if buttons_disabled { 0.45 } else { 1.0 })
                                     .tooltip(|window, cx| {
                                         Tooltip::element(move |_window, _cx| {
-                                            div().text_size(px(10.)).child(I18nKey::ConfigSyncApply.text())
+                                            div().text_size(fs(10.)).child(I18nKey::ConfigSyncApply.text())
                                         })
                                         .build(window, cx)
                                     })
@@ -610,7 +606,7 @@ impl SettingsPanel {
                                         .flex()
                                         .items_center()
                                         .justify_between()
-                                        .text_size(px(10.))
+                                        .text_size(fs(10.))
                                         .text_color(if active { accent } else { text_1 })
                                         .bg(if active { accent_soft } else { rgba(0x00000000) })
                                         .cursor(CursorStyle::PointingHand)
@@ -643,7 +639,7 @@ impl SettingsPanel {
                                                     .ml(px(6.))
                                                     .flex_shrink_0()
                                                     .font_family("iconfont")
-                                                    .text_size(px(10.))
+                                                    .text_size(fs(10.))
                                                     .child("\u{e611}"),
                                             )
                                         })
@@ -652,56 +648,59 @@ impl SettingsPanel {
                             .with_priority(1),
                         )
                     })
-            })
+            }.into_any_element()];
+        container =
+            container.child(self.settings_group(I18nKey::GroupConfigSync.text(), config_rows));
+
+        // --- Backends ---
+        let backend_rows: Vec<AnyElement> = vec![div()
+            .overflow_hidden()
             .child(
                 div()
+                    .h(px(40.))
                     .rounded(px(10.))
-                    .bg(surface)
-                    .border(px(1.))
-                    .border_color(divider)
-                    .overflow_hidden()
+                    .bg(self.theme.titlebar_bg)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.))
+                    .when(sync.auto_enabled, |button| {
+                        button
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.bg(accent_soft))
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                backend_panel.update(cx, |panel, cx| {
+                                    panel.open_add(_window, cx);
+                                });
+                            })
+                    })
+                    .when(!sync.auto_enabled, |button| {
+                        button.opacity(0.45).cursor(CursorStyle::Arrow)
+                    })
+                    .child(div().text_size(fs(14.)).text_color(accent).child("+"))
                     .child(
                         div()
-                            .h(px(40.))
-                            .rounded(px(10.))
-                            .bg(self.theme.titlebar_bg)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(6.))
-                            .when(sync.auto_enabled, |button| {
-                                button
-                                    .cursor(CursorStyle::PointingHand)
-                                    .hover(move |style| style.bg(accent_soft))
-                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                        backend_panel.update(cx, |panel, cx| {
-                                            panel.open_add(_window, cx);
-                                        });
-                                    })
-                            })
-                            .when(!sync.auto_enabled, |button| {
-                                button.opacity(0.45).cursor(CursorStyle::Arrow)
-                            })
-                            .child(div().text_size(px(14.)).text_color(accent).child("+"))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(text_2)
-                                    .child(I18nKey::SyncAddBackend.text()),
-                            ),
-                    )
-                    .when(!backend_cards.is_empty(), |card| {
-                        card.child(
-                            div()
-                                .max_h(px(270.))
-                                .overflow_y_scrollbar()
-                                .p(px(8.))
-                                .flex()
-                                .flex_col()
-                                .children(backend_cards),
-                        )
-                    }),
+                            .text_size(fs(12.))
+                            .text_color(text_2)
+                            .child(I18nKey::SyncAddBackend.text()),
+                    ),
             )
+            .when(!backend_cards.is_empty(), |card| {
+                card.child(
+                    div()
+                        .max_h(px(270.))
+                        .overflow_y_scrollbar()
+                        .p(px(8.))
+                        .flex()
+                        .flex_col()
+                        .children(backend_cards),
+                )
+            })
+            .into_any_element()];
+        container =
+            container.child(self.settings_group(I18nKey::GroupBackends.text(), backend_rows));
+
+        container
     }
 
     fn render_backend_card(
@@ -848,7 +847,7 @@ impl SettingsPanel {
                                     .gap(px(6.))
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .font_family("iconfont")
                                             .text_color(status_color)
                                             .flex_shrink_0()
@@ -861,7 +860,7 @@ impl SettingsPanel {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(text_1)
                                             .child(backend.config.name.clone()),
@@ -878,7 +877,7 @@ impl SettingsPanel {
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
-                                        .text_size(px(10.))
+                                        .text_size(fs(10.))
                                         .text_color(accent)
                                         .flex()
                                         .items_center()
@@ -1050,7 +1049,7 @@ impl SettingsPanel {
                             .child(
                                 div()
                                     .max_w(px(210.))
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(text_3)
                                     .overflow_hidden()
                                     .text_ellipsis()
@@ -1087,7 +1086,7 @@ impl SettingsPanel {
                                 .h(px(20.))
                                 .rounded(px(6.))
                                 .bg(if selected { accent } else { rgba(0x00000000) })
-                                .text_size(px(10.))
+                                .text_size(fs(10.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(if selected { rgb(0xffffff) } else { text_2 })
                                 .flex()
@@ -1115,7 +1114,7 @@ impl SettingsPanel {
                             .h(px(20.))
                             .rounded(px(6.))
                             .bg(accent)
-                            .text_size(px(10.))
+                            .text_size(fs(10.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(0xffffff))
                             .flex()
@@ -1156,7 +1155,7 @@ fn icon_button(
         .h(px(24.))
         .rounded(px(5.))
         .font_family("iconfont")
-        .text_size(px(12.))
+        .text_size(fs(12.))
         .text_color(color)
         .flex()
         .items_center()
@@ -1164,7 +1163,7 @@ fn icon_button(
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.text_color(hover_color).bg(rgba(0xffffff0d)))
         .tooltip(move |window, cx| {
-            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tooltip))
+            Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(tooltip))
                 .build(window, cx)
         })
         .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
@@ -1185,7 +1184,7 @@ fn disabled_icon_button(
         .h(px(24.))
         .rounded(px(5.))
         .font_family("iconfont")
-        .text_size(px(12.))
+        .text_size(fs(12.))
         .text_color(color)
         .opacity(0.35)
         .flex()
@@ -1193,7 +1192,7 @@ fn disabled_icon_button(
         .justify_center()
         .cursor(CursorStyle::Arrow)
         .tooltip(move |window, cx| {
-            Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tooltip))
+            Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(tooltip))
                 .build(window, cx)
         })
         .child(icon)

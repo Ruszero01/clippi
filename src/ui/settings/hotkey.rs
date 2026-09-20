@@ -98,12 +98,12 @@ impl SettingsPanel {
     ) -> impl IntoElement {
         let waiting = pending_single.is_some();
         let waiting_color = rgb(0xeab308);
-        let recording_border = if waiting {
-            waiting_color
-        } else if recording {
-            theme.accent
+        // The row sits inside a settings group, so its recording state shows as
+        // a background tint rather than its own card chrome.
+        let row_tint = if waiting {
+            rgba(0xeab30822)
         } else {
-            theme.divider
+            theme.accent_soft
         };
         let recording_btn_bg = if waiting {
             rgba(0xeab30822)
@@ -146,10 +146,7 @@ impl SettingsPanel {
 
         div()
             .h(px(66.))
-            .rounded(px(10.))
-            .bg(theme.surface)
-            .border(px(1.))
-            .border_color(recording_border)
+            .when(recording || waiting, |row| row.bg(row_tint))
             .px(px(14.))
             .flex()
             .flex_row()
@@ -677,127 +674,121 @@ impl SettingsPanel {
 
         let theme = &self.theme;
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .pt(px(8.))
-            // 1. Hotkey recording card (66px) — or managed card when takeover active
-            .child({
-                let state = state.clone();
-                let wm = wm.clone();
-                let this = this.clone();
+        let mut container = div().flex().flex_col().gap(px(14.)).pt(px(8.));
 
-                #[cfg(target_os = "windows")]
-                if takeover_active {
-                    // --- Managed by takeover: show "Win+V" fixed, disable recording ---
-                    let theme_surface = theme.surface;
-                    let theme_divider = theme.divider;
-                    let theme_text_1 = theme.text_1;
-                    let theme_text_3 = theme.text_3;
-                    div()
-                        .h(px(66.))
-                        .rounded(px(10.))
-                        .bg(theme_surface)
-                        .border(px(1.))
-                        .border_color(theme_divider)
-                        .px(px(14.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(theme_text_1)
-                                        .child(I18nKey::HotkeyTabTitle.text()),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .text_color(theme_text_3)
-                                        .child(I18nKey::WinVManagedByMode.text()),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .h(px(28.))
-                                .w(px(80.))
-                                .rounded(px(7.))
-                                .bg(theme.accent_soft)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(theme.accent)
-                                        .child("Win+V"),
-                                ),
-                        )
-                        .into_any_element()
-                } else {
-                    Self::render_recording_card(
-                        I18nKey::HotkeyTabTitle,
-                        main_hotkey_display.clone().into(),
-                        recording,
-                        pending_single.clone().filter(|_| recording),
-                        theme,
-                        move |_window, cx| {
-                            if state.read(cx).hotkey_recording
-                                && state.read(cx).pending_single_hotkey.is_some()
-                            {
-                                wm.update(cx, |wm, cx| {
-                                    wm.confirm_pending_single_hotkey(cx);
-                                });
-                            } else {
-                                wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
-                                state.update(cx, |s, _cx| s.hotkey_recording = true);
-                            }
-                            this.update(cx, |_panel, cx| cx.notify());
-                        },
-                        None,
-                        RecordingCardOptions::default(),
+        // --- Global hotkeys ---
+        let mut hotkey_rows: Vec<AnyElement> = vec![{
+            let state = state.clone();
+            let wm = wm.clone();
+            let this = this.clone();
+
+            #[cfg(target_os = "windows")]
+            if takeover_active {
+                // --- Managed by takeover: show "Win+V" fixed, disable recording ---
+                let theme_text_1 = theme.text_1;
+                let theme_text_3 = theme.text_3;
+                div()
+                    .h(px(66.))
+                    .px(px(14.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme_text_1)
+                                    .child(I18nKey::HotkeyTabTitle.text()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme_text_3)
+                                    .child(I18nKey::WinVManagedByMode.text()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h(px(28.))
+                            .w(px(80.))
+                            .rounded(px(7.))
+                            .bg(theme.accent_soft)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.accent)
+                                    .child("Win+V"),
+                            ),
                     )
                     .into_any_element()
-                }
+            } else {
+                Self::render_recording_card(
+                    I18nKey::HotkeyTabTitle,
+                    main_hotkey_display.clone().into(),
+                    recording,
+                    pending_single.clone().filter(|_| recording),
+                    theme,
+                    move |_window, cx| {
+                        if state.read(cx).hotkey_recording
+                            && state.read(cx).pending_single_hotkey.is_some()
+                        {
+                            wm.update(cx, |wm, cx| {
+                                wm.confirm_pending_single_hotkey(cx);
+                            });
+                        } else {
+                            wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                            state.update(cx, |s, _cx| s.hotkey_recording = true);
+                        }
+                        this.update(cx, |_panel, cx| cx.notify());
+                    },
+                    None,
+                    RecordingCardOptions::default(),
+                )
+                .into_any_element()
+            }
 
-                #[cfg(not(target_os = "windows"))]
-                {
-                    Self::render_recording_card(
-                        I18nKey::HotkeyTabTitle,
-                        main_hotkey_display.clone().into(),
-                        recording,
-                        pending_single.clone().filter(|_| recording),
-                        theme,
-                        move |_window, cx| {
-                            if state.read(cx).hotkey_recording
-                                && state.read(cx).pending_single_hotkey.is_some()
-                            {
-                                wm.update(cx, |wm, cx| {
-                                    wm.confirm_pending_single_hotkey(cx);
-                                });
-                            } else {
-                                wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
-                                state.update(cx, |s, _cx| s.hotkey_recording = true);
-                            }
-                            this.update(cx, |_panel, cx| cx.notify());
-                        },
-                        None,
-                        RecordingCardOptions::default(),
-                    )
-                    .into_any_element()
-                }
-            })
-            // 1b. Quick hotkey recording card (only visible when enabled)
-            .when(self.state.read(cx).settings.quick_hotkey_enabled, {
+            #[cfg(not(target_os = "windows"))]
+            {
+                Self::render_recording_card(
+                    I18nKey::HotkeyTabTitle,
+                    main_hotkey_display.clone().into(),
+                    recording,
+                    pending_single.clone().filter(|_| recording),
+                    theme,
+                    move |_window, cx| {
+                        if state.read(cx).hotkey_recording
+                            && state.read(cx).pending_single_hotkey.is_some()
+                        {
+                            wm.update(cx, |wm, cx| {
+                                wm.confirm_pending_single_hotkey(cx);
+                            });
+                        } else {
+                            wm.update(cx, |wm, cx| wm.start_hotkey_recording(cx));
+                            state.update(cx, |s, _cx| s.hotkey_recording = true);
+                        }
+                        this.update(cx, |_panel, cx| cx.notify());
+                    },
+                    None,
+                    RecordingCardOptions::default(),
+                )
+                .into_any_element()
+            }
+        }
+        .into_any_element()];
+        if self.state.read(cx).settings.quick_hotkey_enabled {
+            // The conditional rows are written as row builders (closures) so
+            // they can be pushed into the group's row list.
+            let build_quick = {
                 let quick_hotkey = hotkey_display(&self.state.read(cx).settings.quick_hotkey);
                 let quick_recording = self.state.read(cx).recording_quick_hotkey;
                 let pending_single = self.state.read(cx).pending_single_hotkey.clone();
@@ -805,7 +796,7 @@ impl SettingsPanel {
                 let wm = wm.clone();
                 let this = this.clone();
                 let theme = theme.clone();
-                move |parent| {
+                move |parent: Div| {
                     parent.child(Self::render_recording_card(
                         I18nKey::QuickHotkeyLabel,
                         quick_hotkey.into(),
@@ -829,10 +820,11 @@ impl SettingsPanel {
                         RecordingCardOptions::default(),
                     ))
                 }
-            })
-            // 1b2. Paste-plain hotkey recording card (spec §2: empty = disabled,
-            // recording reuses the shared flow, clear = immediate unregister).
-            .child({
+            };
+            hotkey_rows.push(build_quick(div()).into_any_element());
+        }
+        hotkey_rows.push(
+            {
                 let state = state.clone();
                 let wm = wm.clone();
                 let this = this.clone();
@@ -876,20 +868,23 @@ impl SettingsPanel {
                         neutral_clear: true,
                     },
                 )
-            })
-            // 1c. Win+V takeover toggle + status (Windows only)
-            .when(cfg!(target_os = "windows"), {
+            }
+            .into_any_element(),
+        );
+        container = container.child(self.settings_group(I18nKey::GroupHotkeys.text(), hotkey_rows));
+
+        // --- System hotkey takeover (single row, no section title) ---
+        if cfg!(target_os = "windows") {
+            let build_win_v = {
                 let takeover_active_val = takeover_active;
                 let takeover_status_val = takeover_status;
                 let this_winv = this.clone();
                 let state_winv = state.clone();
                 let wm_winv = wm.clone();
-                move |parent| {
+                move |parent: Div| {
                     let status_text = match takeover_status_val {
                         WinVTakeoverStatus::Active => I18nKey::WinVStatusActive.text(),
-                        WinVTakeoverStatus::HotkeyUnavailable => {
-                            I18nKey::WinVStatusConflict.text()
-                        }
+                        WinVTakeoverStatus::HotkeyUnavailable => I18nKey::WinVStatusConflict.text(),
                         WinVTakeoverStatus::RegistryUpdateRequired => {
                             I18nKey::WinVStatusUpdateRequired.text()
                         }
@@ -898,8 +893,7 @@ impl SettingsPanel {
                         }
                         WinVTakeoverStatus::Disabled => I18nKey::WinVTakeoverDesc.text(),
                     };
-                    let show_recheck =
-                        takeover_status_val == WinVTakeoverStatus::HotkeyUnavailable;
+                    let show_recheck = takeover_status_val == WinVTakeoverStatus::HotkeyUnavailable;
                     let show_manual = matches!(
                         takeover_status_val,
                         WinVTakeoverStatus::RegistryError
@@ -1067,180 +1061,75 @@ impl SettingsPanel {
                             }),
                     )
                 }
-            })
-            // 1d. Latest content hotkeys entry card
-            .child({
-                let this = this.clone();
+            };
+            let win_v_rows: Vec<AnyElement> = vec![build_win_v(div()).into_any_element()];
+            container =
+                container.child(self.settings_group(I18nKey::GroupWinVTakeover.text(), win_v_rows));
+        }
+
+        // --- Lists & exclusions ---
+        let mut list_rows: Vec<AnyElement> = vec![
+            {
+                let this_click = this.clone();
                 let configured = app
                     .settings
                     .latest_hotkeys
                     .iter()
                     .filter(|e| !e.hotkey.is_empty())
                     .count();
-                let desc = format!("已设置 {}/10", configured);
-                let theme_clone = theme.clone();
-                div()
-                    .h(px(66.))
-                    .rounded(px(10.))
-                    .bg(theme.surface)
-                    .border(px(1.))
-                    .border_color(theme.divider)
-                    .px(px(14.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(theme_clone.titlebar_bg))
-                    .on_mouse_down(MouseButton::Left, {
-                        let this_click = this.clone();
-                        move |_ev, _window, cx| {
-                            this_click.update(cx, |panel, cx| {
-                                let open = !panel.latest_hotkeys_popup_open;
-                                panel.close_app_list_popups();
-                                panel.latest_hotkeys_popup_open = open;
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.text_1)
-                                    .child(I18nKey::LatestHotkeysTitle.text()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(theme.text_3)
-                                    .child(desc),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .font_family("iconfont")
-                            .text_size(px(14.))
-                            .text_color(theme.text_2)
-                            .child("\u{e602}"), // arrow icon
-                    )
-            })
-            // 3. Hotkey blacklist entry card
-            .child({
-                let this = this.clone();
+                let desc = I18nKey::LatestHotkeysConfigured.fmt(&[&configured.to_string()]);
+                self.setting_row_opener(
+                    I18nKey::LatestHotkeysTitle.text(),
+                    &desc,
+                    move |_window, cx| {
+                        this_click.update(cx, |panel, cx| {
+                            let open = !panel.latest_hotkeys_popup_open;
+                            panel.close_app_list_popups();
+                            panel.latest_hotkeys_popup_open = open;
+                            cx.notify();
+                        });
+                    },
+                )
+            }
+            .into_any_element(),
+            {
+                let this_click = this.clone();
                 let count = blacklist.len();
                 let desc = I18nKey::ClipboardAppBlacklistCount.fmt(&[&count.to_string()]);
-                let theme_clone = theme.clone();
-                div()
-                    .h(px(66.))
-                    .rounded(px(10.))
-                    .bg(theme.surface)
-                    .border(px(1.))
-                    .border_color(theme.divider)
-                    .px(px(14.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(theme_clone.titlebar_bg))
-                    .on_mouse_down(MouseButton::Left, {
-                        let this_click = this.clone();
-                        move |_ev, _window, cx| {
-                            this_click.update(cx, |panel, cx| {
-                                panel.toggle_hotkey_blacklist_popup();
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.text_1)
-                                    .child(I18nKey::HotkeyBlacklist.text()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(theme.text_3)
-                                    .child(desc),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .font_family("iconfont")
-                            .text_size(px(14.))
-                            .text_color(theme.text_2)
-                            .child("\u{e602}"),
-                    )
-            })
-            // 4. Paste shortcut entry card (Windows only)
-            .when(cfg!(target_os = "windows"), |root| {
+                self.setting_row_opener(
+                    I18nKey::HotkeyBlacklist.text(),
+                    &desc,
+                    move |_window, cx| {
+                        this_click.update(cx, |panel, cx| {
+                            panel.toggle_hotkey_blacklist_popup();
+                            cx.notify();
+                        });
+                    },
+                )
+            }
+            .into_any_element(),
+        ];
+        if cfg!(target_os = "windows") {
+            let build_paste_shortcuts = |root: Div| {
                 let count = paste_shortcuts.len();
                 let desc = I18nKey::ClipboardAppBlacklistCount.fmt(&[&count.to_string()]);
-                let this = this.clone();
-                let theme_clone = theme.clone();
-                root.child(
-                    div()
-                        .h(px(66.))
-                        .rounded(px(10.))
-                        .bg(theme.surface)
-                        .border(px(1.))
-                        .border_color(theme.divider)
-                        .px(px(14.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .cursor(CursorStyle::PointingHand)
-                        .hover(move |style| style.bg(theme_clone.titlebar_bg))
-                        .on_mouse_down(MouseButton::Left, {
-                            let this_click = this.clone();
-                            move |_ev, _window, cx| {
-                                this_click.update(cx, |panel, cx| {
-                                    panel.toggle_paste_shortcuts_popup();
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(theme.text_1)
-                                        .child(I18nKey::HotkeyPasteShortcut.text()),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .text_color(theme.text_3)
-                                        .child(desc),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .font_family("iconfont")
-                                .text_size(px(14.))
-                                .text_color(theme.text_2)
-                                .child("\u{e602}"),
-                        ),
-                )
-            })
+                let this_click = this.clone();
+                root.child(self.setting_row_opener(
+                    I18nKey::HotkeyPasteShortcut.text(),
+                    &desc,
+                    move |_window, cx| {
+                        this_click.update(cx, |panel, cx| {
+                            panel.toggle_paste_shortcuts_popup();
+                            cx.notify();
+                        });
+                    },
+                ))
+            };
+            list_rows.push(build_paste_shortcuts(div()).into_any_element());
+        }
+        container =
+            container.child(self.settings_group(I18nKey::GroupHotkeyLists.text(), list_rows));
+
+        container
     }
 }
