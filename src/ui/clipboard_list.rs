@@ -3,6 +3,7 @@
 //! --- Uses `gpui_component::v_virtual_list` to efficiently render thousands ---
 //! --- of clipboard items with dynamic card heights (68— 28px). ---
 
+use crate::ui::font::fs;
 use std::{collections::HashSet, rc::Rc};
 
 use gpui::prelude::FluentBuilder;
@@ -20,6 +21,7 @@ use crate::state::app::AppState;
 
 use super::clipboard_card::{estimate_card_height, ClipboardCard};
 use super::components::reorder::DragAutoScroll;
+use super::font::sx;
 use super::search_box::SearchBox;
 use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
@@ -379,6 +381,10 @@ pub struct ClipboardListView {
     pending_images: Vec<PendingImageView>,
     item_sizes: Rc<Vec<Size<Pixels>>>,
     card_height_mode: String,
+    /// Scale the current `item_sizes` were computed at. When the font size
+    /// setting changes, this differs from the live `font::scale()` and the
+    /// cached heights are recomputed on the next refresh.
+    sizes_font_scale: f32,
     scroll_handle: VirtualListScrollHandle,
     focus_handle: FocusHandle,
     selected_ids: Vec<i64>,
@@ -451,6 +457,7 @@ impl ClipboardListView {
             pending_images: Vec::new(),
             item_sizes,
             card_height_mode,
+            sizes_font_scale: crate::ui::font::scale(),
             scroll_handle: VirtualListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             selected_ids: Vec::new(),
@@ -498,6 +505,7 @@ impl ClipboardListView {
         self.pending_images = self.state.read(cx).pending_images.clone();
         let combined = self.combined_with_pending(items);
         self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
+        self.sizes_font_scale = crate::ui::font::scale();
         // --- Persist current selection before swap (survives empty-item clears ---
         // --- during window hide, when hide() emits ClipboardChanged).         ---
         if let Some(idx) = self.selected_index {
@@ -632,6 +640,7 @@ impl ClipboardListView {
         self.pending_images = self.state.read(cx).pending_images.clone();
         let combined = self.combined_with_pending(app_items);
         self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
+        self.sizes_font_scale = crate::ui::font::scale();
 
         // Capture the previous interaction positions by stable item ID before
         // replacing the list. Deletion shifts indices, so keeping stale indices
@@ -834,9 +843,11 @@ impl ClipboardListView {
         cx: &mut Context<Self>,
     ) {
         let card_height_mode = self.state.read(cx).settings.card_height_mode.clone();
-        if self.card_height_mode != card_height_mode {
+        let scale_changed = self.sizes_font_scale != crate::ui::font::scale();
+        if self.card_height_mode != card_height_mode || scale_changed {
             self.card_height_mode = card_height_mode;
             self.item_sizes = Rc::new(Self::compute_sizes(&self.items, &self.card_height_mode));
+            self.sizes_font_scale = crate::ui::font::scale();
         }
         if scroll_to_top && !self.items.is_empty() {
             let latest_idx = self
@@ -2332,7 +2343,9 @@ impl ClipboardListView {
         let mut sizes: Vec<_> = items
             .iter()
             .map(|item| {
-                let h = estimate_card_height(item, mode) + CLIPBOARD_ROW_VERTICAL_SPACE;
+                // estimate_card_height is already scaled; scale the inter-row
+                // gap too so the whole list zooms proportionally.
+                let h = estimate_card_height(item, mode) + sx(CLIPBOARD_ROW_VERTICAL_SPACE);
                 size(px(308.), px(h))
             })
             .collect();
@@ -2342,7 +2355,7 @@ impl ClipboardListView {
         // --- scrollable space. This avoids inflating the last card's visual height ---
         // --- when there are only a few items in the list. ---
         if !sizes.is_empty() {
-            sizes.push(size(px(308.), px(CLIPBOARD_BOTTOM_SCROLL_INSET)));
+            sizes.push(size(px(308.), px(sx(CLIPBOARD_BOTTOM_SCROLL_INSET))));
         }
         sizes
     }
@@ -2413,13 +2426,13 @@ impl Render for ClipboardListView {
                 .bg(bg)
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(fs(13.))
                         .text_color(text_2)
                         .child(I18nKey::ListNoItems.text()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .text_color(text_3)
                         .child(I18nKey::ListEmptyHint.text()),
                 )
@@ -2626,13 +2639,13 @@ impl Render for ClipboardListView {
                         .gap(px(6.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(fs(13.))
                                 .text_color(text_2)
                                 .child(I18nKey::ListNoItems.text()),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(fs(11.))
                                 .text_color(text_3)
                                 .child(I18nKey::ListEmptyHint.text()),
                         ),

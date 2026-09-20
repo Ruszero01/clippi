@@ -8,6 +8,7 @@
 //! --- - Single and batch mode variants with conditional items ---
 //! --- - Position clamping to container bounds ---
 
+use crate::ui::font::fs;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -718,7 +719,7 @@ impl RenderOnce for ContextMenu {
                                 let icon = icon.clone();
                                 div()
                                     .font_family("iconfont")
-                                    .text_size(px(13.))
+                                    .text_size(fs(13.))
                                     .text_color(normal_icon)
                                     .hover(move |style| style.text_color(hover_icon))
                                     .child(icon)
@@ -726,7 +727,7 @@ impl RenderOnce for ContextMenu {
                             .child({
                                 let label = label.clone();
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(fs(13.))
                                     .text_color(normal_text)
                                     .hover(move |style| style.text_color(hover_text))
                                     .child(label)
@@ -735,7 +736,7 @@ impl RenderOnce for ContextMenu {
                     .when(shortcut.is_some(), move |row| {
                         row.child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(fs(10.))
                                 .text_color(text_3)
                                 .child(shortcut.clone().unwrap()),
                         )

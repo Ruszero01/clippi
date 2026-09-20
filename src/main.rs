@@ -281,6 +281,16 @@ fn main() {
         gpui_component::Theme::change(theme_mode, None, cx);
         gpui_component::Theme::global_mut(cx).background = Hsla::transparent_black();
 
+        // --- Apply the user's font scale + family. Must run after ---
+        // --- `Theme::change` (which resets font_size/font_family to defaults). ---
+        ui::font::apply_scale(
+            settings
+                .font_size_scale
+                .unwrap_or_else(|| ui::font::level_scale(&settings.font_size_level)),
+        );
+        ui::font::set_family(&settings.font_family);
+        ui::font::apply_to_global_theme(cx);
+
         // Calculate initial position (physical pixels) and size (logical pixels)
         // before the settings are moved into AppState.
         let initial_phys_pos = core::frontend::calculate_initial_position(&settings);

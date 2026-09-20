@@ -32,6 +32,7 @@ use crate::core::types::{
 
 use super::components::sensitive_text::SensitiveText;
 use super::components::spinner::activity_spinner;
+use super::font::{scale, sc};
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
 use super::rich_preview::{self, StyledHtmlSpan};
 use super::search_highlight;
@@ -132,13 +133,17 @@ fn visible_tag_count(
     0
 }
 
+/// Available width for the card's bottom info row, in *design* units so it can
+/// be compared against the design-unit pill widths from `info_pill_width`.
+/// The outer (window/sidebar) chrome does not zoom, so the real viewport slice
+/// is converted back to design units by dividing out the scale.
 fn info_row_available_width(window: &Window) -> f32 {
-    let card_width = f32::from(window.viewport_size().width)
+    let card_width_real = f32::from(window.viewport_size().width)
         - PANEL_OFFSET_X
         - PANEL_BORDER_WIDTH * 2.0
         - LIST_PADDING_X * 2.0;
     let content_left = CARD_PADDING_X + CARD_ICON_WIDTH + CARD_CONTENT_GAP;
-    (card_width - content_left - CARD_PADDING_X).max(0.0)
+    (card_width_real / scale() - content_left - CARD_PADDING_X).max(0.0)
 }
 
 #[cfg(test)]
@@ -689,7 +694,7 @@ fn file_name_highlighted(
 ) -> (AnyElement, AnyElement) {
     let (stem, ext) = file_name_segments(name, stem_len, terms);
     let render = |segments: Vec<NameSegment>, color: Rgba, nowrap: bool| -> AnyElement {
-        let mut el = div().flex().flex_row().text_size(px(10.)).text_color(color);
+        let mut el = div().flex().flex_row().text_size(sc(10.)).text_color(color);
         if nowrap {
             el = el.whitespace_nowrap().overflow_hidden();
         }
@@ -761,13 +766,13 @@ fn render_path_like_preview(
         .flex_1()
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(sc(4.))
         .overflow_hidden()
         .child(
             div()
                 .w_full()
-                .text_size(px(13.))
-                .line_height(px(16.))
+                .text_size(sc(13.))
+                .line_height(sc(16.))
                 .font_weight(FontWeight::BOLD)
                 .text_color(label_color)
                 .whitespace_nowrap()
@@ -789,8 +794,8 @@ fn render_path_like_preview(
         preview.child(
             div()
                 .w_full()
-                .text_size(px(11.))
-                .line_height(px(14.))
+                .text_size(sc(11.))
+                .line_height(sc(14.))
                 .text_color(subtitle_color)
                 .whitespace_nowrap()
                 .overflow_hidden()
@@ -1152,8 +1157,15 @@ fn card_content_matches_search(item: &ClipboardItem, terms: &[String]) -> bool {
     rich_text_matches
 }
 
-/// Compute estimated card height for the virtual list.
+/// Compute estimated card height for the virtual list, in real (zoomed) pixels.
+/// The body returns design-unit buckets (68/96/128); multiplying by the live
+/// scale keeps the row budget proportional to the uniformly-zoomed card
+/// contents, so larger fonts never clip.
 pub fn estimate_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32 {
+    base_card_height(item, card_height_mode) * scale()
+}
+
+fn base_card_height(item: &ClipboardItem, card_height_mode: &str) -> f32 {
     if card_height_mode == "auto" && !item.note.is_empty() {
         return 68.0;
     }
@@ -1593,16 +1605,16 @@ impl RenderOnce for ClipboardCard {
                 cx.stop_propagation();
             })
             .bg(surface)
-            .border(px(1.))
+            .border(sc(1.))
             .border_color(border_color)
-            .rounded(px(10.))
+            .rounded(sc(10.))
             .overflow_hidden()
             .when(is_dark, |el| el.shadow_md())
             .when(!is_dark, |el| el.shadow_sm())
             .flex()
             .flex_row()
-            .p(px(10.))
-            .gap(px(10.));
+            .p(sc(10.))
+            .gap(sc(10.));
 
         // --- Wire click handler ---
         let base = if let Some(handler) = on_click {
@@ -1629,16 +1641,16 @@ impl RenderOnce for ClipboardCard {
         let icon_kind = item.display_kind();
         let icon_area = match icon_kind {
             DisplayKind::Color => div()
-                .w(px(36.))
+                .w(sc(36.))
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap(px(3.))
+                .gap(sc(3.))
                 .child(
                     div()
-                        .w(px(36.))
-                        .h(px(28.))
-                        .rounded(px(6.))
+                        .w(sc(36.))
+                        .h(sc(28.))
+                        .rounded(sc(6.))
                         .overflow_hidden()
                         .bg(tag_bg)
                         .flex()
@@ -1649,48 +1661,48 @@ impl RenderOnce for ClipboardCard {
                                 .when_some(image_cache.clone(), |img, cache| {
                                     img.image_cache(&cache)
                                 })
-                                .w(px(20.))
-                                .h(px(20.))
-                                .rounded(px(4.))
+                                .w(sc(20.))
+                                .h(sc(20.))
+                                .rounded(sc(4.))
                                 .into_any_element()
                         } else {
                             div()
-                                .w(px(20.))
-                                .h(px(20.))
-                                .rounded(px(4.))
+                                .w(sc(20.))
+                                .h(sc(20.))
+                                .rounded(sc(4.))
                                 .bg(color_swatch)
-                                .border(px(1.))
+                                .border(sc(1.))
                                 .border_color(color_border)
                                 .into_any_element()
                         }),
                 )
                 .child(if source_icon_path.is_some() {
                     div()
-                        .w(px(36.))
-                        .h(px(14.))
-                        .rounded(px(3.))
+                        .w(sc(36.))
+                        .h(sc(14.))
+                        .rounded(sc(3.))
                         .bg(color_swatch)
-                        .border(px(1.))
+                        .border(sc(1.))
                         .border_color(color_border)
-                        .p(px(2.))
+                        .p(sc(2.))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(div().w_full().h_full().rounded(px(1.)).bg(color_swatch))
+                        .child(div().w_full().h_full().rounded(sc(1.)).bg(color_swatch))
                         .into_any_element()
                 } else {
                     div()
-                        .w(px(36.))
-                        .h(px(14.))
-                        .rounded(px(3.))
+                        .w(sc(36.))
+                        .h(sc(14.))
+                        .rounded(sc(3.))
                         .bg(tag_bg)
-                        .px(px(3.))
+                        .px(sc(3.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(sc(10.))
                                 .text_color(tag_text)
                                 .truncate()
                                 .child(label.to_string()),
@@ -1698,16 +1710,16 @@ impl RenderOnce for ClipboardCard {
                         .into_any_element()
                 }),
             DisplayKind::Image => div()
-                .w(px(36.))
+                .w(sc(36.))
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap(px(3.))
+                .gap(sc(3.))
                 .child(
                     div()
-                        .w(px(36.))
-                        .h(px(28.))
-                        .rounded(px(6.))
+                        .w(sc(36.))
+                        .h(sc(28.))
+                        .rounded(sc(6.))
                         .overflow_hidden()
                         .bg(tag_bg)
                         .flex()
@@ -1718,13 +1730,13 @@ impl RenderOnce for ClipboardCard {
                                 .when_some(image_cache.clone(), |img, cache| {
                                     img.image_cache(&cache)
                                 })
-                                .w(px(20.))
-                                .h(px(20.))
-                                .rounded(px(4.))
+                                .w(sc(20.))
+                                .h(sc(20.))
+                                .rounded(sc(4.))
                                 .into_any_element()
                         } else {
                             div()
-                                .text_size(px(18.))
+                                .text_size(sc(18.))
                                 .font_family("iconfont")
                                 .text_color(tag_text)
                                 .child(icon.to_string())
@@ -1733,17 +1745,17 @@ impl RenderOnce for ClipboardCard {
                 )
                 .child(
                     div()
-                        .w(px(36.))
-                        .h(px(14.))
-                        .rounded(px(3.))
+                        .w(sc(36.))
+                        .h(sc(14.))
+                        .rounded(sc(3.))
                         .bg(tag_bg)
-                        .px(px(3.))
+                        .px(sc(3.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(sc(10.))
                                 .text_color(tag_text)
                                 .truncate()
                                 .child(label.to_string()),
@@ -1769,16 +1781,16 @@ impl RenderOnce for ClipboardCard {
                 let effective_icon = file_icon.or(source_icon_path);
                 let fallback_icon = if transfer_is_cloud { "\u{e794}" } else { icon };
                 div()
-                    .w(px(36.))
+                    .w(sc(36.))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(3.))
+                    .gap(sc(3.))
                     .child(
                         div()
-                            .w(px(36.))
-                            .h(px(28.))
-                            .rounded(px(6.))
+                            .w(sc(36.))
+                            .h(sc(28.))
+                            .rounded(sc(6.))
                             .overflow_hidden()
                             .bg(tag_bg)
                             .flex()
@@ -1789,13 +1801,13 @@ impl RenderOnce for ClipboardCard {
                                     .when_some(image_cache.clone(), |img, cache| {
                                         img.image_cache(&cache)
                                     })
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .rounded(px(4.))
+                                    .w(sc(20.))
+                                    .h(sc(20.))
+                                    .rounded(sc(4.))
                                     .into_any_element()
                             } else {
                                 div()
-                                    .text_size(px(18.))
+                                    .text_size(sc(18.))
                                     .font_family("iconfont")
                                     .text_color(tag_text)
                                     .child(fallback_icon.to_string())
@@ -1804,17 +1816,17 @@ impl RenderOnce for ClipboardCard {
                     )
                     .child(
                         div()
-                            .w(px(36.))
-                            .h(px(14.))
-                            .rounded(px(3.))
+                            .w(sc(36.))
+                            .h(sc(14.))
+                            .rounded(sc(3.))
                             .bg(tag_bg)
-                            .px(px(3.))
+                            .px(sc(3.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(sc(10.))
                                     .text_color(tag_text)
                                     .truncate()
                                     .child(label.to_string()),
@@ -1836,16 +1848,16 @@ impl RenderOnce for ClipboardCard {
                 let app_icon = if show_source { source_icon_path } else { None };
                 let effective_icon = favicon_path.or(app_icon);
                 div()
-                    .w(px(36.))
+                    .w(sc(36.))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(3.))
+                    .gap(sc(3.))
                     .child(
                         div()
-                            .w(px(36.))
-                            .h(px(28.))
-                            .rounded(px(6.))
+                            .w(sc(36.))
+                            .h(sc(28.))
+                            .rounded(sc(6.))
                             .overflow_hidden()
                             .bg(tag_bg)
                             .flex()
@@ -1856,13 +1868,13 @@ impl RenderOnce for ClipboardCard {
                                     .when_some(image_cache.clone(), |img, cache| {
                                         img.image_cache(&cache)
                                     })
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .rounded(px(4.))
+                                    .w(sc(20.))
+                                    .h(sc(20.))
+                                    .rounded(sc(4.))
                                     .into_any_element()
                             } else {
                                 div()
-                                    .text_size(px(18.))
+                                    .text_size(sc(18.))
                                     .font_family("iconfont")
                                     .text_color(tag_text)
                                     .child(icon.to_string())
@@ -1871,17 +1883,17 @@ impl RenderOnce for ClipboardCard {
                     )
                     .child(
                         div()
-                            .w(px(36.))
-                            .h(px(14.))
-                            .rounded(px(3.))
+                            .w(sc(36.))
+                            .h(sc(14.))
+                            .rounded(sc(3.))
                             .bg(tag_bg)
-                            .px(px(3.))
+                            .px(sc(3.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(sc(10.))
                                     .text_color(tag_text)
                                     .truncate()
                                     .child(label.to_string()),
@@ -1889,16 +1901,16 @@ impl RenderOnce for ClipboardCard {
                     )
             }
             _ => div()
-                .w(px(36.))
+                .w(sc(36.))
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap(px(3.))
+                .gap(sc(3.))
                 .child(
                     div()
-                        .w(px(36.))
-                        .h(px(28.))
-                        .rounded(px(6.))
+                        .w(sc(36.))
+                        .h(sc(28.))
+                        .rounded(sc(6.))
                         .overflow_hidden()
                         .bg(tag_bg)
                         .flex()
@@ -1909,13 +1921,13 @@ impl RenderOnce for ClipboardCard {
                                 .when_some(image_cache.clone(), |img, cache| {
                                     img.image_cache(&cache)
                                 })
-                                .w(px(20.))
-                                .h(px(20.))
-                                .rounded(px(4.))
+                                .w(sc(20.))
+                                .h(sc(20.))
+                                .rounded(sc(4.))
                                 .into_any_element()
                         } else {
                             div()
-                                .text_size(px(18.))
+                                .text_size(sc(18.))
                                 .font_family("iconfont")
                                 .text_color(tag_text)
                                 .child(icon.to_string())
@@ -1924,17 +1936,17 @@ impl RenderOnce for ClipboardCard {
                 )
                 .child(
                     div()
-                        .w(px(36.))
-                        .h(px(14.))
-                        .rounded(px(3.))
+                        .w(sc(36.))
+                        .h(sc(14.))
+                        .rounded(sc(3.))
                         .bg(tag_bg)
-                        .px(px(3.))
+                        .px(sc(3.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(sc(10.))
                                 .text_color(tag_text)
                                 .truncate()
                                 .child(label.to_string()),
@@ -1962,23 +1974,23 @@ impl RenderOnce for ClipboardCard {
                 .flex()
                 .flex_col()
                 .justify_center()
-                .gap(px(6.))
+                .gap(sc(6.))
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(4.))
+                        .gap(sc(4.))
                         .child(
                             div()
                                 .font_family("iconfont")
-                                .text_size(px(14.))
+                                .text_size(sc(14.))
                                 .text_color(accent)
                                 .child("\u{e66b}"),
                         )
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(sc(12.))
                                 .text_color(accent)
                                 .child(record_text),
                         ),
@@ -1986,21 +1998,21 @@ impl RenderOnce for ClipboardCard {
                 .when(format_options.len() > 1, |el| {
                     el.child(
                         div()
-                            .h(px(18.))
+                            .h(sc(18.))
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(4.))
+                            .gap(sc(4.))
                             .children(format_options.into_iter().map(|format| {
                                 let selected = format == selected_format;
                                 let handler = format_handler.clone();
                                 div()
-                                    .h(px(18.))
-                                    .rounded(px(9.))
+                                    .h(sc(18.))
+                                    .rounded(sc(9.))
                                     .bg(if selected { accent } else { pill_bg })
-                                    .border(px(1.))
+                                    .border(sc(1.))
                                     .border_color(if selected { accent } else { pill_border })
-                                    .px(px(6.))
+                                    .px(sc(6.))
                                     .flex()
                                     .items_center()
                                     .cursor(CursorStyle::PointingHand)
@@ -2019,7 +2031,7 @@ impl RenderOnce for ClipboardCard {
                                     })
                                     .child(
                                         div()
-                                            .text_size(px(9.))
+                                            .text_size(sc(9.))
                                             .text_color(if selected {
                                                 rgb(0xffffff)
                                             } else {
@@ -2039,10 +2051,10 @@ impl RenderOnce for ClipboardCard {
                 .flex_1()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
+                .gap(sc(2.))
                 .child(
                     // --- Single-line text input ---
-                    div().w_full().h(px(24.)).child({
+                    div().w_full().h(sc(24.)).child({
                         let input_entity =
                             note_input_ref.expect("note_input must be set when editing");
                         Input::new(&input_entity)
@@ -2051,16 +2063,16 @@ impl RenderOnce for ClipboardCard {
                             .focus_bordered(false)
                             .w_full()
                             .h_full()
-                            .text_size(px(12.))
+                            .text_size(sc(12.))
                     }),
                 )
                 .child(
                     // --- Confirm button (checkmark icon \u{e611}) ---
                     div().flex().flex_row().justify_end().child(
                         div()
-                            .w(px(20.))
-                            .h(px(20.))
-                            .rounded(px(4.))
+                            .w(sc(20.))
+                            .h(sc(20.))
+                            .rounded(sc(4.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2078,7 +2090,7 @@ impl RenderOnce for ClipboardCard {
                             .child(
                                 div()
                                     .font_family("iconfont")
-                                    .text_size(px(12.))
+                                    .text_size(sc(12.))
                                     .text_color(accent)
                                     .child("\u{e611}"), // checkmark icon
                             ),
@@ -2100,7 +2112,7 @@ impl RenderOnce for ClipboardCard {
             div().flex_1().flex().items_center().child(
                 div()
                     .w_full()
-                    .text_size(px(12.))
+                    .text_size(sc(12.))
                     .text_color(text_2)
                     .whitespace_nowrap()
                     .overflow_hidden()
@@ -2165,7 +2177,7 @@ impl RenderOnce for ClipboardCard {
                         .overflow_hidden()
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(sc(13.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(text_1)
                                 .child(search_highlight::render_highlighted_inline(
@@ -2181,13 +2193,13 @@ impl RenderOnce for ClipboardCard {
                         .when(show_sep, |this| {
                             this.child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(sc(13.))
                                     .text_color(text_3)
-                                    .mx(px(2.))
+                                    .mx(sc(2.))
                                     .child(" - "),
                             )
                         })
-                        .child(div().text_size(px(13.)).text_color(text_3).child(
+                        .child(div().text_size(sc(13.)).text_color(text_3).child(
                             search_highlight::render_highlighted_auxiliary_inline(
                                 subtitle,
                                 &search_terms,
@@ -2244,7 +2256,7 @@ impl RenderOnce for ClipboardCard {
             } else if matches!(content_kind, DisplayKind::Color) {
                 div().flex_1().flex().items_center().child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(sc(12.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(text_1)
                         .overflow_hidden()
@@ -2277,7 +2289,7 @@ impl RenderOnce for ClipboardCard {
                                 .flex_1()
                                 .w_full()
                                 .h_full()
-                                .rounded(px(8.))
+                                .rounded(sc(8.))
                                 .overflow_hidden()
                                 .bg(tag_bg)
                                 .flex()
@@ -2290,7 +2302,7 @@ impl RenderOnce for ClipboardCard {
                                         })
                                         .w_full()
                                         .h_full()
-                                        .rounded(px(8.))
+                                        .rounded(sc(8.))
                                         .object_fit(object_fit),
                                 )
                                 .child(
@@ -2300,9 +2312,9 @@ impl RenderOnce for ClipboardCard {
                                     // --- border (which draws inward) covers the image corners.  ---
                                     div()
                                         .absolute()
-                                        .inset(px(-3.))
-                                        .rounded(px(11.))
-                                        .border(px(4.))
+                                        .inset(sc(-3.))
+                                        .rounded(sc(11.))
+                                        .border(sc(4.))
                                         .border_color(surface),
                                 )
                         } else if image_missing || preview_img_path.is_none() {
@@ -2318,18 +2330,18 @@ impl RenderOnce for ClipboardCard {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
+                                .mr(sc(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
                                 .child(
                                     div()
-                                        .size(px(40.))
-                                        .rounded(px(8.))
+                                        .size(sc(40.))
+                                        .rounded(sc(8.))
                                         .bg(subtle_row_bg)
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .child(
                                             div()
-                                                .text_size(px(24.))
+                                                .text_size(sc(24.))
                                                 .font_family("iconfont")
                                                 .text_color(placeholder_color)
                                                 .child(placeholder_icon),
@@ -2341,23 +2353,23 @@ impl RenderOnce for ClipboardCard {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .mr(px(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
+                                .mr(sc(CARD_ICON_WIDTH + CARD_CONTENT_GAP))
                                 .child(
                                     div()
                                         .w_full()
-                                        .mb(px(6.))
+                                        .mb(sc(6.))
                                         .flex()
                                         .flex_col()
                                         .items_center()
                                         .justify_center()
-                                        .gap(px(2.))
+                                        .gap(sc(2.))
                                         .child(
                                             div()
-                                                .h(px(24.))
+                                                .h(sc(24.))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .text_size(px(22.))
+                                                .text_size(sc(22.))
                                                 .font_family("iconfont")
                                                 .text_color(text_2)
                                                 .child("\u{e626}"),
@@ -2365,15 +2377,15 @@ impl RenderOnce for ClipboardCard {
                                         .child(
                                             div()
                                                 .w_full()
-                                                .h(px(15.))
+                                                .h(sc(15.))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
                                                 .child(
                                                     div()
                                                         .max_w_full()
-                                                        .text_size(px(11.))
-                                                        .line_height(px(14.))
+                                                        .text_size(sc(11.))
+                                                        .line_height(sc(14.))
                                                         .text_color(text_3)
                                                         .overflow_hidden()
                                                         .whitespace_nowrap()
@@ -2388,9 +2400,9 @@ impl RenderOnce for ClipboardCard {
                         let content_box = div()
                             .flex_1()
                             .w_full()
-                            .text_size(px(12.))
+                            .text_size(sc(12.))
                             .text_color(text_1)
-                            .line_height(px(18.))
+                            .line_height(sc(18.))
                             .overflow_hidden();
 
                         let style = TextViewStyle::default()
@@ -2525,23 +2537,23 @@ impl RenderOnce for ClipboardCard {
                                 .flex_1()
                                 .flex()
                                 .flex_col()
-                                .gap(px(3.))
+                                .gap(sc(3.))
                                 .overflow_hidden()
                                 .child(
                                     div()
-                                        .rounded(px(4.))
+                                        .rounded(sc(4.))
                                         .bg(subtle_row_bg)
-                                        .px(px(6.))
-                                        .py(px(4.))
+                                        .px(sc(6.))
+                                        .py(sc(4.))
                                         .flex()
                                         .flex_row()
-                                        .gap(px(4.))
+                                        .gap(sc(4.))
                                         .items_center()
                                         .overflow_hidden()
                                         .child(
                                             div()
                                                 .font_family("iconfont")
-                                                .text_size(px(12.))
+                                                .text_size(sc(12.))
                                                 .text_color(danger)
                                                 .child(bad_icon),
                                         )
@@ -2550,7 +2562,7 @@ impl RenderOnce for ClipboardCard {
                                                 .flex_1()
                                                 .flex()
                                                 .flex_row()
-                                                .gap(px(0.))
+                                                .gap(sc(0.))
                                                 .overflow_hidden()
                                                 .child(stem_el)
                                                 .child(ext_el),
@@ -2561,7 +2573,7 @@ impl RenderOnce for ClipboardCard {
                                 .flex_1()
                                 .flex()
                                 .flex_col()
-                                .gap(px(3.))
+                                .gap(sc(3.))
                                 .overflow_hidden()
                                 .children(files.iter().take(4).map(|fi| {
                                     let stem_len = if fi.is_dir {
@@ -2586,20 +2598,20 @@ impl RenderOnce for ClipboardCard {
                                     let fallback_icon =
                                         if fi.is_dir { "\u{e60f}" } else { "\u{e646}" };
                                     let row = div()
-                                        .rounded(px(4.))
+                                        .rounded(sc(4.))
                                         .bg(subtle_row_bg)
-                                        .px(px(6.))
-                                        .py(px(4.))
+                                        .px(sc(6.))
+                                        .py(sc(4.))
                                         .flex()
                                         .flex_row()
-                                        .gap(px(4.))
+                                        .gap(sc(4.))
                                         .items_center()
                                         .overflow_hidden();
                                     let row = if multi {
                                         row.child(
                                             div()
-                                                .w(px(14.))
-                                                .h(px(14.))
+                                                .w(sc(14.))
+                                                .h(sc(14.))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
@@ -2609,14 +2621,14 @@ impl RenderOnce for ClipboardCard {
                                                             image_cache.clone(),
                                                             |img, cache| img.image_cache(&cache),
                                                         )
-                                                        .w(px(14.))
-                                                        .h(px(14.))
-                                                        .rounded(px(2.))
+                                                        .w(sc(14.))
+                                                        .h(sc(14.))
+                                                        .rounded(sc(2.))
                                                         .into_any_element()
                                                 } else {
                                                     div()
                                                         .font_family("iconfont")
-                                                        .text_size(px(12.))
+                                                        .text_size(sc(12.))
                                                         .text_color(text_3)
                                                         .child(fallback_icon)
                                                         .into_any_element()
@@ -2630,7 +2642,7 @@ impl RenderOnce for ClipboardCard {
                                             .flex_1()
                                             .flex()
                                             .flex_row()
-                                            .gap(px(0.))
+                                            .gap(sc(0.))
                                             .overflow_hidden()
                                             .child(stem_el)
                                             .child(ext_el),
@@ -2847,27 +2859,27 @@ impl RenderOnce for ClipboardCard {
 
         let bottom_info = div()
             .absolute()
-            .right(px(10.))
-            .bottom(px(6.))
-            .h(px(18.))
+            .right(sc(10.))
+            .bottom(sc(6.))
+            .h(sc(18.))
             .flex()
             .flex_row()
-            .gap(px(4.))
+            .gap(sc(4.))
             .items_center()
             .when(hidden_tag_count > 0, |el| {
                 el.child(
                     div()
-                        .h(px(18.))
-                        .rounded(px(9.))
+                        .h(sc(18.))
+                        .rounded(sc(9.))
                         .bg(pill_bg)
-                        .border(px(1.))
+                        .border(sc(1.))
                         .border_color(pill_border)
-                        .px(px(5.))
+                        .px(sc(5.))
                         .flex()
                         .items_center()
                         .child(
                             div()
-                                .text_size(px(9.))
+                                .text_size(sc(9.))
                                 .text_color(text_2)
                                 .child(format!("+{hidden_tag_count}")),
                         ),
@@ -2876,17 +2888,17 @@ impl RenderOnce for ClipboardCard {
             .children(tags.iter().take(visible_tag_count).map(|tag| {
                 let tag_color = color_from_hex(&tag.color, text_2);
                 div()
-                    .h(px(18.))
-                    .rounded(px(9.))
+                    .h(sc(18.))
+                    .rounded(sc(9.))
                     .bg(pill_bg)
-                    .border(px(1.))
+                    .border(sc(1.))
                     .border_color(tag_color)
-                    .px(px(5.))
+                    .px(sc(5.))
                     .flex()
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(9.))
+                            .text_size(sc(9.))
                             .text_color(tag_color)
                             .child(tag.name.clone()),
                     )
@@ -2894,23 +2906,23 @@ impl RenderOnce for ClipboardCard {
             .when_some(hotkey_pill, |el, hk| {
                 el.child(
                     div()
-                        .h(px(18.))
-                        .rounded(px(9.))
+                        .h(sc(18.))
+                        .rounded(sc(9.))
                         .bg(pill_bg)
-                        .border(px(1.))
+                        .border(sc(1.))
                         .border_color(accent)
-                        .px(px(5.))
+                        .px(sc(5.))
                         .flex()
                         .items_center()
-                        .gap(px(HOTKEY_PILL_ICON_GAP))
+                        .gap(sc(HOTKEY_PILL_ICON_GAP))
                         .child(
                             div()
                                 .font_family("iconfont")
-                                .text_size(px(9.))
+                                .text_size(sc(9.))
                                 .text_color(accent)
                                 .child("\u{e66b}"),
                         )
-                        .child(div().text_size(px(9.)).text_color(accent).child(hk)),
+                        .child(div().text_size(sc(9.)).text_color(accent).child(hk)),
                 )
             })
             .when_some(transfer_pill, |el, (label, kind)| {
@@ -2922,21 +2934,21 @@ impl RenderOnce for ClipboardCard {
                     format!("transfer-download-spinner-{}", item.id).into();
                 el.child(
                     div()
-                        .h(px(18.))
-                        .rounded(px(9.))
+                        .h(sc(18.))
+                        .rounded(sc(9.))
                         .bg(pill_bg)
-                        .border(px(1.))
+                        .border(sc(1.))
                         .border_color(pill_border)
-                        .px(px(5.))
+                        .px(sc(5.))
                         .flex()
                         .items_center()
-                        .gap(px(2.))
+                        .gap(sc(2.))
                         .child(if matches!(kind, TransferPillKind::Downloading) {
                             activity_spinner(animation_id, pill_text_color, 12.)
                         } else {
                             div()
                                 .font_family("iconfont")
-                                .text_size(px(9.))
+                                .text_size(sc(9.))
                                 .text_color(pill_text_color)
                                 .child(match kind {
                                     TransferPillKind::Cloud => "\u{e601}",
@@ -2947,7 +2959,7 @@ impl RenderOnce for ClipboardCard {
                         })
                         .child(
                             div()
-                                .text_size(px(9.))
+                                .text_size(sc(9.))
                                 .text_color(pill_text_color)
                                 .child(label),
                         ),
@@ -2958,10 +2970,10 @@ impl RenderOnce for ClipboardCard {
                     format!("transfer-upload-spinner-{}", item.id).into();
                 el.child(
                     div()
-                        .size(px(18.))
-                        .rounded(px(9.))
+                        .size(sc(18.))
+                        .rounded(sc(9.))
                         .bg(pill_bg)
-                        .border(px(1.))
+                        .border(sc(1.))
                         .border_color(pill_border)
                         .flex()
                         .items_center()
@@ -2972,7 +2984,7 @@ impl RenderOnce for ClipboardCard {
                         } else {
                             div()
                                 .font_family("iconfont")
-                                .text_size(px(10.))
+                                .text_size(sc(10.))
                                 .child("\u{e794}")
                                 .into_any_element()
                         }),
@@ -2988,17 +3000,17 @@ impl RenderOnce for ClipboardCard {
                 };
                 el.child(
                     div()
-                        .h(px(18.))
-                        .rounded(px(9.))
+                        .h(sc(18.))
+                        .rounded(sc(9.))
                         .bg(pill_bg)
-                        .border(px(1.))
+                        .border(sc(1.))
                         .border_color(pill_border)
-                        .px(px(5.))
+                        .px(sc(5.))
                         .flex()
                         .items_center()
                         .child(
                             div()
-                                .text_size(px(9.))
+                                .text_size(sc(9.))
                                 .text_color(pill_text_color)
                                 .child(label),
                         ),
@@ -3006,17 +3018,17 @@ impl RenderOnce for ClipboardCard {
             })
             .child(
                 div()
-                    .h(px(18.))
-                    .rounded(px(9.))
+                    .h(sc(18.))
+                    .rounded(sc(9.))
                     .bg(pill_bg)
-                    .border(px(1.))
+                    .border(sc(1.))
                     .border_color(pill_border)
-                    .px(px(7.))
+                    .px(sc(7.))
                     .flex()
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(9.))
+                            .text_size(sc(9.))
                             .text_color(time_pill_color)
                             .child(time_str),
                     ),
@@ -3037,22 +3049,22 @@ impl RenderOnce for ClipboardCard {
             card.child(
                 div()
                     .absolute()
-                    .left(px(0.))
-                    .top(px(4.))
-                    .bottom(px(4.))
-                    .w(px(3.))
-                    .rounded(px(2.))
+                    .left(sc(0.))
+                    .top(sc(4.))
+                    .bottom(sc(4.))
+                    .w(sc(3.))
+                    .rounded(sc(2.))
                     .bg(theme.transfer_pin_color),
             )
         } else if is_fav {
             card.child(
                 div()
                     .absolute()
-                    .left(px(0.))
-                    .top(px(4.))
-                    .bottom(px(4.))
-                    .w(px(3.))
-                    .rounded(px(2.))
+                    .left(sc(0.))
+                    .top(sc(4.))
+                    .bottom(sc(4.))
+                    .w(sc(3.))
+                    .rounded(sc(2.))
                     .bg(fav_color),
             )
         } else {
@@ -3065,10 +3077,10 @@ impl RenderOnce for ClipboardCard {
             card.child(
                 div()
                     .absolute()
-                    .left(px(0.))
-                    .top(px(0.))
-                    .w(px(16.))
-                    .h(px(16.))
+                    .left(sc(0.))
+                    .top(sc(0.))
+                    .w(sc(16.))
+                    .h(sc(16.))
                     .rounded_full()
                     .bg(accent)
                     .flex()
@@ -3076,7 +3088,7 @@ impl RenderOnce for ClipboardCard {
                     .justify_center()
                     .child(
                         div()
-                            .text_size(px(8.))
+                            .text_size(sc(8.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(0xffffff))
                             .child(format!("{}", selection_order)),
@@ -3093,7 +3105,7 @@ impl RenderOnce for ClipboardCard {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
                 .can_merge_selection(can_merge_selection);
             card.child(
-                div().absolute().top(px(3.)).right(px(4.)).child(
+                div().absolute().top(sc(3.)).right(sc(4.)).child(
                     HoverToolbar::new(toolbar_props)
                         .theme(theme.clone())
                         .on_action(move |action, _window, cx| {

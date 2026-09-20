@@ -6,6 +6,7 @@
 //! --- - Left: app icon (15×15) + app name (12px) + window title (11px) ---
 //! --- - Right: clipboard-blacklist + hotkey-blacklist icon buttons (22×22) ---
 
+use crate::ui::font::fs;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::tooltip::Tooltip;
@@ -94,7 +95,7 @@ impl RenderOnce for BottomBar {
                                 .child(
                                     div()
                                         .flex_shrink_0()
-                                        .text_size(px(12.))
+                                        .text_size(fs(12.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.text_2)
                                         .child(fg_name.clone()),
@@ -106,7 +107,7 @@ impl RenderOnce for BottomBar {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .flex_1()
-                                            .text_size(px(11.))
+                                            .text_size(fs(11.))
                                             .text_color(theme.text_3)
                                             .child(format!(
                                                 " \u{2014} {}",
@@ -119,7 +120,7 @@ impl RenderOnce for BottomBar {
                     .when(!has_fg, |row| {
                         row.child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(fs(11.))
                                 .text_color(theme.text_3)
                                 .child(I18nKey::BottomBarNoApp.text()),
                         )
@@ -152,7 +153,7 @@ impl RenderOnce for BottomBar {
                                 .h(px(22.))
                                 .rounded(px(4.))
                                 .font_family("iconfont")
-                                .text_size(px(13.))
+                                .text_size(fs(13.))
                                 .text_color(base_color)
                                 .flex()
                                 .items_center()
@@ -161,7 +162,7 @@ impl RenderOnce for BottomBar {
                                 .hover(|style| style.text_color(theme.accent))
                                 .tooltip(move |window, cx| {
                                     let label = tooltip_label;
-                                    Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
+                                    Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(label)).build(window, cx)
                                 })
                                 .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                     cx.stop_propagation();
@@ -183,7 +184,7 @@ impl RenderOnce for BottomBar {
                                 .h(px(22.))
                                 .rounded(px(4.))
                                 .font_family("iconfont")
-                                .text_size(px(13.))
+                                .text_size(fs(13.))
                                 .text_color(theme.text_3)
                                 .flex()
                                 .items_center()
@@ -192,7 +193,7 @@ impl RenderOnce for BottomBar {
                                 .hover(|style| style.text_color(theme.accent))
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::BottomBarHotkeyBlacklist.text();
-                                    Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(label)).build(window, cx)
+                                    Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(label)).build(window, cx)
                                 })
                                 .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                     cx.stop_propagation();

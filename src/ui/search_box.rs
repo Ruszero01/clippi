@@ -3,6 +3,7 @@
 //! Split out of the legacy combined `SearchBar`: this component owns only the
 //! input field and its keyboard behavior. Type/tag filters live in `FilterBar`.
 
+use crate::ui::font::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -357,12 +358,12 @@ impl Render for SearchBox {
                                     .w_full()
                                     .h_full()
                                     .px(px(0.))
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .prefix(
                                         div()
                                             .pl(px(8.))
                                             .pr(px(3.))
-                                            .text_size(px(14.))
+                                            .text_size(fs(14.))
                                             .font_family("iconfont")
                                             .text_color(text_3)
                                             .child("\u{e688}"),
@@ -424,7 +425,7 @@ impl Render for SearchBox {
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .text_size(px(16.))
+                                            .text_size(fs(16.))
                                             .text_color(new_item_fg)
                                             .child("+"),
                                     )
@@ -434,7 +435,7 @@ impl Render for SearchBox {
                                             .w(px(NEW_ITEM_LABEL_WIDTH))
                                             .overflow_hidden()
                                             .whitespace_nowrap()
-                                            .text_size(px(11.))
+                                            .text_size(fs(11.))
                                             .text_color(new_item_fg)
                                             .opacity(expand)
                                             .child(I18nKey::EditNewItem.text()),

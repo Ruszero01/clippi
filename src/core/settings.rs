@@ -99,6 +99,21 @@ pub struct AppSettings {
     pub saved_window_x: i32,
     pub saved_window_y: i32,
     pub card_height_mode: String, // "low" | "medium" | "high" | "auto"
+    /// Single font-size entry: one multiplier (see `ui::font`) applied to every
+    /// text role so the title/body/meta hierarchy stays intact.
+    /// Written as an exact multiplier by the font-size slider.
+    #[serde(default)]
+    pub font_size_scale: Option<f32>,
+    /// Legacy preset name ("compact" | "standard" | "large" | "xlarge"), kept
+    /// only so configs written before `font_size_scale` still resolve. Never
+    /// written once the numeric scale is present.
+    #[serde(default = "default_font_size_level")]
+    pub font_size_level: String,
+    /// Custom UI font family; empty = `.SystemUIFont`. Chosen from the system
+    /// font list so the value is always resolvable; missing glyphs (e.g. a
+    /// Latin-only font on Chinese text) fall back via the platform chain.
+    #[serde(default)]
+    pub font_family: String,
     #[serde(default)]
     pub silent_start: bool,
     #[serde(default)]
@@ -274,6 +289,10 @@ fn default_quick_hotkey() -> String {
     "Alt+C".to_string()
 }
 
+fn default_font_size_level() -> String {
+    "standard".to_string()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -292,6 +311,9 @@ impl Default for AppSettings {
             saved_window_x: -1,
             saved_window_y: -1,
             card_height_mode: "auto".to_string(),
+            font_size_level: default_font_size_level(),
+            font_size_scale: None,
+            font_family: String::new(),
             silent_start: true,
             show_source_app: false,
             auto_scroll_to_top: false,

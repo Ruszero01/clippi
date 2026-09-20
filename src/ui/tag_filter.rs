@@ -7,6 +7,7 @@
 //! --- - Edit/delete buttons per tag row ---
 //! - TagEditPanel overlay for editing name/color
 
+use crate::ui::font::fs;
 use std::rc::Rc;
 
 use gpui::prelude::*;
@@ -258,7 +259,7 @@ impl Render for TagFilterPanel {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(fs(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(text_1)
                             .child(I18nKey::TagFilterTitle.text()),
@@ -317,7 +318,7 @@ impl Render for TagFilterPanel {
                                     .focus_bordered(false)
                                     .w_full()
                                     .h(px(20.))
-                                    .text_size(px(11.))
+                                    .text_size(fs(11.))
                                     .text_color(text_1),
                             )
                             // --- Handle Enter key on the parent div — uses the raw ---
@@ -351,7 +352,7 @@ impl Render for TagFilterPanel {
                             .hover(move |style| style.bg(accent_hover_bg))
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .text_size(fs(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(accent)
                                     .child(I18nKey::TagFilterAdd.text()),
@@ -540,7 +541,7 @@ impl Render for TagFilterPanel {
                     div()
                         .py(px(8.))
                         .px(px(6.))
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .text_color(text_3)
                         .child(I18nKey::TagFilterNoTags.text()),
                 )
@@ -572,7 +573,7 @@ fn filter_tag_cell(tag: &TagInfo, checked: bool, pinned: bool, theme: &ClippiThe
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .font_family("iconfont")
                 .text_color(tag_color)
                 .child("\u{e633}")
@@ -588,7 +589,7 @@ fn filter_tag_cell(tag: &TagInfo, checked: bool, pinned: bool, theme: &ClippiThe
         .child(
             div()
                 .flex_1()
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .font_weight(if checked {
                     FontWeight::SEMIBOLD
                 } else {
@@ -653,7 +654,7 @@ pub fn render_edit_panel(
         .gap(px(6.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(fs(13.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(text_1)
                 .child(I18nKey::TagEditTitle.text()),
@@ -661,7 +662,7 @@ pub fn render_edit_panel(
         .child(div().h(px(1.)).w_full().bg(sep_line))
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .text_color(text_2)
                 .child(I18nKey::TagNameLabel.text()),
         )
@@ -681,14 +682,14 @@ pub fn render_edit_panel(
                         .w_full()
                         .h(px(20.))
                         .px(px(0.))
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .text_color(text_1),
                 ),
         )
         .child(div().h(px(1.)).w_full().bg(sep_line))
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .text_color(text_2)
                 .child(I18nKey::TagColor.text()),
         )
@@ -746,7 +747,7 @@ pub fn render_edit_panel(
                         .justify_center()
                         .cursor(CursorStyle::PointingHand)
                         .hover(|style| style.bg(btn_hover))
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .text_color(text_2)
                         .child(I18nKey::BtnCancel.text())
                         .occlude()
@@ -766,7 +767,7 @@ pub fn render_edit_panel(
                         .justify_center()
                         .cursor(CursorStyle::PointingHand)
                         .hover(move |style| style.bg(accent_hover))
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(0xffffff))
                         .child(I18nKey::BackendSave.text())
@@ -805,14 +806,14 @@ fn icon_btn(
         .hover(move |style| style.bg(hover_bg))
         .when_some(tooltip, |button, tip| {
             button.tooltip(move |window, cx| {
-                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tip))
+                Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(tip))
                     .build(window, cx)
             })
         })
         .child(
             div()
                 .font_family("iconfont")
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .text_color(color)
                 .child(icon),
         )
@@ -850,7 +851,7 @@ fn small_btn_visual(icon: &'static str, color: Rgba) -> Div {
         .child(
             div()
                 .font_family("iconfont")
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .text_color(color)
                 .child(icon),
         )

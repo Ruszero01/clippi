@@ -8,6 +8,8 @@
 
 use std::rc::Rc;
 
+use crate::ui::font::sc;
+
 type ToolbarActionHandler = Rc<dyn Fn(&str, &mut gpui::Window, &mut gpui::App)>;
 
 use gpui::prelude::*;
@@ -340,17 +342,17 @@ impl RenderOnce for HoverToolbar {
         let meta_type = props.meta_type.clone();
 
         div()
-            .h(px(22.))
-            .w(px(toolbar_w))
-            .rounded(px(6.))
+            .h(sc(22.))
+            .w(sc(toolbar_w))
+            .rounded(sc(6.))
             .bg(pill_bg)
-            .border(px(1.))
+            .border(sc(1.))
             .border_color(pill_border)
             .flex()
             .flex_row()
-            .px(px(5.))
+            .px(sc(5.))
             .items_center()
-            .gap(px(2.))
+            .gap(sc(2.))
             .children(buttons.into_iter().map(move |(icon, action, color_fn)| {
                 let on_action = on_action.clone();
                 let tooltip = match action {
@@ -392,18 +394,18 @@ impl RenderOnce for HoverToolbar {
 
                 div()
                     .id(action_id)
-                    .w(px(18.))
-                    .h(px(18.))
+                    .w(sc(18.))
+                    .h(sc(18.))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(3.))
+                    .rounded(sc(3.))
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |style| style.bg(hover_bg))
                     .tooltip(move |window, cx| {
                         let label = tooltip.clone();
                         Tooltip::element(move |_window, _cx| {
-                            div().text_size(px(10.)).child(label.clone())
+                            div().text_size(sc(10.)).child(label.clone())
                         })
                         .build(window, cx)
                     })
@@ -413,7 +415,7 @@ impl RenderOnce for HoverToolbar {
                         let color_hover = color_fn(true);
                         div()
                             .font_family("iconfont")
-                            .text_size(px(12.))
+                            .text_size(sc(12.))
                             .text_color(color_normal)
                             .hover(move |style| style.text_color(color_hover))
                             .child(icon)

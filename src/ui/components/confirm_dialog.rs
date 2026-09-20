@@ -13,6 +13,7 @@
 //! --- .render_animated(window, cx, generation) // generation: u64, bump on each show ---
 //! --- ``` ---
 
+use crate::ui::font::fs;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -326,14 +327,14 @@ impl ConfirmDialog {
                     .occlude()
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(fs(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text_1)
                             .child(title),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .text_color(theme.text_2)
                             .mt(px(8.))
                             .child(message),
@@ -358,7 +359,7 @@ impl ConfirmDialog {
                                         div()
                                             .flex_shrink_0()
                                             .font_family("iconfont")
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .text_color(if option.selected {
                                                 theme.accent
                                             } else {
@@ -372,7 +373,7 @@ impl ConfirmDialog {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .text_color(theme.text_1)
                                             .child(option.label),
                                     )
@@ -393,7 +394,7 @@ impl ConfirmDialog {
                                     .h(px(24.))
                                     .px(px(12.))
                                     .rounded(px(4.))
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .text_color(theme.text_2)
                                     .flex()
                                     .items_center()
@@ -421,7 +422,7 @@ impl ConfirmDialog {
                                     .h(px(24.))
                                     .px(px(12.))
                                     .rounded(px(4.))
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .text_color(rgb(0xffffff))
                                     .bg(confirm_color)
                                     .flex()

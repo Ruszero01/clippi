@@ -6,6 +6,7 @@
 //! Dragging the handle keeps the row itself under the pointer (no floating
 //! copy), clamps it to the list, and slides the remaining rows out of the way.
 
+use crate::ui::font::fs;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -229,7 +230,7 @@ impl Render for TypeFilterConfigPanel {
                     .h(px(24.))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
                             .child(I18nKey::FilterConfigTitle.text()),
@@ -250,7 +251,7 @@ impl Render for TypeFilterConfigPanel {
                             })
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .text_size(fs(14.))
                                     .font_family("iconfont")
                                     .text_color(text_2)
                                     .child("\u{e7b7}"),
@@ -410,7 +411,7 @@ fn filter_row(key: &str, visible: bool, theme: &ClippiTheme) -> Div {
         .rounded(px(4.))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .font_family("iconfont")
                 .text_color(if visible { theme.accent } else { theme.text_3 })
                 .flex_shrink_0()
@@ -419,7 +420,7 @@ fn filter_row(key: &str, visible: bool, theme: &ClippiTheme) -> Div {
         .child(
             div()
                 .ml(px(6.))
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .font_family("iconfont")
                 .text_color(if visible { theme.text_2 } else { theme.text_3 })
                 .child(icon.to_string()),
@@ -427,7 +428,7 @@ fn filter_row(key: &str, visible: bool, theme: &ClippiTheme) -> Div {
         .child(
             div()
                 .ml(px(4.))
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .flex_1()
                 .text_color(if visible { theme.text_1 } else { theme.text_3 })
                 .child(label),

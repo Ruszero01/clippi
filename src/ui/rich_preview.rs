@@ -3,6 +3,7 @@
 //! Extracted from `clipboard_card.rs` so the edit panel can reuse HTML color-tag
 //! parsing and rendering.
 
+use crate::ui::font::fs;
 use std::collections::HashMap;
 
 use gpui::*;
@@ -467,7 +468,7 @@ pub fn render_styled_html_lines(
                 .flex_wrap()
                 .children(line.into_iter().map(|span| {
                     let mut d = div()
-                        .text_size(px(12.))
+                        .text_size(fs(12.))
                         .font_family("Consolas")
                         .text_color(span.color.unwrap_or(fallback))
                         .font_weight(span.font_weight.unwrap_or_default());

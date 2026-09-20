@@ -8,6 +8,7 @@
 //! Action buttons can be added to toasts for interactive notifications
 //! (e.g. "Download" / "Later" for update notifications).
 
+use crate::ui::font::fs;
 use std::rc::Rc;
 
 use gpui::*;
@@ -119,7 +120,7 @@ impl RenderOnce for Toast {
             left = left.child(
                 div()
                     .font_family("iconfont")
-                    .text_size(px(12.))
+                    .text_size(fs(12.))
                     .text_color(text_color)
                     .child(icon),
             );
@@ -127,7 +128,7 @@ impl RenderOnce for Toast {
 
         left = left.child(
             div()
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .text_color(text_color)
                 .child(self.message),
         );
@@ -165,7 +166,7 @@ impl RenderOnce for Toast {
                             })
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(fs(11.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(btn_text)
                                     .child(action.label),

@@ -1,5 +1,6 @@
 //! Quick paste popup — compact, non-focus clipboard candidate list.
 
+use crate::ui::font::fs;
 use std::time::Duration;
 
 use gpui::prelude::*;
@@ -908,7 +909,7 @@ impl Render for QuickPasteView {
                                         })
                                         .child(
                                             div()
-                                                .text_size(px(12.0))
+                                                .text_size(fs(12.0))
                                                 .font_family("iconfont")
                                                 .text_color(filter_text)
                                                 .child(icon),
@@ -916,7 +917,7 @@ impl Render for QuickPasteView {
                                         .when(!icon_only, |b| {
                                             b.child(
                                                 div()
-                                                    .text_size(px(11.0))
+                                                    .text_size(fs(11.0))
                                                     .text_color(filter_text)
                                                     .child(label),
                                             )
@@ -948,7 +949,7 @@ impl Render for QuickPasteView {
                             })
                             .child(
                                 div()
-                                    .text_size(px(14.0))
+                                    .text_size(fs(14.0))
                                     .font_family("iconfont")
                                     .text_color(if fav_active {
                                         theme.fav_color
@@ -1005,7 +1006,7 @@ impl Render for QuickPasteView {
                                 .when(tag_compact, |d| d.flex_1().min_w(px(0.0)))
                                 .when(!tag_compact, |d| d.max_w(px(120.0)))
                                 .overflow_hidden()
-                                .text_size(px(10.0))
+                                .text_size(fs(10.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .bg(if active {
                                     theme.accent_overlay()
@@ -1019,7 +1020,7 @@ impl Render for QuickPasteView {
                                     d.tooltip(move |window, cx| {
                                         let tip = tip.clone();
                                         Tooltip::element(move |_window, _cx| {
-                                            div().text_size(px(10.)).child(tip.clone())
+                                            div().text_size(fs(10.)).child(tip.clone())
                                         })
                                         .build(window, cx)
                                     })
@@ -1091,7 +1092,7 @@ impl Render for QuickPasteView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(13.0))
+                                .text_size(fs(13.0))
                                 .text_color(theme.text_2)
                                 .child("No clipboard items"),
                         )
@@ -1133,7 +1134,7 @@ impl Render for QuickPasteView {
                                         div()
                                             .flex_1()
                                             .overflow_hidden()
-                                            .text_size(px(12.0))
+                                            .text_size(fs(12.0))
                                             .text_color(t.text_2)
                                             .whitespace_nowrap()
                                             .text_ellipsis()
@@ -1166,21 +1167,21 @@ impl Render for QuickPasteView {
                                             .overflow_hidden()
                                             .child(
                                                 div()
-                                                    .text_size(px(13.0))
+                                                    .text_size(fs(13.0))
                                                     .text_color(label_color)
                                                     .whitespace_nowrap()
                                                     .child(preview),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(13.0))
+                                                    .text_size(fs(13.0))
                                                     .text_color(t.text_3)
                                                     .whitespace_nowrap()
                                                     .child(" - "),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(13.0))
+                                                    .text_size(fs(13.0))
                                                     .text_color(t.text_3)
                                                     .whitespace_nowrap()
                                                     .text_ellipsis()
@@ -1198,7 +1199,7 @@ impl Render for QuickPasteView {
                                             .whitespace_nowrap()
                                             .children(spans.into_iter().map(|span| {
                                                 let mut d = div()
-                                                    .text_size(px(13.0))
+                                                    .text_size(fs(13.0))
                                                     .text_color(span.color.unwrap_or(t.text_1))
                                                     .font_weight(
                                                         span.font_weight.unwrap_or_default(),
@@ -1217,7 +1218,7 @@ impl Render for QuickPasteView {
                                         div()
                                             .flex_1()
                                             .overflow_hidden()
-                                            .text_size(px(13.0))
+                                            .text_size(fs(13.0))
                                             .text_color(t.text_1)
                                             .whitespace_nowrap()
                                             .text_ellipsis()
@@ -1323,7 +1324,7 @@ impl Render for QuickPasteView {
                                                 } else {
                                                     t.text_2
                                                 })
-                                                .text_size(px(11.0))
+                                                .text_size(fs(11.0))
                                                 .font_weight(FontWeight::BOLD)
                                                 .child((slot + 1).to_string()),
                                         )
@@ -1360,7 +1361,7 @@ impl Render for QuickPasteView {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .text_size(px(12.0))
+                                                .text_size(fs(12.0))
                                                 .font_family("iconfont")
                                                 .text_color(if selected {
                                                     t.accent
@@ -1374,7 +1375,7 @@ impl Render for QuickPasteView {
                                         // Relative time
                                         .child(
                                             div()
-                                                .text_size(px(10.0))
+                                                .text_size(fs(10.0))
                                                 .text_color(t.text_3)
                                                 .whitespace_nowrap()
                                                 .child(time),
@@ -1428,7 +1429,7 @@ impl Render for QuickPasteView {
                                     rgba(0x00000000)
                                 })
                                 .text_color(if selected { t.accent } else { t.text_1 })
-                                .text_size(px(12.0))
+                                .text_size(fs(12.0))
                                 .cursor(CursorStyle::PointingHand)
                                 .on_mouse_down(MouseButton::Left, {
                                     let m = mode.clone();
@@ -1477,21 +1478,21 @@ impl Render for QuickPasteView {
                     .flex()
                     .items_center()
                     .gap(px(16.0))
-                    .text_size(px(10.0))
+                    .text_size(fs(10.0))
                     .text_color(theme.text_3)
                     .border_t(px(1.0))
                     .border_color(theme.divider)
                     .child(
                         div()
                             .font_family("iconfont")
-                            .text_size(px(12.0))
+                            .text_size(fs(12.0))
                             .child("\u{e66b}"),
                     )
                     .child(div().child("Enter 粘贴"))
                     .child(
                         div()
                             .when(self.shift_held, |s| {
-                                s.text_size(px(10.0))
+                                s.text_size(fs(10.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.accent)
                             })
@@ -1504,7 +1505,7 @@ impl Render for QuickPasteView {
                     .child(
                         div()
                             .when(self.ctrl_held, |s| {
-                                s.text_size(px(10.0))
+                                s.text_size(fs(10.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.accent)
                             })

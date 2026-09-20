@@ -1,5 +1,6 @@
 //! --- Tag picker panel - assign or remove tags on clipboard items. ---
 
+use crate::ui::font::fs;
 use std::rc::Rc;
 
 type TagToggleHandler = Rc<dyn Fn(i64, TagState, &mut gpui::Window, &mut gpui::App)>;
@@ -171,7 +172,7 @@ impl RenderOnce for TagPickerPanel {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(fs(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(text_1)
                             .child(if is_batch {
@@ -217,7 +218,7 @@ impl RenderOnce for TagPickerPanel {
                                     .focus_bordered(false)
                                     .w_full()
                                     .h(px(20.))
-                                    .text_size(px(11.))
+                                    .text_size(fs(11.))
                                     .text_color(text_1),
                             )
                             .on_key_down({
@@ -267,7 +268,7 @@ impl RenderOnce for TagPickerPanel {
                             .hover(move |style| style.bg(accent_hover_bg))
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .text_size(fs(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(accent)
                                     .child(I18nKey::TagFilterAdd.text()),
@@ -300,7 +301,7 @@ impl RenderOnce for TagPickerPanel {
                     div()
                         .px(px(6.))
                         .py(px(12.))
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .text_color(text_3)
                         .child(I18nKey::TagPickerNoTags.text()),
                 )
@@ -425,14 +426,14 @@ fn icon_button(
         .hover(move |style| style.bg(hover_bg))
         .when_some(tooltip, |button, tip| {
             button.tooltip(move |window, cx| {
-                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tip))
+                Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(tip))
                     .build(window, cx)
             })
         })
         .child(
             div()
                 .font_family("iconfont")
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .text_color(color)
                 .child(icon),
         );
@@ -482,7 +483,7 @@ fn tag_cell(tag: TagInfo, state: TagState, colors: &TagCellColors) -> Div {
         .child(
             div()
                 .flex_1()
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .font_weight(if active {
                     FontWeight::SEMIBOLD
                 } else {

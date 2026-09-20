@@ -4,6 +4,7 @@
 //! and tag filter UI plus their floating-panel open states. Keyword input
 //! lives in `SearchBox`.
 
+use crate::ui::font::fs;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui::{InteractiveElement, StatefulInteractiveElement};
@@ -262,7 +263,7 @@ impl Render for FilterBar {
                                         .when(icon_only, move |button| {
                                             button.tooltip(move |window, cx| {
                                                 Tooltip::element(move |_window, _cx| {
-                                                    div().text_size(px(10.)).child(label)
+                                                    div().text_size(fs(10.)).child(label)
                                                 })
                                                 .build(window, cx)
                                             })
@@ -278,7 +279,7 @@ impl Render for FilterBar {
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(12.))
+                                                .text_size(fs(12.))
                                                 .font_family("iconfont")
                                                 .text_color(filter_text)
                                                 .child(icon.to_string()),
@@ -286,7 +287,7 @@ impl Render for FilterBar {
                                         .when(!icon_only, |button| {
                                             button.child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(fs(11.))
                                                     .font_weight(filter_weight)
                                                     .text_color(filter_text)
                                                     .child(label),
@@ -323,7 +324,7 @@ impl Render for FilterBar {
                             .tooltip(|window, cx| {
                                 let label = I18nKey::FilterTagsTooltip.text();
                                 Tooltip::element(move |_window, _cx| {
-                                    div().text_size(px(10.)).child(label)
+                                    div().text_size(fs(10.)).child(label)
                                 })
                                 .build(window, cx)
                             })
@@ -344,7 +345,7 @@ impl Render for FilterBar {
                             })
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .text_size(fs(14.))
                                     .font_family("iconfont")
                                     .text_color(if has_tag_filter { accent } else { text_2 })
                                     .child("\u{e886}"),

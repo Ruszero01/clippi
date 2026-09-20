@@ -1,5 +1,6 @@
 //! GPUI edit panel for clipboard text and rich-text items.
 
+use crate::ui::font::fs;
 use base64::Engine;
 use gpui::prelude::*;
 use gpui::*;
@@ -268,7 +269,7 @@ impl Render for EditPanel {
                     ))
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(fs(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
                             .child(if self.is_new {
@@ -307,7 +308,7 @@ impl Render for EditPanel {
                             })
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(accent)
                                     .child(selected_label),
                             ),
@@ -643,7 +644,7 @@ impl Render for EditPanel {
                                     })
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(fs(11.))
                                             .text_color(if active { accent } else { text_1 })
                                             .child(label),
                                     )
@@ -676,7 +677,7 @@ fn editor_box(
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(12.)),
+                .text_size(fs(12.)),
         );
     if fill {
         box_el.flex_1()
@@ -752,7 +753,7 @@ fn icon_button(
         .hover(move |style| style.bg(hover_bg))
         .when_some(tooltip, |button, tip| {
             button.tooltip(move |window, cx| {
-                Tooltip::element(move |_window, _cx| div().text_size(px(10.)).child(tip))
+                Tooltip::element(move |_window, _cx| div().text_size(fs(10.)).child(tip))
                     .build(window, cx)
             })
         })
@@ -762,7 +763,7 @@ fn icon_button(
         .child(
             div()
                 .font_family("iconfont")
-                .text_size(px(14.))
+                .text_size(fs(14.))
                 .text_color(normal)
                 .hover(move |style| style.text_color(hover))
                 .child(icon),
@@ -792,7 +793,7 @@ fn text_button(
         })
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(text_color)
                 .child(label),

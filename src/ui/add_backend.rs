@@ -1,5 +1,6 @@
 //! Add/edit sync backend dialog.
 
+use crate::ui::font::fs;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
@@ -261,7 +262,7 @@ impl AddBackendPanel {
             .gap(px(8.))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(fs(11.))
                     .font_weight(FontWeight::BOLD)
                     .text_color(self.theme.text_2)
                     .child(I18nKey::BackendSelectType.text()),
@@ -366,13 +367,13 @@ impl AddBackendPanel {
                                     };
                                     div()
                                         .font_family("iconfont")
-                                        .text_size(px(14.))
+                                        .text_size(fs(14.))
                                         .text_color(text_2)
                                         .child(icon)
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(fs(12.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(self.theme.text_1)
                                         .child(name.clone()),
@@ -399,7 +400,7 @@ impl AddBackendPanel {
                             .h(px(30.))
                             .rounded(px(6.))
                             .bg(card_bg)
-                            .text_size(px(11.))
+                            .text_size(fs(11.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_2)
                             .flex()
@@ -535,7 +536,7 @@ impl AddBackendPanel {
             .when(!self.test_error.is_empty(), |form| {
                 form.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(fs(11.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(self.theme.danger)
                         .child(self.test_error.clone()),
@@ -721,7 +722,7 @@ impl Render for AddBackendPanel {
                                                 .h(px(26.))
                                                 .rounded(px(6.))
                                                 .font_family("iconfont")
-                                                .text_size(px(14.))
+                                                .text_size(fs(14.))
                                                 .text_color(self.theme.text_2)
                                                 .flex()
                                                 .items_center()
@@ -744,7 +745,7 @@ impl Render for AddBackendPanel {
                                     })
                                     .child(if self.step == EditorStep::SelectType {
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(fs(13.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(self.theme.text_1)
                                             .child(self.title())
@@ -759,7 +760,7 @@ impl Render for AddBackendPanel {
                                     .h(px(26.))
                                     .rounded(px(6.))
                                     .font_family("iconfont")
-                                    .text_size(px(13.))
+                                    .text_size(fs(13.))
                                     .text_color(self.theme.text_2)
                                     .flex()
                                     .items_center()
@@ -796,7 +797,7 @@ fn header_name_input(input: &Entity<InputState>, theme: &ClippiTheme) -> AnyElem
                 .focus_bordered(false)
                 .w_full()
                 .h(px(20.))
-                .text_size(px(13.))
+                .text_size(fs(13.))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.text_1),
         )
@@ -805,7 +806,7 @@ fn header_name_input(input: &Entity<InputState>, theme: &ClippiTheme) -> AnyElem
 
 fn field_label(label: &'static str, color: Rgba) -> impl IntoElement {
     div()
-        .text_size(px(11.))
+        .text_size(fs(11.))
         .font_weight(FontWeight::BOLD)
         .text_color(color)
         .child(label)
@@ -830,7 +831,7 @@ fn input_box(input: &Entity<InputState>, theme: &ClippiTheme) -> AnyElement {
                 .focus_bordered(false)
                 .w_full()
                 .h(px(22.))
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .text_color(theme.text_1),
         )
         .into_any_element()
@@ -864,14 +865,14 @@ fn type_card(
         })
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(fs(12.))
                 .font_weight(FontWeight::BOLD)
                 .text_color(text_1)
                 .child(title),
         )
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(fs(10.))
                 .text_color(text_3)
                 .child(description),
         )
@@ -887,7 +888,7 @@ fn primary_button(
         .h(px(34.))
         .rounded(px(7.))
         .bg(color)
-        .text_size(px(12.))
+        .text_size(fs(12.))
         .font_weight(FontWeight::BOLD)
         .text_color(rgb(0xffffff))
         .flex()

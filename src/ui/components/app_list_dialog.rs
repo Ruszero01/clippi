@@ -3,6 +3,7 @@
 //! (free function) following the same overlay pattern as
 //! `render_latest_hotkeys_popup_overlay`.
 
+use crate::ui::font::fs;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -227,7 +228,7 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(11.))
+                            .text_size(fs(11.))
                             .text_color(text_3)
                             .child(params.empty_hint.clone())
                             .into_any_element()]
@@ -272,7 +273,7 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .gap(px(6.))
-                                .text_size(px(11.))
+                                .text_size(fs(11.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(add_button_text)
                                 .cursor(CursorStyle::PointingHand)
@@ -319,7 +320,7 @@ fn render_title_bar(
                 .gap(px(14.))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(fs(13.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(text_1)
                         .child(title.to_string()),
@@ -335,7 +336,7 @@ fn render_title_bar(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(px(10.))
+                        .text_size(fs(10.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(accent)
                         .child(I18nKey::ClipboardAppBlacklistCount.fmt(&[&count.to_string()])),
@@ -357,7 +358,7 @@ fn render_title_bar(
                             .border(px(1.))
                             .border_color(divider)
                             .font_family("iconfont")
-                            .text_size(px(13.))
+                            .text_size(fs(13.))
                             .text_color(text_2)
                             .flex()
                             .items_center()
@@ -371,7 +372,7 @@ fn render_title_bar(
                                         .flex()
                                         .flex_col()
                                         .gap(px(3.))
-                                        .text_size(px(10.))
+                                        .text_size(fs(10.))
                                         .children(
                                             tooltip_lines
                                                 .clone()
@@ -391,7 +392,7 @@ fn render_title_bar(
                         .h(px(26.))
                         .rounded(px(6.))
                         .font_family("iconfont")
-                        .text_size(px(13.))
+                        .text_size(fs(13.))
                         .text_color(text_2)
                         .flex()
                         .items_center()
@@ -448,7 +449,7 @@ fn render_entry(
                         .w(px(18. * scale))
                         .h(px(18. * scale)),
                 )
-                .text_size(px(11.))
+                .text_size(fs(11.))
                 .text_color(text_1)
                 .child(
                     div()
@@ -475,7 +476,7 @@ fn render_entry(
                                 .px(px(8. * scale))
                                 .rounded(px(4.))
                                 .bg(theme.accent_soft)
-                                .text_size(px(10.))
+                                .text_size(fs(10.))
                                 .text_color(accent)
                                 .flex()
                                 .items_center()
@@ -495,7 +496,7 @@ fn render_entry(
                                 .px(px(8. * scale))
                                 .rounded(px(4.))
                                 .bg(theme.accent_soft)
-                                .text_size(px(10.))
+                                .text_size(fs(10.))
                                 .text_color(accent)
                                 .cursor(CursorStyle::PointingHand)
                                 .on_mouse_down(MouseButton::Left, {
@@ -519,7 +520,7 @@ fn render_entry(
                             .h(px(20.))
                             .rounded(px(4.))
                             .font_family("iconfont")
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .text_color(text_2)
                             .flex()
                             .items_center()
@@ -546,7 +547,7 @@ fn render_entry(
                         .h(px(20.))
                         .rounded(px(4.))
                         .font_family("iconfont")
-                        .text_size(px(12.))
+                        .text_size(fs(12.))
                         .text_color(text_3)
                         .flex()
                         .items_center()

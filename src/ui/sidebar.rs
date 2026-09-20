@@ -7,6 +7,7 @@
 //! --- - unchecked, unpinned tags slide slightly right and fade out; ---
 //! --- - left click toggles a visible tag filter, right click toggles pin. ---
 
+use crate::ui::font::fs;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -418,7 +419,7 @@ impl Render for Sidebar {
                                 .h(px(22.))
                                 .flex()
                                 .items_center()
-                                .text_size(px(11.))
+                                .text_size(fs(11.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(text_1)
                                 .opacity(text_opacity)
@@ -501,7 +502,7 @@ impl Render for Sidebar {
                                 .px(px(5.))
                                 .flex()
                                 .items_center()
-                                .text_size(px(9.))
+                                .text_size(fs(9.))
                                 .text_color(text_2)
                                 .cursor(CursorStyle::PointingHand)
                                 .child(format!("+{hidden_count}")),

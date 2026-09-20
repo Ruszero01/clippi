@@ -3,6 +3,7 @@
 //! Matching, pinyin and match-range logic lives in `core::search` — this
 //! module only handles preview cropping and GPUI element rendering.
 
+use crate::ui::font::{fs, lh};
 use gpui::*;
 
 use crate::core::search::highlight_segments;
@@ -141,7 +142,7 @@ pub fn render_highlighted_inline(
                 .into_iter()
                 .map(move |segment| {
                     let mut el = div()
-                        .text_size(px(font_size))
+                        .text_size(fs(font_size))
                         .text_color(text_color)
                         .child(segment.text);
                     if let Some(weight) = font_weight {
@@ -178,7 +179,7 @@ pub fn render_highlighted_auxiliary_inline(
                 .into_iter()
                 .map(move |segment| {
                     let mut el = div()
-                        .text_size(px(font_size))
+                        .text_size(fs(font_size))
                         .text_color(text_color)
                         .child(segment.text);
                     if segment.highlighted {
@@ -209,13 +210,13 @@ pub fn render_highlighted_block(
                 .flex()
                 .flex_row()
                 .flex_wrap()
-                .line_height(px(line_height))
+                .line_height(lh(line_height))
                 .children(
                     highlight_segments(line, terms)
                         .into_iter()
                         .map(move |segment| {
                             let mut el = div()
-                                .text_size(px(font_size))
+                                .text_size(fs(font_size))
                                 .text_color(text_color)
                                 .child(segment.text);
                             if segment.highlighted {

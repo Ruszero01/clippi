@@ -5,8 +5,9 @@
 //! applied to visible prefix/suffix — the mask and hidden content are never
 //! passed to the highlighter.
 
+use crate::ui::font::fs;
 use gpui::{
-    div, prelude::FluentBuilder, px, rgb, rgba, FontWeight, IntoElement, ParentElement, RenderOnce,
+    div, prelude::FluentBuilder, rgb, rgba, FontWeight, IntoElement, ParentElement, RenderOnce,
     Styled, Window,
 };
 
@@ -95,7 +96,7 @@ impl RenderOnce for SensitiveText {
                 let terms = search_terms.clone();
                 match part {
                     SensitivePreviewPart::Plain(text) => div()
-                        .text_size(px(font_size))
+                        .text_size(fs(font_size))
                         .when_some(font_weight, |this, w| this.font_weight(w))
                         .text_color(text_color)
                         .child(crate::ui::search_highlight::render_highlighted_inline(
@@ -116,7 +117,7 @@ impl RenderOnce for SensitiveText {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .text_size(px(font_size))
+                        .text_size(fs(font_size))
                         .when_some(font_weight, |this, w| this.font_weight(w))
                         .child(crate::ui::search_highlight::render_highlighted_inline(
                             prefix,
@@ -129,7 +130,7 @@ impl RenderOnce for SensitiveText {
                         ))
                         .child(
                             div()
-                                .text_size(px(font_size))
+                                .text_size(fs(font_size))
                                 .when_some(font_weight, |this, w| this.font_weight(w))
                                 .text_color(mask_color)
                                 .child(mask.to_string()),

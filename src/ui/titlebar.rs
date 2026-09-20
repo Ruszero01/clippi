@@ -4,6 +4,7 @@
 //! --- three icon buttons on the right (fav filter, pin, settings). ---
 //! --- The drag area covers the left portion (width - 92px). ---
 
+use crate::ui::font::fs;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::tooltip::Tooltip;
@@ -129,7 +130,7 @@ impl Render for Titlebar {
                     // --- App name ---
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_2)
                             .child(I18nKey::TitlebarAppName.text()),
@@ -164,7 +165,7 @@ impl Render for Titlebar {
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::TitlebarTooltipHotkeys.text();
                                     Tooltip::element(move |_window, _cx| {
-                                        div().text_size(px(10.)).child(label)
+                                        div().text_size(fs(10.)).child(label)
                                     })
                                     .build(window, cx)
                                 })
@@ -179,7 +180,7 @@ impl Render for Titlebar {
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(15.))
+                                        .text_size(fs(15.))
                                         .font_family("iconfont")
                                         .text_color(if hotkeys_active { accent } else { text_2 })
                                         .child("\u{e66b}"),
@@ -200,7 +201,7 @@ impl Render for Titlebar {
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::TransferStation.text();
                                     Tooltip::element(move |_window, _cx| {
-                                        div().text_size(px(10.)).child(label)
+                                        div().text_size(fs(10.)).child(label)
                                     })
                                     .build(window, cx)
                                 })
@@ -211,7 +212,7 @@ impl Render for Titlebar {
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(15.))
+                                        .text_size(fs(15.))
                                         .font_family("iconfont")
                                         .text_color(if transfer_active { accent } else { text_2 })
                                         .child("\u{e794}"),
@@ -232,7 +233,7 @@ impl Render for Titlebar {
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::TitlebarTooltipFavorites.text();
                                     Tooltip::element(move |_window, _cx| {
-                                        div().text_size(px(10.)).child(label)
+                                        div().text_size(fs(10.)).child(label)
                                     })
                                     .build(window, cx)
                                 })
@@ -246,7 +247,7 @@ impl Render for Titlebar {
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(15.))
+                                        .text_size(fs(15.))
                                         .font_family("iconfont")
                                         .text_color(if fav_active { fav_color } else { text_2 })
                                         .child("\u{e630}"),
@@ -270,7 +271,7 @@ impl Render for Titlebar {
                                     I18nKey::TitlebarTooltipPin.text()
                                 };
                                 Tooltip::element(move |_window, _cx| {
-                                    div().text_size(px(10.)).child(label)
+                                    div().text_size(fs(10.)).child(label)
                                 })
                                 .build(window, cx)
                             })
@@ -281,7 +282,7 @@ impl Render for Titlebar {
                             })
                             .child(
                                 div()
-                                    .text_size(px(15.))
+                                    .text_size(fs(15.))
                                     .font_family("iconfont")
                                     .text_color(if pinned { accent } else { text_2 })
                                     .child("\u{e633}"),
@@ -303,7 +304,7 @@ impl Render for Titlebar {
                             })
                             .child(
                                 div()
-                                    .text_size(px(16.))
+                                    .text_size(fs(16.))
                                     .font_family("iconfont")
                                     .text_color(text_2)
                                     .child("\u{e6b6}"),
