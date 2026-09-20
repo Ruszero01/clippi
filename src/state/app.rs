@@ -168,6 +168,10 @@ pub struct AppState {
     /// below — SyncManager only needs to observe this flag.
     pub sync_dirty: Arc<AtomicBool>,
     pub bitmap_paste_finished: Arc<AtomicBool>,
+    /// Set by a background task that wrote to the database behind the list's
+    /// back (for example a fetched link title), consumed by the clipboard poll
+    /// so the change reaches the UI without a full capture cycle.
+    pub needs_reload: Arc<AtomicBool>,
     /// IDs touched by successful usage updates (copy/paste) since the list
     /// last consumed them. Accumulated so background hotkey paths cannot
     /// overwrite an earlier pending update.
@@ -427,6 +431,7 @@ impl AppState {
             batch_pasting: Arc::new(AtomicBool::new(false)),
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: Arc::new(AtomicBool::new(initial_cleanup_dirty)),
+            needs_reload: Arc::new(AtomicBool::new(false)),
             pending_hotkey_unregister: Vec::new(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
@@ -937,8 +942,15 @@ impl AppState {
     }
 
     /// Create a new entry from the editor. Returns the new item id, or `None`
-    /// when the content is blank or the write failed (the caller keeps the
-    /// editor open in that case).
+    /// when the content is blank, the content belongs to a row the editor
+    /// cannot represent, or the write failed (the caller keeps the editor open
+    /// in that case).
+    ///
+    /// The entry is ingested the way a captured one is — Clippi is recorded as
+    /// its source app, the copy sound plays, and a `link` entry gets the same
+    /// favicon/title backfill — so the editor is just another way for content to
+    /// enter the history. Only the type the user picked is taken as given; the
+    /// capture-time content sniffing that would override it is not applied.
     pub fn save_new_item(&mut self, text: &str, editor_type: &str) -> Option<i64> {
         if text.trim().is_empty() {
             self.show_warning_toast(I18nKey::EditEmptyContent.text());
@@ -947,10 +959,43 @@ impl AppState {
 
         let (content_type, meta_type, rich_data) = Self::storage_for_editor_type(editor_type, text);
         let now = chrono::Utc::now();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&text, &mut hasher);
-        let content_hash = std::hash::Hasher::finish(&hasher);
+        // A colour dedupes on its normalized value exactly like a copied one,
+        // so typing `#ff0000` refreshes the row a copied `#FF0000` created.
+        let content_hash = match crate::core::color::detect_color(text) {
+            Some(color) if meta_type == "color" => crate::core::color::color_content_hash(color),
+            _ => Self::hash_text(text),
+        };
 
+        // A file row (including a transfer-station row) hashes its path strings
+        // and an image row hashes its path, so a hand-typed string lands on the
+        // same hash as that payload without being the same content. Refreshing
+        // such a row would rewrite it as text and drop its `file_data` /
+        // `image_path`, so the collision is reported instead.
+        let existing = match self.db.get_by_hash(content_hash) {
+            Ok(existing) => existing,
+            Err(e) => {
+                log::error!("save_new_item: get_by_hash failed: {e}");
+                None
+            }
+        };
+        if let Some(existing) = &existing {
+            let refreshable = matches!(
+                existing.content_type,
+                ContentType::PlainText | ContentType::RichText
+            ) && existing.image_path.is_empty()
+                && existing.file_data.is_empty();
+            if !refreshable {
+                log::info!(
+                    "save_new_item: {content_hash} belongs to a {} row (id={})",
+                    existing.content_type.as_str(),
+                    existing.id
+                );
+                self.show_warning_toast(I18nKey::EditContentIsFileEntry.text());
+                return None;
+            }
+        }
+
+        let source = crate::platform::source::own_app_info();
         let item = ClipboardItem {
             id: 0,
             content_type: ContentType::from_str(content_type),
@@ -965,8 +1010,8 @@ impl AppState {
             file_data: String::new(),
             is_favorite: false,
             note: String::new(),
-            source_app_name: String::new(),
-            source_app_icon: String::new(),
+            source_app_name: source.app_name,
+            source_app_icon: source.icon_base64,
             size: text.chars().count() as i64,
             tags: Vec::new(),
             meta_type: meta_type.to_string(),
@@ -990,16 +1035,46 @@ impl AppState {
             }
         };
 
-        if self.should_mark_sync_dirty(&item) {
+        // The sync scope is judged against the stored row when this save
+        // refreshes one: a hand-typed duplicate of a favorite is a change to a
+        // favorite, which "favorites only" sync does want to publish.
+        let sync_scope = existing.as_ref().unwrap_or(&item);
+        let mark_sync_dirty = self.should_mark_sync_dirty(sync_scope);
+        if mark_sync_dirty {
             self.sync_dirty.store(true, Ordering::SeqCst);
         }
-        // A hand-written entry counts toward the item limit exactly like a
-        // captured one, so apply the same prune the capture path runs.
-        if let Err(e) = self.db.prune_items_over_limit(self.settings.max_items) {
-            log::error!("save_new_item: prune failed: {e}");
+        // Same feedback a capture gives: the entry reached the history.
+        if self.settings.copy_sound_enabled {
+            crate::services::copy_sound::play_copy_sound(&self.settings.copy_sound_file);
         }
+        // A hand-written link gets the same favicon and page title a copied one
+        // would. The title arrives on a worker thread and asks for a reload
+        // through `needs_reload`, which the clipboard poll picks up.
+        crate::services::url_assets::spawn_link_metadata(
+            &item,
+            &self.settings.db_path,
+            self.settings.auto_fetch_url_title,
+            self.needs_reload.clone(),
+            self.sync_dirty.clone(),
+            mark_sync_dirty,
+        );
+        // A hand-written entry counts toward the item limit exactly like a
+        // captured one, so apply the same prune the capture path runs. A
+        // refreshed row keeps its original `created_at`, so it can be the
+        // oldest deletable row this very call evicts.
+        let pruned = match self.db.prune_items_over_limit(self.settings.max_items) {
+            Ok(pruned) => pruned,
+            Err(e) => {
+                log::error!("save_new_item: prune failed: {e}");
+                Vec::new()
+            }
+        };
         self.cancel_edit_item();
         self.reload_items();
+        if pruned.contains(&new_id) {
+            log::info!("save_new_item: id={new_id} was pruned by the item limit");
+            return Some(new_id);
+        }
         self.select_single(new_id);
         log::info!(
             "save_new_item: created id={new_id} ({editor_type}, {} chars)",
@@ -1050,6 +1125,14 @@ impl AppState {
                 false
             }
         }
+    }
+
+    /// Dedupe hash of raw text, matching `ClipboardItem::new_text` and therefore
+    /// the clipboard capture path.
+    fn hash_text(text: &str) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&text, &mut hasher);
+        std::hash::Hasher::finish(&hasher)
     }
 
     fn storage_for_editor_type(
@@ -2126,7 +2209,13 @@ impl AppState {
 
     /// Update the note field for a clipboard item.
     /// Writes to DB (includes updated_at) and syncs the in-memory items list.
+    ///
+    /// The note is trimmed first: an all-whitespace note is stored as empty
+    /// like every other note check expects, instead of a stray space making the
+    /// row count as curated — which would exempt it from the retention window,
+    /// the item limit and the stale-item cleanup for good.
     pub fn update_note(&mut self, id: i64, note: &str) {
+        let note = note.trim();
         let mark_dirty = self
             .items
             .iter()
@@ -3020,6 +3109,7 @@ mod tests {
             skip_next: Arc::new(AtomicBool::new(false)),
             sync_dirty: dirty.clone(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
+            needs_reload: Arc::new(AtomicBool::new(false)),
             last_usage_touched_ids: Vec::new(),
             usage_sync_requires_full_reload: false,
             pending_hotkey_unregister: Vec::new(),
@@ -4336,6 +4426,125 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(state.items.len(), 1, "no duplicate row for the same hash");
+    }
+
+    /// A file row hashes its path strings, so a hand-typed path produces the
+    /// same hash without being the same content. Refreshing it would rewrite
+    /// the row as text and drop its `file_data`, so the save is refused and the
+    /// file row is left untouched.
+    #[test]
+    fn save_new_item_refuses_a_path_owned_by_a_file_row() {
+        let (mut state, _dirty) = test_state();
+        let path = "/tmp/clippi-report.pdf";
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&path, &mut hasher);
+        let mut file_item = make_item(1, ContentType::File, false, "clippi-report.pdf");
+        file_item.content_hash = std::hash::Hasher::finish(&hasher);
+        file_item.file_data =
+            r#"[{"name":"clippi-report.pdf","path":"/tmp/clippi-report.pdf","is_dir":false}]"#
+                .to_string();
+        state.db.upsert(&file_item).unwrap();
+
+        state.start_new_item();
+        assert!(state.save_new_item(path, "plain_text").is_none());
+        assert!(state.toast_is_warning);
+        assert!(
+            state.editing_is_new,
+            "editor stays open for a rejected save"
+        );
+
+        let stored = state
+            .db
+            .get_by_hash(file_item.content_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.content_type, ContentType::File);
+        assert_eq!(stored.full_text, "clippi-report.pdf");
+        assert!(stored.file_data.contains("clippi-report.pdf"));
+    }
+
+    /// A note of only whitespace is not a note: the maintenance predicate tests
+    /// `note = ''`, so storing the space verbatim would exempt the row from
+    /// every automatic cleanup and from the default "clear data" selection.
+    #[test]
+    fn update_note_trims_whitespace_instead_of_storing_it() {
+        let (mut state, _dirty) = test_state();
+        let item = make_item(1, ContentType::PlainText, false, "hello");
+        state.db.upsert(&item).unwrap();
+        state.items.push(item);
+
+        state.update_note(1, "   ");
+
+        let stored = state.db.get_by_id(1).unwrap().unwrap();
+        assert_eq!(stored.note, "", "a whitespace-only note clears the note");
+
+        state.update_note(1, "  keep me  ");
+        let stored = state.db.get_by_id(1).unwrap().unwrap();
+        assert_eq!(stored.note, "keep me");
+    }
+
+    /// A hand-written entry is attributed to Clippi itself, not to whichever
+    /// application happened to be frontmost while the user typed.
+    #[test]
+    fn save_new_item_records_clippi_as_the_source_app() {
+        let (mut state, _dirty) = test_state();
+        state.start_new_item();
+
+        let id = state.save_new_item("typed by hand", "plain_text").unwrap();
+
+        let item = state.db.get_by_id(id).unwrap().unwrap();
+        assert_eq!(item.source_app_name, I18nKey::TitlebarAppName.text());
+        assert!(
+            !item.source_app_icon.is_empty(),
+            "the app icon travels with the entry"
+        );
+        assert!(
+            item.source_app_icon.len() < 256 * 1024,
+            "the icon must stay within the inline budget the list keeps"
+        );
+    }
+
+    /// A colour typed by hand dedupes on its normalized value exactly like a
+    /// copied one, so it refreshes that row instead of adding a duplicate.
+    #[test]
+    fn save_new_item_refreshes_a_captured_color_row() {
+        let (mut state, _dirty) = test_state();
+        let color = crate::core::color::detect_color("#FF0000").unwrap();
+        let mut captured = make_item(1, ContentType::PlainText, false, "#FF0000");
+        captured.content_hash = crate::core::color::color_content_hash(color);
+        captured.meta_type = "color".to_string();
+        state.db.upsert(&captured).unwrap();
+
+        state.start_new_item();
+        let id = state.save_new_item("#ff0000", "color").unwrap();
+
+        assert_eq!(id, 1, "the captured row is refreshed, not duplicated");
+        assert_eq!(state.items.len(), 1, "no duplicate row for the same colour");
+        assert_eq!(state.db.get_by_id(id).unwrap().unwrap().meta_type, "color");
+    }
+
+    /// Refreshing an existing favorite is a change to a favorite, so
+    /// "favorites only" sync has to publish it even though the entry being
+    /// saved was built as an ordinary, non-favorite one.
+    #[test]
+    fn save_new_item_marks_a_refreshed_favorite_dirty_in_favorites_only_mode() {
+        let (mut state, dirty) = test_state();
+        state.settings.sync_favorites_only = true;
+        let mut favorite = make_item(1, ContentType::PlainText, true, "keep me");
+        favorite.content_hash = AppState::hash_text("keep me");
+        state.db.upsert(&favorite).unwrap();
+        // `upsert` inserts without the favorite flag, so mark it the way the UI does.
+        state.db.toggle_favorite(1).unwrap();
+        state.reload_items();
+
+        state.start_new_item();
+        let id = state.save_new_item("keep me", "plain_text").unwrap();
+
+        assert_eq!(id, 1, "the favorite row is refreshed");
+        assert!(
+            dirty.load(Ordering::SeqCst),
+            "a refreshed favorite is in sync scope"
+        );
     }
 
     // ── toggle_item_tag sync_dirty ─────────────────────────────────

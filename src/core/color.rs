@@ -4,6 +4,9 @@
 //! --- (rgb/rgba function, comma/space separated) formats. Normalizes ---
 //! to a canonical 6-digit uppercase hex for deduplication.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 /// Normalized RGB color value used for hashing and conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ColorValue {
@@ -27,6 +30,18 @@ impl ColorValue {
     pub fn to_rgb(self) -> String {
         format!("rgb({}, {}, {})", self.r, self.g, self.b)
     }
+}
+
+/// Dedupe hash for a colour entry.
+///
+/// Colours hash their normalized value instead of the text the user typed, so
+/// `#FF0000`, `#ff0000` and `rgb(255,0,0)` all resolve to one history row.
+/// Shared by the clipboard capture path and the editor's "new entry" flow so a
+/// hand-typed colour refreshes the same row a copied one would.
+pub fn color_content_hash(color: ColorValue) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    color.to_hex_normalized().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Try to detect and parse a color from text.

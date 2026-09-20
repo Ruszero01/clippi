@@ -16,6 +16,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::LatestHotkeyEntry;
 use crate::platform::hotkey::hotkey_display;
 use crate::state::app::AppState;
+use crate::ui::font::fs;
 use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::{WinVTakeoverStatus, WindowManager};
 
@@ -164,14 +165,14 @@ impl SettingsPanel {
                     .when(options.idle_desc.is_some(), |d| d.flex_1().min_w(px(0.)))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text_1)
                             .child(title.text()),
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(fs(10.))
                             .text_color(desc_color)
                             .when(options.idle_desc.is_some(), |d| {
                                 d.max_w_full()
@@ -211,7 +212,7 @@ impl SettingsPanel {
                                     })
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(fs(11.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(neutral)
                                             .child(I18nKey::BtnReset.text()),
@@ -240,7 +241,7 @@ impl SettingsPanel {
                             })
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(fs(11.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(recording_btn_text)
                                     .child(if let Some(candidate) = pending_single {
@@ -273,7 +274,7 @@ impl SettingsPanel {
                                     .child(
                                         div()
                                             .font_family("iconfont")
-                                            .text_size(px(9.))
+                                            .text_size(fs(9.))
                                             .text_color(danger)
                                             .child("\u{e7b7}"),
                                     ),
@@ -367,7 +368,7 @@ impl SettingsPanel {
                     .justify_center()
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(fs(10.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(badge_text)
                             .child(format!("{}", index + 1)),
@@ -379,7 +380,7 @@ impl SettingsPanel {
                     .min_w(px(0.))
                     .overflow_hidden()
                     .text_ellipsis()
-                    .text_size(px(11.))
+                    .text_size(fs(11.))
                     .font_weight(if has_hotkey {
                         FontWeight::MEDIUM
                     } else {
@@ -410,7 +411,7 @@ impl SettingsPanel {
                         .child(
                             div()
                                 .font_family("iconfont")
-                                .text_size(px(9.))
+                                .text_size(fs(9.))
                                 .text_color(danger)
                                 .child("\u{e7b7}"),
                         ),
@@ -490,7 +491,7 @@ impl SettingsPanel {
                                     .gap(px(14.))
                                     .child(
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(fs(13.))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(theme.text_1)
                                             .child(I18nKey::LatestHotkeysTitle.text()),
@@ -506,7 +507,7 @@ impl SettingsPanel {
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .text_size(px(10.))
+                                            .text_size(fs(10.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(theme.accent)
                                             .child(format!("{}/10", configured)),
@@ -520,7 +521,7 @@ impl SettingsPanel {
                                     .h(px(26.))
                                     .rounded(px(6.))
                                     .font_family("iconfont")
-                                    .text_size(px(13.))
+                                    .text_size(fs(13.))
                                     .text_color(close_text)
                                     .flex()
                                     .items_center()
@@ -701,14 +702,14 @@ impl SettingsPanel {
                             .gap(px(2.))
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme_text_1)
                                     .child(I18nKey::HotkeyTabTitle.text()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(theme_text_3)
                                     .child(I18nKey::WinVManagedByMode.text()),
                             ),
@@ -724,7 +725,7 @@ impl SettingsPanel {
                             .justify_center()
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(fs(11.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.accent)
                                     .child("Win+V"),
@@ -939,7 +940,7 @@ impl SettingsPanel {
                                                     .overflow_hidden()
                                                     .text_ellipsis()
                                                     .whitespace_nowrap()
-                                                    .text_size(px(12.))
+                                                    .text_size(fs(12.))
                                                     .font_weight(FontWeight::BOLD)
                                                     .text_color(theme.text_1)
                                                     .child(I18nKey::WinVTakeoverLabel.text()),
@@ -950,7 +951,7 @@ impl SettingsPanel {
                                                     .overflow_hidden()
                                                     .text_ellipsis()
                                                     .whitespace_nowrap()
-                                                    .text_size(px(10.))
+                                                    .text_size(fs(10.))
                                                     .text_color(theme.text_3)
                                                     .child(status_text),
                                             ),
@@ -1016,7 +1017,7 @@ impl SettingsPanel {
                                                         .py(px(3.))
                                                         .rounded(px(5.))
                                                         .bg(accent)
-                                                        .text_size(px(10.))
+                                                        .text_size(fs(10.))
                                                         .text_color(rgb(0xffffff))
                                                         .cursor(CursorStyle::PointingHand)
                                                         .hover(|style| style.opacity(0.85))
@@ -1040,7 +1041,7 @@ impl SettingsPanel {
                                                     div()
                                                         .px(px(6.))
                                                         .py(px(3.))
-                                                        .text_size(px(10.))
+                                                        .text_size(fs(10.))
                                                         .text_color(text_3)
                                                         .cursor(CursorStyle::PointingHand)
                                                         .hover(|style| style.opacity(0.7))

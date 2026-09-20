@@ -170,6 +170,7 @@ impl GpuiClipboardService {
     pub fn poll_state(&mut self, state: &mut AppState) -> bool {
         // --- ── Handle async OCR completion ── ---
         let needs_reload = self.needs_refresh.swap(false, Ordering::SeqCst)
+            || state.needs_reload.swap(false, Ordering::SeqCst)
             || crate::platform::clipboard::take_thumbnail_ready();
 
         if self
@@ -311,29 +312,14 @@ impl GpuiClipboardService {
             }
 
             // ── Post-upsert: spawn URL metadata fetch for link items ──
-            if item.meta_type == "link" {
-                crate::services::url_assets::spawn_ensure_url_favicon_cached(
-                    item.full_text.clone(),
-                );
-            }
-            if item.meta_type == "link"
-                && should_fetch_url_title(&item.full_text, state.settings.auto_fetch_url_title)
-            {
-                let url = item.full_text.clone();
-                let content_hash = item.content_hash;
-                let db_path = db_path.clone();
-                let needs_refresh = self.needs_refresh.clone();
-                let sync_dirty = state.sync_dirty.clone();
-                let mark_sync_dirty = state.should_mark_sync_dirty(&item);
-                crate::services::url_assets::spawn_fetch_url_title(
-                    url,
-                    content_hash,
-                    db_path,
-                    needs_refresh,
-                    sync_dirty,
-                    mark_sync_dirty,
-                );
-            }
+            crate::services::url_assets::spawn_link_metadata(
+                &item,
+                &db_path,
+                state.settings.auto_fetch_url_title,
+                self.needs_refresh.clone(),
+                state.sync_dirty.clone(),
+                state.should_mark_sync_dirty(&item),
+            );
         }
 
         if changed || needs_reload {
@@ -363,10 +349,6 @@ impl GpuiClipboardService {
             do_ocr,
         });
     }
-}
-
-fn should_fetch_url_title(url: &str, enabled: bool) -> bool {
-    enabled && crate::core::secret::url_sensitive_ranges(url).is_empty()
 }
 
 impl Drop for GpuiClipboardService {
@@ -461,28 +443,5 @@ fn run_ocr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
         }
         Ok(_) => { /* empty result, skip */ }
         Err(e) => log::error!("OCR error: {e}"),
-    }
-}
-
-#[cfg(test)]
-mod url_title_policy_tests {
-    use super::should_fetch_url_title;
-
-    #[test]
-    fn skips_title_fetch_for_sensitive_urls() {
-        assert!(!should_fetch_url_title(
-            "https://user:password@example.com/reset",
-            true
-        ));
-        assert!(!should_fetch_url_title(
-            "https://example.com/reset?token=one-time-secret",
-            true
-        ));
-    }
-
-    #[test]
-    fn allows_title_fetch_for_normal_urls_when_enabled() {
-        assert!(should_fetch_url_title("https://example.com/docs", true));
-        assert!(!should_fetch_url_title("https://example.com/docs", false));
     }
 }

@@ -22,7 +22,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
 
-use gpui::{App, Pixels, SharedString, Window, px};
+use gpui::{px, App, Pixels, SharedString, Window};
 
 /// Live scale multiplier, stored as f32 bits. Read/written only on the GPUI
 /// main thread (render + event handlers), so a relaxed atomic is sufficient.
@@ -75,6 +75,20 @@ const REM_BASE: f32 = 16.0;
 /// gpui's special family name for the platform UI font.
 pub const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 
+/// Monospace family for the styled rich-text preview.
+///
+/// The preview deliberately opts out of the UI family so extracted document
+/// spans keep one fixed, column-aligned face, which is why it names a family
+/// here instead of reading the theme. `Consolas` ships only with Windows and
+/// Office: CoreText does not know it, so on macOS the preview would fall
+/// through to a proportional fallback and misalign tab-separated cells.
+#[cfg(target_os = "windows")]
+pub const PREVIEW_FONT_FAMILY: &str = "Consolas";
+#[cfg(target_os = "macos")]
+pub const PREVIEW_FONT_FAMILY: &str = "Menlo";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub const PREVIEW_FONT_FAMILY: &str = "monospace";
+
 /// Current global UI scale multiplier.
 #[inline]
 pub fn scale() -> f32 {
@@ -84,7 +98,14 @@ pub fn scale() -> f32 {
 /// Apply a raw scale multiplier (clamped to a sane range so a corrupted config
 /// can never blow up layout).
 pub fn apply_scale(scale: f32) {
-    SCALE.store(scale.clamp(0.8, 1.6).to_bits(), Ordering::Relaxed);
+    // `f32::clamp` returns NaN unchanged, and a NaN multiplier turns every
+    // scaled size into NaN, so non-finite values fall back to the default.
+    let scale = if scale.is_finite() {
+        scale.clamp(0.8, 1.6)
+    } else {
+        1.0
+    };
+    SCALE.store(scale.to_bits(), Ordering::Relaxed);
 }
 
 /// Current stored family ("" == system default).

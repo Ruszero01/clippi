@@ -1043,9 +1043,6 @@ fn detect_text_content_with_readers(
 
         // Color detection: hash the normalized color value for dedup
         if let Some(color) = detect_color(&text) {
-            let mut hasher = DefaultHasher::new();
-            color.to_hex_normalized().hash(&mut hasher);
-            let hash = hasher.finish();
             let mut item = ClipboardItem::new_text(
                 0,
                 &text,
@@ -1054,7 +1051,7 @@ fn detect_text_content_with_readers(
                 rich_data.as_ref(),
             );
             // Override the text-based hash with the normalized color hash for dedup
-            item.content_hash = hash;
+            item.content_hash = crate::core::color::color_content_hash(color);
             item.meta_type = "color".to_string();
             return Some(item);
         }

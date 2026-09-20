@@ -10,6 +10,7 @@ use gpui_component::tooltip::Tooltip;
 
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::migrate_database;
+use crate::ui::font::fs;
 use crate::ui::settings::SettingsEvent;
 
 use super::SettingsPanel;
@@ -128,7 +129,7 @@ impl SettingsPanel {
                 // --- Title ---
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(fs(12.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(text_1)
                         .child(I18nKey::SettingDbPath.text()),
@@ -156,7 +157,7 @@ impl SettingsPanel {
                                 .overflow_hidden()
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(fs(10.))
                                         .text_color(text_2)
                                         .whitespace_nowrap()
                                         .child(db_path_str.clone()),
@@ -235,7 +236,7 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(fs(11.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(rgb(0xffffff))
                                         .child(I18nKey::BtnChange.text()),
@@ -263,7 +264,7 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(fs(11.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_3)
                                         .child(I18nKey::BtnReset.text()),
@@ -307,14 +308,14 @@ impl SettingsPanel {
                                 .gap(px(1.))
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(fs(12.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_1)
                                         .child(I18nKey::SettingMaxItems.text()),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(fs(10.))
                                         .text_color(text_3)
                                         .child(I18nKey::DescMaxItems.text()),
                                 ),
@@ -339,7 +340,7 @@ impl SettingsPanel {
                                             .focus_bordered(false)
                                             .w_full()
                                             .h(px(20.))
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .text_color(text_1),
                                     )
                                     .on_key_down({
@@ -376,7 +377,7 @@ impl SettingsPanel {
                                     })
                                     .child(if val == 0 {
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .text_color(text_3)
                                             .child(I18nKey::Unlimited.text())
                                             .into_any_element()
@@ -388,13 +389,13 @@ impl SettingsPanel {
                                             .gap(px(2.))
                                             .child(
                                                 div()
-                                                    .text_size(px(12.))
+                                                    .text_size(fs(12.))
                                                     .text_color(text_1)
                                                     .child(val.to_string()),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(12.))
+                                                    .text_size(fs(12.))
                                                     .text_color(text_3)
                                                     .child(I18nKey::UnitItems.text()),
                                             )
@@ -422,14 +423,14 @@ impl SettingsPanel {
                                 .gap(px(1.))
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(fs(12.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_1)
                                         .child(I18nKey::SettingRetentionDays.text()),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(fs(10.))
                                         .text_color(text_3)
                                         .child(I18nKey::DescRetentionDays.text()),
                                 ),
@@ -454,7 +455,7 @@ impl SettingsPanel {
                                             .focus_bordered(false)
                                             .w_full()
                                             .h(px(20.))
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .text_color(text_1),
                                     )
                                     .on_key_down({
@@ -491,7 +492,7 @@ impl SettingsPanel {
                                     })
                                     .child(if val == 0 {
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(fs(12.))
                                             .text_color(text_3)
                                             .child(I18nKey::Unlimited.text())
                                             .into_any_element()
@@ -503,13 +504,13 @@ impl SettingsPanel {
                                             .gap(px(2.))
                                             .child(
                                                 div()
-                                                    .text_size(px(12.))
+                                                    .text_size(fs(12.))
                                                     .text_color(text_1)
                                                     .child(val.to_string()),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(12.))
+                                                    .text_size(fs(12.))
                                                     .text_color(text_3)
                                                     .child(I18nKey::UnitDays.text()),
                                             )
@@ -523,7 +524,7 @@ impl SettingsPanel {
                     div()
                         .px(px(14.))
                         .pb(px(10.))
-                        .text_size(px(10.))
+                        .text_size(fs(10.))
                         .text_color(text_3)
                         .child(I18nKey::DescRetentionExempt.text()),
                 )
@@ -561,14 +562,14 @@ impl SettingsPanel {
                         .gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(fs(12.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(text_1)
                                 .child(I18nKey::SettingCleanup.text()),
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(fs(10.))
                                 .text_color(text_3)
                                 .child(I18nKey::DescCleanup.text()),
                         ),
@@ -612,7 +613,7 @@ impl SettingsPanel {
                             div()
                                 .flex_shrink_0()
                                 .font_family("iconfont")
-                                .text_size(px(12.))
+                                .text_size(fs(12.))
                                 .text_color(if stale_enabled { accent } else { text_3 })
                                 .child(if stale_enabled {
                                     "\u{e61f}"
@@ -627,7 +628,7 @@ impl SettingsPanel {
                                 .gap(px(5.))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(fs(11.))
                                         .text_color(text_1)
                                         .child(I18nKey::SettingCleanupStaleItems.text()),
                                 )
@@ -642,7 +643,7 @@ impl SettingsPanel {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .text_size(px(9.))
+                                        .text_size(fs(9.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(text_3)
                                         .cursor(CursorStyle::Arrow)
@@ -652,7 +653,7 @@ impl SettingsPanel {
                                                     .flex()
                                                     .flex_col()
                                                     .gap(px(2.))
-                                                    .text_size(px(10.))
+                                                    .text_size(fs(10.))
                                                     .child(I18nKey::DescCleanupStaleItems.text())
                                                     .child(I18nKey::DescRetentionExempt.text())
                                             })
@@ -735,7 +736,7 @@ impl SettingsPanel {
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(fs(11.))
                                                     .font_weight(btn_weight)
                                                     .text_color(btn_text)
                                                     .child(*label),
@@ -779,7 +780,7 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(fs(11.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(rgb(0xffffff))
                                         .child(if maintenance_running {
@@ -823,14 +824,14 @@ impl SettingsPanel {
                         .gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(fs(12.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(text_1)
                                 .child(I18nKey::SettingClearData.text()),
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(fs(10.))
                                 .text_color(text_3)
                                 .child(I18nKey::DescClearData.text()),
                         ),
@@ -873,7 +874,7 @@ impl SettingsPanel {
                         })
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(fs(11.))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(0xffffff))
                                 .child(if maintenance_running {
@@ -1173,7 +1174,7 @@ impl SettingsPanel {
                     // --- Title ---
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(fs(14.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(text_1)
                             .child(I18nKey::BtnResetDataDir.text()),
@@ -1181,7 +1182,7 @@ impl SettingsPanel {
                     // --- Description ---
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(fs(12.))
                             .text_color(text_3)
                             .child(I18nKey::DescStorageChoose.text()),
                     )
@@ -1214,14 +1215,14 @@ impl SettingsPanel {
                             })
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
                                     .child(I18nKey::StoragePortable.text()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(text_3)
                                     .child(dialog.portable_path.clone()),
                             )
@@ -1255,14 +1256,14 @@ impl SettingsPanel {
                             })
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(text_1)
                                     .child(I18nKey::SystemDefault.text()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(fs(10.))
                                     .text_color(text_3)
                                     .child(dialog.system_path.clone()),
                             )
@@ -1282,7 +1283,7 @@ impl SettingsPanel {
                                     .h(px(24.))
                                     .px(px(12.))
                                     .rounded(px(4.))
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .text_color(text_2)
                                     .flex()
                                     .items_center()
@@ -1304,7 +1305,7 @@ impl SettingsPanel {
                                     .h(px(24.))
                                     .px(px(12.))
                                     .rounded(px(4.))
-                                    .text_size(px(12.))
+                                    .text_size(fs(12.))
                                     .text_color(rgb(0xffffff))
                                     .bg(accent)
                                     .flex()

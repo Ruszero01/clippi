@@ -32,7 +32,7 @@ use crate::core::types::{
 
 use super::components::sensitive_text::SensitiveText;
 use super::components::spinner::activity_spinner;
-use super::font::{scale, sc};
+use super::font::{sc, scale};
 use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
 use super::rich_preview::{self, StyledHtmlSpan};
 use super::search_highlight;

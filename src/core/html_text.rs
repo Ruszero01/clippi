@@ -1042,6 +1042,24 @@ lang=EN-US><o:p></o:p></span></span></b></p>
         assert_eq!(preview_html(&html, 4096), html);
     }
 
+    /// The reserve is "past half the budget", so a head of exactly half is kept.
+    /// The list projection applies the same rule in SQL; a `>`/`>=` mismatch
+    /// here would make a keyword page and the list preview different slices of
+    /// one payload.
+    #[test]
+    fn preview_html_anchors_only_past_half_the_budget() {
+        let limit = 100;
+        let tail = "y".repeat(200);
+        let at_reserve = format!("{}<!--StartFragment--><p>{tail}</p>", "x".repeat(limit / 2));
+        let past_reserve = format!(
+            "{}<!--StartFragment--><p>{tail}</p>",
+            "x".repeat(limit / 2 + 1)
+        );
+
+        assert!(!preview_html(&at_reserve, limit).starts_with(FRAGMENT_MARKER));
+        assert!(preview_html(&past_reserve, limit).starts_with(FRAGMENT_MARKER));
+    }
+
     #[test]
     fn wps_class_style_survives_cf_html_round_trip() {
         let wps = r#"<html><head><style>.et2 { color: #ff6600; }</style></head><body><table><tr><td class=et2>测试文本</td></tr></table></body></html>"#;

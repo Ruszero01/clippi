@@ -577,49 +577,17 @@ impl Render for EditPanel {
                                         this.update(cx, |panel, cx| {
                                             let old_type = panel.selected_type.clone();
                                             let new_type = key.clone();
+                                            let current =
+                                                panel.content_input.read(cx).value().to_string();
 
-                                            // 富文本 → 纯文本：提取纯文本 + 记录文本段，缓存完整 HTML
-                                            if is_rich_editor_type(&old_type)
-                                                && is_plain_editor_type(&new_type)
-                                            {
-                                                let current = panel
-                                                    .content_input
-                                                    .read(cx)
-                                                    .value()
-                                                    .to_string();
-                                                let (plain, segments) =
-                                                    extract_text_and_segments(&current);
-                                                panel.rich_cache = Some(RichTextCache {
-                                                    html: current,
-                                                    plain: plain.clone(),
-                                                    segments,
-                                                });
-                                                pending_value = Some(plain);
-                                            }
-                                            // 纯文本 → 富文本：将编辑后的纯文本同步回 HTML
-                                            else if is_plain_editor_type(&old_type)
-                                                && is_rich_editor_type(&new_type)
-                                            {
-                                                if let Some(cache) = panel.rich_cache.take() {
-                                                    let current_plain = panel
-                                                        .content_input
-                                                        .read(cx)
-                                                        .value()
-                                                        .to_string();
-                                                    let restored = if current_plain == cache.plain {
-                                                        // 未编辑 → 直接还原
-                                                        cache.html
-                                                    } else {
-                                                        // 有编辑 → 尝试同步文本回 HTML
-                                                        replace_text_in_html(
-                                                            &cache.html,
-                                                            &current_plain,
-                                                            &cache.segments,
-                                                        )
-                                                    };
-                                                    pending_value = Some(restored);
-                                                }
-                                            }
+                                            let switched = type_switch(
+                                                &old_type,
+                                                &new_type,
+                                                &current,
+                                                panel.rich_cache.take(),
+                                            );
+                                            panel.rich_cache = switched.cache;
+                                            pending_value = switched.value;
 
                                             panel.selected_type = new_type;
                                             panel.type_menu_open = false;
@@ -881,15 +849,15 @@ fn is_rich_editor_type(t: &str) -> bool {
     matches!(t, "markdown" | "html")
 }
 
-/// 是否为纯文本编辑器类型（无样式标签）
-fn is_plain_editor_type(t: &str) -> bool {
-    matches!(
-        t,
-        "plain_text" | "link" | "path" | "color" | "email" | "phone" | "secret"
-    )
+/// HTML 是唯一一种其他类型无法承载的内容：它的缓冲区里是带标签的文档，
+/// 其他类型只能编辑其中的可见文本。Markdown 与纯文本同为文本，切换时
+/// 内容原样保留。
+fn is_html_editor_type(t: &str) -> bool {
+    t == "html"
 }
 
 /// 缓存富文本内容，支持纯文本编辑后同步回 HTML。
+#[derive(Clone)]
 struct RichTextCache {
     /// 原始 HTML/富文本内容（含完整标签）
     html: String,
@@ -897,6 +865,63 @@ struct RichTextCache {
     plain: String,
     /// 提取时记录的各文本段（顺序与 HTML 中 `>text<` 一致）
     segments: Vec<String>,
+}
+
+/// 切换编辑器类型后缓冲区与缓存的新状态。
+struct TypeSwitch {
+    /// 需要写回输入框的内容；`None` 表示保持用户输入不变。
+    value: Option<String>,
+    /// 切换后的富文本缓存；`None` 表示没有可还原的 HTML。
+    cache: Option<RichTextCache>,
+}
+
+/// 计算类型切换对内容的影响。
+///
+/// 只有 HTML 参与转换：离开 HTML 时提取可见文本、并把文档缓存起来，回到
+/// HTML 时还原（期间的纯文本编辑会尝试回填到文档里）。其余任何切换——
+/// 包括 Markdown 与纯文本之间——都不动缓冲区，用户输入什么条目就存什么，
+/// 避免 "# 标题" 这类内容在切换类型时被悄悄改写。
+fn type_switch(
+    old_type: &str,
+    new_type: &str,
+    current: &str,
+    cache: Option<RichTextCache>,
+) -> TypeSwitch {
+    let leaving_html = is_html_editor_type(old_type) && !is_html_editor_type(new_type);
+    if leaving_html {
+        let (plain, segments) = extract_text_and_segments(current);
+        return TypeSwitch {
+            value: Some(plain.clone()),
+            cache: Some(RichTextCache {
+                html: current.to_string(),
+                plain,
+                segments,
+            }),
+        };
+    }
+
+    let entering_html = !is_html_editor_type(old_type) && is_html_editor_type(new_type);
+    if entering_html {
+        let Some(cache) = cache else {
+            // 没有可还原的 HTML（例如 Markdown 条目）：当前文本直接作为
+            // HTML 源码，内容保持不变。
+            return TypeSwitch {
+                value: None,
+                cache: None,
+            };
+        };
+        let restored = if current == cache.plain {
+            cache.html.clone()
+        } else {
+            replace_text_in_html(&cache.html, current, &cache.segments)
+        };
+        return TypeSwitch {
+            value: Some(restored),
+            cache: None,
+        };
+    }
+
+    TypeSwitch { value: None, cache }
 }
 
 /// 从 HTML 提取纯文本的同时记录各文本段（用于反向同步）。
@@ -1067,4 +1092,103 @@ fn replace_text_in_html(html: &str, new_plain: &str, old_segments: &[String]) ->
         }
     }
     result
+}
+
+#[cfg(test)]
+mod type_switch_tests {
+    use super::{type_switch, RichTextCache};
+
+    fn cache(html: &str, plain: &str, segments: &[&str]) -> RichTextCache {
+        RichTextCache {
+            html: html.to_string(),
+            plain: plain.to_string(),
+            segments: segments.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// The reported bug: text typed as plain text was rewritten on the way to
+    /// markdown. Markdown is text, so nothing about the buffer may change.
+    #[test]
+    fn markdown_and_plain_text_keep_the_buffer_verbatim() {
+        let md = type_switch("plain_text", "markdown", "# 标题", None);
+        assert_eq!(md.value, None, "plain -> markdown must not rewrite");
+        assert!(md.cache.is_none());
+
+        let plain = type_switch("markdown", "plain_text", "# 标题", None);
+        assert_eq!(plain.value, None, "markdown -> plain must not rewrite");
+        assert!(plain.cache.is_none());
+
+        // Every non-HTML pair behaves the same way.
+        for (from, to) in [
+            ("plain_text", "link"),
+            ("link", "secret"),
+            ("color", "markdown"),
+            ("email", "plain_text"),
+        ] {
+            let switched = type_switch(from, to, "keep me", None);
+            assert_eq!(switched.value, None, "{from} -> {to} must not rewrite");
+        }
+    }
+
+    /// Leaving HTML edits only the visible text, and the document is kept so the
+    /// markup can be restored.
+    #[test]
+    fn leaving_html_extracts_the_visible_text_and_caches_the_document() {
+        let html = "<p>hello</p><p>world</p>";
+        let switched = type_switch("html", "plain_text", html, None);
+
+        let value = switched.value.expect("buffer becomes the visible text");
+        assert!(value.contains("hello") && value.contains("world"));
+        assert!(!value.contains("<p>"));
+        let cache = switched.cache.expect("document is cached");
+        assert_eq!(cache.html, html);
+        assert_eq!(cache.plain, value);
+
+        // Leaving HTML for markdown edits the plain text too.
+        let to_markdown = type_switch("html", "markdown", html, None);
+        assert_eq!(to_markdown.value.as_deref(), Some(value.as_str()));
+    }
+
+    #[test]
+    fn returning_to_html_restores_the_cached_document() {
+        let html = "<p>hello</p>";
+        let cached = cache(html, "hello", &["hello"]);
+
+        let restored = type_switch("plain_text", "html", "hello", Some(cached.clone()));
+        assert_eq!(restored.value.as_deref(), Some(html));
+        assert!(restored.cache.is_none(), "the cache is consumed");
+
+        // Edits made while away are replayed into the document.
+        let edited = type_switch("markdown", "html", "goodbye", Some(cached));
+        let value = edited.value.expect("buffer becomes the document again");
+        assert!(
+            value.contains("goodbye"),
+            "edited text reaches the HTML: {value}"
+        );
+        assert!(!value.contains("hello"));
+    }
+
+    /// Without a cached document the buffer is already the HTML source.
+    #[test]
+    fn entering_html_without_a_cache_keeps_the_buffer() {
+        let switched = type_switch("markdown", "html", "<p>as typed</p>", None);
+
+        assert_eq!(switched.value, None);
+        assert!(switched.cache.is_none());
+    }
+
+    /// A cache survives switches that do not touch HTML, so a detour through
+    /// another type still restores the original document.
+    #[test]
+    fn a_cache_survives_unrelated_switches() {
+        let html = "<p>hello</p>";
+        let cached = cache(html, "hello", &["hello"]);
+
+        let detour = type_switch("markdown", "plain_text", "hello", Some(cached));
+        assert!(detour.value.is_none());
+        let cache = detour.cache.expect("cache is kept");
+
+        let back = type_switch("plain_text", "html", "hello", Some(cache));
+        assert_eq!(back.value.as_deref(), Some(html));
+    }
 }

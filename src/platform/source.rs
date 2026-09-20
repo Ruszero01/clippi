@@ -377,3 +377,34 @@ pub fn get_actual_file_icon_base64(file_path: &str) -> Option<String> {
         None
     }
 }
+
+/// Source identity for entries created inside Clippi itself.
+///
+/// The editor's "new entry" flow does not take its content from another
+/// application, so those entries are attributed to Clippi rather than to
+/// whichever app happens to be frontmost while the user types.
+pub fn own_app_info() -> SourceAppInfo {
+    static INFO: std::sync::OnceLock<SourceAppInfo> = std::sync::OnceLock::new();
+    INFO.get_or_init(|| SourceAppInfo {
+        app_name: crate::core::i18n_keys::I18nKey::TitlebarAppName
+            .text()
+            .to_string(),
+        icon_base64: own_icon_base64().unwrap_or_default(),
+    })
+    .clone()
+}
+
+/// 32px PNG of the app logo, for [`own_app_info`].
+///
+/// The embedded logo is 720 KB — far past the inline budget the list projection
+/// keeps (`db::SOURCE_APP_ICON_INLINE_LIMIT`) — so it is downscaled once to the
+/// size captured app icons are stored at.
+fn own_icon_base64() -> Option<String> {
+    use base64::Engine;
+
+    let logo = image::load_from_memory(include_bytes!("../../assets/LOGO_notext.png")).ok()?;
+    let icon = logo.resize(32, 32, image::imageops::FilterType::Lanczos3);
+    let mut png = std::io::Cursor::new(Vec::new());
+    icon.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(png.into_inner()))
+}

@@ -149,6 +149,45 @@ pub fn spawn_fetch_url_title(
     });
 }
 
+/// Whether a page title may be fetched for `url`.
+///
+/// URLs carrying credentials or one-time secrets are skipped: the title of such
+/// a page is not worth the request, and the URL itself is already treated as
+/// sensitive elsewhere.
+pub fn should_fetch_url_title(url: &str, enabled: bool) -> bool {
+    enabled && crate::core::secret::url_sensitive_ranges(url).is_empty()
+}
+
+/// Spawn the asynchronous metadata work a freshly stored `link` item needs:
+/// cache its favicon and, when enabled, fetch the page title.
+///
+/// Shared by the clipboard capture path and the editor's "new entry" flow so a
+/// hand-written link is treated exactly like a copied one. Items of any other
+/// `meta_type` are ignored, so callers can hand over every stored item.
+pub fn spawn_link_metadata(
+    item: &crate::core::types::ClipboardItem,
+    db_path: &str,
+    auto_fetch_title: bool,
+    needs_refresh: Arc<AtomicBool>,
+    sync_dirty: Arc<AtomicBool>,
+    mark_sync_dirty: bool,
+) {
+    if item.meta_type != "link" {
+        return;
+    }
+    spawn_ensure_url_favicon_cached(item.full_text.clone());
+    if should_fetch_url_title(&item.full_text, auto_fetch_title) {
+        spawn_fetch_url_title(
+            item.full_text.clone(),
+            item.content_hash,
+            db_path.to_string(),
+            needs_refresh,
+            sync_dirty,
+            mark_sync_dirty,
+        );
+    }
+}
+
 /// Backfill local-only URL assets for synced link items.
 ///
 /// This deliberately does not update DB rows: favicon cache files are not part
@@ -195,4 +234,27 @@ pub fn spawn_link_open_backfill(
         sync_dirty,
         mark_sync_dirty,
     });
+}
+
+#[cfg(test)]
+mod url_title_policy_tests {
+    use super::should_fetch_url_title;
+
+    #[test]
+    fn skips_title_fetch_for_sensitive_urls() {
+        assert!(!should_fetch_url_title(
+            "https://user:password@example.com/reset",
+            true
+        ));
+        assert!(!should_fetch_url_title(
+            "https://example.com/reset?token=one-time-secret",
+            true
+        ));
+    }
+
+    #[test]
+    fn allows_title_fetch_for_normal_urls_when_enabled() {
+        assert!(should_fetch_url_title("https://example.com/docs", true));
+        assert!(!should_fetch_url_title("https://example.com/docs", false));
+    }
 }

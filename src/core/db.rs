@@ -139,10 +139,14 @@ fn list_item_select_columns() -> String {
     // `html_text::preview_html` applies the same rule to the in-memory
     // previews of keyword pages; keep both sides in lockstep.
     let html = "coalesce(json_extract(rich_data, '$.html'), '')";
+    // `instr` is 1-based, so `instr - 1` is the character count before the
+    // marker and the comparison matches `preview_start_offset`'s `> reserve`
+    // exactly. Without the correction a head of exactly half the budget would
+    // be anchored in SQL and kept in Rust.
     let html_preview = format!(
         "CASE \
          WHEN length({html}) > {LIST_RICH_HTML_LIMIT} \
-              AND instr({html}, '{FRAGMENT_MARKER}') > {head_reserve} \
+              AND instr({html}, '{FRAGMENT_MARKER}') - 1 > {head_reserve} \
          THEN substr({html}, instr({html}, '{FRAGMENT_MARKER}'), {LIST_RICH_HTML_LIMIT}) \
          ELSE substr({html}, 1, {LIST_RICH_HTML_LIMIT}) END",
         head_reserve = LIST_RICH_HTML_LIMIT / 2
@@ -4336,5 +4340,51 @@ mod tests {
     fn touch_items_empty_is_noop() {
         let db = Database::open(":memory:").unwrap();
         assert_eq!(db.touch_items(&[], "2026-08-10T00:00:00Z").unwrap(), 0);
+    }
+
+    /// The list projection and `html_text::preview_html` must cut the preview at
+    /// the same place. The rule is "past half the budget", and `instr` is
+    /// 1-based, so a head of exactly half the budget has to stay put on both
+    /// sides or a keyword page and the list disagree about the same payload.
+    #[test]
+    fn list_projection_agrees_with_preview_html_at_the_head_reserve() {
+        let (_path, db) = temp_db("list-html-preview-lockstep");
+        let limit = LIST_RICH_HTML_LIMIT;
+        let sql = format!(
+            "SELECT {} FROM clipboard_items WHERE content_hash = ?1",
+            list_item_select_columns()
+        );
+
+        for head in [limit / 2 - 1, limit / 2, limit / 2 + 1, limit / 2 + 200] {
+            let html = format!(
+                "{}<!--StartFragment--><p>{}</p>",
+                "x".repeat(head),
+                "y".repeat(limit)
+            );
+            db.conn
+                .execute(
+                    "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, rich_data) \
+                     VALUES ('rich_text', 'body', ?1, '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z', ?2)",
+                    rusqlite::params![head as i64, serde_json::json!({ "html": html }).to_string()],
+                )
+                .unwrap();
+
+            let projected: String = db
+                .conn
+                .query_row(&sql, rusqlite::params![head as i64], |row| row.get(7))
+                .unwrap();
+            let projected = serde_json::from_str::<serde_json::Value>(&projected)
+                .unwrap()
+                .get("html")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+
+            assert_eq!(
+                projected,
+                crate::core::html_text::preview_html(&html, limit),
+                "head of {head} characters"
+            );
+        }
     }
 }

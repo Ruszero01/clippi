@@ -39,7 +39,8 @@ use crate::ui::components::confirm_dialog::ConfirmDialog;
 use crate::ui::components::slider::{
     SliderDetent, SliderDragState, SteppedSlider, SteppedSliderColors,
 };
-use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};use crate::ui::theme::ClippiTheme;
+use crate::ui::components::toggle::{render_toggle, ToggleColors, ToggleTransitionState};
+use crate::ui::theme::ClippiTheme;
 use crate::ui::window_manager::WindowManager;
 
 /// Events emitted by the settings panel.
@@ -770,7 +771,11 @@ impl SettingsPanel {
     /// left over by its parent. Used by the version tab, where the release-notes
     /// area is the only part that scrolls — so the page itself never scrolls and
     /// there is just one scrollbar.
-    pub(crate) fn settings_group_fill(&self, title: &str, rows: Vec<AnyElement>) -> impl IntoElement {
+    pub(crate) fn settings_group_fill(
+        &self,
+        title: &str,
+        rows: Vec<AnyElement>,
+    ) -> impl IntoElement {
         self.settings_group_with(title, rows, true)
     }
 
@@ -1155,19 +1160,15 @@ impl SettingsPanel {
             )
             .child(div().h(px(1.)).bg(divider))
             .child(
-                div()
-                    .px(px(16.))
-                    .pt(px(10.))
-                    .pb(px(8.))
-                    .child(
-                        SteppedSlider::new(slider_id, detents)
-                            .value(active)
-                            .label_inset(18.)
-                            .drag_state(drag)
-                            .colors(colors)
-                            .on_change(on_change)
-                            .on_preview(on_preview),
-                    ),
+                div().px(px(16.)).pt(px(10.)).pb(px(8.)).child(
+                    SteppedSlider::new(slider_id, detents)
+                        .value(active)
+                        .label_inset(18.)
+                        .drag_state(drag)
+                        .colors(colors)
+                        .on_change(on_change)
+                        .on_preview(on_preview),
+                ),
             )
     }
 
@@ -1362,68 +1363,58 @@ impl SettingsPanel {
 
         let row_bg_transparent = rgba(0x00000000);
         let row_text_selected = rgb(0xffffff);
-        let mk_entry = |family: String,
-                        display: String,
-                        preview_family: SharedString|
-         -> AnyElement {
-            let selected = family == current;
-            let id = if family.is_empty() {
-                "font-family-system".to_string()
-            } else {
-                format!("font-family-{}", family)
+        let mk_entry =
+            |family: String, display: String, preview_family: SharedString| -> AnyElement {
+                let selected = family == current;
+                let id = if family.is_empty() {
+                    "font-family-system".to_string()
+                } else {
+                    format!("font-family-{}", family)
+                };
+                div()
+                    .id(SharedString::from(id))
+                    .h(px(34.))
+                    .flex_shrink_0()
+                    .px(px(10.))
+                    .mx(px(4.))
+                    .rounded(px(6.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .bg(if selected { accent } else { row_bg_transparent })
+                    .cursor(CursorStyle::PointingHand)
+                    .when(!selected, |d| d.hover(move |s| s.bg(hover_bg)))
+                    .on_mouse_down(MouseButton::Left, {
+                        let this = this.clone();
+                        move |_ev, _window, cx| {
+                            let family = family.clone();
+                            this.update(cx, |panel, cx| panel.apply_font_family(family, cx));
+                        }
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .font_family(preview_family.clone())
+                            .text_size(fs(13.))
+                            .text_color(if selected { row_text_selected } else { text_2 })
+                            .child(display),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .ml(px(8.))
+                            .font_family(preview_family)
+                            .text_size(fs(11.))
+                            .text_color(if selected { row_text_selected } else { text_3 })
+                            .child(sample),
+                    )
+                    .into_any_element()
             };
-            div()
-                .id(SharedString::from(id))
-                .h(px(34.))
-                .flex_shrink_0()
-                .px(px(10.))
-                .mx(px(4.))
-                .rounded(px(6.))
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .bg(if selected { accent } else { row_bg_transparent })
-                .cursor(CursorStyle::PointingHand)
-                .when(!selected, |d| d.hover(move |s| s.bg(hover_bg)))
-                .on_mouse_down(MouseButton::Left, {
-                    let this = this.clone();
-                    move |_ev, _window, cx| {
-                        let family = family.clone();
-                        this.update(cx, |panel, cx| panel.apply_font_family(family, cx));
-                    }
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .font_family(preview_family.clone())
-                        .text_size(fs(13.))
-                        .text_color(if selected {
-                            row_text_selected
-                        } else {
-                            text_2
-                        })
-                        .child(display),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .ml(px(8.))
-                        .font_family(preview_family)
-                        .text_size(fs(11.))
-                        .text_color(if selected {
-                            row_text_selected
-                        } else {
-                            text_3
-                        })
-                        .child(sample),
-                )
-                .into_any_element()
-        };
 
         let entries: Vec<AnyElement> = std::iter::once(mk_entry(
             String::new(),

@@ -1287,6 +1287,7 @@ impl Render for RootView {
         let root_list = list_view.clone();
         let root_state = self.state.clone();
         let root_backend = backend_panel.clone();
+        let root_settings = self.settings_panel.clone();
 
         div()
             .relative()
@@ -1317,8 +1318,10 @@ impl Render for RootView {
                 let is_settings = root_this.read(cx).current_view == "settings";
                 let is_edit = root_this.read(cx).current_view == "edit";
                 if is_settings {
-                    // Close backend panel popup first, then go back to clipboard
-                    if root_backend.read(cx).is_visible() {
+                    // Close the innermost overlay first, then go back to clipboard
+                    if root_settings.read(cx).font_picker_open {
+                        root_settings.update(cx, |panel, cx| panel.close_font_picker(cx));
+                    } else if root_backend.read(cx).is_visible() {
                         root_backend.update(cx, |panel, cx| panel.close(cx));
                     } else {
                         root_this.update(cx, |this, cx| {
@@ -2307,12 +2310,17 @@ impl Render for RootView {
                                     {
                                         let app_state = app_state.clone();
                                         move |_window, cx| {
-                                            app_state.update(cx, |state, _cx| {
+                                            app_state.update(cx, |state, cx| {
                                                 state.set_clear_data_selection(
                                                     !include_favorites,
                                                     include_tagged,
                                                     include_noted,
                                                 );
+                                                // Root re-renders on the state
+                                                // observer, so the checkmark and
+                                                // the reported count refresh now
+                                                // instead of on the next hover.
+                                                cx.notify();
                                             });
                                         }
                                     },
@@ -2323,12 +2331,13 @@ impl Render for RootView {
                                     {
                                         let app_state = app_state.clone();
                                         move |_window, cx| {
-                                            app_state.update(cx, |state, _cx| {
+                                            app_state.update(cx, |state, cx| {
                                                 state.set_clear_data_selection(
                                                     include_favorites,
                                                     !include_tagged,
                                                     include_noted,
                                                 );
+                                                cx.notify();
                                             });
                                         }
                                     },
@@ -2339,12 +2348,13 @@ impl Render for RootView {
                                     {
                                         let app_state = app_state.clone();
                                         move |_window, cx| {
-                                            app_state.update(cx, |state, _cx| {
+                                            app_state.update(cx, |state, cx| {
                                                 state.set_clear_data_selection(
                                                     include_favorites,
                                                     include_tagged,
                                                     !include_noted,
                                                 );
+                                                cx.notify();
                                             });
                                         }
                                     },

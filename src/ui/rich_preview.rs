@@ -469,7 +469,7 @@ pub fn render_styled_html_lines(
                 .children(line.into_iter().map(|span| {
                     let mut d = div()
                         .text_size(fs(12.))
-                        .font_family("Consolas")
+                        .font_family(crate::ui::font::PREVIEW_FONT_FAMILY)
                         .text_color(span.color.unwrap_or(fallback))
                         .font_weight(span.font_weight.unwrap_or_default());
                     if span.font_style == Some(FontStyle::Italic) {
