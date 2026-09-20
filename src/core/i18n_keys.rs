@@ -277,7 +277,7 @@ define_i18n! {
     DescRetentionExempt:    ("收藏、标签、备注与带快捷键的条目始终保留",
                              "Favorites, tagged, noted and hotkey items are always kept"),
     SettingCleanupStaleItems: ("清理已失效条目", "Clean stale items"),
-    DescCleanupStaleItems:   ("自动清理已确认失效的本地非收藏条目", "Auto-remove local non-favorite items confirmed stale"),
+    DescCleanupStaleItems:   ("自动清理已确认失效的本地条目", "Auto-remove local items confirmed stale"),
     SettingClearData:       ("清空数据", "Clear data"),
     DescClearData:          ("永久清空剪贴板历史", "Permanently clear clipboard history; source files are not deleted"),
     BtnClearData:           ("清空数据", "Clear data"),

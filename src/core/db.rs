@@ -54,11 +54,13 @@ const LIST_NOTE_LIMIT: usize = 2048;
 /// as no history at all so they can never satisfy the delete threshold.
 const STALE_OBSERVATION_COUNT_MAX: i64 = 1_000;
 
-/// Predicate matching the rows that history retention (item limit and
-/// retention window) may delete. Favorites, tagged items, noted items, and
-/// items with a custom hotkey are user-curated: they neither count toward
-/// `max_items` nor expire, so curating an item is what makes it permanent.
-const RETENTION_DELETABLE_PREDICATE: &str = "meta_type != 'transfer' \
+/// Predicate matching the rows that automatic history maintenance may delete:
+/// the retention window, the item limit, and the stale-item cleanup all use
+/// it. Favorites, tagged items, noted items, and items with a custom hotkey
+/// are user-curated — they neither count toward `max_items` nor expire nor get
+/// reclaimed when their source disappears, so curating an item is what makes
+/// it permanent.
+const MAINTENANCE_DELETABLE_PREDICATE: &str = "meta_type != 'transfer' \
      AND is_favorite = 0 \
      AND custom_hotkey = '' \
      AND note = '' \
@@ -1427,7 +1429,7 @@ impl Database {
     /// Prune oldest disposable items while their count exceeds max_items.
     /// Returns the ids of deleted items. max_items == 0 means unlimited.
     ///
-    /// Only rows matching `RETENTION_DELETABLE_PREDICATE` are counted and
+    /// Only rows matching `MAINTENANCE_DELETABLE_PREDICATE` are counted and
     /// deleted; favorites, tagged items, noted items, and items with a custom
     /// hotkey are kept on top of the limit.
     pub fn prune_items_over_limit(&self, max_items: u32) -> SqlResult<Vec<i64>> {
@@ -1435,7 +1437,9 @@ impl Database {
             return Ok(Vec::new());
         }
         let deletable_count: i64 = self.conn.query_row(
-            &format!("SELECT COUNT(*) FROM clipboard_items WHERE {RETENTION_DELETABLE_PREDICATE}"),
+            &format!(
+                "SELECT COUNT(*) FROM clipboard_items WHERE {MAINTENANCE_DELETABLE_PREDICATE}"
+            ),
             [],
             |row| row.get(0),
         )?;
@@ -1446,7 +1450,7 @@ impl Database {
         // Read only the IDs that will actually be deleted instead of loading
         // every eligible row and truncating in memory.
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT id FROM clipboard_items WHERE {RETENTION_DELETABLE_PREDICATE} \
+            "SELECT id FROM clipboard_items WHERE {MAINTENANCE_DELETABLE_PREDICATE} \
              ORDER BY created_at ASC LIMIT ?1"
         ))?;
         let pruned_ids: Vec<i64> = stmt
@@ -1473,7 +1477,7 @@ impl Database {
     /// Prune expired items and write any required sync tombstones in the same
     /// transaction as the item/tag deletions.
     ///
-    /// Only rows matching `RETENTION_DELETABLE_PREDICATE` expire; favorites,
+    /// Only rows matching `MAINTENANCE_DELETABLE_PREDICATE` expire; favorites,
     /// tagged items, noted items, and items with a custom hotkey are always
     /// kept.
     pub fn prune_expired_items_with_sync_scope(
@@ -1488,7 +1492,7 @@ impl Database {
         let tx = self.conn.unchecked_transaction()?;
         let mut stmt = tx.prepare(&format!(
             "SELECT id, content_hash, content_type, is_favorite, custom_hotkey, file_data FROM clipboard_items \
-             WHERE {RETENTION_DELETABLE_PREDICATE} \
+             WHERE {MAINTENANCE_DELETABLE_PREDICATE} \
                AND julianday(updated_at) < julianday('now', ?1)"
         ))?;
         let expired_items: Vec<PrunedClipboardItem> = stmt
@@ -2092,27 +2096,34 @@ impl Database {
     }
 
     /// Find clipboard items that are candidates for stale-item cleanup.
-    /// Returns non-favorite, non-transfer file, native-path, and locally
-    /// captured image items, together with their current observation state.
+    /// Returns transfer-free file, native-path, and locally captured image
+    /// items, together with their current observation state.
+    ///
+    /// The shared maintenance predicate keeps every user-curated row out, so
+    /// favorites, tagged, noted and custom-hotkey items are never candidates.
     ///
     /// Rows whose `updated_at` cannot be parsed are counted and skipped
     /// instead of failing the whole batch, so one corrupt row cannot disable
     /// stale cleanup for every other item (see design §5.11).
     pub fn find_stale_item_candidates(&self) -> SqlResult<(Vec<StaleItemCandidate>, u32)> {
-        let mut stmt = self.conn.prepare(
-            "SELECT ci.id, ci.content_hash, ci.updated_at, ci.content_type, ci.full_text, \
-                    ci.image_path, ci.file_data, ci.meta_type, ci.is_favorite, \
-                    ci.existence_observed_at, ci.sync_pending, \
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT clipboard_items.id, clipboard_items.content_hash, \
+                    clipboard_items.updated_at, clipboard_items.content_type, \
+                    clipboard_items.full_text, clipboard_items.image_path, \
+                    clipboard_items.file_data, clipboard_items.meta_type, \
+                    clipboard_items.is_favorite, clipboard_items.existence_observed_at, \
+                    clipboard_items.sync_pending, \
                     obs.content_hash, obs.item_updated_at, obs.first_missing_at, \
                     obs.last_checked_at, obs.consecutive_missing_count, obs.last_status, \
                     obs.last_reason \
-             FROM clipboard_items ci \
-             LEFT JOIN stale_item_observations obs ON obs.item_id = ci.id \
-             WHERE ci.is_favorite = 0 \
-               AND ci.meta_type != 'transfer' \
-               AND (ci.content_type = 'file' OR ci.content_type = 'image' OR ci.meta_type = 'path') \
-             ORDER BY ci.id",
-        )?;
+             FROM clipboard_items \
+             LEFT JOIN stale_item_observations obs ON obs.item_id = clipboard_items.id \
+             WHERE {MAINTENANCE_DELETABLE_PREDICATE} \
+               AND (clipboard_items.content_type = 'file' \
+                    OR clipboard_items.content_type = 'image' \
+                    OR clipboard_items.meta_type = 'path') \
+             ORDER BY clipboard_items.id",
+        ))?;
 
         let mut skipped: u32 = 0;
         let candidates: Vec<StaleItemCandidate> = stmt
@@ -2200,8 +2211,9 @@ impl Database {
     ///
     /// Each candidate is re-checked within the transaction using
     /// `id + content_hash + updated_at` to ensure the record hasn't changed
-    /// since the filesystem scan. Sync tombstones are written for items
-    /// within the sync scope.
+    /// since the filesystem scan, and must still match the shared maintenance
+    /// predicate so an item curated after the scan is kept. Sync tombstones are
+    /// written for items within the sync scope.
     pub fn delete_stale_items(
         &self,
         confirmed: &[ConfirmedStaleItem],
@@ -2233,12 +2245,12 @@ impl Database {
                 // classification here can make an eligible item impossible to
                 // clean when an external application's temporary file changes
                 // between the scan and this transaction.
-                let mut stmt = tx.prepare(
+                let mut stmt = tx.prepare(&format!(
                     "SELECT updated_at, content_type, file_data, custom_hotkey \
                      FROM clipboard_items \
                      WHERE id = ?1 AND content_hash = ?2 \
-                       AND is_favorite = 0 AND meta_type != 'transfer'",
-                )?;
+                       AND {MAINTENANCE_DELETABLE_PREDICATE}",
+                ))?;
 
                 let row: Option<StaleDeleteRow> = stmt
                     .query_row(params![item.id, item.content_hash as i64], |row| {
@@ -3558,7 +3570,7 @@ mod tests {
 
         // The scan owns validity classification. Even if filesystem state
         // changes before the transaction, deletion only checks that the same
-        // database row is still non-favorite and non-transfer.
+        // database row still matches the maintenance predicate.
         std::fs::write(&temporary_file, b"temporary screenshot").unwrap();
         let result = db.delete_stale_items(&confirmed, None).unwrap();
 
@@ -4106,6 +4118,142 @@ mod tests {
         assert_eq!(stats.stale_items, 1);
         assert!(db.get_by_hash(301).unwrap().is_none());
         assert!(db.get_by_hash(302).unwrap().is_some());
+    }
+
+    #[test]
+    fn stale_cleanup_protects_curated_items_like_retention_does() {
+        let (_path, db) = temp_db("stale-curated");
+        let images_dir = crate::core::paths::images_dir();
+        let missing = |kind: &str, hash: u64| {
+            images_dir.join(format!(
+                "missing-{kind}-{hash}-{}-{}.png",
+                std::process::id(),
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            ))
+        };
+
+        // One row per curation kind, each pointing at a missing managed image
+        // that the shared classifier reports as DefinitelyMissing.
+        for (kind, hash) in [
+            ("plain", 801u64),
+            ("favorite", 802),
+            ("tagged", 803),
+            ("noted", 804),
+            ("hotkey", 805),
+        ] {
+            let image_path = missing(kind, hash).to_string_lossy().into_owned();
+            db.conn
+                .execute(
+                    "INSERT INTO clipboard_items \
+                     (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                      source_app_name) \
+                     VALUES ('image', '', ?1, ?2, ?2, ?3, 'Local App')",
+                    params![hash as i64, "2026-07-28T00:00:00Z", image_path],
+                )
+                .unwrap();
+        }
+        let tag_id = insert_tag(&db, "curated", "#FF0000", "2026-07-28T00:00:00Z");
+        tag_item(&db, item_id(&db, 803), tag_id);
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET is_favorite = 1 WHERE content_hash = 802",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET note = 'keep' WHERE content_hash = 804",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET custom_hotkey = 'Ctrl+Alt+1' WHERE content_hash = 805",
+                [],
+            )
+            .unwrap();
+
+        // Only the plain row is a candidate: curation is what makes an item
+        // permanent, for the item limit, the retention window and stale
+        // cleanup alike.
+        let (candidates, skipped) = db.find_stale_item_candidates().unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].content_hash, 801);
+
+        let t0 = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let mut stats = crate::core::cache_cleanup::CleanupStats::default();
+        crate::core::cache_cleanup::run_stale_scan(&db, t0, None, &mut stats);
+        assert_eq!(stats.stale_scanned, 1);
+        assert_eq!(stats.stale_items, 1);
+        assert!(db.get_by_hash(801).unwrap().is_none());
+        for hash in [802u64, 803, 804, 805] {
+            assert!(
+                db.get_by_hash(hash).unwrap().is_some(),
+                "curated item {hash} must survive stale cleanup"
+            );
+        }
+        // The protected tagged row keeps its tag association too.
+        let associations: u32 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM item_tags", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(associations, 1);
+    }
+
+    #[test]
+    fn stale_delete_skips_items_curated_after_the_scan() {
+        let (_path, db) = temp_db("stale-curated-recheck");
+        let images_dir = crate::core::paths::images_dir();
+        for hash in [811u64, 812] {
+            let image_path = images_dir
+                .join(format!(
+                    "missing-recheck-{hash}-{}-{}.png",
+                    std::process::id(),
+                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                ))
+                .to_string_lossy()
+                .into_owned();
+            db.conn
+                .execute(
+                    "INSERT INTO clipboard_items \
+                     (content_type, full_text, content_hash, created_at, updated_at, image_path, \
+                      source_app_name) \
+                     VALUES ('image', '', ?1, ?2, ?2, ?3, 'Local App')",
+                    params![hash as i64, "2026-07-28T00:00:00Z", image_path],
+                )
+                .unwrap();
+        }
+
+        let updated_at = "2026-07-28T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let confirmed: Vec<crate::core::cache_cleanup::ConfirmedStaleItem> = [811u64, 812]
+            .into_iter()
+            .map(|hash| crate::core::cache_cleanup::ConfirmedStaleItem {
+                id: item_id(&db, hash),
+                content_hash: hash,
+                expected_updated_at: updated_at,
+            })
+            .collect();
+
+        // The user notes one item and tags the other between the scan and the
+        // deletion transaction. Identity and filesystem state still match, so
+        // only the shared predicate can stop them.
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET note = 'keep me' WHERE content_hash = 811",
+                [],
+            )
+            .unwrap();
+        let tag_id = insert_tag(&db, "late-tag", "#FF0000", "2026-07-28T00:00:00Z");
+        tag_item(&db, item_id(&db, 812), tag_id);
+
+        let result = db.delete_stale_items(&confirmed, None).unwrap();
+        assert_eq!(result.deleted_items, 0);
+        assert_eq!(count_items(&db), 2);
     }
 
     // ── touch_items (batch usage-time updates) ──────────────────────

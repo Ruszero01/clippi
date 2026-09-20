@@ -6,8 +6,11 @@
 //!
 //! Item validity follows the shared four-state design: paths are classified as
 //! Present / DefinitelyMissing / Unknown / Protected instead of a `bool`.
-//! The UI and cleanup use the same classifier; cleanup simply removes
-//! non-favorite items classified as DefinitelyMissing.
+//! The UI and cleanup use the same classifier; validity is deliberately
+//! independent of deletion policy. Cleanup removes items classified as
+//! DefinitelyMissing except the user-curated ones — favorites, tagged, noted
+//! and custom-hotkey items — which the shared database predicate keeps out of
+//! every automatic deletion path (retention, item limit, stale cleanup).
 
 use crate::core::db::Database;
 use crate::core::types::{PathObjectKind, PathStatus, PathStatusReason};
@@ -71,7 +74,8 @@ pub struct CleanupStats {
     /// Candidates eligible for deletion this cycle (sent to the delete step).
     pub stale_eligible: u32,
     /// Candidates kept because of a protection reason (sync, remote, removable
-    /// volume, unknown origin, ...). Favorite policy is applied by the query.
+    /// volume, unknown origin, ...). User-curated policy is applied by the
+    /// query, so those rows are not scanned at all.
     pub stale_protected: u32,
     /// Candidates kept because the path could not be verified.
     pub stale_unknown: u32,
@@ -823,9 +827,12 @@ pub(crate) fn classify_item_status(candidate: &StaleItemCandidate) -> ItemStatus
 
 // ── Stale-item scan ───────────────────────────────────────────────────
 
-/// Classify path-backed items and delete the non-favorite rows whose shared
-/// item status is `DefinitelyMissing`. UI stale labels use the same classifier;
-/// this phase adds no independent grace period or confirmation policy.
+/// Classify path-backed items and delete the rows whose shared item status is
+/// `DefinitelyMissing`. UI stale labels use the same classifier; this phase
+/// adds no independent grace period or confirmation policy. User-curated items
+/// (favorites, tagged, noted, custom-hotkey) are excluded by the candidate
+/// query and re-checked at deletion, so they keep their stale label but are
+/// never reclaimed automatically.
 pub(crate) fn run_stale_scan(
     db: &Database,
     _now: DateTime<Utc>,

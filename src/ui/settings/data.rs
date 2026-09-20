@@ -649,8 +649,12 @@ impl SettingsPanel {
                                         .tooltip(|window, cx| {
                                             Tooltip::element(move |_window, _cx| {
                                                 div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(2.))
                                                     .text_size(px(10.))
                                                     .child(I18nKey::DescCleanupStaleItems.text())
+                                                    .child(I18nKey::DescRetentionExempt.text())
                                             })
                                             .build(window, cx)
                                         })
