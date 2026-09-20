@@ -539,8 +539,8 @@ pub struct WindowManager {
     // --- Poll task ---
     _poll_task: Option<Task<()>>,
     /// One-shot main-window show task. Native positioning must run outside an
-    /// app/entity update so synchronous DPI callbacks can re-borrow GPUI.
-    #[cfg(target_os = "windows")]
+    /// app/entity update so synchronous DPI (Windows) and `windowDidMove:`
+    /// (macOS) callbacks can re-borrow GPUI.
     _main_show_task: Option<Task<()>>,
     /// Fast poll for quick-action hotkeys when quick window is visible (16ms ≈ 60fps).
     _quick_poll_task: Option<Task<()>>,
@@ -687,7 +687,6 @@ impl WindowManager {
             #[cfg(target_os = "windows")]
             quick_guard_episode_logged: false,
             _poll_task: None,
-            #[cfg(target_os = "windows")]
             _main_show_task: None,
             _quick_poll_task: None,
             #[cfg(target_os = "windows")]
@@ -2862,11 +2861,35 @@ impl WindowManager {
                 // avoid a 1×1 flash (doc §3.3).
                 self.restore_main_macos_window(cx);
             } else {
-                if let Some((x, y)) = self.calculate_position() {
-                    self.position_macos_window(x, y);
-                }
-                cx.activate(true);
-                self.activate_macos_window();
+                // Position and order front from a task, the way the Windows
+                // branch below and `show_quick_macos_window_deferred` do: the
+                // move has to happen outside the app borrow this update holds
+                // (see `position_ns_window`), and deferring both steps together
+                // keeps the window from appearing at the stale position first.
+                let position = self.calculate_position();
+                let ns_window = self.ns_window;
+                self._main_show_task = Some(cx.spawn(async move |weak_self, cx| {
+                    // Yield until the WindowManager update that handled the
+                    // hotkey or tray action has released GPUI's app borrow.
+                    Timer::after(Duration::from_millis(1)).await;
+
+                    let Some(this) = weak_self.upgrade() else {
+                        return;
+                    };
+                    let should_show = this
+                        .update(cx, |wm, _cx| wm.visible && wm.ns_window == ns_window)
+                        .unwrap_or(false);
+                    if !should_show || ns_window == 0 {
+                        return;
+                    }
+                    if let Some((x, y)) = position {
+                        WindowManager::position_ns_window(ns_window, x, y);
+                    }
+                    // The app must be active before ordering front, otherwise
+                    // keyboard events keep going to the previous app (doc §3.3).
+                    let _ = cx.update(|cx| cx.activate(true));
+                    WindowManager::activate_ns_window(ns_window);
+                }));
             }
         }
 
@@ -4236,7 +4259,7 @@ impl WindowManager {
                 return;
             };
             let shown = this
-                .update(cx, |wm, cx| {
+                .update(cx, |wm, _cx| {
                     if !wm.visible
                         || wm.surface_generation != restore_generation
                         || wm
@@ -4244,25 +4267,31 @@ impl WindowManager {
                             .as_ref()
                             .is_none_or(|s| s.generation != restore_generation)
                     {
-                        return false;
+                        return None;
                     }
-                    // Clear the guard only in the same update that positions
-                    // and shows the confirmed full-size window. This prevents
-                    // the 200 ms geometry poll from ever observing an in-flight
-                    // 1×1 restore as a normal visible window.
+                    // Clear the guard only in the same update that claims the
+                    // confirmed full-size window, before it is positioned and
+                    // ordered front. This prevents the 200 ms geometry poll from
+                    // ever observing an in-flight 1×1 restore as a normal
+                    // visible window.
                     wm.main_compacted_state = None;
-                    if let Some((x, y)) = wm.calculate_position() {
-                        wm.position_macos_window(x, y);
-                    }
-                    // Keep the existing activation semantics of `show_and_focus`
-                    // (doc §3.3): the app must be active before ordering front,
-                    // otherwise keyboard events keep going to the previous app.
-                    cx.activate(true);
-                    wm.activate_macos_window();
-                    true
+                    Some((wm.calculate_position(), wm.ns_window))
                 })
-                .unwrap_or(false);
-            if shown {
+                .ok()
+                .flatten();
+            // Position and order front outside the app borrow: the move must not
+            // be made while an update is on the stack (see `position_ns_window`).
+            // Nothing is awaited in between, so the window still appears at the
+            // target position rather than jumping to it a frame later.
+            if let Some((position, ns_window)) = shown {
+                if let Some((x, y)) = position {
+                    Self::position_ns_window(ns_window, x, y);
+                }
+                // Keep the existing activation semantics of `show_and_focus`
+                // (doc §3.3): the app must be active before ordering front,
+                // otherwise keyboard events keep going to the previous app.
+                let _ = cx.update(|cx| cx.activate(true));
+                Self::activate_ns_window(ns_window);
                 log::debug!("surface restore: main window shown");
             }
         }));
@@ -4454,11 +4483,10 @@ impl WindowManager {
                     window.resize(size(px(QUICK_WINDOW_WIDTH), px(height)));
                 });
             }
-            // Reposition through AppKit. `setFrameTopLeftPoint:` fires
-            // `windowDidMove:`, which is also dropped while borrowed — harmless,
-            // because the popup reads nothing from that callback.
-            this.update(cx, |wm, _cx| wm.position_quick_macos_window_origin(x, y))
-                .ok();
+            // Reposition through AppKit, outside the borrow for the same reason
+            // the resize above goes through GPUI (see `position_ns_window`).
+            let quick_ns_window = this.update(cx, |wm, _cx| wm.quick_ns_window).unwrap_or(0);
+            Self::position_ns_window(quick_ns_window, x, y);
 
             // Confirm the native size before showing so the popup can never
             // flash at the compacted 1×1 (or stale) size. The deadline keeps it
@@ -4506,17 +4534,6 @@ impl WindowManager {
     }
 
     #[cfg(target_os = "macos")]
-    fn activate_macos_window(&self) {
-        if self.ns_window == 0 {
-            return;
-        }
-        unsafe {
-            let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
-            window.makeKeyAndOrderFront(None);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
     fn show_quick_macos_window(&self) {
         if self.quick_ns_window == 0 {
             return;
@@ -4538,26 +4555,27 @@ impl WindowManager {
         }
     }
 
-    /// Move the Quick Paste window's top-left origin through AppKit.
+    /// Move a native window's top-left origin through AppKit.
     ///
-    /// AppKit reports the move synchronously via `windowDidMove:`, which GPUI
-    /// forwards to `App::update`. That nested update is dropped when this runs
-    /// while the app borrow is held, but the popup keeps no state from the move
-    /// callback, so the loss is harmless. The *size* must never be changed this
-    /// way: a dropped `setFrameSize:` leaves GPUI's `viewport_size` stale, which
-    /// is exactly the issue #87 failure (see
-    /// `show_quick_macos_window_deferred`).
+    /// `setFrameTopLeftPoint:` reports the move synchronously through AppKit's
+    /// `windowDidMove:`, which GPUI forwards to `App::update` through `AsyncApp`.
+    /// That cannot borrow the app a second time, so calling this while an update
+    /// is still on the stack drops the callback and leaves GPUI's cached scale
+    /// factor, viewport size and display id describing the screen the window
+    /// just left — the issue #87 failure class. Every caller therefore runs in a
+    /// task body, after the update that decided the position has returned.
     #[cfg(target_os = "macos")]
-    fn position_quick_macos_window_origin(&self, x: i32, y: i32) {
-        if self.quick_ns_window == 0 {
+    fn position_ns_window(ns_window: isize, x: i32, y: i32) {
+        if ns_window == 0 {
             return;
         }
         let Some(primary_height) = monitor::primary_screen_height() else {
             return;
         };
         let top = primary_height - y as f64;
+        // SAFETY: our own NSWindow pointer, main thread only.
         unsafe {
-            let window = &*(self.quick_ns_window as *const objc2_app_kit::NSWindow);
+            let window = &*(ns_window as *const objc2_app_kit::NSWindow);
             window.setFrameTopLeftPoint(objc2_foundation::NSPoint::new(x as f64, top));
         }
     }
@@ -4574,17 +4592,24 @@ impl WindowManager {
     }
 
     #[cfg(target_os = "macos")]
-    fn position_macos_window(&self, x: i32, y: i32) {
-        if self.ns_window == 0 {
+    fn activate_macos_window(&self) {
+        Self::activate_ns_window(self.ns_window);
+    }
+
+    /// Bring a native window to the front and make it key.
+    ///
+    /// Unlike the frame setters this is safe inside an app borrow: AppKit's
+    /// key-window notification reaches GPUI through the executor instead of a
+    /// nested `App::update`.
+    #[cfg(target_os = "macos")]
+    fn activate_ns_window(ns_window: isize) {
+        if ns_window == 0 {
             return;
         }
-        let Some(primary_height) = monitor::primary_screen_height() else {
-            return;
-        };
-        let top = primary_height - y as f64;
+        // SAFETY: our own NSWindow pointer, main thread only.
         unsafe {
-            let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
-            window.setFrameTopLeftPoint(objc2_foundation::NSPoint::new(x as f64, top));
+            let window = &*(ns_window as *const objc2_app_kit::NSWindow);
+            window.makeKeyAndOrderFront(None);
         }
     }
 
