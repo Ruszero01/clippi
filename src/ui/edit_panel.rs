@@ -389,6 +389,14 @@ impl EditPanel {
         self.type_menu_open = false;
         self.rich_cache = None;
         self.preview_generation = self.preview_generation.wrapping_add(1);
+        // 换条目就是新的一次编辑：查找栏收起、两个输入框清空，
+        // 下一条不会带着上一条的查找词和替换词。
+        self.find_open = false;
+        self.pending_find_jump = false;
+        self.find_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.replace_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
 
         // --- For HTML items, load the raw HTML from rich_data so the ---
         // --- preview can render colored <span> tags properly.         ---
