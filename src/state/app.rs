@@ -1587,6 +1587,53 @@ impl AppState {
         );
     }
 
+    /// Open a text entry in the system's default text editor.
+    ///
+    /// The text is written to a file under the temp directory and handed to the
+    /// shell, which launches whatever application owns `.txt`.
+    pub fn open_item_in_editor(&self, id: i64) {
+        let item = match self.db.get_by_id(id) {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                log::warn!("open_item_in_editor: item {id} not found");
+                return;
+            }
+            Err(e) => {
+                log::error!("open_item_in_editor: db error for {id}: {e}");
+                return;
+            }
+        };
+        let text = editor_text(&item);
+        if text.trim().is_empty() {
+            log::warn!("open_item_in_editor: item {id} has no text");
+            return;
+        }
+
+        // Named by content hash so re-opening an entry reuses one file instead
+        // of piling up copies in the temp directory.
+        let file_name = format!("{:016x}.txt", item.content_hash);
+
+        // --- Spawn on a background thread — ShellExecuteW can pump Windows ---
+        // --- messages internally (DDE/COM) and deadlock if called from the ---
+        // --- GPUI main thread event handler.                               ---
+        std::thread::spawn(move || {
+            let directory = std::env::temp_dir().join("clippi-editor");
+            if let Err(e) = std::fs::create_dir_all(&directory) {
+                log::error!(
+                    "open_item_in_editor: cannot create {}: {e}",
+                    directory.display()
+                );
+                return;
+            }
+            let path = directory.join(file_name);
+            if let Err(e) = std::fs::write(&path, text.as_bytes()) {
+                log::error!("open_item_in_editor: cannot write {}: {e}", path.display());
+                return;
+            }
+            open_system_target(&path.to_string_lossy());
+        });
+    }
+
     pub fn qr_action(&mut self, id: i64) {
         let qr_text = match self.db.get_by_id(id) {
             Ok(Some(item)) => RichData::from_json(&item.rich_data).qr_text,
@@ -2599,6 +2646,23 @@ impl AppState {
 
 fn transfer_path_key(path: &str) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path))
+}
+
+/// Text handed to the system editor when a text entry is opened externally.
+///
+/// HTML entries keep their markup in `rich_data` while `full_text` holds only
+/// the visible text; the edit panel edits the markup, so opening the entry in
+/// another editor has to hand over the same document.
+fn editor_text(item: &ClipboardItem) -> String {
+    if item.display_kind() == crate::core::types::DisplayKind::Html {
+        let rich = RichData::from_json(&item.rich_data);
+        if let Some(html) = rich.html {
+            if !html.trim().is_empty() {
+                return html;
+            }
+        }
+    }
+    item.full_text.clone()
 }
 
 fn open_system_target(target: &str) {
@@ -3793,6 +3857,32 @@ mod tests {
             visible[0].tags[0].uid,
             crate::core::transfer_types::TRANSFER_STATUS_DOWNLOADING_UID
         );
+    }
+
+    /// Opening an entry externally hands over what the edit panel edits: the
+    /// HTML document for HTML entries, the text itself for everything else.
+    #[test]
+    fn opening_a_text_entry_externally_uses_the_document_not_the_visible_text() {
+        let mut html = make_item(1, ContentType::RichText, false, "hello");
+        html.meta_type = "html".to_string();
+        html.rich_data = RichData {
+            html: Some("<p>hello</p>".into()),
+            ..Default::default()
+        }
+        .to_json();
+        assert_eq!(editor_text(&html), "<p>hello</p>");
+
+        // Without a stored document the visible text is all there is.
+        let mut bare = make_item(2, ContentType::RichText, false, "hi");
+        bare.meta_type = "html".to_string();
+        assert_eq!(editor_text(&bare), "hi");
+
+        let plain = make_item(3, ContentType::PlainText, false, "just text");
+        assert_eq!(editor_text(&plain), "just text");
+
+        let mut markdown = make_item(4, ContentType::PlainText, false, "# Title");
+        markdown.meta_type = "markdown".to_string();
+        assert_eq!(editor_text(&markdown), "# Title");
     }
 
     #[test]

@@ -251,7 +251,7 @@ fn main() {
         } else {
             settings.language.clone()
         };
-        core::i18n::set_language(&effective_language);
+        ui::i18n::set_language(&effective_language);
 
         // --- Warn if Accessibility permission is missing on macOS — ---
         // --- required for CGEventPost to HID (Cmd+V paste simulation). ---

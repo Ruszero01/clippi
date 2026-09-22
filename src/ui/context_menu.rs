@@ -32,6 +32,10 @@ pub struct MenuItemContext {
     pub is_favorite: bool,
     pub is_link: bool,
     pub is_path: bool,
+    /// Text entry (plain or rich) that has no dedicated open action of its own —
+    /// it opens in the system's default text editor. Secrets are excluded: they
+    /// are masked in the UI and must not be written to a file.
+    pub opens_in_editor: bool,
     pub has_hotkey: bool,
     /// True if this file item has been uploaded to the transfer station.
     pub is_transfer: bool,
@@ -64,6 +68,10 @@ impl MenuItemContext {
             is_path: item.meta_type == "path"
                 && crate::core::types::path_is_native(&item.full_text)
                 && crate::core::types::path_exists(&item.full_text),
+            opens_in_editor: matches!(
+                item.content_type,
+                ContentType::PlainText | ContentType::RichText
+            ) && !matches!(item.meta_type.as_str(), "link" | "path" | "secret"),
             has_hotkey: !item.custom_hotkey.is_empty(),
             is_transfer,
             transfer_enabled: false,
@@ -115,6 +123,9 @@ fn ctrl_shortcut(key: &str) -> Option<String> {
     Some(format!("{}+{}", ctrl_label(), key))
 }
 const MENU_WIDTH: f32 = 184.0;
+/// Generic open glyph, shared by every open action so one icon means "open"
+/// whatever the entry type is.
+const OPEN_ICON: &str = "\u{e603}";
 /// Internal item width (menu width minus 4px padding on each side).
 const ITEM_WIDTH: f32 = MENU_WIDTH - 8.0; // 176.0
 /// Height of a single menu item row.
@@ -255,7 +266,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenImage.text().into(),
                 action: "open_image".into(),
-                icon: "\u{e69f}".into(),
+                icon: OPEN_ICON.into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -309,7 +320,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenLink.text().into(),
                 action: "open_location".into(),
-                icon: "\u{e641}".into(),
+                icon: OPEN_ICON.into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -320,7 +331,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
                 action: "open_location".into(),
-                icon: "\u{e64d}".into(),
+                icon: OPEN_ICON.into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -331,7 +342,18 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
                 action: "open_location".into(),
-                icon: "\u{e64d}".into(),
+                icon: OPEN_ICON.into(),
+                danger: false,
+                fav: false,
+                shortcut: sc("Space"),
+            });
+        }
+        // --- Open in the default text editor (text only) ---
+        if ctx.opens_in_editor {
+            items.push(RawMenuItem {
+                label: I18nKey::CtxOpenText.text().into(),
+                action: "open_text".into(),
+                icon: OPEN_ICON.into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),
@@ -496,7 +518,7 @@ impl ContextMenu {
             items.push(RawMenuItem {
                 label: I18nKey::CtxOpenFolder.text().into(),
                 action: "open_transfer_location".into(),
-                icon: "\u{e64d}".into(),
+                icon: OPEN_ICON.into(),
                 danger: false,
                 fav: false,
                 shortcut: sc("Space"),

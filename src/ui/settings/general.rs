@@ -375,7 +375,7 @@ impl SettingsPanel {
                     } else {
                         new_lang.clone()
                     };
-                    core::i18n::set_language(&effective);
+                    crate::ui::i18n::set_language(&effective);
                     state.update(_cx, |s, _cx| {
                         s.settings.language = new_lang;
                         s.settings.save();

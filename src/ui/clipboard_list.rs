@@ -2149,6 +2149,12 @@ impl ClipboardListView {
                     self.state.update(cx, |s, _cx| s.open_item_location(id));
                 }
             }
+            "open_text" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let id = item.id;
+                    self.state.update(cx, |s, _cx| s.open_item_in_editor(id));
+                }
+            }
             _ => {}
         }
         self.hide_context_menu(cx);
@@ -2324,6 +2330,14 @@ impl ClipboardListView {
                     if let Some(item) = self.items.get(index) {
                         self.state
                             .update(cx, |s, _cx| s.open_item_location(item.id));
+                    }
+                }
+            }
+            "open_text" => {
+                if let Some(index) = self.hovered_index {
+                    if let Some(item) = self.items.get(index) {
+                        self.state
+                            .update(cx, |s, _cx| s.open_item_in_editor(item.id));
                     }
                 }
             }
@@ -2569,6 +2583,11 @@ impl Render for ClipboardListView {
                                         || item.content_type == ContentType::File
                                     {
                                         this.state.update(cx, |s, _cx| s.open_item_location(item_id));
+                                    } else if item.meta_type != "secret" {
+                                        // Plain/rich text (link, path and file are
+                                        // handled above) opens in the system editor.
+                                        this.state
+                                            .update(cx, |s, _cx| s.open_item_in_editor(item_id));
                                     }
                                 }
                             }

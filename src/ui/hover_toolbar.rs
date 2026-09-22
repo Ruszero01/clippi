@@ -81,6 +81,32 @@ impl HoverToolbarProps {
     }
 }
 
+/// Which open action a single entry offers, if any.
+///
+/// Links open in the browser, paths and files reveal in the file manager, and
+/// text (including markdown/HTML/color entries) opens in the system's default
+/// text editor.
+fn single_open_action(props: &HoverToolbarProps) -> Option<&'static str> {
+    if props.meta_type == "link" {
+        return Some("open_location");
+    }
+    if props.meta_type == "path" {
+        // A path that does not exist on this machine has nothing to reveal.
+        return (crate::core::types::path_is_native(&props.full_text)
+            && crate::core::types::path_exists(&props.full_text))
+        .then_some("open_location");
+    }
+    match props.content_type {
+        ContentType::File => Some("open_location"),
+        ContentType::Image => Some("open_image"),
+        ContentType::PlainText | ContentType::RichText => {
+            // Secrets are masked in the UI on purpose — never spill one into a
+            // plain-text file on disk.
+            (props.meta_type != "secret").then_some("open_text")
+        }
+    }
+}
+
 #[derive(IntoElement)]
 pub struct HoverToolbar {
     props: HoverToolbarProps,
@@ -151,7 +177,7 @@ impl RenderOnce for HoverToolbar {
             let pin_color = theme.transfer_pin_color;
             if props.transfer_is_local {
                 buttons.push((
-                    "\u{e64d}",
+                    "\u{e603}",
                     "open_transfer_location",
                     Box::new(move |hovered| if hovered { accent } else { text_2 }),
                 ));
@@ -196,16 +222,11 @@ impl RenderOnce for HoverToolbar {
                 ));
             }
 
-            // --- Paste as bitmap + open image (image only) ---
+            // --- Paste as bitmap (image only) ---
             if props.content_type == ContentType::Image {
                 buttons.push((
                     "\u{e626}",
                     "paste_image_bitmap",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
-                ));
-                buttons.push((
-                    "\u{e69f}",
-                    "open_image",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -215,34 +236,6 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e605}",
                     "qr_action",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
-                ));
-            }
-
-            // --- Open in browser (link only) ---
-            if props.meta_type == "link" {
-                buttons.push((
-                    "\u{e641}",
-                    "open_location",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
-                ));
-            }
-            // --- Jump to directory (path only, native platform only) ---
-            if props.meta_type == "path"
-                && crate::core::types::path_is_native(&props.full_text)
-                && crate::core::types::path_exists(&props.full_text)
-            {
-                buttons.push((
-                    "\u{e64d}",
-                    "open_location",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
-                ));
-            }
-            // --- Reveal in folder (file only) ---
-            if props.content_type == ContentType::File {
-                buttons.push((
-                    "\u{e64d}",
-                    "open_location",
                     Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
                 ));
             }
@@ -269,6 +262,15 @@ impl RenderOnce for HoverToolbar {
                 "show_tag_picker",
                 Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
             ));
+
+            // --- Open (one button for the whole family, right of tag) ---
+            if let Some(open_action) = single_open_action(&props) {
+                buttons.push((
+                    "\u{e603}",
+                    open_action,
+                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                ));
+            }
 
             // --- Favorite (icon changes based on state) ---
             let fav_icon = if props.is_favorite {
@@ -360,6 +362,7 @@ impl RenderOnce for HoverToolbar {
                     "paste_plain" => I18nKey::CtxPastePlain.text().to_string(),
                     "paste_image_bitmap" => I18nKey::CtxPasteImageBitmap.text().to_string(),
                     "open_image" => I18nKey::CtxOpenImage.text().to_string(),
+                    "open_text" => I18nKey::CtxOpenText.text().to_string(),
                     "qr_action" => I18nKey::CtxDetectQr.text().to_string(),
                     "open_location" if meta_type == "link" => {
                         I18nKey::CtxOpenLink.text().to_string()
@@ -430,5 +433,89 @@ impl RenderOnce for HoverToolbar {
                         }
                     })
             }))
+    }
+}
+
+#[cfg(test)]
+mod open_action_tests {
+    use super::{single_open_action, HoverToolbarProps};
+    use crate::core::types::{ClipboardItem, ContentType, RichData};
+
+    fn props_for(item: &ClipboardItem) -> HoverToolbarProps {
+        HoverToolbarProps::from_item(item, 1, false)
+    }
+
+    fn text_item(id: i64, meta_type: &str) -> ClipboardItem {
+        let mut item = ClipboardItem::new_text(id, "content", ContentType::PlainText, None, None);
+        item.meta_type = meta_type.to_string();
+        item
+    }
+
+    #[test]
+    fn each_entry_type_routes_to_its_open_action() {
+        let link = text_item(1, "link");
+        assert_eq!(single_open_action(&props_for(&link)), Some("open_location"));
+
+        let mut file = text_item(2, "");
+        file.content_type = ContentType::File;
+        assert_eq!(single_open_action(&props_for(&file)), Some("open_location"));
+
+        let image = ClipboardItem::new_image(3, "", 0, 4, 4, None);
+        assert_eq!(single_open_action(&props_for(&image)), Some("open_image"));
+
+        let plain = text_item(4, "");
+        assert_eq!(single_open_action(&props_for(&plain)), Some("open_text"));
+
+        // Markdown and HTML are text too — they open as source.
+        let markdown = text_item(5, "markdown");
+        assert_eq!(single_open_action(&props_for(&markdown)), Some("open_text"));
+        let html = ClipboardItem::new_text(
+            6,
+            "hello",
+            ContentType::RichText,
+            None,
+            Some(&RichData {
+                html: Some("<p>hello</p>".into()),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(single_open_action(&props_for(&html)), Some("open_text"));
+    }
+
+    /// Text that is masked in the UI never gets an open button: it would be
+    /// written to a plain-text file on disk.
+    #[test]
+    fn secrets_are_never_opened_in_an_editor() {
+        let secret = text_item(7, "secret");
+        assert_eq!(single_open_action(&props_for(&secret)), None);
+    }
+
+    /// A path entry that is gone from this machine has nothing to reveal.
+    #[test]
+    fn a_missing_path_has_no_open_action() {
+        let mut missing = ClipboardItem::new_text(
+            8,
+            &std::env::temp_dir()
+                .join("clippi-missing-open-target-9a1f")
+                .to_string_lossy(),
+            ContentType::PlainText,
+            None,
+            None,
+        );
+        missing.meta_type = "path".to_string();
+        assert_eq!(single_open_action(&props_for(&missing)), None);
+
+        let mut existing = ClipboardItem::new_text(
+            9,
+            &std::env::temp_dir().to_string_lossy(),
+            ContentType::PlainText,
+            None,
+            None,
+        );
+        existing.meta_type = "path".to_string();
+        assert_eq!(
+            single_open_action(&props_for(&existing)),
+            Some("open_location")
+        );
     }
 }

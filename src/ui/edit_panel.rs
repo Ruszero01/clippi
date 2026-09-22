@@ -4,7 +4,7 @@ use crate::ui::font::fs;
 use base64::Engine;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Search};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::tooltip::Tooltip;
@@ -77,6 +77,10 @@ impl EditPanel {
         let content_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
+                // The find/replace bar lives inside the input: selecting text and
+                // pressing Ctrl/Cmd+F opens it with that text, and the toolbar
+                // button dispatches the same action.
+                .searchable(true)
                 .placeholder(I18nKey::EditContentPlaceholder.text())
         });
         let content_for_sub = content_input.clone();
@@ -315,6 +319,23 @@ impl Render for EditPanel {
                     )
                     .child(div().flex_1())
                     .child(icon_button(
+                        "\u{e64c}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditTooltipFindReplace.text()),
+                        {
+                            let input = content_input.clone();
+                            move |window, cx| {
+                                // The find/replace bar belongs to the input, so
+                                // focus it before dispatching the action that
+                                // shows the bar.
+                                input.update(cx, |input, cx| input.focus(window, cx));
+                                window.dispatch_action(Box::new(Search), cx);
+                            }
+                        },
+                    ))
+                    .child(icon_button(
                         "\u{e6da}",
                         text_2,
                         accent,
@@ -473,19 +494,17 @@ impl Render for EditPanel {
                                 .border_color(divider)
                                 .bg(surface)
                                 .overflow_y_scrollbar()
-                                .child(
-                                    div().pt(px(10.)).pb(px(10.)).pl(px(10.)).pr(px(18.)).child(
-                                        render_rich_preview(
-                                            &selected_type,
-                                            &content_text,
-                                            self.last_item_id,
-                                            preview_generation,
-                                            text_1,
-                                            window,
-                                            cx,
-                                        ),
+                                .child(div().pt(px(6.)).pb(px(6.)).pl(px(6.)).pr(px(14.)).child(
+                                    render_rich_preview(
+                                        &selected_type,
+                                        &content_text,
+                                        self.last_item_id,
+                                        preview_generation,
+                                        text_1,
+                                        window,
+                                        cx,
                                     ),
-                                ),
+                                )),
                         )
                     })
             })
@@ -634,9 +653,11 @@ fn editor_box(
         .border(px(1.))
         .border_color(divider)
         .bg(surface)
-        .pt(px(8.))
-        .pb(px(8.))
-        .pl(px(8.))
+        // Body padding stays tight — the editor panel is small enough that 8px
+        // of inset reads as wasted space around the text.
+        .pt(px(4.))
+        .pb(px(4.))
+        .pl(px(4.))
         .pr(px(0.))
         .child(
             Input::new(input)
