@@ -64,6 +64,19 @@ fn init_logging() {
     }
 }
 
+/// Send panics to the log file as well as stderr.
+///
+/// GPUI does not catch panics, so a panic anywhere in startup terminates the
+/// process; without a hook the log ends at the last line before it and the
+/// failure looks like the app never started.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("Panic: {info}");
+        default_hook(info);
+    }));
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredStartupAction {
     InitializeHotkey,
@@ -167,11 +180,6 @@ fn load_icon_from_embedded_bytes(ico_data: &[u8]) -> Option<isize> {
 }
 
 fn main() {
-    // --restart: 跳过单实例检测（旧进程 TCP 端口尚未被 OS 回收）
-    if !is_restart() && !ensure_single_instance() {
-        return;
-    }
-
     // --- Detect portable mode before loading any settings (so config/log paths ---
     // --- are resolved correctly). Must run before init_logging() and ---
     // --- AppSettings::load(). ---
@@ -181,6 +189,14 @@ fn main() {
     // --- a non-portable install, migrate existing data from the system dir. ---
     core::paths::migrate_portable_data();
     init_logging();
+    install_panic_hook();
+
+    // --restart: 跳过单实例检测（旧进程 TCP 端口尚未被 OS 回收）
+    // Below init_logging() so a rejected launch still leaves a line in the log.
+    if !is_restart() && !ensure_single_instance() {
+        log::warn!("Another instance already holds the single-instance port; exiting");
+        return;
+    }
 
     // Clean up leftover temp files from previous updates.
     crate::services::updater::cleanup_temp();
@@ -246,6 +262,12 @@ fn main() {
         }
 
         let settings = AppSettings::load();
+        // The persisted flag cannot notice a moved exe or a registration removed
+        // by a cleaner, which leaves auto-start silently dead; repair it before
+        // the first window opens.
+        if settings.auto_start {
+            core::settings::sync_auto_start_path();
+        }
         let effective_language = if settings.language.is_empty() {
             core::settings::detect_system_language()
         } else {

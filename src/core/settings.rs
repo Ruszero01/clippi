@@ -671,12 +671,37 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
     if enable {
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("{}: {e}", I18nKey::ErrGetExePath.text()))?;
-        key.set_value(APP_NAME, &exe_path.to_string_lossy().as_ref())
+        // Quoted so a path containing spaces is not split into a different target.
+        let exe_value = format!("\"{}\"", exe_path.display());
+        key.set_value(APP_NAME, &exe_value)
             .map_err(|e| format!("{}: {e}", I18nKey::ErrRegistryWrite.text()))?;
     } else {
         let _ = key.delete_value(APP_NAME);
     }
     Ok(())
+}
+
+/// Re-register auto-start when the stored registration no longer points at the
+/// running executable — the app was moved or renamed, or a cleaner dropped the
+/// entry while `auto_start` stayed true in the settings file.
+#[cfg(target_os = "windows")]
+pub fn sync_auto_start_path() {
+    let Ok(exe_path) = std::env::current_exe() else {
+        return;
+    };
+    let expected = format!("\"{}\"", exe_path.display());
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(key) = hkcu.open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_READ | KEY_WRITE) else {
+        return;
+    };
+    let current: Result<String, _> = key.get_value(APP_NAME);
+    if current.is_ok_and(|value| value == expected) {
+        return;
+    }
+    match key.set_value(APP_NAME, &expected) {
+        Ok(()) => log::info!("Re-registered auto-start for {}", exe_path.display()),
+        Err(e) => log::warn!("Failed to re-register auto-start: {e}"),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -732,10 +757,33 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// macOS counterpart of the Windows registry check above.
+#[cfg(target_os = "macos")]
+pub fn sync_auto_start_path() {
+    let Some(plist_path) = launch_agent_plist_path() else {
+        return;
+    };
+    let Ok(exe_path) = std::env::current_exe() else {
+        return;
+    };
+    let exe_str = exe_path.to_string_lossy();
+    let expected = format!("<string>{exe_str}</string>");
+    if std::fs::read_to_string(&plist_path).is_ok_and(|plist| plist.contains(expected.as_str())) {
+        return;
+    }
+    match set_auto_start(true) {
+        Ok(()) => log::info!("Re-registered auto-start for {exe_str}"),
+        Err(e) => log::warn!("Failed to re-register auto-start: {e}"),
+    }
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn set_auto_start(_enable: bool) -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn sync_auto_start_path() {}
 
 /// Generate a unique ID using splitmix64 mixing for better bit distribution.
 pub(crate) fn generate_id() -> String {
