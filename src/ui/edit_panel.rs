@@ -1113,8 +1113,9 @@ fn editor_box(
         .border(px(1.))
         .border_color(divider)
         .bg(surface)
-        // Body padding stays tight — the editor panel is small enough that 8px
-        // of inset reads as wasted space around the text.
+        // Body padding stays tight: gpui-component's input carries its own
+        // theme padding (12px/8px at Medium) on top of whatever the box adds,
+        // and that is what the box's own padding was being measured against.
         .pt(px(4.))
         .pb(px(4.))
         .pl(px(4.))
@@ -1126,6 +1127,11 @@ fn editor_box(
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
+                // Drop the theme's input padding: the box above already keeps
+                // the text off the border, and the default inset is far too
+                // wide for an editor that fills the panel.
+                .px(px(0.))
+                .py(px(0.))
                 .text_size(fs(12.)),
         );
     if fill {
@@ -1257,7 +1263,10 @@ fn find_field(
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
+                // Same as the body: no theme padding inside the bar's own
+                // 26px-high field, or the text would have no room left.
                 .px(px(0.))
+                .py(px(0.))
                 .text_size(fs(11.)),
         )
 }
