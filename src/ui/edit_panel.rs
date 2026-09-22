@@ -783,7 +783,7 @@ impl Render for EditPanel {
                                 .border_color(divider)
                                 .bg(surface)
                                 .overflow_y_scrollbar()
-                                .child(div().pt(px(6.)).pb(px(6.)).pl(px(6.)).pr(px(14.)).child(
+                                .child(div().pt(px(8.)).pb(px(8.)).pl(px(8.)).pr(px(14.)).child(
                                     render_rich_preview(
                                         &selected_type,
                                         &content_text,
@@ -942,12 +942,12 @@ fn editor_box(
         .border(px(1.))
         .border_color(divider)
         .bg(surface)
-        // Body padding stays tight: gpui-component's input carries its own
-        // theme padding (12px/8px at Medium) on top of whatever the box adds,
-        // and that is what the box's own padding was being measured against.
-        .pt(px(4.))
-        .pb(px(4.))
-        .pl(px(4.))
+        // 8px is the whole inset: gpui-component's input carries its own theme
+        // padding (12px/8px at Medium) and that is removed below, so nothing
+        // stacks on top of this.
+        .pt(px(8.))
+        .pb(px(8.))
+        .pl(px(8.))
         .pr(px(0.))
         .child(
             Input::new(input)
