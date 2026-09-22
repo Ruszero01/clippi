@@ -252,6 +252,16 @@ pub fn images_dir() -> PathBuf {
     dir
 }
 
+/// Directory holding the mirror files of entries opened in an external editor.
+///
+/// Deliberately in the platform temp directory rather than next to the data
+/// directory: the path is handed to another application, which needs the file
+/// to stay put while it has it open. Stale mirrors are reclaimed by the cache
+/// cleanup (`core::cache_cleanup::clean_editor_mirrors`).
+pub fn editor_mirror_dir() -> PathBuf {
+    std::env::temp_dir().join("clippi-editor")
+}
+
 /// Directory for transfer station cached files.
 ///
 /// Files are stored as `{hash}/{portable_name}` and are only used for local access —

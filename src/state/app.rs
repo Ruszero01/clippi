@@ -1672,7 +1672,7 @@ impl AppState {
         item: &ClipboardItem,
         text: &str,
     ) -> Option<std::path::PathBuf> {
-        let directory = std::env::temp_dir().join("clippi-editor");
+        let directory = crate::core::paths::editor_mirror_dir();
         if let Err(e) = std::fs::create_dir_all(&directory) {
             log::error!(
                 "open_item_in_editor: cannot create {}: {e}",

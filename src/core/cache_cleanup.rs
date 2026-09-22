@@ -24,6 +24,13 @@ use std::path::Path;
 /// 30-day expiry for sync tombstones.
 const TOMBSTONE_EXPIRY_DAYS: i64 = 30;
 
+/// How long a mirror file from an external editor is left alone.
+///
+/// Only the user knows when their editor let go of it, so the sweep is
+/// deliberately generous: a week-old copy of an entry is disposable, and a
+/// file the editor still holds open fails to delete on Windows anyway.
+const EDITOR_MIRROR_MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+
 // ── Configuration types ────────────────────────────────────────────────
 
 /// Options controlling which phases a cleanup pass should execute.
@@ -52,6 +59,8 @@ pub struct CleanupStats {
     pub orphan_images: u32,
     /// Number of unreferenced icon cache files removed.
     pub unreferenced_icons: u32,
+    /// Number of stale external-editor mirror files removed.
+    pub editor_mirrors: u32,
     /// Number of expired tombstone rows removed.
     pub expired_tombstones: u32,
     /// Number of clipboard items removed due to retention_days expiry.
@@ -94,6 +103,7 @@ impl CleanupStats {
     pub fn is_empty(&self) -> bool {
         self.orphan_images == 0
             && self.unreferenced_icons == 0
+            && self.editor_mirrors == 0
             && self.expired_tombstones == 0
             && self.expired_items == 0
             && self.stale_items == 0
@@ -374,6 +384,65 @@ fn clean_unreferenced_icons_in(db: &Database, images_dir: &Path, stats: &mut Cle
             }
         }
     }
+}
+
+/// Remove stale mirror files left by entries opened in an external editor.
+///
+/// These are the only cache files outside the data directory: the path is
+/// handed to another application, so they live in the platform temp directory.
+/// Phase order and locking rule are the same as for the other cache files —
+/// only what can no longer be in use is taken, and a file the editor still has
+/// open simply fails to delete.
+pub fn clean_editor_mirrors(
+    dir: &std::path::Path,
+    max_age: std::time::Duration,
+    stats: &mut CleanupStats,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        // No mirror directory: the feature was never used on this machine.
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        // Only files: anything else in there is not ours to remove.
+        if !metadata.is_file() {
+            continue;
+        }
+        // Unreadable mtime counts as "not old enough" — leave it be.
+        let old_enough = metadata
+            .modified()
+            .map(|modified| now.duration_since(modified).unwrap_or_default() >= max_age)
+            .unwrap_or(false);
+        if !old_enough {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => stats.editor_mirrors += 1,
+            // Still open in an editor, or transiently locked: the next pass
+            // picks it up. Not counted as a failure — this is expected.
+            Err(e) => log::debug!(
+                "clean_editor_mirrors: cannot remove {} yet: {e}",
+                path.display()
+            ),
+        }
+    }
+}
+
+/// Reclaim the cache files that need no database lookup: orphaned images and
+/// icons next to the data directory, and the external-editor mirrors in the
+/// temp directory.
+fn clean_cache_files(db: &Database, stats: &mut CleanupStats) {
+    clean_orphan_images(db, stats);
+    clean_unreferenced_icons(db, stats);
+    clean_editor_mirrors(
+        &crate::core::paths::editor_mirror_dir(),
+        std::time::Duration::from_secs(EDITOR_MIRROR_MAX_AGE_SECS),
+        stats,
+    );
 }
 
 /// Remove sync tombstones older than `TOMBSTONE_EXPIRY_DAYS` days.
@@ -931,15 +1000,15 @@ pub fn run_cleanup_with_options(
 
     // Phase 4: Orphan cache cleanup — AFTER database deletions.
     if options.clean_orphan_cache {
-        clean_orphan_images(db, &mut stats);
-        clean_unreferenced_icons(db, &mut stats);
+        clean_cache_files(db, &mut stats);
     }
 
     if !stats.is_empty() {
         log::info!(
-            "run_cleanup_with_options: {} orphan images, {} unreferenced icons, {} expired tombstones, {} expired items, {} stale items ({} scanned, {} pending, {} protected, {} unknown, {} invalid metadata)",
+            "run_cleanup_with_options: {} orphan images, {} unreferenced icons, {} editor mirrors, {} expired tombstones, {} expired items, {} stale items ({} scanned, {} pending, {} protected, {} unknown, {} invalid metadata)",
             stats.orphan_images,
             stats.unreferenced_icons,
+            stats.editor_mirrors,
             stats.expired_tombstones,
             stats.expired_items,
             stats.stale_items,
@@ -962,8 +1031,7 @@ pub fn run_cache_maintenance(db: &Database) -> CleanupStats {
         scan_complete: true,
         ..CleanupStats::default()
     };
-    clean_orphan_images(db, &mut stats);
-    clean_unreferenced_icons(db, &mut stats);
+    clean_cache_files(db, &mut stats);
     clean_expired_tombstones(db, &mut stats);
     stats
 }
@@ -985,6 +1053,52 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Write a mirror file and backdate it, the way an entry opened in an
+    /// external editor and then forgotten would look.
+    fn mirror_file(dir: &std::path::Path, name: &str, age_days: u64) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, "entry text").unwrap();
+        let when =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(age_days * 24 * 60 * 60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn only_stale_editor_mirrors_are_swept() {
+        let dir = temp_dir("editor-mirrors");
+        let limit = std::time::Duration::from_secs(EDITOR_MIRROR_MAX_AGE_SECS);
+        let fresh = mirror_file(&dir, "fresh.txt", 0);
+        let stale = mirror_file(&dir, "stale.md", 8);
+        let other = mirror_file(&dir, "other.html", 30);
+
+        let mut stats = CleanupStats::default();
+        clean_editor_mirrors(&dir, limit, &mut stats);
+
+        assert_eq!(stats.editor_mirrors, 2);
+        assert!(fresh.exists(), "a mirror opened today may still be open");
+        assert!(!stale.exists());
+        assert!(!other.exists());
+        assert!(
+            !stats.is_empty(),
+            "sweeping mirrors is work the toast has to report"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_mirror_directory_is_not_an_error() {
+        let dir = temp_dir("no-mirrors").join("absent");
+        let mut stats = CleanupStats::default();
+        clean_editor_mirrors(&dir, std::time::Duration::from_secs(1), &mut stats);
+        assert_eq!(stats.editor_mirrors, 0);
     }
 
     /// Insert an image item through the public upsert path with a controlled
