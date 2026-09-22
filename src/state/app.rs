@@ -1680,7 +1680,11 @@ impl AppState {
             );
             return None;
         }
-        let path = directory.join(format!("{:016x}.txt", item.content_hash));
+        let path = directory.join(format!(
+            "{:016x}.{}",
+            item.content_hash,
+            editor_file_extension(item.editor_type())
+        ));
         if let Err(e) = std::fs::write(&path, text.as_bytes()) {
             log::error!("open_item_in_editor: cannot write {}: {e}", path.display());
             return None;
@@ -2806,6 +2810,20 @@ fn transfer_path_key(path: &str) -> std::path::PathBuf {
 fn file_stamp(path: &std::path::Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.len(), meta.modified().ok()))
+}
+
+/// File extension a text entry is handed to the shell under.
+///
+/// The shell picks the application from the extension, so an entry goes out in
+/// the format it actually holds: an HTML entry as a document, markdown as
+/// markdown, everything else — including RTF, whose stored text is the plain
+/// text the editor panel edits — as plain text.
+fn editor_file_extension(editor_type: &str) -> &'static str {
+    match editor_type {
+        "html" => "html",
+        "markdown" => "md",
+        _ => "txt",
+    }
 }
 
 /// Text handed to the system editor when a text entry is opened externally.
@@ -4107,6 +4125,11 @@ mod tests {
         .to_json();
         let (id, path) = mirror_entry(&mut state, item);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "<p>hello</p>");
+        assert_eq!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("html"),
+            "an HTML entry goes out as a document, so the shell picks an app              that can open one"
+        );
 
         std::fs::write(&path, "<p>edited outside</p>").unwrap();
         assert!(state.poll_external_editor_edits());
@@ -4117,6 +4140,25 @@ mod tests {
             Some("<p>edited outside</p>")
         );
         assert_eq!(stored.meta_type, "html", "the entry keeps its type");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The mirror's extension follows the entry's format: the shell decides
+    /// which application opens the file from it.
+    #[test]
+    fn the_mirror_extension_follows_the_entry_format() {
+        assert_eq!(editor_file_extension("plain_text"), "txt");
+        assert_eq!(editor_file_extension("color"), "txt");
+        assert_eq!(editor_file_extension("secret"), "txt");
+        assert_eq!(editor_file_extension("markdown"), "md");
+        assert_eq!(editor_file_extension("html"), "html");
+
+        let (mut state, _dirty) = test_state();
+        let mut markdown = make_item(5, ContentType::PlainText, false, "# Title");
+        markdown.meta_type = "markdown".to_string();
+        let (_, path) = mirror_entry(&mut state, markdown);
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("md"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Title");
         let _ = std::fs::remove_file(&path);
     }
 
