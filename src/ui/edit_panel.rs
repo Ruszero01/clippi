@@ -4,19 +4,30 @@ use crate::ui::font::fs;
 use base64::Engine;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState, Search};
+use gpui_component::input::{Input, InputEvent, InputState, RopeExt};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::tooltip::Tooltip;
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
+use std::ops::Range;
 
+use crate::core::find_replace;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::types::{ClipboardItem, RichData};
 use crate::state::app::AppState;
 
 use super::rich_preview;
 use super::theme::ClippiTheme;
+
+/// Height of one row of the find bar, and of the bar itself with and without
+/// its replace row. The split handle's drag math needs the latter: the bar
+/// shortens the area the rich-text split divides.
+const FIND_ROW_H: f32 = 26.0;
+const FIND_BAR_GAP: f32 = 4.0;
+const FIND_BAR_PADDING: f32 = 6.0;
+const FIND_BAR_H: f32 = FIND_ROW_H + 2.0 * FIND_BAR_PADDING;
+const FIND_BAR_H_WITH_REPLACE: f32 = FIND_ROW_H * 2.0 + FIND_BAR_GAP + 2.0 * FIND_BAR_PADDING;
 
 const TYPE_OPTIONS: [(&str, I18nKey); 9] = [
     ("plain_text", I18nKey::EditTypeText),
@@ -55,6 +66,18 @@ pub struct EditPanel {
     /// 当从富文本类型切换到纯文本类型时，缓存原始富文本和提取的纯文本，
     /// 以便切回富文本时能将纯文本编辑同步回 HTML 标签中。
     rich_cache: Option<RichTextCache>,
+    /// 查找栏是否展开（替换行是否展开单独记录）
+    find_open: bool,
+    replace_open: bool,
+    find_input: Entity<InputState>,
+    replace_input: Entity<InputState>,
+    /// 当前查询在正文里的命中区间（字节）、总数与当前项下标
+    find_ranges: Vec<Range<usize>>,
+    find_total: usize,
+    find_index: usize,
+    /// 查询词变化后要把视图带到当前命中：定位需要 Window，订阅回调里拿不到，
+    /// 交给下一次 render 处理（与编辑会话的重载同一个做法）。
+    pending_find_jump: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,23 +100,47 @@ impl EditPanel {
         let content_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
-                // The find/replace bar lives inside the input: selecting text and
-                // pressing Ctrl/Cmd+F opens it with that text, and the toolbar
-                // button dispatches the same action.
-                .searchable(true)
                 .placeholder(I18nKey::EditContentPlaceholder.text())
         });
-        let content_for_sub = content_input.clone();
-        let _subscriptions =
-            vec![
-                cx.subscribe(&content_input, move |this, _, ev: &InputEvent, cx| {
-                    if matches!(ev, InputEvent::Change) {
-                        this.preview_generation = this.preview_generation.wrapping_add(1);
-                        let _ = content_for_sub.read(cx).value();
-                        cx.notify();
+        let find_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(I18nKey::EditFindPlaceholder.text()));
+        let replace_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(I18nKey::EditReplacePlaceholder.text())
+        });
+
+        // The query changed: re-match, then land on the first match from the
+        // caret and pull the view there. Typing in the find field is the one
+        // moment the editor is not the focused input, so moving its caret is
+        // safe.
+        let find_for_query = find_input.clone();
+        let replace_for_query = replace_input.clone();
+        let _subscriptions = vec![
+            cx.subscribe(&content_input, move |this, _, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.preview_generation = this.preview_generation.wrapping_add(1);
+                    // 命中位置随正文变化，计数要跟上；不清空当前项，
+                    // 用户正在正文里打字时不应该把视图拉走。
+                    if this.find_open {
+                        this.rematch(cx);
                     }
-                }),
-            ];
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&find_input, move |this, _, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    let _ = find_for_query.read(cx).value();
+                    this.rematch(cx);
+                    this.pending_find_jump = true;
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&replace_input, move |_this, _, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    let _ = replace_for_query.read(cx).value();
+                    cx.notify();
+                }
+            }),
+        ];
 
         Self {
             state,
@@ -110,6 +157,14 @@ impl EditPanel {
             split_dragging: None,
             split_drag_start_ratio: 0.5,
             rich_cache: None,
+            find_open: false,
+            replace_open: false,
+            find_input,
+            replace_input,
+            find_ranges: Vec::new(),
+            find_total: 0,
+            find_index: 0,
+            pending_find_jump: false,
             _subscriptions,
         }
     }
@@ -117,6 +172,366 @@ impl EditPanel {
     pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    /// 展开查找栏（`replace_row` 为真时连替换行一起），并把焦点交给查找框。
+    fn open_find_bar(&mut self, replace_row: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = true;
+        self.replace_open = self.replace_open || replace_row;
+        self.rematch(cx);
+        self.pending_find_jump = true;
+        self.find_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    /// 收起查找栏：焦点回到正文，命中记录与计数一并清掉。
+    fn close_find_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.find_open {
+            return;
+        }
+        self.find_open = false;
+        self.replace_open = false;
+        self.find_ranges.clear();
+        self.find_total = 0;
+        self.find_index = 0;
+        self.pending_find_jump = false;
+        self.content_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    /// 工具栏按钮：展开或收起查找栏。
+    fn toggle_find_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_open {
+            self.close_find_bar(window, cx);
+        } else {
+            self.open_find_bar(false, window, cx);
+        }
+    }
+
+    /// 命中数是否超过了查找栏一次处理的上限。
+    fn find_truncated(&self) -> bool {
+        self.find_total > self.find_ranges.len()
+    }
+
+    /// 按当前正文与查询词重新计算命中。
+    fn rematch(&mut self, cx: &App) {
+        let text = self.content_input.read(cx).value();
+        let query = self.find_input.read(cx).value();
+        let set = find_replace::find_matches(&text, &query);
+        self.find_ranges = set.ranges;
+        self.find_total = set.total;
+        if self.find_index >= self.find_ranges.len() {
+            self.find_index = 0;
+        }
+    }
+
+    /// 上一个 / 下一个命中，首尾绕回。
+    fn find_step(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_ranges.is_empty() {
+            return;
+        }
+        if forward {
+            self.find_index = (self.find_index + 1) % self.find_ranges.len();
+        } else {
+            self.find_index = if self.find_index == 0 {
+                self.find_ranges.len() - 1
+            } else {
+                self.find_index - 1
+            };
+        }
+        self.locate_match(window, cx);
+        cx.notify();
+    }
+
+    /// 把正文视图带到当前命中处。
+    ///
+    /// 正文输入框只公开了「设置光标位置」这一条定位途径（内部的
+    /// `scroll_to` 不对外），而它会连带抢走焦点，所以先记下查找框的焦点、
+    /// 定位完再还回去 —— 否则用户点一次「下一个」就没法继续在查找框里回车。
+    fn locate_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(range) = self.find_ranges.get(self.find_index).cloned() else {
+            return;
+        };
+        self.locate_offset(range.start, window, cx);
+    }
+
+    fn locate_offset(&mut self, offset: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let keep_focus = if self.find_input.read(cx).focus_handle(cx).is_focused(window) {
+            Some(self.find_input.clone())
+        } else if self
+            .replace_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            Some(self.replace_input.clone())
+        } else {
+            None
+        };
+
+        let input = self.content_input.clone();
+        let text_len = input.read(cx).text().len();
+        let offset = offset.min(text_len);
+        input.update(cx, |input, cx| {
+            let position = input.text().offset_to_position(offset);
+            input.set_cursor_position(position, window, cx);
+        });
+
+        if let Some(field) = keep_focus {
+            field.update(cx, |field, cx| field.focus(window, cx));
+        }
+    }
+
+    /// 用替换框里的内容替换当前命中，然后跳到下一处。
+    fn replace_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rematch(cx);
+        let Some(range) = self.find_ranges.get(self.find_index).cloned() else {
+            return;
+        };
+        let replacement = self.replace_input.read(cx).value().to_string();
+        let text = self.content_input.read(cx).value().to_string();
+        let updated = find_replace::replace_one(&text, &range, &replacement);
+        let caret = range.start + replacement.len();
+
+        let query = self.find_input.read(cx).value();
+        let set = find_replace::find_matches(&updated, &query);
+        self.find_ranges = set.ranges;
+        self.find_total = set.total;
+        self.find_index = find_replace::index_at_or_after(&self.find_ranges, caret);
+
+        self.apply_content(updated, window, cx);
+        if self.find_ranges.is_empty() {
+            self.locate_offset(caret, window, cx);
+        } else {
+            self.locate_match(window, cx);
+        }
+    }
+
+    /// 一次替换所有命中。
+    fn replace_every(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.find_input.read(cx).value();
+        let text = self.content_input.read(cx).value().to_string();
+        let set = find_replace::find_matches(&text, &query);
+        if set.is_empty() {
+            return;
+        }
+        let replacement = self.replace_input.read(cx).value().to_string();
+        let first = set.ranges[0].start;
+        let updated = find_replace::replace_all(&text, &set.ranges, &replacement);
+
+        let remaining = find_replace::find_matches(&updated, &query);
+        self.find_ranges = remaining.ranges;
+        self.find_total = remaining.total;
+        self.find_index = 0;
+
+        self.apply_content(updated, window, cx);
+        self.locate_offset(first, window, cx);
+    }
+
+    /// 把替换结果写回输入框。
+    ///
+    /// `set_value` 不触发 Change 事件（也就不刷新预览），所以这里手动推进
+    /// 预览代次。它同时会把视图滚回顶部，调用方紧接着定位到命中处。
+    fn apply_content(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        self.content_input.update(cx, |input, cx| {
+            input.set_value(text, window, cx);
+            cx.notify();
+        });
+    }
+
+    /// 工具栏下方的查找栏：左边查找框，右边上一个 / 下一个 / 计数 / 替换，
+    /// 展开替换后再多一行「替换为 + 替换 + 全部替换」。
+    fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let surface = theme.surface;
+        let divider = theme.divider;
+        let text_2 = theme.text_2;
+        let text_3 = theme.text_3;
+        let accent = theme.accent;
+        let hover_bg = if theme.bg == rgb(0x191a1b) {
+            rgba(0xffffff10)
+        } else {
+            rgba(0x0000000a)
+        };
+        let this = cx.entity();
+
+        let query = self.find_input.read(cx).value();
+        let count = if self.find_total == 0 {
+            "0/0".to_string()
+        } else if self.find_truncated() {
+            // 命中数超过查找栏能处理的上限：显示可跳转 / 可替换的数量并加号标记。
+            format!("{}/{}+", self.find_index + 1, self.find_ranges.len())
+        } else {
+            format!("{}/{}", self.find_index + 1, self.find_total)
+        };
+        let count_color = if self.find_total == 0 && !query.is_empty() {
+            theme.danger
+        } else {
+            text_3
+        };
+
+        let search_row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .gap(px(4.))
+            .child(find_field(
+                &self.find_input,
+                surface,
+                divider,
+                text_3,
+                "\u{e64c}",
+            ))
+            .child(find_text_button(
+                I18nKey::EditFindPrev.text(),
+                text_2,
+                accent,
+                hover_bg,
+                {
+                    let this = this.clone();
+                    move |window, cx| {
+                        this.update(cx, |panel, cx| panel.find_step(false, window, cx));
+                    }
+                },
+            ))
+            .child(find_text_button(
+                I18nKey::EditFindNext.text(),
+                text_2,
+                accent,
+                hover_bg,
+                {
+                    let this = this.clone();
+                    move |window, cx| {
+                        this.update(cx, |panel, cx| panel.find_step(true, window, cx));
+                    }
+                },
+            ))
+            .child(
+                div()
+                    .w(px(34.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(fs(10.))
+                    .text_color(count_color)
+                    .child(count),
+            )
+            .child(icon_button(
+                "edit-replace-mode",
+                "\u{e7a9}",
+                if self.replace_open { accent } else { text_2 },
+                accent,
+                hover_bg,
+                Some(I18nKey::EditReplace.text()),
+                {
+                    let this = this.clone();
+                    move |window, cx| {
+                        this.update(cx, |panel, cx| {
+                            panel.replace_open = !panel.replace_open;
+                            if panel.replace_open {
+                                panel
+                                    .replace_input
+                                    .update(cx, |input, cx| input.focus(window, cx));
+                            } else {
+                                panel
+                                    .find_input
+                                    .update(cx, |input, cx| input.focus(window, cx));
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+            ));
+
+        let bar = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .flex_shrink_0()
+            .gap(px(FIND_BAR_GAP))
+            .on_key_down({
+                let this = this.clone();
+                move |ev: &KeyDownEvent, window, cx| {
+                    let key = ev.keystroke.key.as_str();
+                    let shift = ev.keystroke.modifiers.shift;
+                    match key {
+                        "escape" => {
+                            this.update(cx, |panel, cx| panel.close_find_bar(window, cx));
+                            cx.stop_propagation();
+                        }
+                        "enter" => {
+                            this.update(cx, |panel, cx| {
+                                // 在替换框里回车 = 替换当前并跳到下一处；
+                                // 在查找框里回车只是跳转。
+                                let in_replace = panel
+                                    .replace_input
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .is_focused(window);
+                                if in_replace {
+                                    panel.replace_current(window, cx);
+                                } else {
+                                    panel.find_step(!shift, window, cx);
+                                }
+                            });
+                            cx.stop_propagation();
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .child(search_row);
+
+        bar.when(self.replace_open, |bar| {
+            bar.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .w_full()
+                    .gap(px(4.))
+                    .child(find_field(
+                        &self.replace_input,
+                        surface,
+                        divider,
+                        text_3,
+                        "\u{e7a9}",
+                    ))
+                    .child(icon_button(
+                        "edit-replace-one",
+                        "\u{e7a9}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditReplace.text()),
+                        {
+                            let this = this.clone();
+                            move |window, cx| {
+                                this.update(cx, |panel, cx| panel.replace_current(window, cx));
+                            }
+                        },
+                    ))
+                    .child(icon_button(
+                        "edit-replace-all",
+                        "\u{e6ed}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::EditReplaceAll.text()),
+                        {
+                            let this = this.clone();
+                            move |window, cx| {
+                                this.update(cx, |panel, cx| panel.replace_every(window, cx));
+                            }
+                        },
+                    )),
+            )
+        })
+        .into_any_element()
     }
 
     fn sync_from_item(
@@ -146,6 +561,12 @@ impl EditPanel {
             input.set_value(content.clone(), window, cx);
             input.focus_handle(cx).focus(window);
         });
+
+        // 换了条目，查找栏的命中和计数要重新算一遍。
+        if self.find_open {
+            self.find_index = 0;
+            self.rematch(cx);
+        }
     }
 
     fn apply_content_transform(
@@ -199,6 +620,12 @@ impl Render for EditPanel {
             self.content_input.update(cx, |state, cx| {
                 state.set_placeholder(I18nKey::EditContentPlaceholder.text(), window, cx);
             });
+            self.find_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::EditFindPlaceholder.text(), window, cx);
+            });
+            self.replace_input.update(cx, |state, cx| {
+                state.set_placeholder(I18nKey::EditReplacePlaceholder.text(), window, cx);
+            });
         }
 
         // The panel is dropped from the tree while another view is active, so a
@@ -217,6 +644,13 @@ impl Render for EditPanel {
             if let Some(item) = item {
                 self.sync_from_item(&item, session, window, cx);
             }
+        }
+        if self.pending_find_jump {
+            self.pending_find_jump = false;
+            // 从光标处往下找，光标位置比文首更接近用户想找的地方。
+            let caret = self.content_input.read(cx).cursor();
+            self.find_index = find_replace::index_at_or_after(&self.find_ranges, caret);
+            self.locate_match(window, cx);
         }
 
         let this = cx.entity();
@@ -238,6 +672,8 @@ impl Render for EditPanel {
         let content_text = self.content_input.read(cx).value().to_string();
         let selected_type = self.selected_type.clone();
         let preview_generation = self.preview_generation;
+        let find_bar = self.find_bar(cx);
+        let is_find_open = self.find_open;
 
         div()
             .relative()
@@ -249,6 +685,16 @@ impl Render for EditPanel {
             .overflow_hidden()
             .p(px(8.))
             .gap(px(8.))
+            .on_key_down({
+                // Ctrl/Cmd+F 打开（再次按下收起）查找栏。
+                let this = this.clone();
+                move |ev: &KeyDownEvent, window, cx| {
+                    if ev.keystroke.modifiers.secondary() && ev.keystroke.key.as_str() == "f" {
+                        this.update(cx, |panel, cx| panel.toggle_find_bar(window, cx));
+                        cx.stop_propagation();
+                    }
+                }
+            })
             .child(
                 div()
                     .flex()
@@ -257,6 +703,7 @@ impl Render for EditPanel {
                     .gap(px(8.))
                     .h(px(36.))
                     .child(icon_button(
+                        "edit-back",
                         "\u{e62b}",
                         text_2,
                         accent,
@@ -319,23 +766,21 @@ impl Render for EditPanel {
                     )
                     .child(div().flex_1())
                     .child(icon_button(
+                        "edit-find",
                         "\u{e64c}",
-                        text_2,
+                        if self.find_open { accent } else { text_2 },
                         accent,
                         hover_bg,
                         Some(I18nKey::EditTooltipFindReplace.text()),
                         {
-                            let input = content_input.clone();
+                            let this = this.clone();
                             move |window, cx| {
-                                // The find/replace bar belongs to the input, so
-                                // focus it before dispatching the action that
-                                // shows the bar.
-                                input.update(cx, |input, cx| input.focus(window, cx));
-                                window.dispatch_action(Box::new(Search), cx);
+                                this.update(cx, |panel, cx| panel.toggle_find_bar(window, cx));
                             }
                         },
                     ))
                     .child(icon_button(
+                        "edit-url-decode",
                         "\u{e6da}",
                         text_2,
                         accent,
@@ -354,6 +799,7 @@ impl Render for EditPanel {
                         },
                     ))
                     .child(icon_button(
+                        "edit-base64-decode",
                         "\u{e66e}",
                         text_2,
                         accent,
@@ -372,6 +818,7 @@ impl Render for EditPanel {
                         },
                     ))
                     .child(icon_button(
+                        "edit-json-format",
                         "\u{e819}",
                         text_2,
                         accent,
@@ -385,6 +832,7 @@ impl Render for EditPanel {
                         },
                     ))
                     .child(icon_button(
+                        "edit-trim",
                         "\u{e6db}",
                         text_2,
                         accent,
@@ -398,9 +846,20 @@ impl Render for EditPanel {
                         },
                     )),
             )
+            .when(is_find_open, move |panel| panel.child(find_bar))
             .child({
                 let split_ratio = self.split_ratio;
                 let is_dragging = self.split_dragging.is_some();
+                // 查找栏展开后内容区变矮，拖拽比例要按同一条基准换算
+                let find_bar_h = if self.find_open {
+                    if self.replace_open {
+                        FIND_BAR_H_WITH_REPLACE
+                    } else {
+                        FIND_BAR_H
+                    }
+                } else {
+                    0.0
+                };
                 div()
                     .flex_1()
                     .flex()
@@ -417,7 +876,8 @@ impl Render for EditPanel {
                                         let delta = f32::from(ev.position.y) - f32::from(start_y);
                                         // 从窗口高度估算内容区高度（减去 header/toolbar/button/gap/padding ≈ 132px）
                                         let content_h = (f32::from(window.viewport_size().height)
-                                            - 132.0)
+                                            - 132.0
+                                            - find_bar_h)
                                             .max(200.0);
                                         let delta_ratio = delta / content_h;
                                         let new_ratio = (panel.split_drag_start_ratio
@@ -723,6 +1183,7 @@ fn render_rich_preview(
 }
 
 fn icon_button(
+    id: &'static str,
     icon: &'static str,
     normal: Rgba,
     hover: Rgba,
@@ -731,7 +1192,7 @@ fn icon_button(
     handler: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     div()
-        .id(icon)
+        .id(id)
         .w(px(22.))
         .h(px(22.))
         .rounded(px(4.))
@@ -756,6 +1217,80 @@ fn icon_button(
                 .text_color(normal)
                 .hover(move |style| style.text_color(hover))
                 .child(icon),
+        )
+}
+
+/// 查找栏里的输入框：和编辑器的输入框同一套写法，外面套一层带边框的壳。
+fn find_field(
+    input: &Entity<InputState>,
+    surface: Rgba,
+    divider: Rgba,
+    icon_color: Rgba,
+    icon: &'static str,
+) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .flex_1()
+        .min_w(px(0.))
+        .h(px(FIND_ROW_H))
+        .bg(surface)
+        .rounded(px(6.))
+        .border(px(1.))
+        .border_color(divider)
+        .overflow_hidden()
+        .child(
+            div()
+                .pl(px(6.))
+                .pr(px(3.))
+                .flex_shrink_0()
+                .font_family("iconfont")
+                .text_size(fs(12.))
+                .text_color(icon_color)
+                .child(icon),
+        )
+        .child(
+            Input::new(input)
+                .appearance(false)
+                .bordered(false)
+                .focus_bordered(false)
+                .w_full()
+                .h_full()
+                .px(px(0.))
+                .text_size(fs(11.)),
+        )
+}
+
+/// 查找栏里的文字按钮（上一个 / 下一个）：比 `text_button` 紧凑，无边框，
+/// 悬停时才变色。
+fn find_text_button(
+    label: &'static str,
+    normal: Rgba,
+    hover: Rgba,
+    hover_bg: Rgba,
+    handler: impl Fn(&mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(label)
+        .h(px(FIND_ROW_H))
+        .px(px(6.))
+        .flex_shrink_0()
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |style| style.bg(hover_bg))
+        .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+            handler(window, cx)
+        })
+        .child(
+            div()
+                .text_size(fs(11.))
+                .text_color(normal)
+                .hover(move |style| style.text_color(hover))
+                .child(label),
         )
 }
 

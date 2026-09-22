@@ -5,6 +5,7 @@ pub mod color;
 pub mod config_sync;
 pub mod db;
 pub mod filters;
+pub mod find_replace;
 pub mod frontend;
 pub mod html_text;
 pub mod i18n;
