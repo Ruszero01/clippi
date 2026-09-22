@@ -316,6 +316,8 @@ define_i18n! {
     CtxOpenLink:        ("打开链接", "Open Link"),
     CtxOpenFolder:      ("打开文件夹", "Open Folder"),
     CtxOpenText:        ("打开文本", "Open Text"),
+    ToastExternalEditSynced: ("已同步外部编辑", "External edit synced back"),
+    ToastOpenExternalFailed: ("无法打开外部编辑器", "Couldn't open the external editor"),
     CtxFav:             ("收藏", "Fav"),
     CtxUnfav:           ("取消收藏", "Unfav"),
     ToastPreparingBitmapImage: ("正在准备位图图片...", "Preparing bitmap image..."),

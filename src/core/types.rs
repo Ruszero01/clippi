@@ -533,6 +533,25 @@ impl ClipboardItem {
             _ => DisplayKind::PlainText,
         }
     }
+
+    /// The edit panel's type key for this entry.
+    ///
+    /// Also what an external editor's content is written back as, so a round
+    /// trip through another editor keeps the entry's type.
+    pub fn editor_type(&self) -> &'static str {
+        match self.display_kind() {
+            DisplayKind::Html => "html",
+            DisplayKind::Markdown => "markdown",
+            DisplayKind::Email => "email",
+            DisplayKind::Phone => "phone",
+            DisplayKind::Link => "link",
+            DisplayKind::Path => "path",
+            DisplayKind::Color => "color",
+            DisplayKind::Secret => "secret",
+            // RTF and plain text share one type: the panel edits either as text.
+            _ => "plain_text",
+        }
+    }
 }
 
 /// Format elapsed time as human-readable string

@@ -789,21 +789,10 @@ fn text_button(
         )
 }
 
+/// The type the editor opens an entry as. Shared with the external editor's
+/// read-back path, which writes content back under the same type.
 fn editor_type_from_item(item: &ClipboardItem) -> &'static str {
-    use crate::core::types::DisplayKind;
-
-    match item.display_kind() {
-        DisplayKind::Html => "html",
-        DisplayKind::Markdown => "markdown",
-        DisplayKind::Rtf => "plain_text",
-        DisplayKind::Email => "email",
-        DisplayKind::Phone => "phone",
-        DisplayKind::Link => "link",
-        DisplayKind::Path => "path",
-        DisplayKind::Color => "color",
-        DisplayKind::Secret => "secret",
-        _ => "plain_text",
-    }
+    item.editor_type()
 }
 
 fn type_label(key: &str) -> &'static str {

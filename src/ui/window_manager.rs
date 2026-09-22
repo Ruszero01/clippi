@@ -802,6 +802,14 @@ impl WindowManager {
 
         self.poll_bitmap_paste(cx);
 
+        // --- 4b. External editor mirrors — read saved edits back ---
+        if self
+            .state
+            .update(cx, |state, _cx| state.poll_external_editor_edits())
+        {
+            cx.emit(WindowManagerEvent::ClipboardChanged);
+        }
+
         // 5. Focus / auto-hide logic (also updates foreground app info in AppState)
         self.poll_focus(cx);
 

@@ -40,6 +40,26 @@ const LIST_NOTE_LIMIT: usize = 2048;
 /// editing".
 pub const NEW_ITEM_ID: i64 = 0;
 
+/// How many mirrored files stay watched. Bounds the per-tick stat work the
+/// poll loop does for external edits.
+const EXTERNAL_EDITOR_MAX_TARGETS: usize = 8;
+/// Mirror files larger than this are not read back: the read runs on the GPUI
+/// thread, and a file of that size would be felt as a hitch.
+const EXTERNAL_EDITOR_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A text entry mirrored to a file an external editor has open.
+struct ExternalEditorTarget {
+    item_id: i64,
+    path: std::path::PathBuf,
+    /// Hash of the bytes Clippi last wrote or last applied; a file that hashes
+    /// the same has nothing new in it.
+    written_hash: u64,
+    /// Length and mtime as of that write — the cheap check the poll compares
+    /// against, so the file is only read when it actually changed.
+    seen_len: u64,
+    seen_modified: Option<std::time::SystemTime>,
+}
+
 /// Blank item handed to the edit panel for a new entry. Only `display_kind()`
 /// and the preview key read it — `save_new_item` builds the row that is
 /// actually persisted.
@@ -182,6 +202,10 @@ pub struct AppState {
     usage_sync_requires_full_reload: bool,
     /// Item IDs whose custom hotkeys need unregistering (consumed by WindowManager poll).
     pub pending_hotkey_unregister: Vec<i64>,
+    /// Text entries currently mirrored to a file that an external editor has
+    /// open. Polled by the WindowManager loop so a save outside Clippi comes
+    /// back into the entry.
+    external_editor_targets: Vec<ExternalEditorTarget>,
     pub toast_message: Option<String>,
     /// true = warning (red), false = info (green).
     pub toast_is_warning: bool,
@@ -433,6 +457,7 @@ impl AppState {
             sync_dirty: Arc::new(AtomicBool::new(initial_cleanup_dirty)),
             needs_reload: Arc::new(AtomicBool::new(false)),
             pending_hotkey_unregister: Vec::new(),
+            external_editor_targets: Vec::new(),
             bitmap_paste_finished: Arc::new(AtomicBool::new(false)),
             toast_message: None,
             toast_is_warning: false,
@@ -1084,6 +1109,19 @@ impl AppState {
     }
 
     pub fn save_edited_item(&mut self, id: i64, text: &str, editor_type: &str) -> bool {
+        if !self.apply_content_edit(id, text, editor_type) {
+            return false;
+        }
+        self.cancel_edit_item();
+        true
+    }
+
+    /// Write edited content into an existing entry.
+    ///
+    /// The editor panel's save and the external editor's read-back both land
+    /// here. Ending the edit session is the caller's business: an external save
+    /// must not close a panel the user has open on another entry.
+    fn apply_content_edit(&mut self, id: i64, text: &str, editor_type: &str) -> bool {
         let (content_type, meta_type, rich_data) = Self::storage_for_editor_type(editor_type, text);
         // Pre-flight: is the item in sync scope? Check before DB write.
         let mark_dirty = self
@@ -1099,7 +1137,6 @@ impl AppState {
                 if mark_dirty {
                     self.sync_dirty.store(true, Ordering::SeqCst);
                 }
-                self.cancel_edit_item();
                 // Incremental update: preserve scroll position (consistent with
                 // update_note / toggle_favorite). The item keeps its current
                 // position; re-sort happens on next window open via reload_items().
@@ -1121,7 +1158,7 @@ impl AppState {
                 true
             }
             Err(e) => {
-                log::error!("save_edited_item({id}): {e}");
+                log::error!("apply_content_edit({id}): {e}");
                 false
             }
         }
@@ -1591,7 +1628,10 @@ impl AppState {
     ///
     /// The text is written to a file under the temp directory and handed to the
     /// shell, which launches whatever application owns `.txt`.
-    pub fn open_item_in_editor(&self, id: i64) {
+    ///
+    /// The mirror file stays watched: whatever the external editor saves is
+    /// read back into the entry by [`Self::poll_external_editor_edits`].
+    pub fn open_item_in_editor(&mut self, id: i64) {
         let item = match self.db.get_by_id(id) {
             Ok(Some(item)) => item,
             Ok(None) => {
@@ -1609,29 +1649,142 @@ impl AppState {
             return;
         }
 
-        // Named by content hash so re-opening an entry reuses one file instead
-        // of piling up copies in the temp directory.
-        let file_name = format!("{:016x}.txt", item.content_hash);
+        let Some(path) = self.mirror_for_external_editor(&item, &text) else {
+            self.show_toast(I18nKey::ToastOpenExternalFailed.text());
+            return;
+        };
 
         // --- Spawn on a background thread — ShellExecuteW can pump Windows ---
         // --- messages internally (DDE/COM) and deadlock if called from the ---
         // --- GPUI main thread event handler.                               ---
         std::thread::spawn(move || {
-            let directory = std::env::temp_dir().join("clippi-editor");
-            if let Err(e) = std::fs::create_dir_all(&directory) {
-                log::error!(
-                    "open_item_in_editor: cannot create {}: {e}",
-                    directory.display()
-                );
-                return;
-            }
-            let path = directory.join(file_name);
-            if let Err(e) = std::fs::write(&path, text.as_bytes()) {
-                log::error!("open_item_in_editor: cannot write {}: {e}", path.display());
-                return;
-            }
             open_system_target(&path.to_string_lossy());
         });
+    }
+
+    /// Write the entry's text to its mirror file and start watching it.
+    ///
+    /// Returns the file path, or `None` when the write failed. The file is
+    /// named by content hash, so re-opening an entry reuses one file instead of
+    /// piling up copies in the temp directory.
+    fn mirror_for_external_editor(
+        &mut self,
+        item: &ClipboardItem,
+        text: &str,
+    ) -> Option<std::path::PathBuf> {
+        let directory = std::env::temp_dir().join("clippi-editor");
+        if let Err(e) = std::fs::create_dir_all(&directory) {
+            log::error!(
+                "open_item_in_editor: cannot create {}: {e}",
+                directory.display()
+            );
+            return None;
+        }
+        let path = directory.join(format!("{:016x}.txt", item.content_hash));
+        if let Err(e) = std::fs::write(&path, text.as_bytes()) {
+            log::error!("open_item_in_editor: cannot write {}: {e}", path.display());
+            return None;
+        }
+
+        let (seen_len, seen_modified) = file_stamp(&path).unwrap_or((0, None));
+        self.external_editor_targets
+            .retain(|target| target.path != path);
+        self.external_editor_targets.push(ExternalEditorTarget {
+            item_id: item.id,
+            path: path.clone(),
+            written_hash: Self::hash_text(text),
+            seen_len,
+            seen_modified,
+        });
+        // The oldest mirror stops being watched once the list is full.
+        if self.external_editor_targets.len() > EXTERNAL_EDITOR_MAX_TARGETS {
+            self.external_editor_targets.remove(0);
+        }
+        Some(path)
+    }
+
+    /// Read mirrored files back into their entries.
+    ///
+    /// Called from the WindowManager poll loop: one stat per mirrored file per
+    /// tick, and a read only when the file's length or mtime moved. Returns
+    /// true when an entry changed, so the caller can refresh the list.
+    pub fn poll_external_editor_edits(&mut self) -> bool {
+        if self.external_editor_targets.is_empty() {
+            return false;
+        }
+
+        let mut updated = false;
+        let mut watching = Vec::with_capacity(self.external_editor_targets.len());
+        for mut target in std::mem::take(&mut self.external_editor_targets) {
+            let Some((len, modified)) = file_stamp(&target.path) else {
+                // The mirror is gone (temp cleaned up, editor moved the file):
+                // there is nothing left to read back.
+                continue;
+            };
+            if len == target.seen_len && modified == target.seen_modified {
+                watching.push(target);
+                continue;
+            }
+            target.seen_len = len;
+            target.seen_modified = modified;
+
+            if len > EXTERNAL_EDITOR_MAX_BYTES {
+                log::warn!(
+                    "external editor mirror {} is too large to read back",
+                    target.path.display()
+                );
+                continue;
+            }
+            let text = match std::fs::read_to_string(&target.path) {
+                Ok(text) => text,
+                Err(e) => {
+                    // A half-written file, or an encoding we cannot read. Keep
+                    // watching — the next save may land cleanly.
+                    log::warn!(
+                        "external editor mirror {} could not be read: {e}",
+                        target.path.display()
+                    );
+                    watching.push(target);
+                    continue;
+                }
+            };
+            let hash = Self::hash_text(&text);
+            if hash == target.written_hash {
+                watching.push(target);
+                continue;
+            }
+
+            // The entry keeps its own type: an external save is the same edit
+            // the editor panel would make with its type left alone.
+            let item_id = target.item_id;
+            let editor_type = self
+                .items
+                .iter()
+                .find(|item| item.id == item_id)
+                .map(|item| item.editor_type())
+                .or_else(|| {
+                    self.db
+                        .get_by_id(item_id)
+                        .ok()
+                        .flatten()
+                        .map(|item| item.editor_type())
+                });
+            let Some(editor_type) = editor_type else {
+                // The entry was deleted while the editor was open.
+                log::warn!("external editor mirror for deleted item {item_id} dropped");
+                continue;
+            };
+
+            if self.apply_content_edit(item_id, &text, editor_type) {
+                log::info!("external edit synced back into item {item_id}");
+                self.show_toast(I18nKey::ToastExternalEditSynced.text());
+                target.written_hash = hash;
+                updated = true;
+            }
+            watching.push(target);
+        }
+        self.external_editor_targets = watching;
+        updated
     }
 
     pub fn qr_action(&mut self, id: i64) {
@@ -2648,6 +2801,13 @@ fn transfer_path_key(path: &str) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path))
 }
 
+/// Cheap identity of a file: its length plus its mtime. `None` when it cannot
+/// be stat-ed — gone, or unreadable.
+fn file_stamp(path: &std::path::Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()))
+}
+
 /// Text handed to the system editor when a text entry is opened externally.
 ///
 /// HTML entries keep their markup in `rich_data` while `full_text` holds only
@@ -3177,6 +3337,7 @@ mod tests {
             last_usage_touched_ids: Vec::new(),
             usage_sync_requires_full_reload: false,
             pending_hotkey_unregister: Vec::new(),
+            external_editor_targets: Vec::new(),
             toast_message: None,
             toast_is_warning: false,
             foreground_app_name: String::new(),
@@ -3883,6 +4044,100 @@ mod tests {
         let mut markdown = make_item(4, ContentType::PlainText, false, "# Title");
         markdown.meta_type = "markdown".to_string();
         assert_eq!(editor_text(&markdown), "# Title");
+    }
+
+    /// Seed an entry, mirror it to a file the way `open_item_in_editor` does,
+    /// and hand back the mirror path and the row's id.
+    fn mirror_entry(state: &mut AppState, item: ClipboardItem) -> (i64, std::path::PathBuf) {
+        state.db.upsert(&item).unwrap();
+        let id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
+        state.reload_items();
+        let stored = state.db.get_by_id(id).unwrap().unwrap();
+        let path = state
+            .mirror_for_external_editor(&stored, &editor_text(&stored))
+            .expect("mirror file written");
+        (id, path)
+    }
+
+    /// What the user saves in an external editor lands back in the entry.
+    #[test]
+    fn an_external_editor_save_is_read_back_into_the_entry() {
+        let (mut state, dirty) = test_state();
+        let (id, path) = mirror_entry(
+            &mut state,
+            make_item(1, ContentType::PlainText, false, "before"),
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "before");
+        // Favorites are the default sync scope, so this edit has to mark the
+        // data dirty: an external save syncs onward like any other edit.
+        state.db.set_favorite(id, true).unwrap();
+        state.reload_items();
+
+        // Saving in the external editor changes the file; the poll applies it.
+        std::fs::write(&path, "after the external edit").unwrap();
+        assert!(state.poll_external_editor_edits());
+
+        let stored = state.db.get_by_id(id).unwrap().unwrap();
+        assert_eq!(stored.full_text, "after the external edit");
+        assert!(state.toast_message.is_some(), "the sync is reported");
+        assert!(dirty.load(Ordering::SeqCst), "the edit is synced onward");
+        // The in-memory list the cards render from was updated too.
+        assert_eq!(
+            state.items.iter().find(|it| it.id == id).unwrap().full_text,
+            "after the external edit"
+        );
+
+        // Nothing further saved: the next poll has nothing to do.
+        assert!(!state.poll_external_editor_edits());
+        assert_eq!(state.external_editor_targets.len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An HTML entry's mirror holds the document, and the edit comes back as a
+    /// document under the same type.
+    #[test]
+    fn an_external_edit_of_an_html_entry_round_trips_the_document() {
+        let (mut state, _dirty) = test_state();
+        let mut item = make_item(2, ContentType::RichText, false, "hello");
+        item.meta_type = "html".to_string();
+        item.rich_data = RichData {
+            html: Some("<p>hello</p>".into()),
+            ..Default::default()
+        }
+        .to_json();
+        let (id, path) = mirror_entry(&mut state, item);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<p>hello</p>");
+
+        std::fs::write(&path, "<p>edited outside</p>").unwrap();
+        assert!(state.poll_external_editor_edits());
+
+        let stored = state.db.get_by_id(id).unwrap().unwrap();
+        assert_eq!(
+            RichData::from_json(&stored.rich_data).html.as_deref(),
+            Some("<p>edited outside</p>")
+        );
+        assert_eq!(stored.meta_type, "html", "the entry keeps its type");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Deleting the entry while its mirror is open stops the watch — the next
+    /// save in that editor is not resurrected as a new entry.
+    #[test]
+    fn an_external_edit_of_a_deleted_entry_is_dropped() {
+        let (mut state, _dirty) = test_state();
+        let (id, path) = mirror_entry(
+            &mut state,
+            make_item(3, ContentType::PlainText, false, "gone soon"),
+        );
+
+        state.db.delete_item(id).unwrap();
+        state.reload_items();
+        std::fs::write(&path, "typed into a deleted entry").unwrap();
+
+        assert!(!state.poll_external_editor_edits());
+        assert!(state.external_editor_targets.is_empty());
+        assert!(state.db.get_by_id(id).unwrap().is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
