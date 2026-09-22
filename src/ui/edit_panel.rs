@@ -530,16 +530,6 @@ impl Render for EditPanel {
             .overflow_hidden()
             .p(px(8.))
             .gap(px(8.))
-            .on_key_down({
-                // Ctrl/Cmd+F 打开（再次按下收起）查找栏。
-                let this = this.clone();
-                move |ev: &KeyDownEvent, window, cx| {
-                    if ev.keystroke.modifiers.secondary() && ev.keystroke.key.as_str() == "f" {
-                        this.update(cx, |panel, cx| panel.toggle_find_bar(window, cx));
-                        cx.stop_propagation();
-                    }
-                }
-            })
             .child(
                 div()
                     .flex()
