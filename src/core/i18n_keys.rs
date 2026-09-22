@@ -344,7 +344,6 @@ define_i18n! {
     EditTooltipFindReplace: ("查找替换", "Find & Replace"),
     EditFindPlaceholder:    ("查找内容", "Find"),
     EditReplacePlaceholder: ("替换为", "Replace with"),
-    EditReplace:            ("替换", "Replace"),
     EditReplaceAll:         ("全部替换", "Replace all"),
     EditReplaceDone:        ("已替换 {0} 处", "Replaced {0} matches"),
     EditPanelTitleNew:  ("新建条目", "New Entry"),

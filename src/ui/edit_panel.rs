@@ -257,22 +257,6 @@ impl EditPanel {
         self.locate_offset(start, window, cx);
     }
 
-    /// 替换光标之后的下一处命中，并把光标留在替换结果之后，
-    /// 于是连点几次就是逐处替换。
-    fn replace_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (ranges, index) = self.matches_from_caret(cx);
-        let Some(range) = ranges.get(index).cloned() else {
-            return;
-        };
-        let replacement = self.replace_text(cx);
-        let text = self.content_input.read(cx).value().to_string();
-        let updated = find_replace::replace_one(&text, &range, &replacement);
-        let caret = range.start + replacement.len();
-
-        self.apply_content(updated, window, cx);
-        self.locate_offset(caret, window, cx);
-    }
-
     /// 一次替换所有命中。
     fn replace_every(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.content_input.read(cx).value().to_string();
@@ -305,11 +289,11 @@ impl EditPanel {
         });
     }
 
-    /// 工具栏下方的查找替换栏：左边原文本，右边新文本，再右边替换与全部替换。
+    /// 工具栏下方的查找替换栏：左边原文本，右边新文本，再右边全部替换。
     ///
-    /// 没有高亮，也没法给命中处加底色（正文输入框只开放了「设置光标位置」
-    /// 这一条定位途径），所以不做上一个/下一个与计数：定位靠光标，
-    /// 替换了多少处靠替换后的提示。
+    /// 一个动作就够用：正文里的命中没法加底色（正文输入框只开放了
+    /// 「设置光标位置」这一条定位途径），所以不做上一个/下一个、计数与
+    /// 单处替换 —— 定位靠光标，替换了多少处靠替换后的提示。
     fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = &self.theme;
         let surface = theme.surface;
@@ -341,15 +325,15 @@ impl EditPanel {
                         }
                         "enter" => {
                             this.update(cx, |panel, cx| {
-                                // 在新文本框里回车＝替换这一处，连按几次就是逐处替换；
-                                // 在原文本框里回车只是把视图带到下一处，不动内容。
+                                // 在新文本框里回车＝全部替换；在原文本框里回车
+                                // 只是把视图带到下一处，不动内容。
                                 let in_replace = panel
                                     .replace_input
                                     .read(cx)
                                     .focus_handle(cx)
                                     .is_focused(window);
                                 if in_replace {
-                                    panel.replace_current(window, cx);
+                                    panel.replace_every(window, cx);
                                 } else {
                                     panel.locate_next(window, cx);
                                 }
@@ -373,20 +357,6 @@ impl EditPanel {
                 divider,
                 text_3,
                 "\u{e7a9}",
-            ))
-            .child(icon_button(
-                "edit-replace-one",
-                "\u{e7a9}",
-                text_2,
-                accent,
-                hover_bg,
-                Some(I18nKey::EditReplace.text()),
-                {
-                    let this = this.clone();
-                    move |window, cx| {
-                        this.update(cx, |panel, cx| panel.replace_current(window, cx));
-                    }
-                },
             ))
             .child(icon_button(
                 "edit-replace-all",

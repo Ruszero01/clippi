@@ -74,18 +74,6 @@ pub fn find_matches(text: &str, query: &str) -> MatchSet {
     set
 }
 
-/// Replace one match. Ranges outside `text` are left alone.
-pub fn replace_one(text: &str, range: &Range<usize>, replacement: &str) -> String {
-    if range.start > range.end || range.end > text.len() {
-        return text.to_string();
-    }
-    let mut out = String::with_capacity(text.len() + replacement.len());
-    out.push_str(&text[..range.start]);
-    out.push_str(replacement);
-    out.push_str(&text[range.end..]);
-    out
-}
-
 /// Replace every match, skipping any range that overlaps an earlier one.
 pub fn replace_all(text: &str, ranges: &[Range<usize>], replacement: &str) -> String {
     if ranges.is_empty() {
@@ -145,7 +133,7 @@ fn equals_ignore_case(a: char, b: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_matches, index_at_or_after, replace_all, replace_one, MatchSet};
+    use super::{find_matches, index_at_or_after, replace_all, MatchSet};
 
     fn ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
         find_matches(text, query)
@@ -204,10 +192,9 @@ mod tests {
     }
 
     #[test]
-    fn replace_one_and_all_rewrite_only_the_matches() {
+    fn replace_all_rewrites_only_the_matches() {
         let text = "one_two_three";
         let set = find_matches(text, "_");
-        assert_eq!(replace_one(text, &set.ranges[0], " "), "one two_three");
         assert_eq!(replace_all(text, &set.ranges, " "), "one two three");
         // Replacing with the query itself leaves the text alone.
         assert_eq!(replace_all(text, &set.ranges, "_"), text);
