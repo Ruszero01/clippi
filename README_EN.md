@@ -161,6 +161,21 @@ Clippi's quick paste feature requires Accessibility permission to simulate keyst
 
 ---
 
+## Windows Users Notice
+
+### Administrator rights vs. auto-start and paste
+
+Windows UIPI only allows a process to send input to windows at the **same or a lower integrity level**, which means:
+
+- **Running unelevated**: auto-start works, but pasting into applications running as administrator (elevated terminals, editors, launchers) does nothing;
+- **Running elevated**: pasting works everywhere, but the registry `Run` entry cannot elevate the process at logon, so auto-start silently fails (Task Manager still lists it as "Enabled" while the process never starts).
+
+Once the executable is flagged **"Run as administrator"**, Clippi registers auto-start as an "at logon" scheduled task with highest privileges (no UAC prompt); without the flag it uses the `Run` entry. When switching back, Clippi tries to remove the old task. If that needs administrator rights, it asks you to launch Clippi elevated once to finish the change. It also tries to repair a moved executable or removed registration on the next launch. The one elevated launch performed by the installer does **not** change the mechanism.
+
+> When a paste into an elevated application is refused, the log records `Paste target runs as administrator while Clippi does not`; restart Clippi as administrator to paste there.
+
+---
+
 ## Links
 
 - [Official Website](https://clippi.rains-ailurus.cn/)

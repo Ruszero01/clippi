@@ -4,14 +4,24 @@
 //! 1. User-configured per-process shortcuts (from settings)
 //! 2. Automatic detection of console/terminal windows → Shift+Insert
 //! 3. Default: Ctrl+V
+//!
+//! Input injection is subject to UIPI: an application may only send input to
+//! processes at the same or a lower integrity level. A Clippi instance that is
+//! not elevated therefore cannot paste into an application running as
+//! administrator — Windows discards the keystroke without any visible error
+//! (`SendInput` returns 0 with `ERROR_ACCESS_DENIED`).
 
 use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -322,8 +332,11 @@ fn send_paste_keystroke(shortcut: &PasteShortcut) {
             std::mem::size_of::<INPUT>() as i32,
         );
         if inserted != inputs.len() as u32 {
+            // `ERROR_ACCESS_DENIED` (5) is UIPI rejecting the input because the
+            // foreground window belongs to a higher integrity level process.
+            let error = GetLastError();
             log::warn!(
-                "SendInput inserted {inserted}/{} paste events",
+                "SendInput inserted {inserted}/{} paste events (error {error})",
                 inputs.len()
             );
         }
@@ -346,17 +359,76 @@ fn set_key_input(input: &mut INPUT, vk: u16, key_up: bool) {
     }
 }
 
-/// Restore focus to the last non-Clippi foreground window (paste target)
+/// Whether the process owning `hwnd` runs with an elevated token.
+///
+/// `None` means "unknown": protected processes reject even the limited query,
+/// and callers must keep going in that case.
 #[cfg(target_os = "windows")]
-pub fn restore_paste_target() {
-    if let Some(hwnd) = crate::platform::focus::get_last_non_clippi_window() {
-        // SAFETY: `IsWindow` only reads window validity; `SetForegroundWindow`
-        // is safe when the HWND is known valid (IsWindow check) and belongs to
-        // a non-Clippi process.
-        if unsafe { IsWindow(hwnd) } != 0 {
-            unsafe { SetForegroundWindow(hwnd) };
+fn window_process_is_elevated(hwnd: windows_sys::Win32::Foundation::HWND) -> Option<bool> {
+    use windows_sys::Win32::Foundation::HANDLE;
+
+    // SAFETY: read-only queries on handles; every handle is closed before the
+    // function returns, and `TOKEN_ELEVATION` is the structure `TokenElevation`
+    // expects with its exact size passed along.
+    unsafe {
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 || pid == std::process::id() {
+            return None;
         }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+            CloseHandle(process);
+            return None;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut returned: u32 = 0;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut TOKEN_ELEVATION as *mut core::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        );
+        CloseHandle(token);
+        CloseHandle(process);
+        (ok != 0).then_some(elevation.TokenIsElevated != 0)
     }
+}
+
+/// UIPI only lets an application inject input into processes at the same or a
+/// lower integrity level, so a non-elevated Clippi cannot paste into an elevated
+/// target — the keystroke would be dropped (or, worse, land in another window).
+#[cfg(any(target_os = "windows", test))]
+fn paste_blocked_by_uipi(clippi_elevated: bool, target_elevated: Option<bool>) -> bool {
+    !clippi_elevated && target_elevated == Some(true)
+}
+
+/// Restore focus to the last non-Clippi foreground window (paste target).
+///
+/// Returns whether Windows accepted the request: a refusal usually means the
+/// target runs elevated while Clippi does not.
+#[cfg(target_os = "windows")]
+pub fn restore_paste_target() -> bool {
+    let Some(hwnd) = crate::platform::focus::get_last_non_clippi_window() else {
+        return false;
+    };
+    // SAFETY: `IsWindow` only reads window validity; `SetForegroundWindow` is
+    // safe when the HWND is known valid (IsWindow check) and belongs to a
+    // non-Clippi process.
+    if unsafe { IsWindow(hwnd) } == 0 {
+        return false;
+    }
+    let restored = unsafe { SetForegroundWindow(hwnd) } != 0;
+    if !restored {
+        let error = unsafe { GetLastError() };
+        log::warn!("SetForegroundWindow on the paste target failed (error {error})");
+    }
+    restored
 }
 
 /// Simulate paste after restoring focus.
@@ -394,24 +466,44 @@ fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShor
     // Initial delay for SetForegroundWindow to take effect
     std::thread::sleep(std::time::Duration::from_millis(BASE_DELAY_MS));
 
+    if let Some(hwnd) = target_hwnd {
+        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+        // An elevated target cannot receive the keystroke at all; sending it
+        // anyway would drop it into whichever window happens to be foreground.
+        if paste_blocked_by_uipi(
+            crate::core::settings::is_process_elevated(),
+            window_process_is_elevated(hwnd),
+        ) {
+            log::warn!(
+                "Paste target runs as administrator while Clippi does not; \
+                 restart Clippi elevated (the auto-start logon task does this) \
+                 to paste into elevated applications"
+            );
+            return;
+        }
+    }
+
     // Verify target window is actually foreground before pasting
     if let Some(hwnd) = target_hwnd {
         let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
         // SAFETY: `IsWindow` is a read-only query on a known HWND value from the
         // focus watcher; `GetForegroundWindow` returns the current foreground HWND
         // which is always valid or null-safe.
-        if unsafe { IsWindow(hwnd) } != 0 {
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
-            loop {
-                if unsafe { GetForegroundWindow() } == hwnd {
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
+        if unsafe { IsWindow(hwnd) } == 0 {
+            log::warn!("Paste target window no longer exists; skipping paste");
+            return;
+        }
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+        while unsafe { GetForegroundWindow() } != hwnd {
+            if std::time::Instant::now() >= deadline {
+                log::warn!(
+                    "Paste target did not become foreground within {FOCUS_TIMEOUT_MS} ms; \
+                     skipping paste"
+                );
+                return;
             }
+            std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
         }
     }
 
@@ -556,25 +648,30 @@ fn macos_active_flags(active: &[MacModifierKey]) -> u8 {
         .fold(0, |flags, modifier| flags | modifier.flag)
 }
 
+/// Restore focus to the last non-Clippi foreground application (paste target).
+///
+/// Returns whether a matching running application was asked to activate.
 #[cfg(target_os = "macos")]
-pub fn restore_paste_target() {
-    if let Some(pid) = crate::platform::focus::get_last_non_clippi_pid() {
-        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-        let apps = workspace.runningApplications();
-        for i in 0..apps.count() {
-            let app = apps.objectAtIndex(i);
-            if app.processIdentifier() == pid {
-                // Use raw value to avoid deprecated NSApplicationActivateIgnoringOtherApps.
-                // This flag is a no-op on macOS 14+ but still required for correct
-                // --- activation behavior on macOS 12–13 (our minimum is 12.0). ---
-                let options: u64 = 1 << 1; // NSApplicationActivateIgnoringOtherApps
-                unsafe {
-                    let _: bool = objc2::msg_send![&app, activateWithOptions: options];
-                }
-                break;
+pub fn restore_paste_target() -> bool {
+    let Some(pid) = crate::platform::focus::get_last_non_clippi_pid() else {
+        return false;
+    };
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let apps = workspace.runningApplications();
+    for i in 0..apps.count() {
+        let app = apps.objectAtIndex(i);
+        if app.processIdentifier() == pid {
+            // Use raw value to avoid deprecated NSApplicationActivateIgnoringOtherApps.
+            // This flag is a no-op on macOS 14+ but still required for correct
+            // --- activation behavior on macOS 12–13 (our minimum is 12.0). ---
+            let options: u64 = 1 << 1; // NSApplicationActivateIgnoringOtherApps
+            unsafe {
+                let _: bool = objc2::msg_send![&app, activateWithOptions: options];
             }
+            return true;
         }
     }
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -708,7 +805,9 @@ fn macos_cg_flags(flags: u8) -> core_graphics::event::CGEventFlags {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn restore_paste_target() {}
+pub fn restore_paste_target() -> bool {
+    false
+}
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn paste_after_delay(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {}
@@ -719,9 +818,22 @@ pub fn paste_sync(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcut
 #[cfg(test)]
 mod tests {
     use super::{
-        macos_paste_events, should_request_accessibility_permission, MacKeyEvent, MacModifierKey,
-        MACOS_FLAG_COMMAND, MACOS_FLAG_SHIFT, MACOS_KEY_COMMAND, MACOS_KEY_V,
+        macos_paste_events, paste_blocked_by_uipi, should_request_accessibility_permission,
+        MacKeyEvent, MacModifierKey, MACOS_FLAG_COMMAND, MACOS_FLAG_SHIFT, MACOS_KEY_COMMAND,
+        MACOS_KEY_V,
     };
+
+    #[test]
+    fn injection_into_an_elevated_target_is_blocked_for_a_filtered_process() {
+        // Same or lower integrity level: input is delivered.
+        assert!(!paste_blocked_by_uipi(false, Some(false)));
+        assert!(!paste_blocked_by_uipi(false, None));
+        // Higher integrity level: UIPI discards the input.
+        assert!(paste_blocked_by_uipi(false, Some(true)));
+        // An elevated Clippi may inject into everything, elevated included.
+        assert!(!paste_blocked_by_uipi(true, Some(true)));
+        assert!(!paste_blocked_by_uipi(true, None));
+    }
 
     #[test]
     fn accessibility_prompt_is_requested_once_when_permission_is_missing() {

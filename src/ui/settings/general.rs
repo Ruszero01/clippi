@@ -6,7 +6,7 @@ use gpui::*;
 use crate::core;
 use crate::core::frontend::PositionMode;
 use crate::core::i18n_keys::I18nKey;
-use crate::core::settings::set_auto_start;
+use crate::core::settings::{set_auto_start, AutoStartChange};
 use crate::ui::components::slider::SliderDetent;
 use crate::ui::settings::SettingsEvent;
 
@@ -55,25 +55,54 @@ impl SettingsPanel {
             _ => 0,
         };
         let mut container = div().flex().flex_col().gap(px(14.)).pt(px(8.));
-
         // --- Startup ---
+        // Elevated builds auto-start through a logon task (a `Run` value cannot
+        // elevate at logon), so the row says which mechanism is in use.
+        let auto_start_desc_on = if auto_start
+            && core::settings::auto_start_method() == core::settings::AutoStartMethod::ElevatedTask
+        {
+            I18nKey::DescAutoStartTask
+        } else {
+            I18nKey::DescAutoStart
+        };
         let startup_rows: Vec<AnyElement> = vec![
             self.render_toggle_row(
                 I18nKey::SettingAutoStart,
-                I18nKey::DescAutoStart,
+                auto_start_desc_on,
                 I18nKey::DescAutoStart,
                 auto_start,
                 window,
                 cx,
                 |state, _this, _window, _cx| {
                     let new_val = !state.read(_cx).settings.auto_start;
-                    if let Err(e) = set_auto_start(new_val) {
-                        log::error!("Failed to set auto-start: {e}");
-                        return;
-                    }
+                    let outcome = match set_auto_start(new_val) {
+                        Ok(outcome) => outcome,
+                        Err(e) => {
+                            log::error!("Failed to set auto-start: {e}");
+                            state.update(_cx, |s, _cx| {
+                                s.show_warning_toast(I18nKey::ToastAutoStartFailed.text());
+                            });
+                            return;
+                        }
+                    };
                     state.update(_cx, |s, _cx| {
                         s.settings.auto_start = new_val;
                         s.settings.save();
+                        // The elevated logon task is the only registration that
+                        // works for an elevated build, so report both when it
+                        // failed and when a leftover task could not be cleared.
+                        match outcome {
+                            AutoStartChange::Applied => {}
+                            AutoStartChange::AppliedWithoutElevation => {
+                                s.show_warning_toast(I18nKey::ToastAutoStartWithoutElevation.text())
+                            }
+                            AutoStartChange::KeptElevatedTask => {
+                                s.show_warning_toast(I18nKey::ToastAutoStartKeptElevatedTask.text())
+                            }
+                            AutoStartChange::LeftoverElevatedTask => {
+                                s.show_warning_toast(I18nKey::ToastAutoStartLeftoverTask.text())
+                            }
+                        }
                     });
                 },
             )

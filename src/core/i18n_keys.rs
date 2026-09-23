@@ -46,6 +46,26 @@ define_i18n! {
     // ─── General settings ───
     SettingAutoStart:   ("开机自启", "Auto-start"),
     DescAutoStart:      ("系统启动时自动运行", "Run on system startup"),
+    DescAutoStartTask:  (
+        "以管理员身份运行，已注册为登录计划任务",
+        "Runs elevated — registered as a logon task"
+    ),
+    ToastAutoStartFailed: (
+        "开机自启设置失败，详情见日志",
+        "Couldn't change auto-start — see the log"
+    ),
+    ToastAutoStartWithoutElevation: (
+        "已开启开机自启，但计划任务创建失败，可能无法以管理员权限启动",
+        "Auto-start is on, but the logon task failed — Clippi may start without admin rights"
+    ),
+    ToastAutoStartKeptElevatedTask: (
+        "旧的管理员计划任务无法删除；请以管理员身份运行 Clippi 后重试",
+        "The elevated logon task could not be removed; run Clippi as administrator and retry"
+    ),
+    ToastAutoStartLeftoverTask: (
+        "已关闭开机自启，但管理员权限的计划任务需要提权才能删除，请以管理员身份运行后重试",
+        "Auto-start is off, but removing the elevated logon task needs administrator rights"
+    ),
     SettingAutoHide:    ("自动隐藏", "Auto-hide"),
     DescAutoHide:       ("失去焦点时隐藏窗口", "Hide on focus loss"),
     SettingSilentStart: ("静默启动", "Silent start"),

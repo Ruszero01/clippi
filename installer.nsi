@@ -8,6 +8,7 @@ ManifestDPIAware true
 !define APP_NAME "Clippi"
 !define APP_PUBLISHER "Rains"
 !define APP_EXE "clippi.exe"
+!define AUTOSTART_TASK_NAME "Clippi AutoStart (Ruszero01)"
 !define REG_UNINST "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 
 !ifndef VERSION
@@ -225,6 +226,11 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APP_NAME}\卸载 Clippi.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
   Delete "$DESKTOP\${APP_NAME}.lnk"
+
+  ; Auto-start is registered either as a Run value or under Clippi's dedicated
+  ; logon task name. The uninstaller is elevated and can clear both.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
+  nsExec::ExecToLog 'schtasks /Delete /F /TN "${AUTOSTART_TASK_NAME}"'
 
   DeleteRegKey HKLM "${REG_UNINST}"
 SectionEnd

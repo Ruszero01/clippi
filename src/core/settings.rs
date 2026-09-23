@@ -8,7 +8,7 @@ use super::filters::BUILTIN_TYPE_KEYS;
 use super::i18n_keys::I18nKey;
 
 #[cfg(target_os = "windows")]
-use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE};
 #[cfg(target_os = "windows")]
 use winreg::RegKey;
 
@@ -16,6 +16,14 @@ use winreg::RegKey;
 const AUTOSTART_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 #[cfg(target_os = "windows")]
 const APP_NAME: &str = "Clippi";
+/// Executable compatibility flags. Ticking "以管理员身份运行" / "Run as
+/// administrator" in the file properties writes `~ RUNASADMIN` for the exe path.
+#[cfg(target_os = "windows")]
+const AUTOSTART_LAYERS_PATH: &str =
+    r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
+/// Logon scheduled task used when the Run key cannot elevate the process.
+#[cfg(target_os = "windows")]
+const AUTOSTART_TASK_NAME: &str = "Clippi AutoStart (Ruszero01)";
 
 #[cfg(target_os = "macos")]
 const LAUNCH_AGENT_ID: &str = "com.clippi.launcher";
@@ -661,44 +669,431 @@ pub fn detect_system_language() -> String {
     }
 }
 
+/// How auto-start has to be registered on this machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoStartMethod {
+    /// Per-user registration launched with the logged-on user's filtered token:
+    /// the `HKCU\...\Run` value on Windows, a LaunchAgent plist on macOS.
+    UserSession,
+    /// Windows logon scheduled task with `RunLevel=HighestAvailable`. Required
+    /// when Clippi runs elevated: Explorer starts `Run` values with the filtered
+    /// token and cannot elevate them at logon, so an elevated executable
+    /// registered there never starts.
+    ElevatedTask,
+}
+
+/// Outcome of a requested auto-start change, so the UI can explain a partial
+/// success instead of silently leaving the user with a dead registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoStartChange {
+    /// Auto-start is registered exactly as requested.
+    Applied,
+    /// Auto-start is on, but through the fallback `Run` value, which cannot
+    /// elevate at logon: Clippi may not start (or start unelevated) at logon.
+    AppliedWithoutElevation,
+    /// The exe no longer requests elevation, but the existing elevated task
+    /// could not be removed without administrator rights.
+    KeptElevatedTask,
+    /// Auto-start is off, but a logon task registered by an elevated session is
+    /// still in place: deleting it needs administrator rights.
+    LeftoverElevatedTask,
+}
+
+/// Whether the current process holds an elevated (administrator) token.
 #[cfg(target_os = "windows")]
-pub fn set_auto_start(enable: bool) -> Result<(), String> {
+pub fn is_process_elevated() -> bool {
+    process_elevation().unwrap_or(false)
+}
+
+/// Token elevation state of the current process; `None` when the token query
+/// itself failed, which must not be mistaken for "not elevated".
+#[cfg(target_os = "windows")]
+fn process_elevation() -> Option<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    // SAFETY: the pseudo handle from `GetCurrentProcess` must not be closed; the
+    // token handle is closed on every path; `TOKEN_ELEVATION` is the exact
+    // structure `TokenElevation` expects and its size is passed along.
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return None;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut returned: u32 = 0;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut TOKEN_ELEVATION as *mut core::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        );
+        CloseHandle(token);
+        (ok != 0).then_some(elevation.TokenIsElevated != 0)
+    }
+}
+
+/// Whether the current process holds an elevated token (always false elsewhere).
+/// Kept on every platform so callers do not need their own `cfg` split.
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn is_process_elevated() -> bool {
+    false
+}
+
+/// How auto-start must be registered for the running executable.
+pub fn auto_start_method() -> AutoStartMethod {
+    #[cfg(target_os = "windows")]
+    {
+        // Only the persistent "run as administrator" flag counts. The privilege
+        // level of the current session is not a signal: the installer and the
+        // updater start Clippi elevated once, which must not change how it
+        // auto-starts for the rest of the installation's life.
+        if std::env::current_exe().is_ok_and(|exe| exe_requests_elevation(&exe)) {
+            return AutoStartMethod::ElevatedTask;
+        }
+    }
+    AutoStartMethod::UserSession
+}
+
+/// Whether the exe carries the "Run as administrator" compatibility layer.
+#[cfg(target_os = "windows")]
+fn exe_requests_elevation(exe_path: &Path) -> bool {
+    let value_name = exe_path.to_string_lossy().to_string();
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(key) = hkcu.open_subkey_with_flags(AUTOSTART_LAYERS_PATH, KEY_READ) {
+        if let Ok(flags) = key.get_value::<String, _>(&value_name) {
+            if layer_flags_request_admin(&flags) {
+                return true;
+            }
+        }
+    }
+    // Machine-wide layers (written by installers) win over the per-user key.
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if let Ok(key) = hklm.open_subkey_with_flags(AUTOSTART_LAYERS_PATH, KEY_READ) {
+        if let Ok(flags) = key.get_value::<String, _>(&value_name) {
+            if layer_flags_request_admin(&flags) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Layer values are space-separated tokens such as `~ RUNASADMIN HIGHDPIAWARE`.
+#[cfg(target_os = "windows")]
+fn layer_flags_request_admin(flags: &str) -> bool {
+    flags
+        .split_whitespace()
+        .any(|token| token.eq_ignore_ascii_case("RUNASADMIN"))
+}
+
+#[cfg(target_os = "windows")]
+fn write_run_entry(exe_path: &Path) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_WRITE)
         .map_err(|e| format!("{}: {e}", I18nKey::ErrRegistryOpen.text()))?;
-
-    if enable {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("{}: {e}", I18nKey::ErrGetExePath.text()))?;
-        // Quoted so a path containing spaces is not split into a different target.
-        let exe_value = format!("\"{}\"", exe_path.display());
-        key.set_value(APP_NAME, &exe_value)
-            .map_err(|e| format!("{}: {e}", I18nKey::ErrRegistryWrite.text()))?;
-    } else {
-        let _ = key.delete_value(APP_NAME);
-    }
-    Ok(())
+    // Quoted so a path containing spaces is not split into a different target.
+    let exe_value = format!("\"{}\"", exe_path.display());
+    key.set_value(APP_NAME, &exe_value)
+        .map_err(|e| format!("{}: {e}", I18nKey::ErrRegistryWrite.text()))
 }
 
-/// Re-register auto-start when the stored registration no longer points at the
-/// running executable — the app was moved or renamed, or a cleaner dropped the
-/// entry while `auto_start` stayed true in the settings file.
+#[cfg(target_os = "windows")]
+fn run_entry_matches(exe_path: &Path) -> bool {
+    let expected = format!("\"{}\"", exe_path.display());
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(key) = hkcu.open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_READ) else {
+        return false;
+    };
+    key.get_value::<String, _>(APP_NAME)
+        .is_ok_and(|value| value == expected)
+}
+
+#[cfg(target_os = "windows")]
+fn remove_run_entry() {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(key) = hkcu.open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_READ | KEY_WRITE) {
+        let _ = key.delete_value(APP_NAME);
+    }
+}
+
+/// Run `schtasks.exe` without flashing a console window.
+#[cfg(target_os = "windows")]
+fn run_schtasks(args: &[&str]) -> Result<std::process::Output, String> {
+    use std::os::windows::process::CommandExt;
+
+    /// `CREATE_NO_WINDOW` — a GUI process must not open a console for the child.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    Command::new("schtasks.exe")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("schtasks {args:?}: {e}"))
+}
+
+/// Register (or replace) the logon task that starts this executable elevated.
+///
+/// Verified against the live Task Scheduler: an `ONLOGON` (and `ONSTART`) task
+/// can only be created by an elevated process — a filtered process gets
+/// "Access is denied" even without `/RL HIGHEST` — while a plain `DAILY` task is
+/// allowed. The call therefore only succeeds for the elevated builds that need
+/// it, and the caller falls back to the `Run` value otherwise.
+#[cfg(target_os = "windows")]
+fn create_auto_start_task(exe_path: &Path) -> Result<(), String> {
+    let target = format!("\"{}\"", exe_path.display());
+    let output = run_schtasks(&[
+        "/Create",
+        "/F",
+        "/TN",
+        AUTOSTART_TASK_NAME,
+        "/TR",
+        &target,
+        "/SC",
+        "ONLOGON",
+        "/RL",
+        "HIGHEST",
+        "/IT",
+    ])?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!("schtasks /Create: {}", schtasks_message(&output)))
+}
+
+/// Read the registered task's executable action, if any.
+#[cfg(target_os = "windows")]
+fn logon_task_command() -> Option<String> {
+    let output = run_schtasks(&["/Query", "/TN", AUTOSTART_TASK_NAME, "/XML"]).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let xml = decode_console_output(&output.stdout);
+    xml_element_text(&xml, "Command")
+}
+
+#[cfg(target_os = "windows")]
+fn logon_task_targets_exe(exe_path: &Path) -> bool {
+    logon_task_command().is_some_and(|command| task_command_targets_exe(&command, exe_path))
+}
+
+/// Text of the first `<tag>…</tag>` element.
+#[cfg(target_os = "windows")]
+fn xml_element_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(xml[start..end].trim().to_string())
+}
+
+/// Match the task's executable action, never an argument containing our path.
+#[cfg(target_os = "windows")]
+fn task_command_targets_exe(command: &str, exe_path: &Path) -> bool {
+    let command = command.trim().trim_matches('"').to_lowercase();
+    let needle = exe_path.to_string_lossy().to_lowercase();
+    !needle.is_empty() && (command == needle || command == xml_escape(&needle))
+}
+
+/// Escape the characters Task Scheduler escapes when it writes the XML.
+#[cfg(target_os = "windows")]
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Delete Clippi's dedicated logon task, including a stale or renamed exe.
+#[cfg(target_os = "windows")]
+fn remove_logon_task() -> Result<(), String> {
+    if logon_task_command().is_none() {
+        return Ok(());
+    }
+    let output = run_schtasks(&["/Delete", "/F", "/TN", AUTOSTART_TASK_NAME])?;
+    if output.status.success() {
+        log::info!("Removed the Clippi logon task");
+        return Ok(());
+    }
+    Err(format!(
+        "the Clippi logon task could not be removed ({}) — deleting it needs \
+         administrator rights, so it keeps starting Clippi at logon",
+        schtasks_message(&output)
+    ))
+}
+
+/// First non-empty line of the captured `schtasks` output.
+#[cfg(target_os = "windows")]
+fn schtasks_message(output: &std::process::Output) -> String {
+    let mut text = decode_console_output(&output.stdout);
+    text.push('\n');
+    text.push_str(&decode_console_output(&output.stderr));
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("unknown error")
+        .to_string()
+}
+
+/// `schtasks.exe` writes UTF-16LE once its output is redirected, and text in the
+/// system ANSI code page otherwise; decode both so error messages stay readable.
+#[cfg(target_os = "windows")]
+fn decode_console_output(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    ansi_to_string(bytes)
+}
+
+/// Decode console output in the system ANSI code page (GBK on a Chinese system),
+/// which `from_utf8_lossy` would turn into replacement characters.
+#[cfg(target_os = "windows")]
+fn ansi_to_string(bytes: &[u8]) -> String {
+    use windows_sys::Win32::Globalization::{MultiByteToWideChar, CP_ACP};
+
+    if bytes.is_empty() {
+        return String::new();
+    }
+    // SAFETY: `MultiByteToWideChar` reads exactly `bytes.len()` bytes from the
+    // input pointer and writes at most `wide.len()` units into the output buffer.
+    unsafe {
+        let needed = MultiByteToWideChar(
+            CP_ACP,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        );
+        if needed <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide = vec![0u16; needed as usize];
+        let written = MultiByteToWideChar(
+            CP_ACP,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            wide.as_mut_ptr(),
+            needed,
+        );
+        wide.truncate(written.max(0) as usize);
+        String::from_utf16_lossy(&wide)
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_auto_start(enable: bool) -> Result<AutoStartChange, String> {
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("{}: {e}", I18nKey::ErrGetExePath.text()))?;
+
+    if !enable {
+        remove_run_entry();
+        return match remove_logon_task() {
+            Ok(()) => Ok(AutoStartChange::Applied),
+            Err(e) => {
+                log::warn!("Failed to clear auto-start: {e}");
+                Ok(AutoStartChange::LeftoverElevatedTask)
+            }
+        };
+    }
+
+    if exe_requests_elevation(&exe_path) {
+        match create_auto_start_task(&exe_path) {
+            Ok(()) => {
+                // A `Run` value would additionally start a filtered instance at logon.
+                remove_run_entry();
+                log::info!(
+                    "Auto-start registered as an elevated logon task for {}",
+                    exe_path.display()
+                );
+                return Ok(AutoStartChange::Applied);
+            }
+            Err(e) => {
+                // Creating an ONLOGON task needs administrator rights, so this
+                // only happens when the exe demands elevation but the running
+                // process is filtered; the user has to be told.
+                log::warn!("{e}; falling back to the Run key, which cannot elevate at logon");
+                write_run_entry(&exe_path)?;
+                return Ok(AutoStartChange::AppliedWithoutElevation);
+            }
+        }
+    }
+
+    // The admin flag was removed. Drop the old highest-privilege task before
+    // writing a Run value, so logging on cannot launch two copies.
+    if let Err(e) = remove_logon_task() {
+        log::warn!("Failed to switch auto-start back to the Run key: {e}");
+        remove_run_entry();
+        return Ok(AutoStartChange::KeptElevatedTask);
+    }
+
+    write_run_entry(&exe_path)?;
+    Ok(AutoStartChange::Applied)
+}
+
+/// Re-register auto-start when the stored registration no longer matches the
+/// running executable — the app was moved or renamed, a cleaner dropped the
+/// entry while `auto_start` stayed true in the settings file, or the executable
+/// only now carries "run as administrator" (which the Run key cannot honour).
+///
+/// The mechanism follows the persistent "run as administrator" flag on the exe,
+/// never the privilege level of the current session: the installer and the
+/// updater launch Clippi elevated once (`MUI_FINISHPAGE_RUN`,
+/// `.onInstSuccess`), which would otherwise flip an installer user between a
+/// `Run` value and a logon task on every update.
 #[cfg(target_os = "windows")]
 pub fn sync_auto_start_path() {
     let Ok(exe_path) = std::env::current_exe() else {
         return;
     };
-    let expected = format!("\"{}\"", exe_path.display());
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let Ok(key) = hkcu.open_subkey_with_flags(AUTOSTART_KEY_PATH, KEY_READ | KEY_WRITE) else {
-        return;
-    };
-    let current: Result<String, _> = key.get_value(APP_NAME);
-    if current.is_ok_and(|value| value == expected) {
+
+    if exe_requests_elevation(&exe_path) {
+        // Re-create only when the registration is missing or stale.
+        if logon_task_targets_exe(&exe_path) {
+            // The task is current, but a `Run` value written by an older version
+            // would start a second instance at logon.
+            remove_run_entry();
+            return;
+        }
+        match create_auto_start_task(&exe_path) {
+            Ok(()) => {
+                remove_run_entry();
+                log::info!(
+                    "Auto-start uses an elevated logon task for {}",
+                    exe_path.display()
+                );
+            }
+            Err(e) => log::warn!("Failed to register the elevated logon task: {e}"),
+        }
         return;
     }
-    match key.set_value(APP_NAME, &expected) {
+
+    // If the admin flag was removed, migrate from the elevated task back to
+    // the Run key. A filtered process may lack permission; in that case leave
+    // the existing task alone and do not add a second registration.
+    if let Err(e) = remove_logon_task() {
+        remove_run_entry();
+        log::warn!("Failed to switch auto-start back to the Run key: {e}");
+        return;
+    }
+
+    if run_entry_matches(&exe_path) {
+        return;
+    }
+
+    match write_run_entry(&exe_path) {
         Ok(()) => log::info!("Re-registered auto-start for {}", exe_path.display()),
         Err(e) => log::warn!("Failed to re-register auto-start: {e}"),
     }
@@ -713,7 +1108,7 @@ fn launch_agent_plist_path() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn set_auto_start(enable: bool) -> Result<(), String> {
+pub fn set_auto_start(enable: bool) -> Result<AutoStartChange, String> {
     let plist_path = launch_agent_plist_path().ok_or(I18nKey::ErrLaunchAgentsPath.text())?;
 
     if let Some(parent) = plist_path.parent() {
@@ -754,7 +1149,7 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
         }
     }
 
-    Ok(())
+    Ok(AutoStartChange::Applied)
 }
 
 /// macOS counterpart of the Windows registry check above.
@@ -772,14 +1167,14 @@ pub fn sync_auto_start_path() {
         return;
     }
     match set_auto_start(true) {
-        Ok(()) => log::info!("Re-registered auto-start for {exe_str}"),
+        Ok(_) => log::info!("Re-registered auto-start for {exe_str}"),
         Err(e) => log::warn!("Failed to re-register auto-start: {e}"),
     }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn set_auto_start(_enable: bool) -> Result<(), String> {
-    Ok(())
+pub fn set_auto_start(_enable: bool) -> Result<AutoStartChange, String> {
+    Ok(AutoStartChange::Applied)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -1572,5 +1967,104 @@ mod tests {
         assert_eq!(loaded.max_items, 250);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The "Run as administrator" tick lands in the Layers value as one token
+    /// among several, so detection must not depend on the whole string.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn run_as_admin_layer_flag_is_detected_among_other_tokens() {
+        assert!(layer_flags_request_admin("~ RUNASADMIN"));
+        assert!(layer_flags_request_admin("~ RUNASADMIN HIGHDPIAWARE"));
+        assert!(layer_flags_request_admin("~  highdpiaware runasadmin"));
+        assert!(!layer_flags_request_admin("~ HIGHDPIAWARE"));
+        assert!(!layer_flags_request_admin(""));
+    }
+
+    /// Guards the Win32 plumbing behind the elevated auto-start decision: a wrong
+    /// information class or structure size would silently degrade to `false`.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn elevation_query_reads_the_process_token() {
+        assert!(
+            process_elevation().is_some(),
+            "GetTokenInformation(TokenElevation) failed"
+        );
+    }
+
+    /// Only the task action may establish ownership; a path in arguments must
+    /// not make a different program's task look like Clippi's.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn task_command_matching_checks_only_the_executable() {
+        let path = std::path::Path::new(r"C:\Program Files\Some App\clippi.exe");
+
+        // What `create_auto_start_task` produces (verified against the live
+        // Task Scheduler).
+        let xml = format!(
+            "<Task><Actions><Exec><Command>\"{}\"</Command></Exec></Actions></Task>",
+            path.display()
+        );
+        let command = xml_element_text(&xml, "Command").unwrap();
+        assert!(task_command_targets_exe(&command, path));
+        assert!(task_command_targets_exe(
+            r"C:\Program Files\Some App\clippi.exe",
+            path
+        ));
+
+        // `&` is XML-escaped inside the task definition.
+        let ampersand = std::path::Path::new(r"C:\Tools\A&B\clippi.exe");
+        assert!(task_command_targets_exe(
+            "C:\\Tools\\A&amp;B\\clippi.exe",
+            ampersand
+        ));
+
+        // Another executable, a path in arguments, and a stale path do not match.
+        assert!(!task_command_targets_exe(
+            r"C:\Program Files\Some App\clippi-helper.exe",
+            path
+        ));
+        assert!(!task_command_targets_exe(
+            r"C:\Tools\runner.exe C:\Program Files\Some App\clippi.exe",
+            path
+        ));
+        assert!(!task_command_targets_exe(r"C:\Other\clippi.exe", path));
+        assert!(!task_command_targets_exe(
+            r"C:\Program Files\Some App\clippi.exe",
+            std::path::Path::new("")
+        ));
+
+        assert_eq!(xml_element_text(&xml, "Arguments"), None);
+    }
+
+    /// Redirected `schtasks` output is UTF-16LE; decoding it as UTF-8 would turn
+    /// every error message into replacement characters.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn schtasks_output_decodes_utf16_and_ansi() {
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in "错误: 拒绝访问。".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_console_output(&utf16), "错误: 拒绝访问。");
+        assert_eq!(
+            decode_console_output("ERROR: Access is denied.".as_bytes()),
+            "ERROR: Access is denied."
+        );
+        assert_eq!(decode_console_output(&[]), "");
+    }
+
+    /// A stale task must never be the only registration on a filtered process,
+    /// and the elevated build must not fall back to the Run key silently.
+    #[test]
+    fn auto_start_method_is_a_user_session_registration_when_not_elevated() {
+        // The test harness runs filtered, so the Windows branch has to answer
+        // `UserSession` unless the exe itself carries the RUNASADMIN layer.
+        let method = auto_start_method();
+        assert!(matches!(
+            method,
+            AutoStartMethod::UserSession | AutoStartMethod::ElevatedTask
+        ));
+        assert!(!is_process_elevated() || method == AutoStartMethod::ElevatedTask);
     }
 }
