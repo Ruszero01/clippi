@@ -291,8 +291,9 @@ pub struct QuickPasteView {
     /// 下划线；提交后由 `push_query_string` 并入搜索词。没有组合时为空。
     composition: String,
     /// 搜索框是否已聚焦：只有点击搜索框（或按 Tab，或开始输入）后光标才出现在框内。
-    /// 快速窗口是 `WS_EX_NOACTIVATE` 窗口，永远拿不到系统焦点，这里记录的是
-    /// 「用户把输入目标指向了搜索框」这一界面状态。
+    /// 快速窗口是 `WS_EX_NOACTIVATE` 窗口，这里记录的是「用户把输入目标指向了
+    /// 搜索框」这一界面状态，决定光标与边框高亮。把按键从前景应用手里接过来的
+    /// 是钩子的搜索态（`keyboard_hook::set_search_armed`），二者不是同一件事。
     query_focused: bool,
     /// 光标闪烁相位：`true` 表示这一帧光标可见。
     cursor_blink_on: bool,
@@ -398,24 +399,37 @@ impl QuickPasteView {
         &self.query
     }
 
-    /// 点击搜索框（或按 Tab，见 `toggle_search`）：把键盘焦点借给弹窗，并进入
-    /// 聚焦态（光标出现、开始闪烁）。
+    /// 进入搜索态：点击搜索框、按 Tab，或设置里的「打开窗口时自动聚焦搜索框」。
     ///
-    /// 输入法只会把组合文字送进拥有键盘焦点的窗口，所以「点一下搜索框」
-    /// 是中文能输入进来的前提（`platform::quick_focus`）。借焦点失败也不影响
-    /// 英文输入：那种情况下仍由键盘钩子逐字转发。
+    /// 搜索态**不借键盘焦点**。按键由键盘钩子独占并转发进搜索框，所以前台应用
+    /// 既不会被打断输入，Listary、Quicker 这类启动器面板也不会把「焦点被拿走」
+    /// 当成用户离开而自行关闭——那正是快速窗口存在的意义，也是这里不再借焦点的
+    /// 原因。
     ///
-    /// 返回是否借到了焦点：自动聚焦（`auto_focus_search`）据此重试——窗口刚
-    /// 呼出时系统还不会把键盘焦点交给它，第一次尝试失败是正常的。
-    pub fn activate_search(&mut self, cx: &mut Context<Self>) -> bool {
+    /// 中文搜索本身也不需要输入法：搜索支持全拼与首字母，直接打 `gzjh` 就能搜到
+    /// 「工作计划」。确实要用输入法组合文字时另有显式入口（双击搜索框，见
+    /// `take_input_method`）。
+    pub fn activate_search(&mut self, cx: &mut Context<Self>) {
+        crate::platform::keyboard_hook::set_search_armed(true);
+        self.focus_query(cx);
+    }
+
+    /// 双击搜索框：把键盘焦点借给弹窗，让系统输入法能在搜索框里组合中文。
+    ///
+    /// 输入法只会把组合文字送进拥有键盘焦点的窗口（`platform::quick_focus`），
+    /// 所以这条路径必然要借焦点，代价是前台应用在这段时间里失去插入点、Listary
+    /// 这类面板会自行关闭。正因为代价明确，它不做成自动动作，只有用户双击才会发生。
+    ///
+    /// 返回是否借到了焦点：失败时仍处于搜索态，按键继续由键盘钩子逐字转发。
+    pub fn take_input_method(&mut self, cx: &mut Context<Self>) -> bool {
         let acquired = crate::platform::quick_focus::acquire_search_focus();
         self.focus_query(cx);
         acquired
     }
 
-    /// 在「借到键盘焦点」与「还回去」之间切换（Tab）。
+    /// 在搜索态与列表态之间切换（Tab）。
     ///
-    /// 借焦点不能只有鼠标点击一条路：Listary、Quicker 这类启动器面板会把自己
+    /// 进入搜索态不能只有鼠标点击一条路：Listary、Quicker 这类启动器面板会把自己
     /// 之外的点击当成「点到外面」而自行关闭——用户还没开始搜索，粘贴目标就先没了。
     /// 键盘这条入口不产生任何点击，且与点击共用同一个切换动作，两种入口不会
     /// 走出两种状态。
@@ -444,10 +458,12 @@ impl QuickPasteView {
         }
     }
 
-    /// 离开搜索框聚焦态：归还键盘焦点，收起光标并让闪烁循环退出。
+    /// 离开搜索态：不再把按键从前景应用手里接过来（数字键恢复槽位语义），归还
+    /// 可能借来的键盘焦点，收起光标并让闪烁循环退出。
     ///
     /// 输入法未提交的组合文本一并丢弃：它只属于当前这一次聚焦。
     pub fn blur_query(&mut self, cx: &mut Context<Self>) {
+        crate::platform::keyboard_hook::set_search_armed(false);
         crate::platform::quick_focus::release_search_focus();
         crate::platform::quick_focus::reset_ime_text();
         let had_composition = !self.composition.is_empty();
@@ -508,8 +524,9 @@ impl QuickPasteView {
 
     /// 追加一个字符（键盘钩子转发的可见字符）。
     ///
-    /// 输入即说明用户把输入目标放在了搜索框上：光标随之出现并闪烁。这里不借
-    /// 键盘焦点——只有点击搜索框才会，输入法因此不会在用户没点之前就被唤起。
+    /// 输入即说明用户把输入目标放在了搜索框上：光标随之出现并闪烁。这里既不借
+    /// 键盘焦点，也不代用户进入搜索态——数字键的归属由点击、Tab 或设置里的自动
+    /// 聚焦决定，输入法更是只有双击搜索框才接手，用户没表示之前什么都不动。
     pub fn push_query_char(&mut self, character: char, cx: &mut Context<Self>) {
         let mut query = self.query.clone();
         query.push(character);
@@ -1889,8 +1906,18 @@ impl Render for QuickPasteView {
                             .cursor(CursorStyle::IBeam)
                             .on_mouse_down(MouseButton::Left, {
                                 let view = view_entity.clone();
-                                move |_, _window, cx| {
-                                    view.update(cx, |view, cx| view.activate_search(cx));
+                                move |ev, _window, cx| {
+                                    // 单击进入搜索态：不加任何输入前提，也不借键盘
+                                    // 焦点，前台应用照旧保持自己的插入点。双击才把输入法
+                                    // 接过来，代价是前台应用在这段时间失去插入点、启动器
+                                    // 面板会自行关闭，所以必须由用户明确点两下。
+                                    if ev.click_count >= 2 {
+                                        view.update(cx, |view, cx| {
+                                            view.take_input_method(cx);
+                                        });
+                                    } else {
+                                        view.update(cx, |view, cx| view.activate_search(cx));
+                                    }
                                 }
                             })
                             .child(

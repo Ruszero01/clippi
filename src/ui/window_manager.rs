@@ -67,13 +67,6 @@ const MAINTENANCE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from
 /// Trailing-edge debounce before window geometry is persisted after a change.
 const GEOMETRY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// How long the automatic search-box focus (`auto_focus_search`) is retried for.
-///
-/// `SetFocus` is refused until the popup is really on screen, which takes a
-/// couple of frames; the deadline only exists so a setting that cannot take
-/// effect here stops trying instead of running for as long as the popup is up.
-const QUICK_AUTO_ARM_TIMEOUT: Duration = Duration::from_millis(600);
-
 fn geometry_retry_delay(retry_count: u32) -> Duration {
     let backoff_secs = (1u64 << retry_count.saturating_sub(1).min(5)).min(30);
     Duration::from_secs(backoff_secs)
@@ -507,10 +500,6 @@ pub struct WindowManager {
     /// in the same poll tick and gives the async positioning task time to
     /// complete before the window can be dismissed.
     quick_suppress_until: Option<Instant>,
-    /// Deadline for the automatic search-box focus (`auto_focus_search`), or
-    /// `None` when the setting is off, or has already done its job, or the user
-    /// armed the search box themselves in the meantime.
-    quick_auto_arm_until: Option<Instant>,
     _quick_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
     quick_hwnd: isize,
@@ -681,7 +670,6 @@ impl WindowManager {
             quick_visible: false,
             quick_mouse_down: false,
             quick_suppress_until: None,
-            quick_auto_arm_until: None,
             _quick_subscription: None,
             #[cfg(target_os = "windows")]
             quick_hwnd: 0,
@@ -773,7 +761,6 @@ impl WindowManager {
                     wm.poll_quick_click_outside(cx);
                     wm.poll_quick_keys(cx);
                     wm.poll_quick_ime(cx);
-                    wm.poll_quick_auto_arm(cx);
                 })
                 .is_err()
             {
@@ -816,7 +803,7 @@ impl WindowManager {
         let Some(view) = self.quick_view.clone() else {
             return;
         };
-        if keyboard_hook::is_search_focused() {
+        if keyboard_hook::is_input_method_taken() {
             // A borrow the user walked away from is dropped; one that only
             // slipped — the application underneath retaking its own focus — is
             // asserted again, because the search box has to keep receiving what
@@ -835,56 +822,6 @@ impl WindowManager {
             view.update(cx, |view, cx| view.push_query_string(&update.committed, cx));
         }
         view.update(cx, |view, cx| view.set_composition(update.composition, cx));
-    }
-
-    /// Apply the `auto_focus_search` setting to the popup: hand the search box
-    /// the keyboard focus, retrying until the deadline.
-    ///
-    /// The first attempts run while the popup is still being shown, and the
-    /// system refuses to move the focus to a window that is not on screen yet,
-    /// so the retry — not the setting — is what makes this reliable.
-    fn poll_quick_auto_arm(&mut self, cx: &mut Context<Self>) {
-        let Some(deadline) = self.quick_auto_arm_until else {
-            return;
-        };
-        // A search box the user armed themselves — a click, or Tab — is the
-        // state the setting is after; there is nothing left to do.
-        if keyboard_hook::is_search_focused() {
-            self.quick_auto_arm_until = None;
-            return;
-        }
-        // A launcher palette takes the keyboard without ever coming to the
-        // front, and keeps its caret only while nothing takes that focus from
-        // it. This arm happens without the user asking at this instant, so it
-        // leaves such a palette alone rather than dismissing it out from under
-        // them: clicking the search box still arms it, for when the user really
-        // does mean to type there.
-        if crate::platform::focus::input_detached_from_foreground() {
-            log::info!(
-                "quick search box auto-focus skipped: the input belongs to a window that is \
-                 not in front"
-            );
-            self.quick_auto_arm_until = None;
-            return;
-        }
-        let armed = self
-            .quick_view
-            .clone()
-            .is_some_and(|view| view.update(cx, |view, cx| view.activate_search(cx)));
-        if armed {
-            self.quick_auto_arm_until = None;
-            return;
-        }
-        if Instant::now() >= deadline {
-            // Only reachable when the focus was never free to borrow — an
-            // application that keeps the foreground to itself — so the setting
-            // could not take effect. Worth one line: the search box stays
-            // unarmed and the user has no other way to tell why.
-            log::warn!(
-                "quick search box auto-focus gave up: the keyboard focus stayed out of reach"
-            );
-            self.quick_auto_arm_until = None;
-        }
     }
 
     /// Apply one claimed key to the quick popup.
@@ -917,13 +854,9 @@ impl WindowManager {
             QuickKey::Backspace => {
                 view.update(cx, |view, cx| view.pop_query_char(cx));
             }
-            // Tab hands the search box the keyboard, or takes it back: the
-            // arming the input method needs, without the click that would
-            // dismiss a launcher palette.
-            QuickKey::SearchFocus => {
-                // The user's own decision, taken now: it outranks an automatic
-                // focus that is still waiting for the popup to finish showing.
-                self.quick_auto_arm_until = None;
+            // Tab turns the search box on, or off again: the entry that exists
+            // because the click it replaces would dismiss a launcher palette.
+            QuickKey::SearchToggle => {
                 view.update(cx, |view, cx| view.toggle_search(cx));
             }
         }
@@ -3552,17 +3485,14 @@ impl WindowManager {
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
         }
-        // Auto-focus search reaches the popup too: the setting hands the search
-        // box the keyboard as soon as the popup is on screen, so the user never
-        // has to click it — and the click that would dismiss a launcher palette
-        // underneath is never made. The hand-over is retried until the deadline
-        // because the window is still being shown at this point.
-        self.quick_auto_arm_until = self
-            .state
-            .read(cx)
-            .settings
-            .auto_focus_search
-            .then(|| Instant::now() + QUICK_AUTO_ARM_TIMEOUT);
+        // Auto-focus search reaches the popup too: the setting puts the search
+        // box into its text-entry state as soon as the popup is up, so the user
+        // never has to click it — and the click that would dismiss a launcher
+        // palette underneath is never made. Unlike a focus hand-over this needs
+        // nothing on screen and no retry: the keys come from the keyboard hook.
+        if self.state.read(cx).settings.auto_focus_search {
+            view.update(cx, |view, cx| view.activate_search(cx));
+        }
 
         // Route keystrokes to the popup for this session. The hook claims the
         // keys the popup owns (navigation, paste, search text) and lets
@@ -3695,7 +3625,6 @@ impl WindowManager {
         if let Some(view) = self.quick_view.clone() {
             view.update(cx, |view, cx| view.blur_query(cx));
         }
-        self.quick_auto_arm_until = None;
         self._quick_poll_task = None; // cancel fast poll
         #[cfg(target_os = "windows")]
         {

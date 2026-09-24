@@ -9,12 +9,18 @@
 //! A hook can translate letter keys, but it can never run an input method. The
 //! moment the user searches in Chinese (or any other composed script) the
 //! composition has to happen in a window that owns the keyboard focus, because
-//! that is where Windows delivers `WM_IME_*`. Clicking the search box therefore
-//! *borrows* the focus: this module joins the input queue of the foreground
-//! thread and moves the focus of that queue to the popup. The foreground window
-//! itself never changes, so the window underneath is neither raised nor
-//! deactivated — which is what keeps launcher palettes such as Quicker's search
-//! box alive while Clippi is on screen.
+//! that is where Windows delivers `WM_IME_*`. Only that path *borrows* the
+//! focus: this module joins the input queue of the foreground thread and moves
+//! the focus of that queue to the popup. The foreground window itself never
+//! changes, so the window underneath is neither raised nor deactivated.
+//!
+//! Because a borrow is still a borrow — the application underneath loses its
+//! caret, and a launcher palette holding it reads it as "the user clicked
+//! outside me" and dismisses itself — it is never taken on its own. Searching
+//! is driven by the keyboard hook without any focus, and the input method is
+//! taken over only when the user explicitly asks for it
+//! (`ui::quick_paste::take_input_method`, a double click on the search box), for
+//! as long as they asked for it and no longer.
 //!
 //! While the popup owns the focus the keyboard hook stops translating text keys
 //! and lets them through; they reach the popup, where the input method turns
@@ -798,11 +804,16 @@ pub fn set_caret_point(x: f32, y: f32) {
     let _ = (x, y);
 }
 
-/// Borrow the keyboard focus for the popup's search box.
+/// Take the input method over by borrowing the keyboard focus for the popup's
+/// search box.
 ///
 /// Returns whether the popup now owns the focus, i.e. whether keys and input
 /// method messages reach it. While the borrow is held the low-level keyboard
 /// hook stops translating text keys, so nothing is swallowed twice.
+///
+/// This is the one action that costs the application underneath its caret, so it
+/// is only ever called for an explicit request (a double click on the search
+/// box). Searching itself needs no focus and never comes through here.
 pub fn acquire_search_focus() -> bool {
     let acquired = {
         #[cfg(target_os = "windows")]
@@ -815,7 +826,7 @@ pub fn acquire_search_focus() -> bool {
         }
     };
     if acquired {
-        crate::platform::keyboard_hook::set_search_focused(true);
+        crate::platform::keyboard_hook::set_input_method_taken(true);
     }
     acquired
 }
@@ -825,7 +836,7 @@ pub fn acquire_search_focus() -> bool {
 /// The focus only returns to the window that had it while the popup still owns
 /// it; a borrow that already went stale is merely detached.
 pub fn release_search_focus() -> bool {
-    crate::platform::keyboard_hook::set_search_focused(false);
+    crate::platform::keyboard_hook::set_input_method_taken(false);
     #[cfg(target_os = "windows")]
     {
         let restore = !windows_impl::lost();
@@ -856,7 +867,7 @@ pub fn borrowed_focus_owner() -> Option<isize> {
 
 /// Drop the borrow without touching the focus, for a borrow that went stale.
 pub fn abandon_search_focus() -> bool {
-    crate::platform::keyboard_hook::set_search_focused(false);
+    crate::platform::keyboard_hook::set_input_method_taken(false);
     #[cfg(target_os = "windows")]
     {
         windows_impl::release(false)
