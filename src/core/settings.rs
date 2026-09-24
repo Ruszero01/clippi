@@ -93,6 +93,12 @@ pub struct AppSettings {
     pub quick_hotkey: String,
     #[serde(default)]
     pub quick_hotkey_enabled: bool,
+    /// 「同步筛选状态」：快速粘贴窗口与主窗口共用标签、类型与收藏筛选。
+    ///
+    /// 关闭后快速窗口单独维护自己的筛选，即选中了哪些标签、类型以及是否只看收藏；
+    /// 类型栏配置、置顶标签等设置项两个窗口仍然共用。默认开启，与旧行为一致。
+    #[serde(default = "default_quick_sync_filters")]
+    pub quick_window_sync_filters: bool,
     /// 「快捷粘贴纯文本」全局热键：空 = 禁用（不注册、不占用、触发无效），
     /// 非空 = 注册并生效（spec §2）。TOML 标量，旧配置缺失时按空值加载。
     #[serde(default)]
@@ -293,6 +299,11 @@ fn default_latest_hotkeys() -> Vec<LatestHotkeyEntry> {
         .collect()
 }
 
+/// 快速窗口默认与主窗口共用筛选状态，与引入该开关之前的行为一致。
+fn default_quick_sync_filters() -> bool {
+    true
+}
+
 fn default_quick_hotkey() -> String {
     "Alt+C".to_string()
 }
@@ -309,6 +320,7 @@ impl Default for AppSettings {
             replace_system_win_v: false,
             quick_hotkey: default_quick_hotkey(),
             quick_hotkey_enabled: false,
+            quick_window_sync_filters: default_quick_sync_filters(),
             paste_plain_hotkey: String::new(),
             auto_start: false,
             auto_hide: true,

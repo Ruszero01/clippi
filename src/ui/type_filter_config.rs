@@ -74,6 +74,7 @@ impl TypeFilterConfigPanel {
 
     fn toggle_visible(&self, key: &str, cx: &mut App) {
         self.state.update(cx, |s, _cx| {
+            let mut just_hidden = false;
             if let Some(entry) = s
                 .settings
                 .type_filter_config
@@ -82,11 +83,14 @@ impl TypeFilterConfigPanel {
             {
                 let was_visible = entry.visible;
                 entry.visible = !entry.visible;
-                // If hiding a currently active filter, deactivate it
-                if was_visible && !entry.visible && s.filters.is_type_active(key) {
-                    s.filters.toggle_type(key);
-                }
-                s.settings.save();
+                just_hidden = was_visible && !entry.visible;
+            }
+            s.settings.save();
+            if just_hidden {
+                // The type bar is shared, so a hidden chip must stop filtering
+                // in the quick popup as well.
+                s.deactivate_type_filter(key);
+            } else {
                 s.reload_items();
             }
         });

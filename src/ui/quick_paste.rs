@@ -388,9 +388,12 @@ impl QuickPasteView {
     fn quick_display_snapshot(&self, cx: &Context<Self>) -> Vec<(usize, i64)> {
         let state = self.state.read(cx);
         let terms = crate::core::search::split_keyword_terms(&self.query);
-        collect_quick_display_indices(&state.items, &terms, std::path::Path::exists)
+        // 渲染与快照取自同一个列表（`quick_items()`：共用筛选时是主列表，独立时是
+        // 快速窗口自身的一页），源下标因此始终指向本条快照对应的条目。
+        let items = state.quick_items();
+        collect_quick_display_indices(items, &terms, std::path::Path::exists)
             .into_iter()
-            .map(|source_index| (source_index, state.items[source_index].id))
+            .map(|source_index| (source_index, items[source_index].id))
             .collect()
     }
 
@@ -578,7 +581,11 @@ impl QuickPasteView {
 
     /// 复验目标条目 ID 在当前状态下仍可用（判定规则与画面快照一致）。
     fn verify_paste_ready(&self, item_id: i64, cx: &Context<Self>) -> bool {
-        quick_item_available_by_id(&self.state.read(cx).items, item_id, std::path::Path::exists)
+        quick_item_available_by_id(
+            self.state.read(cx).quick_items(),
+            item_id,
+            std::path::Path::exists,
+        )
     }
 
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
@@ -718,9 +725,9 @@ impl QuickPasteView {
     }
 
     fn row_data(&self, cx: &Context<Self>, available_indices: &[(usize, i64)]) -> Vec<RowData> {
-        let settings = &self.state.read(cx).settings;
-        let auto_fetch_title = settings.auto_fetch_url_title;
-        let items = &self.state.read(cx).items;
+        let state = self.state.read(cx);
+        let auto_fetch_title = state.settings.auto_fetch_url_title;
+        let items = state.quick_items();
 
         // 先过滤再分页：`slot` 始终是当前视口内的 0..4，数字徽标显示 slot + 1。
         available_indices
@@ -841,7 +848,7 @@ impl QuickPasteView {
             return;
         };
         // 按稳定 ID 在当前 items 中查找：列表重载/重排后源下标会指向其他条目。
-        let Some(item) = state.items.iter().find(|it| it.id == item_id) else {
+        let Some(item) = state.quick_items().iter().find(|it| it.id == item_id) else {
             return;
         };
         let Some((modes, index, mode)) = compute_alt_modes(item, &state.settings.image_alt_mode)
@@ -1054,10 +1061,18 @@ impl Render for QuickPasteView {
 
         let (type_config, filters, items_count, show_original_on_hover, pinned_tags) = {
             let state = self.state.read(cx);
-            // Only clone tag data for pinned tags (avoid cloning all tags every frame)
-            let pinned_tags: Vec<(i64, String, String)> = state
-                .settings
-                .pinned_tag_ids
+            let filters = state.quick_filters();
+            // 置顶标签，以及本窗口当前筛选的标签：未出现在标签栏中的筛选条件无法
+            // 取消，此规则与主界面侧栏「置顶或当前筛选」一致。
+            let mut row_tag_ids = state.settings.pinned_tag_ids.clone();
+            for &id in &filters.tag_ids {
+                if !row_tag_ids.contains(&id) {
+                    row_tag_ids.push(id);
+                }
+            }
+            // Only clone tag data for the tags this row shows (avoid cloning all
+            // tags every frame)
+            let pinned_tags: Vec<(i64, String, String)> = row_tag_ids
                 .iter()
                 .filter_map(|&id| {
                     state
@@ -1069,7 +1084,7 @@ impl Render for QuickPasteView {
                 .collect();
             (
                 state.settings.type_filter_config.clone(),
-                state.filters.clone(),
+                filters.clone(),
                 self.display_indices.len(),
                 state.settings.show_original_on_hover,
                 pinned_tags,
@@ -1211,7 +1226,7 @@ impl Render for QuickPasteView {
                                             let v = view_entity.clone();
                                             move |_, _window, cx| {
                                                 s.update(cx, |s, _cx| {
-                                                    s.toggle_type_filter(&k);
+                                                    s.quick_toggle_type_filter(&k);
                                                 });
                                                 v.update(cx, |view, cx| view.reset_scroll(cx));
                                             }
@@ -1251,7 +1266,7 @@ impl Render for QuickPasteView {
                                 let v = view_entity.clone();
                                 move |_, _window, cx| {
                                     s.update(cx, |s, _cx| {
-                                        s.toggle_favorites_filter();
+                                        s.quick_toggle_favorites_filter();
                                     });
                                     v.update(cx, |view, cx| view.reset_scroll(cx));
                                 }
@@ -1339,7 +1354,7 @@ impl Render for QuickPasteView {
                                     let v = view_entity.clone();
                                     move |_, _window, cx| {
                                         s.update(cx, |s, _cx| {
-                                            s.toggle_tag_filter(tag_id);
+                                            s.quick_toggle_tag_filter(tag_id);
                                         });
                                         v.update(cx, |view, cx| view.reset_scroll(cx));
                                     }

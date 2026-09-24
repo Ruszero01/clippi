@@ -3474,7 +3474,8 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         crate::platform::focus::sample_paste_target();
 
-        self.state.update(cx, |state, _cx| state.reload_items());
+        self.state
+            .update(cx, |state, _cx| state.reload_quick_items());
         view.update(cx, |view, cx| view.reset_for_show(cx));
         self.quick_visible = true;
         self.quick_mouse_down = Self::mouse_buttons_down();

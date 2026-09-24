@@ -237,7 +237,7 @@ impl SettingsPanel {
             }
             .into_any_element(),
         );
-        let quick_rows: Vec<AnyElement> = vec![{
+        let mut quick_rows: Vec<AnyElement> = vec![{
             let wm = wm.clone();
             let quick_enabled = self.state.read(cx).settings.quick_hotkey_enabled;
             self.render_toggle_row(
@@ -267,6 +267,30 @@ impl SettingsPanel {
             )
         }
         .into_any_element()];
+
+        // 仅在快速窗口开启后出现的一行：快速窗口是独立维护筛选，还是跟随主窗口。
+        // 类型栏配置、置顶标签等设置项两个窗口始终共用，与本行无关。
+        if self.state.read(cx).settings.quick_hotkey_enabled {
+            let sync_filters = self.state.read(cx).settings.quick_window_sync_filters;
+            quick_rows.push(
+                self.render_toggle_row(
+                    I18nKey::SettingQuickSyncFilters,
+                    I18nKey::DescQuickSyncFiltersOn,
+                    I18nKey::DescQuickSyncFiltersOff,
+                    sync_filters,
+                    window,
+                    cx,
+                    move |state, _this, _window, _cx| {
+                        state.update(_cx, |s, _cx| {
+                            let sync = !s.settings.quick_window_sync_filters;
+                            s.set_quick_window_sync_filters(sync);
+                        });
+                    },
+                )
+                .into_any_element(),
+            );
+        }
+
         container = container.child(self.settings_group(I18nKey::GroupWindow.text(), window_rows));
 
         // --- Quick paste window ---

@@ -77,6 +77,11 @@ impl ClipboardFilters {
         self.hotkeys_only = !self.hotkeys_only;
     }
 
+    /// Clear the hotkeys-only filter (keeps other filter dimensions)
+    pub fn clear_hotkeys_only(&mut self) {
+        self.hotkeys_only = false;
+    }
+
     /// Check if a specific type filter is active
     pub fn is_type_active(&self, type_name: &str) -> bool {
         self.type_filters.iter().any(|t| t == type_name)

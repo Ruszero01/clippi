@@ -120,6 +120,16 @@ pub struct AppState {
     pub tags: Vec<TagInfo>,
     /// Active filter state
     pub filters: ClipboardFilters,
+    /// The quick popup's own filter state, used only while the two windows keep
+    /// their filters separate (`quick_window_sync_filters` off): which tags and
+    /// types are selected, whether only favorites are shown. While the setting
+    /// is on this copy is unused — the popup shares `filters` with the main
+    /// list. The type filter configuration and the pinned tags are settings, not
+    /// filter state, and stay shared either way.
+    pub quick_filters: ClipboardFilters,
+    /// Page the quick popup renders while the filters are separate. Always empty
+    /// while they are shared, because the popup renders `items` directly then.
+    quick_items: Vec<ClipboardItem>,
     /// Whether any persisted item currently has a custom hotkey.
     pub has_hotkey_items: bool,
     /// Whether any persisted item is currently favorited.
@@ -432,6 +442,8 @@ impl AppState {
             pending_images: Vec::new(),
             tags,
             filters: ClipboardFilters::default(),
+            quick_filters: ClipboardFilters::default(),
+            quick_items: Vec::new(),
             last_usage_touched_ids: Vec::new(),
             usage_sync_requires_full_reload: false,
             has_hotkey_items: stats.has_hotkey_items,
@@ -537,6 +549,177 @@ impl AppState {
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
         self.refresh_titlebar_filter_availability();
+        // Whenever the popup does not render the main list as it is, it renders
+        // a page of its own, and every reason to reload here — a fresh capture, a
+        // periodic cleanup, an edit — applies to that page as well.
+        if !self.quick_items_share_main_list() {
+            self.quick_items = self.load_quick_items();
+        }
+    }
+
+    /// Whether the quick popup keeps its own filter state.
+    ///
+    /// Off by default, i.e. the popup follows the main window unless the user
+    /// asks for the two to be separate.
+    pub fn quick_filters_independent(&self) -> bool {
+        !self.settings.quick_window_sync_filters
+    }
+
+    /// Whether the popup can simply render the main list.
+    ///
+    /// It can while the two windows describe the same page. A keyword and 「仅热键」
+    /// are set in the main window alone — the popup shows no control for them, so
+    /// inheriting them would filter its list with nothing on screen to explain or
+    /// clear it. The popup builds its own page out of the visible dimensions then.
+    fn quick_items_share_main_list(&self) -> bool {
+        !self.quick_filters_independent()
+            && !self.filters.has_keyword()
+            && !self.filters.is_hotkeys_active()
+    }
+
+    /// The filter state the quick popup renders: the main list's own while the
+    /// two are synced, and the popup's separate copy otherwise.
+    pub fn quick_filters(&self) -> &ClipboardFilters {
+        if self.quick_filters_independent() {
+            &self.quick_filters
+        } else {
+            &self.filters
+        }
+    }
+
+    /// The items the quick popup renders: its own filtered page, or the main
+    /// list while that one already is the page the popup should show.
+    pub fn quick_items(&self) -> &[ClipboardItem] {
+        if self.quick_items_share_main_list() {
+            &self.items
+        } else {
+            &self.quick_items
+        }
+    }
+
+    /// Refresh what the quick popup shows when it comes up.
+    ///
+    /// `reload_items` already keeps the popup's own page current for everything
+    /// that happens while the main window is up — a fresh capture, a delete, an
+    /// edit — so this is the safety net for anything that reached the database
+    /// without going through the main list.
+    pub fn reload_quick_items(&mut self) {
+        if self.quick_items_share_main_list() {
+            self.reload_items();
+        } else {
+            self.quick_items = self.load_quick_items();
+        }
+    }
+
+    /// The popup's own filtered page.
+    ///
+    /// Only the dimensions the popup actually shows go in: its keyword lives in
+    /// its own search box (`QuickPasteView::query`) and is matched in memory over
+    /// this page, and 「仅热键」 has no control there at all. The rest mirrors
+    /// `reload_items`, the foreign-path setting included.
+    fn load_quick_items(&self) -> Vec<ClipboardItem> {
+        let mut filters = self.quick_filters().clone();
+        filters.set_keyword("");
+        filters.clear_hotkeys_only();
+        match self
+            .db
+            .load_filtered_list_with_tags(&filters, self.query_limit(), self.order_by())
+        {
+            Ok(mut items) => {
+                if self.settings.filter_foreign_paths {
+                    items.retain(|item| {
+                        item.meta_type != "path"
+                            || crate::core::types::path_is_native(&item.full_text)
+                    });
+                }
+                items
+            }
+            Err(e) => {
+                log::error!("Failed to reload quick window items: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Refresh after the popup toggled one of its filters (type, favorites,
+    /// tag). While the filters are shared that change is the main list's too, so
+    /// the main list is recomputed; while they are separate only the popup's own
+    /// page is, and the main list is left alone.
+    fn after_quick_filter_change(&mut self) {
+        if self.quick_filters_independent() {
+            self.quick_items = self.load_quick_items();
+        } else {
+            self.selected_ids.clear();
+            self.reload_items();
+        }
+    }
+
+    /// Toggle a content-type filter from the quick popup.
+    pub fn quick_toggle_type_filter(&mut self, type_name: &str) {
+        self.quick_filters_mut().toggle_type(type_name);
+        self.after_quick_filter_change();
+    }
+
+    /// Toggle the favorites filter from the quick popup.
+    pub fn quick_toggle_favorites_filter(&mut self) {
+        self.quick_filters_mut().toggle_favorites_only();
+        self.after_quick_filter_change();
+    }
+
+    /// Toggle a tag filter from the quick popup.
+    pub fn quick_toggle_tag_filter(&mut self, tag_id: i64) {
+        self.quick_filters_mut().toggle_tag(tag_id);
+        self.after_quick_filter_change();
+    }
+
+    /// The filter state the quick popup's own toggles write to.
+    fn quick_filters_mut(&mut self) -> &mut ClipboardFilters {
+        if self.quick_filters_independent() {
+            &mut self.quick_filters
+        } else {
+            &mut self.filters
+        }
+    }
+
+    /// Turn 「同步筛选状态」 on or off.
+    ///
+    /// Turning it off hands the popup whatever the main list shows right now, so
+    /// the popup keeps showing the same clips and only diverges from there on.
+    /// Turning it back on makes the popup follow the main list again, leaving
+    /// the popup's own copy aside until the user asks for it once more.
+    pub fn set_quick_window_sync_filters(&mut self, sync: bool) {
+        if self.settings.quick_window_sync_filters == sync {
+            return;
+        }
+        self.settings.quick_window_sync_filters = sync;
+        self.settings.save();
+        if !self.quick_filters_independent() {
+            // Turning sharing back on needs no handover: the popup reads the
+            // main list again and its own copy simply waits.
+            return;
+        }
+        // The popup's copy carries only what it can show and toggle: a keyword or
+        // 「仅热键」 has no control in that window, so it stays behind.
+        let mut seeded = self.filters.clone();
+        seeded.set_keyword("");
+        seeded.clear_hotkeys_only();
+        self.quick_filters = seeded;
+        self.quick_items = self.load_quick_items();
+    }
+
+    /// Drop a content-type filter in both windows.
+    ///
+    /// The type bar configuration is shared, so hiding a type must not leave
+    /// either window filtering by a chip that is no longer reachable.
+    pub fn deactivate_type_filter(&mut self, type_name: &str) {
+        if self.filters.is_type_active(type_name) {
+            self.filters.toggle_type(type_name);
+        }
+        if self.quick_filters.is_type_active(type_name) {
+            self.quick_filters.toggle_type(type_name);
+        }
+        self.selected_ids.clear();
+        self.reload_items();
     }
 
     /// Number of non-transfer history rows affected by the data-page
@@ -718,10 +901,13 @@ impl AppState {
     }
 
     /// Clear all items from memory to free resources while window is hidden.
-    /// Items are reloaded from DB on next `reload_items()` call.
+    /// Both lists are reloaded from DB on the next reload — `reload_items()` and
+    /// `reload_quick_items()` respectively.
     pub fn clear_items(&mut self) {
         self.items.clear();
         self.items.shrink_to_fit();
+        self.quick_items.clear();
+        self.quick_items.shrink_to_fit();
         self.selected_ids.clear();
     }
 
@@ -902,6 +1088,7 @@ impl AppState {
                 }
                 self.sync_dirty.store(true, Ordering::SeqCst);
                 self.filters.tag_ids.retain(|&id| id != tag_id);
+                self.quick_filters.tag_ids.retain(|&id| id != tag_id);
                 // Remove any stale pinned sidebar entry for the deleted tag.
                 self.settings.pinned_tag_ids.retain(|&id| id != tag_id);
                 self.settings.save();
@@ -3329,6 +3516,8 @@ mod tests {
             pending_images: Vec::new(),
             tags: Vec::new(),
             filters: ClipboardFilters::default(),
+            quick_filters: ClipboardFilters::default(),
+            quick_items: Vec::new(),
             has_hotkey_items: false,
             has_favorite_items: false,
             clearable_history_count: 0,
@@ -4991,8 +5180,9 @@ mod tests {
         let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
         state.db.add_item_tag(item_id, tag_id).unwrap();
 
-        // Activate the tag filter and pin the tag in the sidebar.
+        // Activate the tag filter in both windows and pin it in the sidebar.
         state.filters.tag_ids.push(tag_id);
+        state.quick_filters.tag_ids.push(tag_id);
         state.settings.pinned_tag_ids.push(tag_id);
 
         assert!(state.delete_tag(tag_id));
@@ -5001,10 +5191,132 @@ mod tests {
         assert!(state.tags.iter().all(|t| t.id != tag_id));
         // Filter and pinned-sidebar entries were cleaned up.
         assert!(!state.filters.tag_ids.contains(&tag_id));
+        assert!(!state.quick_filters.tag_ids.contains(&tag_id));
         assert!(!state.settings.pinned_tag_ids.contains(&tag_id));
         // The clipboard item survived; its tag association is gone.
         let item = state.db.get_by_id_with_tags(item_id).unwrap().unwrap();
         assert!(item.tags.is_empty());
+    }
+
+    /// 默认与主窗口共用筛选：快速窗口内的筛选操作作用于同一份筛选状态。
+    #[test]
+    fn quick_window_filters_follow_the_main_list_by_default() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "alpha", 1);
+        state.reload_items();
+
+        assert!(!state.quick_filters_independent());
+        state.quick_toggle_favorites_filter();
+
+        assert!(state.filters.is_favorites_active(), "主窗口同步变化");
+        assert!(state.quick_filters().is_favorites_active());
+        assert!(state.quick_items().is_empty());
+    }
+
+    /// 关闭同步后两者独立：主窗口切换标签不影响快速窗口，反之亦然。
+    #[test]
+    fn quick_window_filters_stay_separate_when_sync_is_off() {
+        let (mut state, _dirty) = test_state();
+        let tag_id = state.db.create_tag("work", "#FF0000").unwrap();
+        let tagged = insert_item_at_age(&mut state, 1, false, "tagged", 1);
+        state.db.add_item_tag(tagged, tag_id).unwrap();
+        insert_item_at_age(&mut state, 2, false, "plain", 2);
+        state.reload_tags();
+        state.reload_items();
+        state.set_quick_window_sync_filters(false);
+        assert!(state.quick_filters_independent());
+
+        // 主窗口切换标签：快速窗口仍为两条。
+        state.toggle_tag_filter(tag_id);
+        assert_eq!(state.items.len(), 1);
+        assert!(state.quick_filters().tag_ids.is_empty());
+        assert_eq!(state.quick_items().len(), 2);
+
+        // 快速窗口切换标签：主窗口的筛选状态保持不变。
+        state.quick_toggle_tag_filter(tag_id);
+        assert_eq!(state.quick_filters().tag_ids, vec![tag_id]);
+        assert_eq!(state.quick_items().len(), 1);
+        assert_eq!(
+            state.filters.tag_ids,
+            vec![tag_id],
+            "主窗口的筛选未被快速窗口改动"
+        );
+    }
+
+    /// 关闭同步时快速窗口沿用当前筛选状态，此后两者各自变化。
+    #[test]
+    fn turning_filter_sync_off_hands_the_popup_the_current_filters() {
+        let (mut state, _dirty) = test_state();
+        let tag_id = state.db.create_tag("work", "#FF0000").unwrap();
+        let tagged = insert_item_at_age(&mut state, 1, false, "tagged", 1);
+        state.db.add_item_tag(tagged, tag_id).unwrap();
+        insert_item_at_age(&mut state, 2, false, "plain", 2);
+        state.reload_tags();
+        state.filters.tag_ids.push(tag_id);
+        state.filters.set_keyword("tagged");
+        state.filters.toggle_hotkeys_only();
+        state.reload_items();
+
+        state.set_quick_window_sync_filters(false);
+
+        assert_eq!(state.quick_filters().tag_ids, vec![tag_id]);
+        assert_eq!(state.quick_items().len(), 1);
+        // 关键词与「仅热键」在快速窗口内没有对应控件，带入后无法清除。
+        assert!(!state.quick_filters().has_keyword());
+        assert!(!state.quick_filters().is_hotkeys_active());
+
+        // 重新开启同步后恢复跟随主窗口。
+        state.set_quick_window_sync_filters(true);
+        assert!(!state.quick_filters_independent());
+        state.filters = ClipboardFilters::default();
+        state.reload_items();
+        assert_eq!(state.quick_items().len(), 2);
+    }
+
+    /// 类型筛选项被隐藏后两处筛选一并取消，不留不可见、无法清除的条件。
+    #[test]
+    fn hiding_a_type_filter_leaves_neither_window_filtering_by_it() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "alpha", 1);
+        state.set_quick_window_sync_filters(false);
+        state.quick_toggle_type_filter("image");
+        assert!(state.quick_items().is_empty(), "数据库中无图片条目");
+
+        state.deactivate_type_filter("image");
+
+        assert!(!state.quick_filters().is_type_active("image"));
+        assert!(!state.filters.is_type_active("image"));
+        assert_eq!(state.quick_items().len(), 1);
+    }
+
+    /// 关键词归属各自的搜索框：主窗口的搜索词不进入快速窗口。
+    #[test]
+    fn a_main_window_keyword_stays_out_of_the_quick_window() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "alpha", 1);
+        insert_item_at_age(&mut state, 2, false, "beta", 2);
+        state.filters.set_keyword("alpha");
+        state.reload_items();
+
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.quick_items().len(), 2, "快速窗口仍显示自身那一页");
+
+        // 清空搜索词后两个窗口重新共用同一页。
+        state.set_keyword("");
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.quick_items().len(), 2);
+    }
+
+    /// 「仅热键」仅主窗口可切换，快速窗口不受其影响。
+    #[test]
+    fn a_main_window_hotkeys_filter_stays_out_of_the_quick_window() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "alpha", 1);
+        state.filters.toggle_hotkeys_only();
+        state.reload_items();
+
+        assert!(state.items.is_empty(), "没有条目设置独立快捷键");
+        assert_eq!(state.quick_items().len(), 1);
     }
 
     #[test]
