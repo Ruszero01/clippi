@@ -271,7 +271,13 @@ fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str)
     item.tags.iter().any(|tag| matches(&tag.name))
 }
 
-fn item_matches_keywords(item: &crate::core::types::ClipboardItem, keywords: &[String]) -> bool {
+/// Whether `item` matches every keyword term (AND semantics) — the same
+/// predicate the clipboard list search applies, shared with the quick paste
+/// popup so both searches can never drift apart.
+pub(crate) fn item_matches_keywords(
+    item: &crate::core::types::ClipboardItem,
+    keywords: &[String],
+) -> bool {
     keywords
         .iter()
         .all(|keyword| item_matches_keyword(item, keyword))

@@ -30,7 +30,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+    GetClassNameW, GetParent, GetWindowThreadProcessId, IsIconic, IsWindow, SetForegroundWindow,
+    SetWindowPos, ShowWindow, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE,
 };
 
 #[cfg(target_os = "windows")]
@@ -75,10 +76,26 @@ impl PasteShortcut {
 /// - `CASCADIA_HOSTING_WINDOW_CLASS` — Windows Terminal
 #[cfg(target_os = "windows")]
 fn is_console_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    // The paste target can be the control that holds the focus inside a terminal
+    // rather than the terminal window itself, so the whole chain is inspected.
+    let mut current = hwnd;
+    while !current.is_null() {
+        if has_console_class(current) {
+            return true;
+        }
+        // SAFETY: `GetParent` is a read-only query that returns null for a
+        // top-level window, which ends the walk.
+        current = unsafe { GetParent(current) };
+    }
+    false
+}
+
+/// Whether one window's class is a known console/terminal host.
+#[cfg(target_os = "windows")]
+fn has_console_class(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
     let mut class_name = [0u16; 64];
     // SAFETY: `GetClassNameW` reads the window class name into a stack-allocated
-    // buffer of 64 WCHARs. The HWND is validated by `IsWindow` before this call
-    // in `wait_for_focus_and_send_paste`.
+    // buffer of 64 WCHARs of exactly the length passed along.
     let len = unsafe { GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32) };
     if len == 0 {
         return false;
@@ -408,27 +425,103 @@ fn paste_blocked_by_uipi(clippi_elevated: bool, target_elevated: Option<bool>) -
     !clippi_elevated && target_elevated == Some(true)
 }
 
-/// Restore focus to the last non-Clippi foreground window (paste target).
+/// Activate `target` and put focus back on the control the user had focused.
 ///
-/// Returns whether Windows accepted the request: a refusal usually means the
-/// target runs elevated while Clippi does not.
+/// `SetForegroundWindow` from a background process is normally refused, so the
+/// input queues are attached first. The window is also raised explicitly,
+/// because activation alone can leave it behind another topmost window.
+#[cfg(target_os = "windows")]
+fn activate_paste_target(target: windows_sys::Win32::Foundation::HWND) -> bool {
+    use crate::platform::focus::focused_child_of;
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+
+    // SAFETY: every call either reads window state or changes it on an HWND
+    // validated by the caller; a successful attach is always detached again.
+    unsafe {
+        if IsIconic(target) != 0 {
+            ShowWindow(target, SW_RESTORE);
+        }
+        let current_thread = GetCurrentThreadId();
+        let target_thread = GetWindowThreadProcessId(target, std::ptr::null_mut());
+        let attached = target_thread != 0
+            && target_thread != current_thread
+            && AttachThreadInput(current_thread, target_thread, 1) != 0;
+        let activated = SetForegroundWindow(target) != 0;
+        SetWindowPos(
+            target,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        if let Some(child) = focused_child_of(target) {
+            SetFocus(child);
+        }
+        if attached {
+            AttachThreadInput(current_thread, target_thread, 0);
+        }
+        activated
+    }
+}
+
+/// Make sure a paste target owns the user's input before the keystroke is sent.
+///
+/// The quick popup is created with `WS_EX_NOACTIVATE`, so opening it never takes
+/// focus from the application the user is typing in. A foreign window that
+/// already owns the input — the keyboard focus, or failing that the foreground —
+/// *is* the paste target, so restoring only ever runs when one of Clippi's own
+/// windows holds both.
+///
+/// Forcing the recorded target forward unconditionally is what used to steal
+/// focus from a launcher search box (Listary, Quicker, …) — a palette that holds
+/// the caret while the window behind it stays in front — dismiss it, and let the
+/// simulated keystroke land in the wrong application.
+///
+/// Returns whether the input currently belongs to a paste target.
 #[cfg(target_os = "windows")]
 pub fn restore_paste_target() -> bool {
-    let Some(hwnd) = crate::platform::focus::get_last_non_clippi_window() else {
+    use crate::platform::focus::{
+        describe_input_context, describe_window, get_last_non_clippi_window,
+        is_restorable_paste_target, live_input_owner,
+    };
+
+    // A foreign window that already owns the input is the paste target: leave
+    // z-order and focus exactly as the user left them. This covers the launcher
+    // palette case, where the caret sits in a search box that is not the
+    // foreground window — re-activating the recorded target there would dismiss
+    // the palette and paste into the wrong application.
+    if let Some(live) = live_input_owner() {
+        log::info!(
+            "paste target: keeping live input owner {} ({})",
+            describe_window(live),
+            describe_input_context(Some(live))
+        );
+        return true;
+    }
+
+    let Some(target) =
+        get_last_non_clippi_window().filter(|&hwnd| is_restorable_paste_target(hwnd))
+    else {
+        log::warn!(
+            "paste target: none recorded while Clippi holds the foreground; skipping restore"
+        );
         return false;
     };
-    // SAFETY: `IsWindow` only reads window validity; `SetForegroundWindow` is
-    // safe when the HWND is known valid (IsWindow check) and belongs to a
-    // non-Clippi process.
-    if unsafe { IsWindow(hwnd) } == 0 {
-        return false;
-    }
-    let restored = unsafe { SetForegroundWindow(hwnd) } != 0;
-    if !restored {
+
+    if activate_paste_target(target) {
+        log::info!("paste target: activated {}", describe_window(target));
+        true
+    } else {
         let error = unsafe { GetLastError() };
-        log::warn!("SetForegroundWindow on the paste target failed (error {error})");
+        log::warn!(
+            "paste target: SetForegroundWindow failed (error {error}) for {}",
+            describe_window(target)
+        );
+        false
     }
-    restored
 }
 
 /// Simulate paste after restoring focus.
@@ -438,12 +531,11 @@ pub fn restore_paste_target() -> bool {
 /// collection) is captured.
 #[cfg(target_os = "windows")]
 pub fn paste_after_delay(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {
-    let target_hwnd: Option<usize> =
-        crate::platform::focus::get_last_non_clippi_window().map(|h| h as usize);
-
-    let shortcut = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
-
     std::thread::spawn(move || {
+        // Resolve the target inside the worker thread: the keystroke is sent
+        // after a short delay, by which time the foreground has settled.
+        let target_hwnd = crate::platform::focus::resolve_paste_target().map(|hwnd| hwnd as usize);
+        let shortcut = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
         wait_for_focus_and_send_paste(target_hwnd, shortcut);
     });
 }
@@ -455,58 +547,84 @@ pub fn paste_after_delay(paste_shortcuts: Arc<Vec<crate::core::settings::PasteSh
 /// Caller must call `restore_paste_target()` before invoking.
 #[cfg(target_os = "windows")]
 pub fn paste_sync(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {
-    let target_hwnd: Option<usize> =
-        crate::platform::focus::get_last_non_clippi_window().map(|h| h as usize);
+    let target_hwnd = crate::platform::focus::resolve_paste_target().map(|hwnd| hwnd as usize);
     let shortcut = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
     wait_for_focus_and_send_paste(target_hwnd, shortcut);
 }
 
 #[cfg(target_os = "windows")]
 fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShortcut) {
-    // Initial delay for SetForegroundWindow to take effect
+    use crate::platform::focus::{
+        describe_input_context, paste_would_hit_clippi, paste_would_reach, resolve_paste_target,
+    };
+
+    // Initial delay for the foreground change the caller just started — its own
+    // window hiding, or SetForegroundWindow — to take effect.
     std::thread::sleep(std::time::Duration::from_millis(BASE_DELAY_MS));
 
-    if let Some(hwnd) = target_hwnd {
-        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-        // An elevated target cannot receive the keystroke at all; sending it
-        // anyway would drop it into whichever window happens to be foreground.
-        if paste_blocked_by_uipi(
-            crate::core::settings::is_process_elevated(),
-            window_process_is_elevated(hwnd),
-        ) {
-            log::warn!(
-                "Paste target runs as administrator while Clippi does not; \
-                 restart Clippi elevated (the auto-start logon task does this) \
-                 to paste into elevated applications"
-            );
-            return;
-        }
+    // Re-resolve now that the foreground has settled: the caller hid its own
+    // window right before spawning this thread, so whatever owns the input by
+    // now — a launcher palette included — is what the keystroke will reach.
+    let target_hwnd = resolve_paste_target()
+        .map(|hwnd| hwnd as usize)
+        .or(target_hwnd);
+
+    // Without a target the keystroke would land in whichever window happens to
+    // be foreground — possibly one of Clippi's own windows. Report the failure
+    // instead of injecting blindly.
+    let Some(target_hwnd) = target_hwnd else {
+        log::warn!("Paste target unavailable; skipping paste keystroke");
+        return;
+    };
+    let hwnd = target_hwnd as windows_sys::Win32::Foundation::HWND;
+
+    // An elevated target cannot receive the keystroke at all; sending it
+    // anyway would drop it into whichever window happens to be foreground.
+    if paste_blocked_by_uipi(
+        crate::core::settings::is_process_elevated(),
+        window_process_is_elevated(hwnd),
+    ) {
+        log::warn!(
+            "Paste target runs as administrator while Clippi does not; \
+             restart Clippi elevated (the auto-start logon task does this) \
+             to paste into elevated applications"
+        );
+        return;
     }
 
-    // Verify target window is actually foreground before pasting
-    if let Some(hwnd) = target_hwnd {
-        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-        // SAFETY: `IsWindow` is a read-only query on a known HWND value from the
-        // focus watcher; `GetForegroundWindow` returns the current foreground HWND
-        // which is always valid or null-safe.
-        if unsafe { IsWindow(hwnd) } == 0 {
-            log::warn!("Paste target window no longer exists; skipping paste");
-            return;
-        }
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
-        while unsafe { GetForegroundWindow() } != hwnd {
-            if std::time::Instant::now() >= deadline {
+    // Verify target window is actually foreground before pasting.
+    // SAFETY: `IsWindow` is a read-only query on a known HWND value from the
+    // focus watcher; `GetForegroundWindow` returns the current foreground HWND
+    // which is always valid or null-safe.
+    if unsafe { IsWindow(hwnd) } == 0 {
+        log::warn!("Paste target window no longer exists; skipping paste");
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
+    while !paste_would_reach(hwnd) {
+        if std::time::Instant::now() >= deadline {
+            // The recorded target never took the input back. Injecting into one
+            // of Clippi's own windows would paste into ourselves, so stop there;
+            // anything else means the caret is in another foreign window and
+            // that window — not a stale record — is where the paste belongs.
+            if paste_would_hit_clippi() {
                 log::warn!(
-                    "Paste target did not become foreground within {FOCUS_TIMEOUT_MS} ms; \
-                     skipping paste"
+                    "Paste target never took the input and Clippi holds it; \
+                     skipping paste ({})",
+                    describe_input_context(Some(hwnd))
                 );
                 return;
             }
-            std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
+            log::warn!(
+                "Paste target never took the input; sending to the live input instead ({})",
+                describe_input_context(Some(hwnd))
+            );
+            break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
     }
 
+    log::info!("Paste keystroke → {}", describe_input_context(Some(hwnd)));
     send_paste_keystroke(&shortcut);
 }
 

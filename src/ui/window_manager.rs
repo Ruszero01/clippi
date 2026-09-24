@@ -23,6 +23,7 @@ use crate::platform::hotkey::{
     create_hotkey_listener, hotkey_display, HotkeyEvent, HotkeyListener, HotkeyRecordingPress,
     QuickAction,
 };
+use crate::platform::keyboard_hook::{self, QuickKey};
 use crate::platform::monitor;
 use crate::platform::tray::{TrayAction, TrayManager};
 #[cfg(target_os = "windows")]
@@ -65,6 +66,13 @@ const MAINTENANCE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from
 
 /// Trailing-edge debounce before window geometry is persisted after a change.
 const GEOMETRY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long the automatic search-box focus (`auto_focus_search`) is retried for.
+///
+/// `SetFocus` is refused until the popup is really on screen, which takes a
+/// couple of frames; the deadline only exists so a setting that cannot take
+/// effect here stops trying instead of running for as long as the popup is up.
+const QUICK_AUTO_ARM_TIMEOUT: Duration = Duration::from_millis(600);
 
 fn geometry_retry_delay(retry_count: u32) -> Duration {
     let backoff_secs = (1u64 << retry_count.saturating_sub(1).min(5)).min(30);
@@ -499,6 +507,10 @@ pub struct WindowManager {
     /// in the same poll tick and gives the async positioning task time to
     /// complete before the window can be dismissed.
     quick_suppress_until: Option<Instant>,
+    /// Deadline for the automatic search-box focus (`auto_focus_search`), or
+    /// `None` when the setting is off, or has already done its job, or the user
+    /// armed the search box themselves in the meantime.
+    quick_auto_arm_until: Option<Instant>,
     _quick_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
     quick_hwnd: isize,
@@ -669,6 +681,7 @@ impl WindowManager {
             quick_visible: false,
             quick_mouse_down: false,
             quick_suppress_until: None,
+            quick_auto_arm_until: None,
             _quick_subscription: None,
             #[cfg(target_os = "windows")]
             quick_hwnd: 0,
@@ -755,13 +768,165 @@ impl WindowManager {
             if this
                 .update(cx, |wm, cx| {
                     wm.poll_hotkey(cx);
+                    // Runs before the key batch so the Shift/Ctrl state the keys
+                    // are matched against is the freshest one in this tick.
                     wm.poll_quick_click_outside(cx);
+                    wm.poll_quick_keys(cx);
+                    wm.poll_quick_ime(cx);
+                    wm.poll_quick_auto_arm(cx);
                 })
                 .is_err()
             {
                 break;
             }
         }));
+    }
+
+    /// Drain the keys the quick popup claimed through the low-level keyboard
+    /// hook and apply them to the popup.
+    ///
+    /// The popup is `WS_EX_NOACTIVATE`: it can never own a focused input
+    /// widget, so a desktop-wide hook is the only input path that can see
+    /// keystrokes while it is on screen. Every key is applied through the same
+    /// handlers the global quick-action hotkeys use.
+    fn poll_quick_keys(&mut self, cx: &mut Context<Self>) {
+        if !self.quick_visible {
+            return;
+        }
+        for key in keyboard_hook::take_events() {
+            self.handle_quick_key(key, cx);
+        }
+    }
+
+    /// Apply the input method text the popup received, and keep the keyboard
+    /// focus loan honest.
+    ///
+    /// While the search box is focused the popup owns the keyboard focus and the
+    /// input method delivers its composition and committed text through the
+    /// window subclass (`platform::quick_focus`). Both land here, where they are
+    /// applied to the search box exactly like the keys the hook forwards.
+    ///
+    /// A borrow that went stale — the user clicked another window, focus moved
+    /// on for any other reason — is dropped instead of leaving the two input
+    /// queues joined.
+    fn poll_quick_ime(&mut self, cx: &mut Context<Self>) {
+        if !self.quick_visible {
+            return;
+        }
+        let Some(view) = self.quick_view.clone() else {
+            return;
+        };
+        if keyboard_hook::is_search_focused() {
+            // A borrow the user walked away from is dropped; one that only
+            // slipped — the application underneath retaking its own focus — is
+            // asserted again, because the search box has to keep receiving what
+            // the user types into it.
+            if crate::platform::quick_focus::search_focus_lost()
+                || !crate::platform::quick_focus::reassert_search_focus()
+            {
+                crate::platform::quick_focus::abandon_search_focus();
+                view.update(cx, |view, cx| view.blur_query(cx));
+            }
+        }
+        let Some(update) = crate::platform::quick_focus::take_ime_update() else {
+            return;
+        };
+        if !update.committed.is_empty() {
+            view.update(cx, |view, cx| view.push_query_string(&update.committed, cx));
+        }
+        view.update(cx, |view, cx| view.set_composition(update.composition, cx));
+    }
+
+    /// Apply the `auto_focus_search` setting to the popup: hand the search box
+    /// the keyboard focus, retrying until the deadline.
+    ///
+    /// The first attempts run while the popup is still being shown, and the
+    /// system refuses to move the focus to a window that is not on screen yet,
+    /// so the retry — not the setting — is what makes this reliable.
+    fn poll_quick_auto_arm(&mut self, cx: &mut Context<Self>) {
+        let Some(deadline) = self.quick_auto_arm_until else {
+            return;
+        };
+        // A search box the user armed themselves — a click, or Tab — is the
+        // state the setting is after; there is nothing left to do.
+        if keyboard_hook::is_search_focused() {
+            self.quick_auto_arm_until = None;
+            return;
+        }
+        // A launcher palette takes the keyboard without ever coming to the
+        // front, and keeps its caret only while nothing takes that focus from
+        // it. This arm happens without the user asking at this instant, so it
+        // leaves such a palette alone rather than dismissing it out from under
+        // them: clicking the search box still arms it, for when the user really
+        // does mean to type there.
+        if crate::platform::focus::input_detached_from_foreground() {
+            log::info!(
+                "quick search box auto-focus skipped: the input belongs to a window that is \
+                 not in front"
+            );
+            self.quick_auto_arm_until = None;
+            return;
+        }
+        let armed = self
+            .quick_view
+            .clone()
+            .is_some_and(|view| view.update(cx, |view, cx| view.activate_search(cx)));
+        if armed {
+            self.quick_auto_arm_until = None;
+            return;
+        }
+        if Instant::now() >= deadline {
+            // Only reachable when the focus was never free to borrow — an
+            // application that keeps the foreground to itself — so the setting
+            // could not take effect. Worth one line: the search box stays
+            // unarmed and the user has no other way to tell why.
+            log::warn!(
+                "quick search box auto-focus gave up: the keyboard focus stayed out of reach"
+            );
+            self.quick_auto_arm_until = None;
+        }
+    }
+
+    /// Apply one claimed key to the quick popup.
+    fn handle_quick_key(&mut self, key: QuickKey, cx: &mut Context<Self>) {
+        if !self.quick_visible {
+            return;
+        }
+        let Some(view) = self.quick_view.clone() else {
+            return;
+        };
+        match key {
+            QuickKey::Previous => self.handle_quick_action(QuickAction::Previous, cx),
+            QuickKey::Next => self.handle_quick_action(QuickAction::Next, cx),
+            QuickKey::PreviousPage => self.handle_quick_action(QuickAction::PreviousPage, cx),
+            QuickKey::NextPage => self.handle_quick_action(QuickAction::NextPage, cx),
+            QuickKey::Paste => self.handle_quick_action(QuickAction::Paste, cx),
+            QuickKey::Pick(slot) => self.handle_quick_action(QuickAction::Pick(slot), cx),
+            QuickKey::Close => {
+                // Esc first clears a half-typed query; only an empty search box
+                // closes the popup, so a search is never dismissed by accident.
+                if view.read(cx).query().is_empty() {
+                    self.handle_quick_action(QuickAction::Close, cx);
+                } else {
+                    view.update(cx, |view, cx| view.clear_query(cx));
+                }
+            }
+            QuickKey::Char(character) => {
+                view.update(cx, |view, cx| view.push_query_char(character, cx));
+            }
+            QuickKey::Backspace => {
+                view.update(cx, |view, cx| view.pop_query_char(cx));
+            }
+            // Tab hands the search box the keyboard, or takes it back: the
+            // arming the input method needs, without the click that would
+            // dismiss a launcher palette.
+            QuickKey::SearchFocus => {
+                // The user's own decision, taken now: it outranks an automatic
+                // focus that is still waiting for the popup to finish showing.
+                self.quick_auto_arm_until = None;
+                view.update(cx, |view, cx| view.toggle_search(cx));
+            }
+        }
     }
 
     fn start_recording_poll(&mut self, cx: &mut Context<Self>) {
@@ -3371,8 +3536,13 @@ impl WindowManager {
             crate::platform::paste::restore_paste_target();
         }
 
+        // Sample the application the user was working in: the popup never
+        // takes focus, so this is the window the paste has to land in.
+        #[cfg(target_os = "windows")]
+        crate::platform::focus::sample_paste_target();
+
         self.state.update(cx, |state, _cx| state.reload_items());
-        view.update(cx, |view, cx| view.reset_scroll(cx));
+        view.update(cx, |view, cx| view.reset_for_show(cx));
         self.quick_visible = true;
         self.quick_mouse_down = Self::mouse_buttons_down();
         // Debounce: prevent click-outside and hotkey toggle hides briefly after
@@ -3381,6 +3551,25 @@ impl WindowManager {
         self.quick_suppress_until = Some(Instant::now() + Duration::from_millis(400));
         if let Some(ref mut hotkey) = self.hotkey {
             hotkey.set_quick_actions_enabled(true);
+        }
+        // Auto-focus search reaches the popup too: the setting hands the search
+        // box the keyboard as soon as the popup is on screen, so the user never
+        // has to click it — and the click that would dismiss a launcher palette
+        // underneath is never made. The hand-over is retried until the deadline
+        // because the window is still being shown at this point.
+        self.quick_auto_arm_until = self
+            .state
+            .read(cx)
+            .settings
+            .auto_focus_search
+            .then(|| Instant::now() + QUICK_AUTO_ARM_TIMEOUT);
+
+        // Route keystrokes to the popup for this session. The hook claims the
+        // keys the popup owns (navigation, paste, search text) and lets
+        // everything else — modified shortcuts and input method composition —
+        // through to the application underneath.
+        if keyboard_hook::is_available() {
+            keyboard_hook::set_enabled(true);
         }
 
         // Compute dynamic window height based on visible bars (C4: semantics
@@ -3494,6 +3683,19 @@ impl WindowManager {
     }
 
     fn hide_quick_window(&mut self, cx: &mut Context<Self>) {
+        // Release the keyboard hook together with the popup: keystrokes belong
+        // to the application the user is typing in again.
+        keyboard_hook::set_enabled(false);
+        // Hand the borrowed keyboard focus back before the window disappears.
+        // A hidden window cannot hold the focus, and giving it back here is what
+        // puts the caret in the application underneath exactly where the user
+        // left it — including the launcher palette the paste is about to land
+        // in.
+        crate::platform::quick_focus::release_search_focus();
+        if let Some(view) = self.quick_view.clone() {
+            view.update(cx, |view, cx| view.blur_query(cx));
+        }
+        self.quick_auto_arm_until = None;
         self._quick_poll_task = None; // cancel fast poll
         #[cfg(target_os = "windows")]
         {
@@ -3893,6 +4095,18 @@ impl WindowManager {
                     | SWP_NOZORDER,
             );
         }
+
+        // The popup never activates, so its keystrokes have to be observed
+        // through a desktop-wide low-level hook. A failure is not fatal: the
+        // global quick-action hotkeys (arrows / Enter / digits) still drive the
+        // popup, only the search field stays unavailable.
+        if let Err(error) = keyboard_hook::install() {
+            log::warn!("quick paste keyboard hook unavailable: {error}");
+        }
+        // The search box can only run an input method while it owns the keyboard
+        // focus, so the popup is subclassed to collect the input method messages
+        // that arrive once the focus has been borrowed.
+        crate::platform::quick_focus::install(self.quick_hwnd);
     }
 
     /// Shared macOS window styling — transparent floating panel with no chrome buttons.
@@ -5723,6 +5937,8 @@ impl WindowManager {
         if let Some(ref mut fw) = self.focus_watcher {
             fw.stop();
         }
+        keyboard_hook::uninstall();
+        crate::platform::quick_focus::uninstall();
     }
 
     /// Run periodic maintenance for local caches, retained history, and transfer files.

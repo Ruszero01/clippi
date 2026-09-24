@@ -8,6 +8,7 @@ use gpui::*;
 use gpui::{InteractiveElement, StatefulInteractiveElement};
 
 use super::rich_preview;
+use super::search_highlight;
 use crate::core::color::detect_color;
 use crate::core::secret::sensitive_preview_to_text;
 use crate::core::types::{
@@ -38,7 +39,26 @@ const FAV_BUTTON_GAP: f32 = 6.0;
 pub const QUICK_WINDOW_CORNER_RADIUS: f32 = 8.0;
 const HORIZONTAL_PADDING: f32 = 10.0;
 const LIST_INSET: f32 = 4.0;
-const HINT_BAR_HEIGHT: f32 = 24.0;
+/// Bottom hint bar. Tall enough to hold the search field on the right.
+const HINT_BAR_HEIGHT: f32 = 34.0;
+/// Search field inside the hint bar. Fixed width so the hints on the left can
+/// never squeeze it out of the row.
+const QUICK_SEARCH_WIDTH: f32 = 158.0;
+const QUICK_SEARCH_HEIGHT: f32 = 22.0;
+/// 搜索框文字字号，与渲染里的 `fs(11.0)` 一致；输入法定位候选框时也要用。
+const QUICK_SEARCH_FONT_SIZE: f32 = 11.0;
+/// 光标闪烁半周期（可见 ↔ 不可见），接近 Windows 文本光标的默认节奏。
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
+/// 搜索命中预览的裁剪预算：行内最多保留这么多字符。
+///
+/// 行宽只有一条，命中点必须落在前 ~40 个字符里才看得见，所以先按「命中点前 N
+/// 字，再加窗口总长」把预览裁到命中点附近，再交给主列表同一套高亮渲染器。主列表
+/// 卡片那套 300 字预览在快速窗口里会把命中点推到行外。
+const QUICK_HIGHLIGHT_CHARS: usize = 64;
+/// 正文命中点前保留的字符数：给命中处留一点上下文。
+const QUICK_HIGHLIGHT_LEADING_CHARS: usize = 12;
+/// 副标题（完整路径 / 网址）与主列表一致，命中点前只留 3 个字。
+const QUICK_HIGHLIGHT_SUBTITLE_LEADING_CHARS: usize = 3;
 const TOOLTIP_ITEM_HEIGHT: f32 = 28.0;
 const TOOLTIP_PADDING: f32 = 6.0;
 
@@ -119,6 +139,25 @@ where
         .enumerate()
         .filter(|(_, item)| is_quick_item_available(item, &path_exists))
         .map(|(index, _)| index)
+        .collect()
+}
+
+/// 快速窗口显示序列：先按条目可用性过滤，再按搜索词过滤，返回源下标。
+///
+/// 搜索词复用剪贴板主列表的匹配实现（`item_matches_keywords`），使快速窗口
+/// 与主列表的搜索语义完全一致：大小写不敏感、支持拼音全拼与拼音首字母、
+/// 多个词之间为 AND。搜索词为空时全部命中。
+fn collect_quick_display_indices<F>(
+    items: &[ClipboardItem],
+    terms: &[String],
+    path_exists: F,
+) -> Vec<usize>
+where
+    F: Fn(&std::path::Path) -> bool,
+{
+    collect_quick_item_indices(items, &path_exists)
+        .into_iter()
+        .filter(|&index| crate::state::app::item_matches_keywords(&items[index], terms))
         .collect()
 }
 
@@ -245,9 +284,26 @@ pub struct QuickPasteView {
     first_visible: usize,
     /// Hover tracking — when set, drives selection in single-item mode.
     hovered_index: Option<usize>,
+    /// 搜索框文本。快速窗口是 `WS_EX_NOACTIVATE` 窗口，永远不会获得焦点，
+    /// 键盘输入由 `platform::keyboard_hook` 转发到 `push_query_char`。
+    query: String,
+    /// 输入法正在组合的文本（拼音、注音、假名…），显示在输入内容之后并带
+    /// 下划线；提交后由 `push_query_string` 并入搜索词。没有组合时为空。
+    composition: String,
+    /// 搜索框是否已聚焦：只有点击搜索框（或按 Tab，或开始输入）后光标才出现在框内。
+    /// 快速窗口是 `WS_EX_NOACTIVATE` 窗口，永远拿不到系统焦点，这里记录的是
+    /// 「用户把输入目标指向了搜索框」这一界面状态。
+    query_focused: bool,
+    /// 光标闪烁相位：`true` 表示这一帧光标可见。
+    cursor_blink_on: bool,
+    /// 光标闪烁循环的代号：重新聚焦时自增，旧循环据此自行退出。
+    cursor_blink_generation: u64,
+    /// 当前光标闪烁任务；离开搜索框聚焦时放弃它。
+    _cursor_blink_task: Option<Task<()>>,
     /// 当前画面快照：最近一次 render 构建的过滤后 `(源下标, 稳定 ID)` 序列。
     /// 渲染用源下标取数据，交互用稳定 ID 解析条目身份——`state.items` 重载/重排后
-    /// 源下标会指向其他条目，而 ID 始终指向同一条目。每次 render 重建，不长期缓存。
+    /// 源下标会指向其他条目，而 ID 始终指向同一条目。每帧渲染与搜索词/过滤
+    /// 条件变化时重建，不长期缓存。
     display_indices: Vec<(usize, i64)>,
     /// 最近一次计算高级粘贴模式时对应的条目 ID。
     /// render 归一化改变选中身份后据此决定是否刷新浮层模式。
@@ -279,6 +335,12 @@ impl QuickPasteView {
             selected_index: 0,
             first_visible: 0,
             hovered_index: None,
+            query: String::new(),
+            composition: String::new(),
+            query_focused: false,
+            cursor_blink_on: false,
+            cursor_blink_generation: 0,
+            _cursor_blink_task: None,
             display_indices: Vec::new(),
             alt_mode_item_id: None,
             image_cache: RetainAllImageCache::new(cx),
@@ -312,13 +374,189 @@ impl QuickPasteView {
     /// 重建画面快照并归一化选中位置，触发重绘。
     /// 用于目标条目失效后的兜底刷新（本次不执行粘贴）。
     fn refresh_display_snapshot(&mut self, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        self.display_indices = collect_quick_item_indices(&state.items, std::path::Path::exists)
-            .into_iter()
-            .map(|source_index| (source_index, state.items[source_index].id))
-            .collect();
+        self.display_indices = self.quick_display_snapshot(cx);
         self.normalize_with_display_snapshot(cx);
         cx.notify();
+    }
+
+    /// 当前搜索词命中的 `(源下标, 稳定 ID)` 快照。
+    ///
+    /// 先按搜索词过滤（`AppState` 的 `item_matches_keywords`，与剪贴板主列表
+    /// 搜索同一套分词与拼音匹配），再套用快速窗口的条目可用性规则，保证两条
+    /// 路径的过滤语义不会各自漂移。搜索词为空时全部命中。
+    fn quick_display_snapshot(&self, cx: &Context<Self>) -> Vec<(usize, i64)> {
+        let state = self.state.read(cx);
+        let terms = crate::core::search::split_keyword_terms(&self.query);
+        collect_quick_display_indices(&state.items, &terms, std::path::Path::exists)
+            .into_iter()
+            .map(|source_index| (source_index, state.items[source_index].id))
+            .collect()
+    }
+
+    /// 当前搜索框文本。
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// 点击搜索框（或按 Tab，见 `toggle_search`）：把键盘焦点借给弹窗，并进入
+    /// 聚焦态（光标出现、开始闪烁）。
+    ///
+    /// 输入法只会把组合文字送进拥有键盘焦点的窗口，所以「点一下搜索框」
+    /// 是中文能输入进来的前提（`platform::quick_focus`）。借焦点失败也不影响
+    /// 英文输入：那种情况下仍由键盘钩子逐字转发。
+    ///
+    /// 返回是否借到了焦点：自动聚焦（`auto_focus_search`）据此重试——窗口刚
+    /// 呼出时系统还不会把键盘焦点交给它，第一次尝试失败是正常的。
+    pub fn activate_search(&mut self, cx: &mut Context<Self>) -> bool {
+        let acquired = crate::platform::quick_focus::acquire_search_focus();
+        self.focus_query(cx);
+        acquired
+    }
+
+    /// 在「借到键盘焦点」与「还回去」之间切换（Tab）。
+    ///
+    /// 借焦点不能只有鼠标点击一条路：Listary、Quicker 这类启动器面板会把自己
+    /// 之外的点击当成「点到外面」而自行关闭——用户还没开始搜索，粘贴目标就先没了。
+    /// 键盘这条入口不产生任何点击，且与点击共用同一个切换动作，两种入口不会
+    /// 走出两种状态。
+    pub fn toggle_search(&mut self, cx: &mut Context<Self>) {
+        if self.query_focused {
+            self.blur_query(cx);
+        } else {
+            self.activate_search(cx);
+        }
+    }
+
+    /// 进入聚焦态：光标出现并开始闪烁。
+    ///
+    /// 已经聚焦时只把相位拉回「可见」并按真实文本光标的行为重置节奏，
+    /// 不重建任务，避免连续输入时每敲一个字就重启一次闪烁循环。
+    fn focus_query(&mut self, cx: &mut Context<Self>) {
+        if !self.query_focused {
+            self.query_focused = true;
+            self.start_cursor_blink(cx);
+            cx.notify();
+            return;
+        }
+        if !self.cursor_blink_on {
+            self.start_cursor_blink(cx);
+            cx.notify();
+        }
+    }
+
+    /// 离开搜索框聚焦态：归还键盘焦点，收起光标并让闪烁循环退出。
+    ///
+    /// 输入法未提交的组合文本一并丢弃：它只属于当前这一次聚焦。
+    pub fn blur_query(&mut self, cx: &mut Context<Self>) {
+        crate::platform::quick_focus::release_search_focus();
+        crate::platform::quick_focus::reset_ime_text();
+        let had_composition = !self.composition.is_empty();
+        self.composition.clear();
+        if !self.query_focused {
+            if had_composition {
+                cx.notify();
+            }
+            return;
+        }
+        self.query_focused = false;
+        self.cursor_blink_on = false;
+        // 代号失配让仍在跑的循环自行结束；同时放弃任务句柄。
+        self.cursor_blink_generation = self.cursor_blink_generation.wrapping_add(1);
+        self._cursor_blink_task = None;
+        cx.notify();
+    }
+
+    /// 启动（或重启）光标闪烁循环。
+    ///
+    /// 每一轮只翻转一次相位；失去聚焦或再次聚焦时代号失配，旧循环据此退出，
+    /// 因此不会有两个循环同时改同一份相位。
+    fn start_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_blink_generation = self.cursor_blink_generation.wrapping_add(1);
+        let generation = self.cursor_blink_generation;
+        self.cursor_blink_on = true;
+        self._cursor_blink_task = Some(cx.spawn(async move |weak_view, cx| loop {
+            Timer::after(CURSOR_BLINK_INTERVAL).await;
+            let keep_going = weak_view
+                .update(cx, |view, cx| {
+                    if !view.query_focused || view.cursor_blink_generation != generation {
+                        return false;
+                    }
+                    view.cursor_blink_on = !view.cursor_blink_on;
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if !keep_going {
+                break;
+            }
+        }));
+    }
+
+    /// 替换搜索框文本：回到列表顶部并重绘，同时同步键盘钩子所需的
+    /// 「搜索框为空」状态（数字键在空搜索框下是槽位快捷键，否则是搜索输入）。
+    fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.query == query {
+            return;
+        }
+        self.query = query;
+        crate::platform::keyboard_hook::set_query_empty(self.query.is_empty());
+        self.hovered_index = None;
+        // 回到列表顶部并按新搜索词立即重建快照：一次轮询可能整批处理
+        // 「连续输入字符 + 回车」，随后的粘贴必须已经看到过滤后的列表。
+        self.reset_scroll(cx);
+    }
+
+    /// 追加一个字符（键盘钩子转发的可见字符）。
+    ///
+    /// 输入即说明用户把输入目标放在了搜索框上：光标随之出现并闪烁。这里不借
+    /// 键盘焦点——只有点击搜索框才会，输入法因此不会在用户没点之前就被唤起。
+    pub fn push_query_char(&mut self, character: char, cx: &mut Context<Self>) {
+        let mut query = self.query.clone();
+        query.push(character);
+        self.set_query(query, cx);
+        self.focus_query(cx);
+    }
+
+    /// 追加输入法提交的文本（一个词或一整句），与钩子转发的字符走同一条路径。
+    pub fn push_query_string(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text.is_empty() {
+            return;
+        }
+        let mut query = self.query.clone();
+        query.push_str(text);
+        self.set_query(query, cx);
+    }
+
+    /// 更新输入法正在组合的文本（拼音等），显示在输入内容之后。
+    pub fn set_composition(&mut self, composition: String, cx: &mut Context<Self>) {
+        if self.composition == composition {
+            return;
+        }
+        self.composition = composition;
+        cx.notify();
+    }
+
+    /// 删除最后一个字符（键盘钩子的退格键）。
+    pub fn pop_query_char(&mut self, cx: &mut Context<Self>) {
+        if self.query.is_empty() {
+            return;
+        }
+        let mut query = self.query.clone();
+        query.pop();
+        self.set_query(query, cx);
+    }
+
+    /// 清空搜索框（Esc 第一步 / 每次窗口打开）。
+    pub fn clear_query(&mut self, cx: &mut Context<Self>) {
+        self.set_query(String::new(), cx);
+    }
+
+    /// 每次呼出快速窗口时复位：清空搜索框、收起光标、回到列表顶部。
+    pub fn reset_for_show(&mut self, cx: &mut Context<Self>) {
+        self.query.clear();
+        crate::platform::keyboard_hook::set_query_empty(true);
+        self.blur_query(cx);
+        self.reset_scroll(cx);
     }
 
     /// 复验目标条目 ID 在当前状态下仍可用（判定规则与画面快照一致）。
@@ -441,10 +679,11 @@ impl QuickPasteView {
     pub fn reset_scroll(&mut self, cx: &mut Context<Self>) {
         self.selected_index = 0;
         self.first_visible = 0;
-        // 清空画面快照：新 render 之前拒绝使用上一次窗口会话的快照
-        //（窗口打开时 `state.items` 会先重载，旧快照的源下标已失效）。
-        self.display_indices.clear();
         self.alt_mode_item_id = None;
+        // 立即按当前搜索词和最新列表重建快照。上一会话的快照源下标已失效
+        // （窗口打开时 `state.items` 会先重载），而推迟到下一帧重建会让
+        // 「刚打开就回车」「刚改完过滤条件就回车」读到空快照而丢失按键。
+        self.display_indices = self.quick_display_snapshot(cx);
         cx.notify();
     }
 
@@ -709,17 +948,70 @@ impl Render for QuickPasteView {
         let theme = self.theme(window.appearance(), cx);
         let view_entity = cx.entity();
 
-        // ── 过滤后有效 `(源下标, 稳定 ID)` 快照 ──
+        // 搜索框内容与空状态文案。提示文本、输入内容与光标分属不同层级：
+        // 未聚焦且没有输入时只显示提示文本，聚焦后提示文本让位给输入内容与光标。
+        let query_text: SharedString = self.query.clone().into();
+        let empty_text: SharedString = if self.query.is_empty() {
+            "No clipboard items".into()
+        } else {
+            "没有匹配的条目".into()
+        };
+
+        // 搜索框文本层：空且未聚焦时是「搜索」提示文本，否则是用户输入。
+        let query_text_layer: Option<AnyElement> = if self.query.is_empty() {
+            (!self.query_focused).then(|| {
+                div()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(fs(11.0))
+                    .text_color(theme.text_3)
+                    .child("搜索")
+                    .into_any_element()
+            })
+        } else {
+            Some(
+                div()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(fs(11.0))
+                    .text_color(theme.text_1)
+                    .child(query_text)
+                    .into_any_element(),
+            )
+        };
+        // 光标层：点击搜索框（或开始输入）后才出现，并按半周期闪烁。
+        let caret_layer: Option<AnyElement> =
+            (self.query_focused && self.cursor_blink_on).then(|| {
+                div()
+                    .w(px(1.0))
+                    .h(px(11.0))
+                    .flex_shrink_0()
+                    .bg(theme.accent)
+                    .into_any_element()
+            });
+        // 输入法组合层：拼音等尚未提交的文本，跟在输入内容之后，下划线表示
+        // 还没有提交。输入法的组合窗口与候选框跟随搜索框里的文本起点。
+        let composition_layer: Option<AnyElement> = (!self.composition.is_empty()).then(|| {
+            div()
+                .flex_shrink_0()
+                .whitespace_nowrap()
+                .text_size(fs(11.0))
+                .text_color(theme.text_1)
+                .underline()
+                .child(SharedString::from(self.composition.clone()))
+                .into_any_element()
+        });
+        if self.query_focused {
+            let caret = quick_search_caret_point(window, &self.query, &self.composition);
+            crate::platform::quick_focus::set_caret_point(f32::from(caret.x), f32::from(caret.y));
+        }
+
+        // ── 搜索词过滤后有效 `(源下标, 稳定 ID)` 快照 ──
         // 当次渲染的显示数量、空状态、行数据、选中态与高级粘贴浮层统一复用，
         // 同时存入 `display_indices` 供交互入口解析条目身份，避免同一帧内重复扫描。
-        {
-            let state = self.state.read(cx);
-            self.display_indices =
-                collect_quick_item_indices(&state.items, std::path::Path::exists)
-                    .into_iter()
-                    .map(|source_index| (source_index, state.items[source_index].id))
-                    .collect();
-        }
+        self.display_indices = self.quick_display_snapshot(cx);
         // 剪贴板刷新、排序变化或源文件失效后，把选中/视口位置收缩回有效序列内。
         let (selected, first) = normalize_quick_selection(
             self.selected_index,
@@ -1094,7 +1386,7 @@ impl Render for QuickPasteView {
                                 .justify_center()
                                 .text_size(fs(13.0))
                                 .text_color(theme.text_2)
-                                .child("No clipboard items"),
+                                .child(empty_text),
                         )
                     })
                     .children({
@@ -1103,6 +1395,12 @@ impl Render for QuickPasteView {
                         let first_visible = self.first_visible;
                         let image_cache = self.image_cache.clone();
                         let view_entity = cx.entity();
+                        // 搜索词与高亮配色：分词用主列表那套 `split_keyword_terms`，
+                        // 配色用同一组主题令牌（`accent_highlight` /
+                        // `accent_highlight_text`，主列表卡片也取这两个）。
+                        let terms = crate::core::search::split_keyword_terms(&self.query);
+                        let highlight_bg = theme.accent_highlight();
+                        let highlight_text = theme.accent_highlight_text();
                         self.row_data(cx, &self.display_indices)
                             .into_iter()
                             .map(
@@ -1127,19 +1425,38 @@ impl Render for QuickPasteView {
                                     let t = t.clone();
                                     let ve = view_entity.clone();
 
-                                    let show_note =
-                                        !(note.is_empty() || show_original_on_hover && selected);
+                                    let row_terms = terms.clone();
+                                    let note_matches = !row_terms.is_empty()
+                                        && crate::core::search::contains_match(&note, &row_terms);
+                                    let content_matches = !row_terms.is_empty()
+                                        && (crate::core::search::contains_match(
+                                            &preview, &row_terms,
+                                        ) || preview_subtitle.as_deref().is_some_and(
+                                            |subtitle| {
+                                                crate::core::search::contains_match(
+                                                    subtitle, &row_terms,
+                                                )
+                                            },
+                                        ));
+                                    let show_note = shows_note_preview(
+                                        &note,
+                                        note_matches,
+                                        content_matches,
+                                        show_original_on_hover,
+                                        selected,
+                                    );
                                     let content_cell = if show_note {
                                         // Note takes precedence for every content type, including images.
-                                        div()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .text_size(fs(12.0))
-                                            .text_color(t.text_2)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(note)
-                                            .into_any_element()
+                                        quick_line_cell(
+                                            note,
+                                            &row_terms,
+                                            t.text_2,
+                                            highlight_bg,
+                                            highlight_text,
+                                            12.0,
+                                            QUICK_HIGHLIGHT_LEADING_CHARS,
+                                        )
+                                        .into_any_element()
                                     } else if let Some(ref path) = img_path {
                                         let thumb_h = ROW_HEIGHT - 6.0;
                                         div()
@@ -1159,19 +1476,34 @@ impl Render for QuickPasteView {
                                     } else if let Some(subtitle) = preview_subtitle {
                                         // Rich label + dimmed subtitle (URL / Path / File)
                                         let label_color = path_color.unwrap_or(t.text_1);
+                                        // 标签与副标题各自过一遍高亮渲染器：命中点只可能
+                                        // 落在其中一个里，命中的那个会自己把命中点拉到可见
+                                        // 范围内，另一个原样显示。
+                                        let label = quick_line_cell(
+                                            preview,
+                                            &row_terms,
+                                            label_color,
+                                            highlight_bg,
+                                            highlight_text,
+                                            13.0,
+                                            QUICK_HIGHLIGHT_LEADING_CHARS,
+                                        );
+                                        let subtitle = quick_line_cell(
+                                            subtitle,
+                                            &row_terms,
+                                            t.text_3,
+                                            highlight_bg,
+                                            highlight_text,
+                                            13.0,
+                                            QUICK_HIGHLIGHT_SUBTITLE_LEADING_CHARS,
+                                        );
                                         div()
                                             .flex_1()
                                             .flex()
                                             .flex_row()
                                             .items_center()
                                             .overflow_hidden()
-                                            .child(
-                                                div()
-                                                    .text_size(fs(13.0))
-                                                    .text_color(label_color)
-                                                    .whitespace_nowrap()
-                                                    .child(preview),
-                                            )
+                                            .child(label)
                                             .child(
                                                 div()
                                                     .text_size(fs(13.0))
@@ -1179,17 +1511,21 @@ impl Render for QuickPasteView {
                                                     .whitespace_nowrap()
                                                     .child(" - "),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_size(fs(13.0))
-                                                    .text_color(t.text_3)
-                                                    .whitespace_nowrap()
-                                                    .text_ellipsis()
-                                                    .child(subtitle),
-                                            )
+                                            .child(subtitle)
                                             .into_any_element()
                                     } else if let Some(spans) = styled_first_line {
-                                        // Rich text with inline colours — render styled spans inline
+                                        // Rich text with inline colours — render styled spans inline.
+                                        // 命中段由主列表那套富文本高亮切分并保留原本的行内
+                                        // 颜色；没有搜索词时原样返回。
+                                        let spans = rich_preview::highlight_styled_html_lines(
+                                            vec![spans],
+                                            &row_terms,
+                                            highlight_bg,
+                                            highlight_text,
+                                        )
+                                        .into_iter()
+                                        .next()
+                                        .unwrap_or_default();
                                         div()
                                             .flex_1()
                                             .overflow_hidden()
@@ -1215,15 +1551,16 @@ impl Render for QuickPasteView {
                                             .into_any_element()
                                     } else {
                                         // No note, or selected with show_original_on_hover → show original (masked)
-                                        div()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .text_size(fs(13.0))
-                                            .text_color(t.text_1)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(preview)
-                                            .into_any_element()
+                                        quick_line_cell(
+                                            preview,
+                                            &row_terms,
+                                            t.text_1,
+                                            highlight_bg,
+                                            highlight_text,
+                                            13.0,
+                                            QUICK_HIGHLIGHT_LEADING_CHARS,
+                                        )
+                                        .into_any_element()
                                     };
 
                                     div()
@@ -1469,7 +1806,7 @@ impl Render for QuickPasteView {
                         })),
                 )
             })
-            // ── Bottom hint bar ──
+            // ── Bottom hint bar: hints on the left, search field on the right ──
             .child(
                 div()
                     .h(px(HINT_BAR_HEIGHT))
@@ -1477,49 +1814,153 @@ impl Render for QuickPasteView {
                     .px(px(HORIZONTAL_PADDING))
                     .flex()
                     .items_center()
-                    .gap(px(16.0))
+                    .gap(px(10.0))
                     .text_size(fs(10.0))
                     .text_color(theme.text_3)
                     .border_t(px(1.0))
                     .border_color(theme.divider)
+                    // The hint group yields space first so the search field keeps
+                    // its full width even when a held modifier lengthens a label.
                     .child(
                         div()
-                            .font_family("iconfont")
-                            .text_size(fs(12.0))
-                            .child("\u{e66b}"),
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .font_family("iconfont")
+                                    .text_size(fs(12.0))
+                                    .child("\u{e66b}"),
+                            )
+                            .child(div().whitespace_nowrap().child("Enter 粘贴"))
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .when(self.shift_held, |s| {
+                                        s.text_size(fs(10.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme.accent)
+                                    })
+                                    .child(if self.shift_held {
+                                        "Shift 纯文本粘贴"
+                                    } else {
+                                        "Shift 纯文本"
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .when(self.ctrl_held, |s| {
+                                        s.text_size(fs(10.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme.accent)
+                                    })
+                                    .child(if self.ctrl_held {
+                                        format!("{} 高级粘贴", advanced_modifier_label())
+                                    } else {
+                                        format!("{} 高级", advanced_modifier_label())
+                                    }),
+                            ),
                     )
-                    .child(div().child("Enter 粘贴"))
+                    // Search field. The popup never takes focus, so this renders
+                    // the hook-driven query instead of being an input widget.
+                    // 点击后才进入聚焦态：聚焦前只显示「搜索」提示文本，聚焦后
+                    // 提示文本让位给输入内容与闪烁光标。
                     .child(
                         div()
-                            .when(self.shift_held, |s| {
-                                s.text_size(fs(10.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.accent)
-                            })
-                            .child(if self.shift_held {
-                                "Shift 纯文本粘贴"
+                            .w(px(QUICK_SEARCH_WIDTH))
+                            .h(px(QUICK_SEARCH_HEIGHT))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .px(px(6.0))
+                            .rounded(px(5.0))
+                            .bg(theme.panel_input_bg)
+                            .border(px(1.0))
+                            .border_color(if self.query_focused {
+                                theme.accent
                             } else {
-                                "Shift 纯文本"
-                            }),
-                    )
-                    .child(
-                        div()
-                            .when(self.ctrl_held, |s| {
-                                s.text_size(fs(10.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.accent)
+                                theme.divider
                             })
-                            .child(if self.ctrl_held {
-                                format!("{} 高级粘贴", advanced_modifier_label())
-                            } else {
-                                format!("{} 高级", advanced_modifier_label())
-                            }),
+                            .cursor(CursorStyle::IBeam)
+                            .on_mouse_down(MouseButton::Left, {
+                                let view = view_entity.clone();
+                                move |_, _window, cx| {
+                                    view.update(cx, |view, cx| view.activate_search(cx));
+                                }
+                            })
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family("iconfont")
+                                    .text_size(fs(11.0))
+                                    .text_color(theme.text_3)
+                                    .child("\u{e688}"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(2.0))
+                                    .overflow_hidden()
+                                    .children(query_text_layer)
+                                    .children(composition_layer)
+                                    .children(caret_layer),
+                            ),
                     ),
             )
     }
 }
 
 // ── Helpers (adapted from clipboard_card.rs) ──
+
+/// 搜索框内插入点（逻辑客户区坐标，相对窗口左上角）。
+///
+/// 输入法据此定位组合窗口与候选框，两者都跟着插入点走：搜索框宽度固定且贴右
+/// 对齐，所以起点只随窗口尺寸变化，但要加上已经输入的搜索词与正在组合的文字，
+/// 否则候选框会压在搜索词上。
+fn quick_search_caret_point(window: &Window, query: &str, composition: &str) -> Point<Pixels> {
+    // 搜索框边框与内边距，与渲染里的 `.border(px(1.0))`、`.px(px(6.0))` 一致。
+    const FIELD_BORDER: f32 = 1.0;
+    const FIELD_PADDING: f32 = 6.0;
+    // 搜索图标宽度与图标到文本的间距，与渲染里的图标字号和 `gap` 一致。
+    const ICON_WIDTH: f32 = 11.0;
+    const ICON_GAP: f32 = 5.0;
+    // 文本层之间的 `gap(px(2.0))`。
+    const TEXT_GAP: f32 = 2.0;
+
+    let window_size = window.bounds().size;
+    let field_left = f32::from(window_size.width) - HORIZONTAL_PADDING - QUICK_SEARCH_WIDTH;
+    let field_bottom =
+        f32::from(window_size.height) - (HINT_BAR_HEIGHT - QUICK_SEARCH_HEIGHT) / 2.0;
+    let mut text_width = quick_text_width(query, window);
+    if !composition.is_empty() {
+        text_width += TEXT_GAP + quick_text_width(composition, window);
+    }
+    point(
+        px(field_left + FIELD_BORDER + FIELD_PADDING + ICON_WIDTH + ICON_GAP + text_width),
+        px(field_bottom),
+    )
+}
+
+/// 一段搜索框文字占用的逻辑宽度，与渲染共用同一套字体度量。
+fn quick_text_width(text: &str, window: &Window) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let text: SharedString = text.to_owned().into();
+    let run = window.text_style().to_run(text.len());
+    let line = window
+        .text_system()
+        .shape_line(text, fs(QUICK_SEARCH_FONT_SIZE), &[run], None);
+    f32::from(line.width)
+}
 
 fn type_icon(item: &ClipboardItem) -> &'static str {
     if item.meta_type == "email" {
@@ -1653,6 +2094,61 @@ fn preview_parts(item: &ClipboardItem, auto_fetch_title: bool) -> (String, Optio
     (masked, None)
 }
 
+/// 快速窗口的一行文本。
+///
+/// 没有搜索词时沿用原来的省略号截断；有搜索词时改走主列表的高亮渲染器
+/// （`ui::search_highlight`）：先按快速窗口的窄行宽裁到命中点附近，再逐段着色，
+/// 配色也取自同一套主题令牌，两条列表的高亮因此不会各自漂移。
+fn quick_line_cell(
+    text: String,
+    terms: &[String],
+    text_color: Rgba,
+    highlight_bg: Rgba,
+    highlight_text: Rgba,
+    font_size: f32,
+    leading_context_chars: usize,
+) -> Div {
+    let cell = div()
+        .flex_1()
+        .overflow_hidden()
+        .text_size(fs(font_size))
+        .text_color(text_color)
+        .whitespace_nowrap();
+    if terms.is_empty() {
+        return cell.text_ellipsis().child(text);
+    }
+    let preview = search_highlight::focused_window_with_leading_context(
+        &text,
+        terms,
+        QUICK_HIGHLIGHT_CHARS,
+        leading_context_chars,
+    );
+    cell.child(search_highlight::render_highlighted_inline(
+        preview,
+        terms,
+        text_color,
+        highlight_bg,
+        highlight_text,
+        font_size,
+        None,
+    ))
+}
+
+/// 是否展示备注行。
+///
+/// 备注为空时不展示；按住「显示原文」查看选中项时不展示；搜索命中内容却没命中
+/// 备注时不展示——否则这一行只显示备注，用户看不出它为什么命中。规则与主列表
+/// 卡片一致（`clipboard_card` 的 `show_note_preview`）。
+fn shows_note_preview(
+    note: &str,
+    note_matches: bool,
+    content_matches: bool,
+    show_original_on_hover: bool,
+    selected: bool,
+) -> bool {
+    !(note.is_empty() || show_original_on_hover && selected || (content_matches && !note_matches))
+}
+
 fn parse_hex_for_tag(hex: &str) -> Rgba {
     use crate::core::types::parse_hex_color;
     parse_hex_color(hex)
@@ -1680,9 +2176,11 @@ mod tests {
     // 注意：不使用 `use super::*`——quick_paste.rs 顶层 `use gpui::*` 会带入
     // gpui 的 `test` 属性宏，与 `#[test]` 冲突导致递归展开错误。
     use super::{
-        collect_quick_item_indices, compute_alt_modes, is_quick_item_available,
-        normalize_quick_selection, quick_item_available_by_id, snapshot_selected_id, VISIBLE_ROWS,
+        collect_quick_display_indices, collect_quick_item_indices, compute_alt_modes,
+        is_quick_item_available, normalize_quick_selection, quick_item_available_by_id,
+        shows_note_preview, snapshot_selected_id, VISIBLE_ROWS,
     };
+    use crate::core::search::split_keyword_terms;
     use crate::core::types::FileInfo;
     use crate::core::types::{ClipboardItem, ContentType, FileData, RichData};
     use std::path::Path;
@@ -1972,5 +2470,79 @@ mod tests {
         assert_eq!(normalize_quick_selection(5, 0, 7), (5, 1));
         // 选中在视口上方 → 视口跟随上移。
         assert_eq!(normalize_quick_selection(2, 4, 7), (2, 2));
+    }
+
+    #[test]
+    fn test_query_filter_applies_after_availability_filter() {
+        // 可用性过滤：图片/单文件路径不存在 → 剔除；文本条目始终保留。
+        let mut items = vec![
+            text_item(1),
+            local_image(2, "/missing/2.png"),
+            single_file(3, "/missing/3.txt"),
+            make_item(4, ContentType::PlainText, "", "", ""),
+        ];
+        items[3].full_text = "GitHub issue 98".to_string();
+
+        // 空搜索词：语义等价于原来的可用性过滤，源顺序不变。
+        assert_eq!(
+            collect_quick_display_indices(&items, &[], |_| false),
+            vec![0, 3]
+        );
+
+        // 命中：只保留匹配条目，且不可用条目不会因为搜索词失效而回来。
+        assert_eq!(
+            collect_quick_display_indices(&items, &split_keyword_terms("issue"), |_| false),
+            vec![3]
+        );
+
+        // 多个词按 AND 语义（与主列表一致）。
+        assert_eq!(
+            collect_quick_display_indices(&items, &split_keyword_terms("issue 98"), |_| false),
+            vec![3]
+        );
+        assert!(
+            collect_quick_display_indices(&items, &split_keyword_terms("issue 99"), |_| false)
+                .is_empty()
+        );
+
+        // 拼音首字母与全拼同样命中。
+        items[3].full_text = "工作计划".to_string();
+        assert_eq!(
+            collect_quick_display_indices(&items, &split_keyword_terms("gzjh"), |_| false),
+            vec![3]
+        );
+        assert_eq!(
+            collect_quick_display_indices(&items, &split_keyword_terms("gongzuo"), |_| false),
+            vec![3]
+        );
+
+        // 路径存在的图片条目在命中搜索词后仍保留可用性判定结果。
+        let images = vec![local_image(7, "/exists/7.png")];
+        assert_eq!(
+            collect_quick_display_indices(&images, &split_keyword_terms("item 7"), |_| true),
+            vec![0]
+        );
+        assert!(
+            collect_quick_display_indices(&images, &split_keyword_terms("item 7"), |_| false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_preview_prefers_the_side_that_matched() {
+        // 没有搜索词：备注照常优先（现状不变）。
+        assert!(shows_note_preview("my note", false, false, false, false));
+        // 命中内容、备注不含搜索词：备注让位，否则这一行看不出为什么命中。
+        assert!(!shows_note_preview("my note", false, true, false, false));
+        // 备注自己命中：显示备注，高亮画在备注上。
+        assert!(shows_note_preview("my note", true, true, false, false));
+        // 内容与备注都命中：备注优先，与主列表卡片一致。
+        assert!(shows_note_preview("my note", true, true, true, false));
+        // 备注为空：永远不显示备注行。
+        assert!(!shows_note_preview("", false, false, false, false));
+        // 选中项按住「显示原文」：即使命中的是备注也显示内容。
+        assert!(!shows_note_preview("my note", true, false, true, true));
+        // 未选中时「显示原文」不生效。
+        assert!(shows_note_preview("my note", false, false, true, false));
     }
 }
