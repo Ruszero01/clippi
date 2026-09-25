@@ -32,6 +32,7 @@
 //! Releasing hands the focus back to the window that had it, and the popup goes
 //! back to being driven by the hook alone.
 
+#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -98,6 +99,7 @@ pub fn reset_ime_text() {
 /// Only ever called on the window thread, so a character outside the basic
 /// plane — which arrives as a surrogate pair in two messages — is reassembled
 /// here instead of being dropped half-way.
+#[cfg(any(target_os = "windows", test))]
 fn push_ime_unit(text: &mut ImeText, unit: u16) {
     match text.pending_surrogate.take() {
         Some(high) => {
@@ -783,11 +785,9 @@ mod windows_impl {
 /// Install the input method sink on the quick popup window.
 ///
 /// Must be called from the thread that owns the window (GPUI's main thread).
+#[cfg(target_os = "windows")]
 pub fn install(popup_hwnd: isize) {
-    #[cfg(target_os = "windows")]
     windows_impl::install(popup_hwnd);
-    #[cfg(not(target_os = "windows"))]
-    let _ = popup_hwnd;
 }
 
 /// Remove the input method sink (application shutdown).
@@ -814,17 +814,9 @@ pub fn set_caret_point(x: f32, y: f32) {
 /// This is the one action that costs the application underneath its caret, so it
 /// is only ever called for an explicit request (a double click on the search
 /// box). Searching itself needs no focus and never comes through here.
+#[cfg(target_os = "windows")]
 pub fn acquire_search_focus() -> bool {
-    let acquired = {
-        #[cfg(target_os = "windows")]
-        {
-            windows_impl::acquire()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            false
-        }
-    };
+    let acquired = windows_impl::acquire();
     if acquired {
         crate::platform::keyboard_hook::set_input_method_taken(true);
     }
@@ -854,15 +846,9 @@ pub fn release_search_focus() -> bool {
 /// Dismissing the popup gives the focus back to that window, so it — and never
 /// a stale record of the last foreground application — is where a keystroke
 /// sent after the popup closes lands.
+#[cfg(target_os = "windows")]
 pub fn borrowed_focus_owner() -> Option<isize> {
-    #[cfg(target_os = "windows")]
-    {
-        windows_impl::borrowed_focus_owner()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        None
-    }
+    windows_impl::borrowed_focus_owner()
 }
 
 /// Drop the borrow without touching the focus, for a borrow that went stale.
@@ -884,15 +870,9 @@ pub fn abandon_search_focus() -> bool {
 /// routed to another input queue altogether. The keyboard hook asks before
 /// handing a keystroke over, so a takeover that did not take effect cannot
 /// swallow the search.
+#[cfg(target_os = "windows")]
 pub fn popup_has_keyboard_focus() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        windows_impl::popup_has_keyboard_focus()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
+    windows_impl::popup_has_keyboard_focus()
 }
 
 /// Input method state of the popup itself: `(open, composing)`, or `None` while
@@ -900,15 +880,9 @@ pub fn popup_has_keyboard_focus() -> bool {
 ///
 /// While the search box holds the focus this — not whatever the application
 /// underneath is doing — decides who owns the text keys.
+#[cfg(target_os = "windows")]
 pub fn search_ime_state() -> Option<(bool, bool)> {
-    #[cfg(target_os = "windows")]
-    {
-        windows_impl::ime_state()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        None
-    }
+    windows_impl::ime_state()
 }
 
 /// Take the focus back if it slipped away inside the same pair of windows.
@@ -940,9 +914,11 @@ pub fn search_focus_lost() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static IME_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn ime_updates_are_only_reported_when_something_changed() {
+        let _guard = IME_TEST_LOCK.lock().expect("IME test lock");
         reset_ime_text();
         assert_eq!(take_ime_update(), None);
 
@@ -964,6 +940,7 @@ mod tests {
 
     #[test]
     fn committed_text_is_drained_while_the_composition_stays() {
+        let _guard = IME_TEST_LOCK.lock().expect("IME test lock");
         reset_ime_text();
         {
             let mut text = ime_text().lock().expect("ime text");
@@ -990,6 +967,7 @@ mod tests {
 
     #[test]
     fn surrogate_pairs_are_reassembled() {
+        let _guard = IME_TEST_LOCK.lock().expect("IME test lock");
         reset_ime_text();
         {
             let mut text = ime_text().lock().expect("ime text");

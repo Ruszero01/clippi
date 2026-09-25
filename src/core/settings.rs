@@ -702,12 +702,15 @@ pub enum AutoStartChange {
     Applied,
     /// Auto-start is on, but through the fallback `Run` value, which cannot
     /// elevate at logon: Clippi may not start (or start unelevated) at logon.
+    #[cfg(target_os = "windows")]
     AppliedWithoutElevation,
     /// The exe no longer requests elevation, but the existing elevated task
     /// could not be removed without administrator rights.
+    #[cfg(target_os = "windows")]
     KeptElevatedTask,
     /// Auto-start is off, but a logon task registered by an elevated session is
     /// still in place: deleting it needs administrator rights.
+    #[cfg(target_os = "windows")]
     LeftoverElevatedTask,
 }
 
@@ -913,8 +916,8 @@ fn task_command_targets_exe(command: &str, exe_path: &Path) -> bool {
     !needle.is_empty() && (command == needle || command == xml_escape(&needle))
 }
 
-/// Escape the characters Task Scheduler escapes when it writes the XML.
-#[cfg(target_os = "windows")]
+/// Escape a path before embedding it in Task Scheduler XML or a launch agent plist.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -1131,7 +1134,7 @@ pub fn set_auto_start(enable: bool) -> Result<AutoStartChange, String> {
     if enable {
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("{}: {e}", I18nKey::ErrGetExePath.text()))?;
-        let exe_str = exe_path.to_string_lossy();
+        let exe_str = xml_escape(&exe_path.to_string_lossy());
 
         let plist_content = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1174,7 +1177,7 @@ pub fn sync_auto_start_path() {
         return;
     };
     let exe_str = exe_path.to_string_lossy();
-    let expected = format!("<string>{exe_str}</string>");
+    let expected = format!("<string>{}</string>", xml_escape(&exe_str));
     if std::fs::read_to_string(&plist_path).is_ok_and(|plist| plist.contains(expected.as_str())) {
         return;
     }
@@ -1361,6 +1364,15 @@ pub fn capture_gate(source_app_name: &str, blacklist: &[String], startup_done: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launch_agent_path_is_safe_inside_xml_text() {
+        assert_eq!(
+            xml_escape("/Applications/R&D <beta>/Clippi.app"),
+            "/Applications/R&amp;D &lt;beta&gt;/Clippi.app"
+        );
+    }
 
     #[test]
     fn tag_order_defaults_for_old_settings_and_merges_by_uid() {

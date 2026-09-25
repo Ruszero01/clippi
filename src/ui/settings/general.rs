@@ -93,12 +93,15 @@ impl SettingsPanel {
                         // failed and when a leftover task could not be cleared.
                         match outcome {
                             AutoStartChange::Applied => {}
+                            #[cfg(target_os = "windows")]
                             AutoStartChange::AppliedWithoutElevation => {
                                 s.show_warning_toast(I18nKey::ToastAutoStartWithoutElevation.text())
                             }
+                            #[cfg(target_os = "windows")]
                             AutoStartChange::KeptElevatedTask => {
                                 s.show_warning_toast(I18nKey::ToastAutoStartKeptElevatedTask.text())
                             }
+                            #[cfg(target_os = "windows")]
                             AutoStartChange::LeftoverElevatedTask => {
                                 s.show_warning_toast(I18nKey::ToastAutoStartLeftoverTask.text())
                             }

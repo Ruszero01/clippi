@@ -48,7 +48,9 @@
 //! instead, and still nothing is handed to the application underneath.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// A key that the quick popup takes ownership of.
@@ -587,14 +589,224 @@ mod windows_impl {
     }
 }
 
-/// Install the desktop-wide keyboard hook (Windows only; elsewhere this is a
-/// no-op and `is_available` reports `false`).
+#[cfg(target_os = "macos")]
+mod macos_impl {
+    use super::*;
+    use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
+    use core_graphics::event::{
+        CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventType, CallbackResult, EventField, KeyCode,
+    };
+    use foreign_types::ForeignType;
+    use std::collections::HashSet;
+    use std::os::raw::c_ulong;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    static REENABLE: AtomicBool = AtomicBool::new(false);
+    static THREAD: OnceLock<Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
+    static CLAIMED: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventKeyboardGetUnicodeString(
+            event: core_graphics::sys::CGEventRef,
+            max_length: c_ulong,
+            actual_length: *mut c_ulong,
+            buffer: *mut u16,
+        );
+    }
+
+    fn unicode_text(event: &CGEvent) -> String {
+        let mut buffer = [0u16; 8];
+        let mut length = 0;
+        // SAFETY: CoreGraphics writes at most `buffer.len()` UTF-16 units into
+        // the stack buffer. `event` remains valid for the callback's duration.
+        unsafe {
+            CGEventKeyboardGetUnicodeString(
+                event.as_ptr(),
+                buffer.len() as c_ulong,
+                &mut length,
+                buffer.as_mut_ptr(),
+            )
+        };
+        String::from_utf16_lossy(&buffer[..(length as usize).min(buffer.len())])
+    }
+
+    fn claimed_keys() -> &'static Mutex<HashSet<u16>> {
+        CLAIMED.get_or_init(|| Mutex::new(HashSet::new()))
+    }
+
+    fn process(event_type: CGEventType, event: &CGEvent) -> CallbackResult {
+        if matches!(
+            event_type,
+            CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+        ) {
+            REENABLE.store(true, Ordering::SeqCst);
+            return CallbackResult::Keep;
+        }
+        let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+        if matches!(event_type, CGEventType::KeyUp) {
+            return if claimed_keys()
+                .lock()
+                .is_ok_and(|mut keys| keys.remove(&keycode))
+            {
+                CallbackResult::Drop
+            } else {
+                CallbackResult::Keep
+            };
+        }
+        if !matches!(event_type, CGEventType::KeyDown) || !is_enabled() {
+            return CallbackResult::Keep;
+        }
+        if event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)
+            == std::process::id() as i64
+        {
+            // Paste injection originates in Clippi and must reach its target.
+            return CallbackResult::Keep;
+        }
+
+        let flags = event.get_flags();
+        if flags.intersects(
+            CGEventFlags::CGEventFlagControl
+                | CGEventFlags::CGEventFlagAlternate
+                | CGEventFlags::CGEventFlagCommand,
+        ) {
+            return CallbackResult::Keep;
+        }
+
+        let key = match keycode {
+            KeyCode::UP_ARROW => Some(QuickKey::Previous),
+            KeyCode::DOWN_ARROW => Some(QuickKey::Next),
+            KeyCode::LEFT_ARROW => Some(QuickKey::PreviousPage),
+            KeyCode::RIGHT_ARROW => Some(QuickKey::NextPage),
+            KeyCode::RETURN | KeyCode::ANSI_KEYPAD_ENTER => Some(QuickKey::Paste),
+            KeyCode::ESCAPE => Some(QuickKey::Close),
+            KeyCode::TAB => Some(QuickKey::SearchToggle),
+            KeyCode::DELETE => Some(QuickKey::Backspace),
+            _ => None,
+        };
+        let keys = if let Some(key) = key {
+            vec![key]
+        } else {
+            let value = unicode_text(event);
+            if value.is_empty() || value.chars().any(char::is_control) {
+                if is_search_armed() {
+                    Vec::new()
+                } else {
+                    return CallbackResult::Keep;
+                }
+            } else if !is_search_armed()
+                && QUERY_EMPTY.load(Ordering::SeqCst)
+                && value.len() == 1
+                && value.as_bytes()[0].is_ascii_digit()
+                && value != "0"
+            {
+                vec![QuickKey::Pick((value.as_bytes()[0] - b'1') as usize)]
+            } else {
+                value.chars().map(QuickKey::Char).collect()
+            }
+        };
+
+        // A poisoned queue must not eat a user's keystroke. Once queued, keep
+        // its key-up away from the foreground app as well.
+        let Ok(mut queue) = events().lock() else {
+            return CallbackResult::Keep;
+        };
+        queue.extend(keys);
+        if let Ok(mut claimed) = claimed_keys().lock() {
+            claimed.insert(keycode);
+        }
+        CallbackResult::Drop
+    }
+
+    pub fn install() -> Result<(), String> {
+        let slot = THREAD.get_or_init(|| Mutex::new(None));
+        let mut thread = slot.lock().map_err(|_| "keyboard hook lock poisoned")?;
+        if INSTALLED.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        RUNNING.store(true, Ordering::SeqCst);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let handle = std::thread::spawn(move || {
+            let tap = CGEventTap::new(
+                CGEventTapLocation::Session,
+                CGEventTapPlacement::HeadInsertEventTap,
+                CGEventTapOptions::Default,
+                vec![CGEventType::KeyDown, CGEventType::KeyUp],
+                |_proxy, event_type, event| process(event_type, event),
+            );
+            let Ok(tap) = tap else {
+                let _ = sender.send(false);
+                return;
+            };
+            let Ok(source) = tap.mach_port().create_runloop_source(0) else {
+                let _ = sender.send(false);
+                return;
+            };
+            CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
+            tap.enable();
+            INSTALLED.store(true, Ordering::SeqCst);
+            let _ = sender.send(true);
+            while RUNNING.load(Ordering::SeqCst) {
+                CFRunLoop::run_in_mode(
+                    unsafe { kCFRunLoopDefaultMode },
+                    Duration::from_millis(100),
+                    false,
+                );
+                if REENABLE.swap(false, Ordering::SeqCst) {
+                    tap.enable();
+                }
+            }
+            INSTALLED.store(false, Ordering::SeqCst);
+        });
+        let installed = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(false);
+        *thread = Some(handle);
+        if installed {
+            Ok(())
+        } else {
+            RUNNING.store(false, Ordering::SeqCst);
+            if let Some(handle) = thread.take() {
+                let _ = handle.join();
+            }
+            Err("macOS keyboard event tap unavailable (check Accessibility permission)".into())
+        }
+    }
+
+    pub fn uninstall() {
+        RUNNING.store(false, Ordering::SeqCst);
+        if let Some(slot) = THREAD.get() {
+            if let Ok(mut thread) = slot.lock() {
+                if let Some(handle) = thread.take() {
+                    let _ = handle.join();
+                }
+            }
+        }
+    }
+
+    pub fn is_installed() -> bool {
+        INSTALLED.load(Ordering::SeqCst)
+    }
+}
+
+/// Install the desktop-wide keyboard hook used by the quick popup.
 #[cfg(target_os = "windows")]
 pub fn install() -> Result<(), String> {
     windows_impl::install()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn install() -> Result<(), String> {
+    macos_impl::install()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn install() -> Result<(), String> {
     Ok(())
 }
@@ -604,7 +816,12 @@ pub fn uninstall() {
     windows_impl::uninstall()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn uninstall() {
+    macos_impl::uninstall()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn uninstall() {}
 
 /// Whether the hook is installed and can drive the quick popup.
@@ -613,7 +830,12 @@ pub fn is_available() -> bool {
     windows_impl::is_installed()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn is_available() -> bool {
+    macos_impl::is_installed()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn is_available() -> bool {
     false
 }

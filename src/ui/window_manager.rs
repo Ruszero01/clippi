@@ -3499,6 +3499,12 @@ impl WindowManager {
         // keys the popup owns (navigation, paste, search text) and lets
         // everything else — modified shortcuts and input method composition —
         // through to the application underneath.
+        #[cfg(target_os = "macos")]
+        if !keyboard_hook::is_available() {
+            if let Err(error) = keyboard_hook::install() {
+                log::warn!("quick paste keyboard hook unavailable: {error}");
+            }
+        }
         if keyboard_hook::is_available() {
             keyboard_hook::set_enabled(true);
         }
@@ -3963,6 +3969,10 @@ impl WindowManager {
     ) {
         self.quick_window = Some(handle);
         self.quick_view = Some(view.clone());
+        #[cfg(target_os = "macos")]
+        if let Err(error) = keyboard_hook::install() {
+            log::warn!("quick paste keyboard hook unavailable: {error}");
+        }
         self._quick_subscription = Some(cx.subscribe(
             &view,
             |this, _view, event: &QuickPasteEvent, cx| match event {

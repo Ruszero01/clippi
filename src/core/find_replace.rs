@@ -23,6 +23,7 @@ pub struct MatchSet {
 }
 
 impl MatchSet {
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.total == 0
     }
@@ -33,64 +34,31 @@ impl MatchSet {
 /// An empty query matches nothing.
 pub fn find_matches(text: &str, query: &str) -> MatchSet {
     let mut set = MatchSet::default();
-    if query.is_empty() {
-        return set;
-    }
-
-    if text.is_ascii() && query.is_ascii() {
-        let haystack = text.as_bytes();
-        let needle = query.as_bytes();
-        let mut at = 0;
-        while let Some(found) = find_ascii_ignore_case(&haystack[at..], needle) {
-            let start = at + found;
-            let end = start + needle.len();
-            set.total += 1;
-            if set.ranges.len() < MAX_MATCHES {
-                set.ranges.push(start..end);
-            }
-            at = end;
+    visit_matches(text, query, |range| {
+        set.total += 1;
+        if set.ranges.len() < MAX_MATCHES {
+            set.ranges.push(range);
         }
-        return set;
-    }
-
-    let mut at = 0;
-    while at < text.len() {
-        let Some(ch) = text[at..].chars().next() else {
-            break;
-        };
-        match match_end_at(text, at, query) {
-            Some(end) => {
-                set.total += 1;
-                if set.ranges.len() < MAX_MATCHES {
-                    set.ranges.push(at..end);
-                }
-                // Non-overlapping, like every find/replace tool: continue after
-                // the match instead of inside it.
-                at = end;
-            }
-            None => at += ch.len_utf8(),
-        }
-    }
+    });
     set
 }
 
-/// Replace every match, skipping any range that overlaps an earlier one.
-pub fn replace_all(text: &str, ranges: &[Range<usize>], replacement: &str) -> String {
-    if ranges.is_empty() {
-        return text.to_string();
-    }
-    let mut out = String::with_capacity(text.len() + ranges.len() * replacement.len());
+/// Replace every match, including matches past the navigation range cap.
+/// Returns the new text, replacement count, and first match offset.
+pub fn replace_all(text: &str, query: &str, replacement: &str) -> (String, usize, Option<usize>) {
+    let mut out = String::with_capacity(text.len());
     let mut at = 0;
-    for range in ranges {
-        if range.start < at || range.start > range.end || range.end > text.len() {
-            continue;
-        }
+    let mut count = 0;
+    let mut first = None;
+    visit_matches(text, query, |range| {
+        first.get_or_insert(range.start);
         out.push_str(&text[at..range.start]);
         out.push_str(replacement);
         at = range.end;
-    }
+        count += 1;
+    });
     out.push_str(&text[at..]);
-    out
+    (out, count, first)
 }
 
 /// Which match to land on when the current one is gone or the query changed:
@@ -109,6 +77,36 @@ fn find_ascii_ignore_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn visit_matches(text: &str, query: &str, mut visit: impl FnMut(Range<usize>)) {
+    if query.is_empty() {
+        return;
+    }
+    if text.is_ascii() && query.is_ascii() {
+        let haystack = text.as_bytes();
+        let needle = query.as_bytes();
+        let mut at = 0;
+        while let Some(found) = find_ascii_ignore_case(&haystack[at..], needle) {
+            let start = at + found;
+            let end = start + needle.len();
+            visit(start..end);
+            at = end;
+        }
+        return;
+    }
+
+    let mut at = 0;
+    while at < text.len() {
+        let ch = text[at..].chars().next().expect("valid character boundary");
+        match match_end_at(text, at, query) {
+            Some(end) => {
+                visit(at..end);
+                at = end;
+            }
+            None => at += ch.len_utf8(),
+        }
+    }
 }
 
 /// Byte offset just past `query` when it matches `text` at `start`, ignoring
@@ -194,11 +192,22 @@ mod tests {
     #[test]
     fn replace_all_rewrites_only_the_matches() {
         let text = "one_two_three";
-        let set = find_matches(text, "_");
-        assert_eq!(replace_all(text, &set.ranges, " "), "one two three");
+        assert_eq!(
+            replace_all(text, "_", " "),
+            ("one two three".into(), 2, Some(3))
+        );
         // Replacing with the query itself leaves the text alone.
-        assert_eq!(replace_all(text, &set.ranges, "_"), text);
-        assert_eq!(replace_all(text, &[], "x"), text);
+        assert_eq!(replace_all(text, "_", "_").0, text);
+        assert_eq!(replace_all(text, "", "x"), (text.into(), 0, None));
+    }
+
+    #[test]
+    fn replace_all_continues_past_navigation_cap() {
+        let text = "a".repeat(super::MAX_MATCHES + 25);
+        let (replaced, count, first) = replace_all(&text, "a", "b");
+        assert_eq!(replaced, "b".repeat(super::MAX_MATCHES + 25));
+        assert_eq!(count, super::MAX_MATCHES + 25);
+        assert_eq!(first, Some(0));
     }
 
     #[test]

@@ -566,7 +566,7 @@ impl Database {
         content_type: &str,
         meta_type: &str,
         rich_data: &str,
-    ) -> SqlResult<()> {
+    ) -> SqlResult<bool> {
         let hash = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&text, &mut hasher);
@@ -574,11 +574,11 @@ impl Database {
         };
         let now = chrono::Utc::now().to_rfc3339();
         let size = text.chars().count() as i64;
-        self.conn.execute(
+        let updated = self.conn.execute(
             "UPDATE clipboard_items SET full_text = ?1, content_hash = ?2, content_type = ?3, updated_at = ?4, rich_data = ?5, image_path = '', file_data = '', image_width = 0, image_height = 0, size = ?6, meta_type = ?7 WHERE id = ?8",
             params![text, hash as i64, content_type, now, rich_data, size, meta_type, id],
         )?;
-        Ok(())
+        Ok(updated > 0)
     }
 
     // --- ── Tag CRUD ── ---

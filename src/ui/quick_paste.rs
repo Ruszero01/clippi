@@ -424,6 +424,7 @@ impl QuickPasteView {
     /// 这类面板会自行关闭。正因为代价明确，它不做成自动动作，只有用户双击才会发生。
     ///
     /// 返回是否借到了焦点：失败时仍处于搜索态，按键继续由键盘钩子逐字转发。
+    #[cfg(target_os = "windows")]
     pub fn take_input_method(&mut self, cx: &mut Context<Self>) -> bool {
         let acquired = crate::platform::quick_focus::acquire_search_focus();
         self.focus_query(cx);
@@ -1923,16 +1924,19 @@ impl Render for QuickPasteView {
                                 let view = view_entity.clone();
                                 move |ev, _window, cx| {
                                     // 单击进入搜索态：不加任何输入前提，也不借键盘
-                                    // 焦点，前台应用照旧保持自己的插入点。双击才把输入法
-                                    // 接过来，代价是前台应用在这段时间失去插入点、启动器
-                                    // 面板会自行关闭，所以必须由用户明确点两下。
+                                    // 焦点，前台应用照旧保持自己的插入点。Windows
+                                    // 双击才把输入法接过来；macOS 的快速搜索通过
+                                    // 键盘事件输入拼音，不接管输入法。
+                                    #[cfg(target_os = "windows")]
                                     if ev.click_count >= 2 {
                                         view.update(cx, |view, cx| {
                                             view.take_input_method(cx);
                                         });
-                                    } else {
-                                        view.update(cx, |view, cx| view.activate_search(cx));
+                                        return;
                                     }
+                                    #[cfg(not(target_os = "windows"))]
+                                    let _ = ev;
+                                    view.update(cx, |view, cx| view.activate_search(cx));
                                 }
                             })
                             .child(

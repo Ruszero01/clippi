@@ -340,6 +340,7 @@ define_i18n! {
     CtxOpenFolder:      ("打开文件夹", "Open Folder"),
     CtxOpenText:        ("打开文本", "Open Text"),
     ToastExternalEditSynced: ("已同步外部编辑", "External edit synced back"),
+    ToastExternalEditConflict: ("条目已在应用内修改，外部编辑未覆盖", "Item changed in Clippi; external edit was not applied"),
     ToastOpenExternalFailed: ("无法打开外部编辑器", "Couldn't open the external editor"),
     CtxFav:             ("收藏", "Fav"),
     CtxUnfav:           ("取消收藏", "Unfav"),

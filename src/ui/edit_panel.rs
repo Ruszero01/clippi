@@ -260,14 +260,12 @@ impl EditPanel {
     /// 一次替换所有命中。
     fn replace_every(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.content_input.read(cx).value().to_string();
-        let set = find_replace::find_matches(&text, &self.find_query(cx));
-        if set.is_empty() {
-            return;
-        }
         let replacement = self.replace_text(cx);
-        let first = set.ranges[0].start;
-        let replaced = set.ranges.len();
-        let updated = find_replace::replace_all(&text, &set.ranges, &replacement);
+        let (updated, replaced, first) =
+            find_replace::replace_all(&text, &self.find_query(cx), &replacement);
+        let Some(first) = first else {
+            return;
+        };
 
         self.apply_content(updated, window, cx);
         self.locate_offset(first, window, cx);

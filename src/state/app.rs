@@ -54,6 +54,9 @@ struct ExternalEditorTarget {
     /// Hash of the bytes Clippi last wrote or last applied; a file that hashes
     /// the same has nothing new in it.
     written_hash: u64,
+    /// Database content hash observed when the mirror was last in sync.
+    /// HTML entries can hash their visible text while the mirror holds markup.
+    item_hash: u64,
     /// Length and mtime as of that write — the cheap check the poll compares
     /// against, so the file is only read when it actually changed.
     seen_len: u64,
@@ -1317,16 +1320,20 @@ impl AppState {
     fn apply_content_edit(&mut self, id: i64, text: &str, editor_type: &str) -> bool {
         let (content_type, meta_type, rich_data) = Self::storage_for_editor_type(editor_type, text);
         // Pre-flight: is the item in sync scope? Check before DB write.
-        let mark_dirty = self
-            .items
-            .iter()
-            .find(|it| it.id == id)
-            .is_some_and(|item| self.should_mark_sync_dirty(item));
+        // The edited entry can be outside the currently loaded/filtered page.
+        let mark_dirty = match self.db.get_by_id(id) {
+            Ok(Some(item)) => self.should_mark_sync_dirty(&item),
+            Ok(None) => return false,
+            Err(e) => {
+                log::error!("apply_content_edit({id}): cannot read item: {e}");
+                return false;
+            }
+        };
         match self
             .db
             .update_content_with_rich_data(id, text, content_type, meta_type, &rich_data)
         {
-            Ok(_) => {
+            Ok(true) => {
                 if mark_dirty {
                     self.sync_dirty.store(true, Ordering::SeqCst);
                 }
@@ -1350,6 +1357,7 @@ impl AppState {
                 }
                 true
             }
+            Ok(false) => false,
             Err(e) => {
                 log::error!("apply_content_edit({id}): {e}");
                 false
@@ -1836,6 +1844,9 @@ impl AppState {
                 return;
             }
         };
+        if item.meta_type == "secret" {
+            return;
+        }
         let text = editor_text(&item);
         if text.trim().is_empty() {
             log::warn!("open_item_in_editor: item {id} has no text");
@@ -1858,8 +1869,8 @@ impl AppState {
     /// Write the entry's text to its mirror file and start watching it.
     ///
     /// Returns the file path, or `None` when the write failed. The file is
-    /// named by content hash, so re-opening an entry reuses one file instead of
-    /// piling up copies in the temp directory.
+    /// named by item ID and content hash, so re-opening an unchanged entry
+    /// reuses one file without sharing it with another entry of the same text.
     fn mirror_for_external_editor(
         &mut self,
         item: &ClipboardItem,
@@ -1874,7 +1885,8 @@ impl AppState {
             return None;
         }
         let path = directory.join(format!(
-            "{:016x}.{}",
+            "{}-{:016x}.{}",
+            item.id,
             item.content_hash,
             editor_file_extension(item.editor_type())
         ));
@@ -1885,11 +1897,12 @@ impl AppState {
 
         let (seen_len, seen_modified) = file_stamp(&path).unwrap_or((0, None));
         self.external_editor_targets
-            .retain(|target| target.path != path);
+            .retain(|target| target.item_id != item.id);
         self.external_editor_targets.push(ExternalEditorTarget {
             item_id: item.id,
             path: path.clone(),
             written_hash: Self::hash_text(text),
+            item_hash: item.content_hash,
             seen_len,
             seen_modified,
         });
@@ -1914,17 +1927,15 @@ impl AppState {
         let mut watching = Vec::with_capacity(self.external_editor_targets.len());
         for mut target in std::mem::take(&mut self.external_editor_targets) {
             let Some((len, modified)) = file_stamp(&target.path) else {
-                // The mirror is gone (temp cleaned up, editor moved the file):
-                // there is nothing left to read back.
+                // Atomic-save editors briefly move the old file away before
+                // renaming the replacement into place. Keep watching.
+                watching.push(target);
                 continue;
             };
             if len == target.seen_len && modified == target.seen_modified {
                 watching.push(target);
                 continue;
             }
-            target.seen_len = len;
-            target.seen_modified = modified;
-
             if len > EXTERNAL_EDITOR_MAX_BYTES {
                 log::warn!(
                     "external editor mirror {} is too large to read back",
@@ -1947,6 +1958,8 @@ impl AppState {
             };
             let hash = Self::hash_text(&text);
             if hash == target.written_hash {
+                target.seen_len = len;
+                target.seen_modified = modified;
                 watching.push(target);
                 continue;
             }
@@ -1954,28 +1967,39 @@ impl AppState {
             // The entry keeps its own type: an external save is the same edit
             // the editor panel would make with its type left alone.
             let item_id = target.item_id;
-            let editor_type = self
-                .items
-                .iter()
-                .find(|item| item.id == item_id)
-                .map(|item| item.editor_type())
-                .or_else(|| {
-                    self.db
-                        .get_by_id(item_id)
-                        .ok()
-                        .flatten()
-                        .map(|item| item.editor_type())
-                });
-            let Some(editor_type) = editor_type else {
-                // The entry was deleted while the editor was open.
-                log::warn!("external editor mirror for deleted item {item_id} dropped");
-                continue;
+            let current = match self.db.get_by_id(item_id) {
+                Ok(Some(item)) => item,
+                Ok(None) => {
+                    log::warn!("external editor mirror for deleted item {item_id} dropped");
+                    continue;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "external editor mirror for item {item_id} could not be checked: {e}"
+                    );
+                    watching.push(target);
+                    continue;
+                }
             };
+            if current.content_hash != target.item_hash {
+                // An in-app edit happened after this mirror was opened. The
+                // external copy is now stale; never overwrite the newer entry.
+                log::warn!("external editor mirror for item {item_id} conflicts with a newer edit");
+                self.show_toast(I18nKey::ToastExternalEditConflict.text());
+                continue;
+            }
+            let editor_type = current.editor_type();
+            if editor_type == "secret" {
+                continue;
+            }
 
             if self.apply_content_edit(item_id, &text, editor_type) {
                 log::info!("external edit synced back into item {item_id}");
                 self.show_toast(I18nKey::ToastExternalEditSynced.text());
                 target.written_hash = hash;
+                target.item_hash = hash;
+                target.seen_len = len;
+                target.seen_modified = modified;
                 updated = true;
             }
             watching.push(target);
@@ -4306,6 +4330,65 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[test]
+    fn external_edit_marks_a_favorite_dirty_even_when_it_is_not_loaded() {
+        let (mut state, dirty) = test_state();
+        let (id, path) = mirror_entry(
+            &mut state,
+            make_item(11, ContentType::PlainText, true, "hidden favorite"),
+        );
+        state.db.set_favorite(id, true).unwrap();
+        state.items.clear();
+        std::fs::write(&path, "edited favorite").unwrap();
+
+        assert!(state.poll_external_editor_edits());
+        assert_eq!(
+            state.db.get_by_id(id).unwrap().unwrap().full_text,
+            "edited favorite"
+        );
+        assert!(dirty.load(Ordering::SeqCst));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn external_edit_does_not_overwrite_a_newer_in_app_edit() {
+        let (mut state, _dirty) = test_state();
+        let (id, path) = mirror_entry(
+            &mut state,
+            make_item(12, ContentType::PlainText, false, "original"),
+        );
+        assert!(state.save_edited_item(id, "newer in app", "plain_text"));
+        std::fs::write(&path, "stale external save").unwrap();
+
+        assert!(!state.poll_external_editor_edits());
+        assert_eq!(
+            state.db.get_by_id(id).unwrap().unwrap().full_text,
+            "newer in app"
+        );
+        assert!(state.external_editor_targets.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn atomic_external_save_is_seen_after_a_temporary_missing_file() {
+        let (mut state, _dirty) = test_state();
+        let (id, path) = mirror_entry(
+            &mut state,
+            make_item(13, ContentType::PlainText, false, "before rename"),
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert!(!state.poll_external_editor_edits());
+        assert_eq!(state.external_editor_targets.len(), 1);
+
+        std::fs::write(&path, "after rename").unwrap();
+        assert!(state.poll_external_editor_edits());
+        assert_eq!(
+            state.db.get_by_id(id).unwrap().unwrap().full_text,
+            "after rename"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// An HTML entry's mirror holds the document, and the edit comes back as a
     /// document under the same type.
     #[test]
@@ -4890,6 +4973,7 @@ mod tests {
         state.settings.sync_favorites_only = true;
         let item = make_item(1, ContentType::PlainText, true, "original");
         state.db.upsert(&item).unwrap();
+        state.db.set_favorite(1, true).unwrap();
         state.items.push(item);
 
         let ok = state.save_edited_item(1, "edited", "plain");
