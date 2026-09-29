@@ -807,6 +807,69 @@ fn layer_flags_request_admin(flags: &str) -> bool {
         .any(|token| token.eq_ignore_ascii_case("RUNASADMIN"))
 }
 
+/// Whether future launches of this executable request administrator rights.
+#[cfg(target_os = "windows")]
+pub fn admin_paste_mode() -> bool {
+    std::env::current_exe().is_ok_and(|exe| exe_requests_elevation(&exe))
+}
+
+/// Update only RUNASADMIN, preserving unrelated compatibility settings.
+#[cfg(target_os = "windows")]
+fn with_admin_layer_flag(flags: &str, enable: bool) -> Option<String> {
+    let mut tokens: Vec<&str> = flags
+        .split_whitespace()
+        .filter(|token| !token.eq_ignore_ascii_case("RUNASADMIN"))
+        .collect();
+    if enable {
+        if tokens.is_empty() {
+            tokens.push("~");
+        }
+        tokens.push("RUNASADMIN");
+    }
+    if tokens.is_empty() || tokens == ["~"] {
+        None
+    } else {
+        Some(tokens.join(" "))
+    }
+}
+
+/// Persist the Windows "Run as administrator" compatibility flag for this exe.
+/// The current process keeps its existing token until it is closed and reopened.
+#[cfg(target_os = "windows")]
+pub fn set_admin_paste_mode(enable: bool) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("get current executable path: {e}"))?;
+    let value_name = exe.to_string_lossy().to_string();
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if !enable
+        && hklm
+            .open_subkey_with_flags(AUTOSTART_LAYERS_PATH, KEY_READ)
+            .ok()
+            .and_then(|key| key.get_value::<String, _>(&value_name).ok())
+            .is_some_and(|flags| layer_flags_request_admin(&flags))
+    {
+        return Err("administrator mode is enforced by a machine-wide compatibility flag".into());
+    }
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu
+        .create_subkey(AUTOSTART_LAYERS_PATH)
+        .map_err(|e| format!("open compatibility settings: {e}"))?;
+    let existing = key.get_value::<String, _>(&value_name).unwrap_or_default();
+    match with_admin_layer_flag(&existing, enable) {
+        Some(flags) => key
+            .set_value(&value_name, &flags)
+            .map_err(|e| format!("write compatibility settings: {e}")),
+        None => {
+            if existing.is_empty() {
+                Ok(())
+            } else {
+                key.delete_value(&value_name)
+                    .map_err(|e| format!("remove compatibility settings: {e}"))
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn write_run_entry(exe_path: &Path) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -1231,6 +1294,42 @@ pub fn migrate_database(old_path: &Path, new_path: &Path) -> Result<(), String> 
 /// or keep running and notify the user when spawning fails.
 pub fn spawn_new_process() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("get current executable path: {e}"))?;
+    #[cfg(target_os = "windows")]
+    if admin_paste_mode() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let verb: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+        let path: Vec<u16> = exe
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let args: Vec<u16> = "--restart"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        // ShellExecute with runas handles UAC for a filtered session. A result
+        // of 32 or less includes a cancelled prompt; keep the old app running.
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                path.as_ptr(),
+                args.as_ptr(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        } as isize;
+        if result <= 32 {
+            return Err(format!(
+                "administrator restart was cancelled or failed ({result})"
+            ));
+        }
+        log::info!("Started elevated process for restart");
+        return Ok(());
+    }
     match Command::new(&exe).arg("--restart").spawn() {
         Ok(child) => {
             log::info!("Spawned new process (pid: {}) for restart", child.id());
@@ -2003,6 +2102,21 @@ mod tests {
         assert!(layer_flags_request_admin("~  highdpiaware runasadmin"));
         assert!(!layer_flags_request_admin("~ HIGHDPIAWARE"));
         assert!(!layer_flags_request_admin(""));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn admin_mode_preserves_other_compatibility_flags() {
+        assert_eq!(with_admin_layer_flag("", true), Some("~ RUNASADMIN".into()));
+        assert_eq!(
+            with_admin_layer_flag("~ HIGHDPIAWARE", true),
+            Some("~ HIGHDPIAWARE RUNASADMIN".into())
+        );
+        assert_eq!(
+            with_admin_layer_flag("~ RUNASADMIN HIGHDPIAWARE", false),
+            Some("~ HIGHDPIAWARE".into())
+        );
+        assert_eq!(with_admin_layer_flag("~ RUNASADMIN", false), None);
     }
 
     /// Guards the Win32 plumbing behind the elevated auto-start decision: a wrong

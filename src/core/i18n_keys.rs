@@ -13,6 +13,7 @@ define_i18n! {
     TrayShow:           ("显示窗口", "Show Window"),
     TraySettings:       ("设置", "Settings"),
     TrayRestart:        ("重启应用", "Restart"),
+    ToastRestartFailed: ("未能重启应用，请手动重新打开", "Couldn't restart Clippi; reopen it manually"),
     TrayQuit:           ("退出", "Quit"),
     TrayCheckUpdate:    ("检查更新", "Check for Updates"),
 
@@ -46,9 +47,30 @@ define_i18n! {
     // ─── General settings ───
     SettingAutoStart:   ("开机自启", "Auto-start"),
     DescAutoStart:      ("系统启动时自动运行", "Run on system startup"),
+    SettingAdminPasteMode: ("管理员模式", "Administrator mode"),
+    DescAdminPasteModeOn: (
+        "下次打开时以管理员权限运行；Windows 可能弹出授权提示",
+        "Run as administrator next time Clippi opens; Windows may ask for permission"
+    ),
+    DescAdminPasteModeOff: (
+        "下次默认以普通权限运行，无法粘贴到管理员程序",
+        "Start normally by default next time; pasting into administrator apps will be unavailable"
+    ),
+    ToastAdminPasteModeChanged: (
+        "设置已保存，请退出并重新打开 Clippi 以生效",
+        "Setting saved. Quit and reopen Clippi to apply it"
+    ),
+    ToastAdminPasteModeFailed: (
+        "无法切换管理员模式，详情见日志",
+        "Couldn't change administrator mode — see the log"
+    ),
+    ToastAdminPasteNeedsElevatedRestart: (
+        "管理员模式已保存；请退出并重新打开一次，以完成开机自启设置",
+        "Administrator mode saved. Quit and reopen once to finish auto-start setup"
+    ),
     DescAutoStartTask:  (
-        "以管理员身份运行，已注册为登录计划任务",
-        "Runs elevated — registered as a logon task"
+        "管理员模式使用登录计划任务自启",
+        "Administrator mode uses a logon task for auto-start"
     ),
     ToastAutoStartFailed: (
         "开机自启设置失败，详情见日志",

@@ -2698,9 +2698,19 @@ impl WindowManager {
 
     /// Restart the application: flush, spawn new process, then quit.
     fn do_restart(&mut self, cx: &mut Context<Self>) {
-        self.prepare_shutdown(cx);
-        let _ = crate::core::settings::spawn_new_process();
-        cx.quit();
+        match crate::core::settings::spawn_new_process() {
+            Ok(()) => {
+                self.prepare_shutdown(cx);
+                cx.quit();
+            }
+            Err(e) => {
+                log::warn!("Restart cancelled or failed: {e}");
+                self.state.update(cx, |state, cx| {
+                    state.show_warning_toast(I18nKey::ToastRestartFailed.text());
+                    cx.notify();
+                });
+            }
+        }
     }
 
     // --- Foreground detection ---

@@ -25,8 +25,9 @@ use windows_sys::Win32::System::Threading::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, VK_CONTROL, VK_INSERT, VK_SHIFT, VK_V,
+    GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC_EX, VK_CONTROL,
+    VK_INSERT, VK_SHIFT, VK_V,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -364,12 +365,27 @@ fn send_paste_keystroke(shortcut: &PasteShortcut) {
 fn set_key_input(input: &mut INPUT, vk: u16, key_up: bool) {
     input.r#type = INPUT_KEYBOARD;
     let mut flags = if key_up { KEYEVENTF_KEYUP } else { 0 };
-    if is_extended_key(vk) {
-        flags |= KEYEVENTF_EXTENDEDKEY;
-    }
+    // Flutter identifies physical keys by scan code. Sending Ctrl and V with
+    // wScan=0 can make them appear to be the same key, so its shortcut handler
+    // may lose the Ctrl state before V arrives.
+    let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC_EX) };
+    let (virtual_key, scan_code) = if scan != 0 {
+        flags |= KEYEVENTF_SCANCODE;
+        if scan & 0xff00 != 0 {
+            flags |= KEYEVENTF_EXTENDEDKEY;
+        }
+        (0, scan as u16 & 0xff)
+    } else {
+        // Some user-configured keys have no scan code on the active layout.
+        // Keep their existing virtual-key behavior rather than dropping them.
+        if is_extended_key(vk) {
+            flags |= KEYEVENTF_EXTENDEDKEY;
+        }
+        (vk, 0)
+    };
     input.Anonymous.ki = KEYBDINPUT {
-        wVk: vk,
-        wScan: 0,
+        wVk: virtual_key,
+        wScan: scan_code,
         dwFlags: flags,
         time: 0,
         dwExtraInfo: 0,
@@ -940,6 +956,28 @@ mod tests {
         MacKeyEvent, MacModifierKey, MACOS_FLAG_COMMAND, MACOS_FLAG_SHIFT, MACOS_KEY_COMMAND,
         MACOS_KEY_V,
     };
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn simulated_ctrl_v_has_distinct_physical_keys() {
+        use super::{set_key_input, KEYEVENTF_SCANCODE, VK_CONTROL, VK_V};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT;
+
+        let mut ctrl: INPUT = unsafe { std::mem::zeroed() };
+        let mut v: INPUT = unsafe { std::mem::zeroed() };
+        set_key_input(&mut ctrl, VK_CONTROL, false);
+        set_key_input(&mut v, VK_V, false);
+
+        let ctrl = unsafe { ctrl.Anonymous.ki };
+        let v = unsafe { v.Anonymous.ki };
+        assert_ne!(ctrl.dwFlags & KEYEVENTF_SCANCODE, 0);
+        assert_ne!(v.dwFlags & KEYEVENTF_SCANCODE, 0);
+        assert_eq!(ctrl.wVk, 0);
+        assert_eq!(v.wVk, 0);
+        assert_ne!(ctrl.wScan, 0);
+        assert_ne!(v.wScan, 0);
+        assert_ne!(ctrl.wScan, v.wScan);
+    }
 
     #[test]
     fn injection_into_an_elevated_target_is_blocked_for_a_filtered_process() {

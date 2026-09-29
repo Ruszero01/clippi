@@ -25,6 +25,8 @@ impl SettingsPanel {
         // --- Snapshot current values from AppState ---
         let app = self.state.read(cx);
         let auto_start = app.settings.auto_start;
+        #[cfg(target_os = "windows")]
+        let admin_paste_mode = core::settings::admin_paste_mode();
         let auto_hide = app.settings.auto_hide;
         let silent_start = app.settings.silent_start;
         let always_reset = app.settings.always_reset_to_clipboard;
@@ -65,7 +67,7 @@ impl SettingsPanel {
         } else {
             I18nKey::DescAutoStart
         };
-        let startup_rows: Vec<AnyElement> = vec![
+        let mut startup_rows: Vec<AnyElement> = vec![
             self.render_toggle_row(
                 I18nKey::SettingAutoStart,
                 auto_start_desc_on,
@@ -126,6 +128,74 @@ impl SettingsPanel {
             )
             .into_any_element(),
         ];
+        #[cfg(target_os = "windows")]
+        startup_rows.insert(
+            1,
+            self.render_toggle_row(
+                I18nKey::SettingAdminPasteMode,
+                I18nKey::DescAdminPasteModeOn,
+                I18nKey::DescAdminPasteModeOff,
+                admin_paste_mode,
+                window,
+                cx,
+                |state, _this, _window, _cx| {
+                    let enable = !core::settings::admin_paste_mode();
+                    if let Err(e) = core::settings::set_admin_paste_mode(enable) {
+                        log::error!("Failed to change administrator paste mode: {e}");
+                        state.update(_cx, |s, _cx| {
+                            s.show_warning_toast(I18nKey::ToastAdminPasteModeFailed.text());
+                        });
+                        return;
+                    }
+
+                    // An elevated executable cannot auto-start through the Run
+                    // key. Keep the registration in sync with the new mode.
+                    let auto_start = state.read(_cx).settings.auto_start;
+                    let auto_start_outcome = set_auto_start(auto_start);
+                    // Turning the mode off must not leave an elevated logon
+                    // task behind, or it would still launch Clippi elevated.
+                    if !enable
+                        && matches!(
+                            &auto_start_outcome,
+                            Ok(AutoStartChange::KeptElevatedTask)
+                                | Ok(AutoStartChange::LeftoverElevatedTask)
+                                | Err(_)
+                        )
+                    {
+                        if let Err(e) = core::settings::set_admin_paste_mode(true) {
+                            log::error!(
+                                "Failed to restore administrator mode after auto-start error: {e}"
+                            );
+                        }
+                    }
+                    state.update(_cx, |s, _cx| {
+                        if matches!(&auto_start_outcome, Ok(AutoStartChange::Applied)) {
+                            s.show_toast(I18nKey::ToastAdminPasteModeChanged.text());
+                            return;
+                        }
+                        match auto_start_outcome {
+                            Ok(AutoStartChange::Applied) => {}
+                            Ok(AutoStartChange::AppliedWithoutElevation) => s.show_warning_toast(
+                                I18nKey::ToastAdminPasteNeedsElevatedRestart.text(),
+                            ),
+                            Ok(AutoStartChange::KeptElevatedTask) => {
+                                s.show_warning_toast(I18nKey::ToastAutoStartKeptElevatedTask.text())
+                            }
+                            Ok(AutoStartChange::LeftoverElevatedTask) => {
+                                s.show_warning_toast(I18nKey::ToastAutoStartLeftoverTask.text())
+                            }
+                            Err(ref e) => {
+                                log::error!(
+                                    "Failed to update auto-start after admin mode change: {e}"
+                                );
+                                s.show_warning_toast(I18nKey::ToastAutoStartFailed.text());
+                            }
+                        }
+                    });
+                },
+            )
+            .into_any_element(),
+        );
         container =
             container.child(self.settings_group(I18nKey::GroupStartup.text(), startup_rows));
 
