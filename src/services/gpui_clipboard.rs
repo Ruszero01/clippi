@@ -118,8 +118,14 @@ pub struct GpuiClipboardService {
 }
 
 impl GpuiClipboardService {
-    pub fn new(initial_app_blacklist: Vec<String>) -> Self {
+    pub fn new(
+        initial_app_blacklist: Vec<String>,
+        record_images: bool,
+        record_files: bool,
+    ) -> Self {
         let shared = ClipboardShared::new();
+        shared.record_images.store(record_images, Ordering::SeqCst);
+        shared.record_files.store(record_files, Ordering::SeqCst);
         // Populate the blacklist snapshot BEFORE starting the listener so
         // capture_baseline and the first poll find the correct value.
         *shared
@@ -149,6 +155,14 @@ impl GpuiClipboardService {
             .clipboard_app_blacklist
             .write()
             .unwrap_or_else(|error| error.into_inner()) = blacklist;
+    }
+
+    pub fn set_record_images(&self, enabled: bool) {
+        self.shared.record_images.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_record_files(&self, enabled: bool) {
+        self.shared.record_files.store(enabled, Ordering::SeqCst);
     }
 
     /// Access the `batch_pasting` flag shared with the clipboard listener.

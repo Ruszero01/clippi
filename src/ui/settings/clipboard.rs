@@ -23,10 +23,13 @@ impl SettingsPanel {
     ) -> impl IntoElement {
         let state = self.state.clone();
         let this = cx.entity().clone();
+        let window_manager = self.window_manager.clone();
 
         // --- Snapshot current values from AppState ---
         let app = self.state.read(cx);
         let sort_by_created = app.settings.sort_by_created;
+        let record_images = app.settings.record_images;
+        let record_files = app.settings.record_files;
         let search_favorites_first = app.settings.search_favorites_first;
         let card_height_mode = app.settings.card_height_mode.clone();
         let paste_click_mode = app.settings.paste_click_mode_normalized();
@@ -51,6 +54,48 @@ impl SettingsPanel {
         let text_3 = theme.text_3;
 
         let mut container = div().flex().flex_col().gap(px(14.)).pt(px(8.));
+
+        let capture_rows: Vec<AnyElement> = vec![
+            self.render_toggle_row(
+                I18nKey::SettingRecordImages,
+                I18nKey::DescRecordImagesOn,
+                I18nKey::DescRecordImagesOff,
+                record_images,
+                window,
+                cx,
+                {
+                    let window_manager = window_manager.clone();
+                    move |state, _this, _window, cx| {
+                        let enabled = state.update(cx, |s, _cx| {
+                            s.settings.record_images = !s.settings.record_images;
+                            s.settings.save();
+                            s.settings.record_images
+                        });
+                        window_manager.update(cx, |wm, _cx| wm.set_record_images(enabled));
+                    }
+                },
+            )
+            .into_any_element(),
+            self.render_toggle_row(
+                I18nKey::SettingRecordFiles,
+                I18nKey::DescRecordFilesOn,
+                I18nKey::DescRecordFilesOff,
+                record_files,
+                window,
+                cx,
+                move |state, _this, _window, cx| {
+                    let enabled = state.update(cx, |s, _cx| {
+                        s.settings.record_files = !s.settings.record_files;
+                        s.settings.save();
+                        s.settings.record_files
+                    });
+                    window_manager.update(cx, |wm, _cx| wm.set_record_files(enabled));
+                },
+            )
+            .into_any_element(),
+        ];
+        container =
+            container.child(self.settings_group(I18nKey::TabClipboard.text(), capture_rows));
 
         // --- List & display ---
         let list_rows: Vec<AnyElement> = vec![

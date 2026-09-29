@@ -141,6 +141,8 @@ pub struct ClipboardShared {
     /// App-level clipboard blacklist snapshot.
     /// Listener thread reads; main thread writes via `GpuiClipboardService::set_app_blacklist`.
     pub clipboard_app_blacklist: Arc<RwLock<Vec<String>>>,
+    pub record_images: Arc<AtomicBool>,
+    pub record_files: Arc<AtomicBool>,
 }
 
 impl ClipboardShared {
@@ -152,6 +154,8 @@ impl ClipboardShared {
             skip_next: Arc::new(AtomicBool::new(false)),
             pending_images: Arc::new(Mutex::new(Vec::new())),
             clipboard_app_blacklist: Arc::new(RwLock::new(Vec::new())),
+            record_images: Arc::new(AtomicBool::new(true)),
+            record_files: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -217,24 +221,33 @@ pub trait ClipboardListener: Send {
 fn detect_clipboard_content(
     ctx: &ClipboardContext,
     source_info: &Option<SourceAppInfo>,
+    record_images: bool,
+    record_files: bool,
 ) -> DetectionResult {
-    if let Some(item) = detect_files(ctx, source_info) {
-        return DetectionResult::Item(Box::new(item));
+    if let Some(result) = detect_files(ctx, source_info, record_images, record_files) {
+        return result;
     }
 
     // When both image and rich text (HTML/RTF) coexist on the clipboard,
     // prefer the text. Apps like OneNote and Excel put both a rendered
     // image and formatted text on the clipboard simultaneously; users
     // expect to see the text content, not the image rendering.
-    if clipboard_has_image(ctx) && (ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf)) {
+    let has_image = clipboard_has_image(ctx);
+    if has_image && (ctx.has(ContentFormat::Html) || ctx.has(ContentFormat::Rtf)) {
         if let Some(item) = detect_text_content(ctx, source_info) {
             return DetectionResult::Item(Box::new(item));
         }
+        if record_images {
+            if let Some(image) = detect_image(ctx, source_info) {
+                return DetectionResult::Image(image);
+            }
+        }
+    } else if record_images {
         if let Some(image) = detect_image(ctx, source_info) {
             return DetectionResult::Image(image);
         }
-    } else if let Some(image) = detect_image(ctx, source_info) {
-        return DetectionResult::Image(image);
+    } else if has_image {
+        return DetectionResult::None;
     }
 
     if let Some(item) = detect_text_content(ctx, source_info) {
@@ -248,12 +261,20 @@ fn detect_clipboard_content(
 fn detect_files(
     ctx: &ClipboardContext,
     source_info: &Option<SourceAppInfo>,
-) -> Option<ClipboardItem> {
+    record_images: bool,
+    record_files: bool,
+) -> Option<DetectionResult> {
     let has_files = ctx.has(ContentFormat::Files);
     if has_files {
         let files_result = ctx.get_files();
         if let Ok(files) = files_result {
             if !files.is_empty() {
+                let single_image_file = files.len() == 1
+                    && is_image_extension(&files[0])
+                    && !std::path::Path::new(&files[0]).is_dir();
+                if (single_image_file && !record_images) || (!single_image_file && !record_files) {
+                    return Some(DetectionResult::None);
+                }
                 let entries_with_remote: Vec<(FileInfo, Option<String>)> = files
                     .iter()
                     .map(|path| {
@@ -337,7 +358,7 @@ fn detect_files(
                         }
                         .to_json();
                     }
-                    return Some(item);
+                    return Some(DetectionResult::Item(Box::new(item)));
                 }
 
                 // --- Multi-file, single directory, or single non-image file → File type ---
@@ -370,7 +391,7 @@ fn detect_files(
                     }
                     .to_json();
                 }
-                return Some(item);
+                return Some(DetectionResult::Item(Box::new(item)));
             }
         }
     }
@@ -1491,6 +1512,8 @@ impl ClipboardListener for PollingClipboardListener {
         let batch_pasting = shared.batch_pasting.clone();
         let skip_next = shared.skip_next.clone();
         let app_blacklist = shared.clipboard_app_blacklist.clone(); // Arc<RwLock<_>>
+        let record_images = shared.record_images.clone();
+        let record_files = shared.record_files.clone();
 
         // Windows: use cheap sequence-number check to avoid opening the clipboard
         // --- and encoding large bitmaps to PNG every 50ms when nothing changed. ---
@@ -1626,8 +1649,15 @@ impl ClipboardListener for PollingClipboardListener {
                     &blacklist_snapshot,
                     true, // startup_done already checked above
                     || {
-                        with_clipboard_context(|ctx| detect_clipboard_content(ctx, &source_info))
-                            .unwrap_or(DetectionResult::None)
+                        with_clipboard_context(|ctx| {
+                            detect_clipboard_content(
+                                ctx,
+                                &source_info,
+                                record_images.load(Ordering::SeqCst),
+                                record_files.load(Ordering::SeqCst),
+                            )
+                        })
+                        .unwrap_or(DetectionResult::None)
                     },
                 );
 

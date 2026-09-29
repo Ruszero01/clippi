@@ -179,6 +179,10 @@ pub struct AppSettings {
     pub hotkey_blacklist: Vec<String>, // hotkey blacklist app name list
     #[serde(default)]
     pub clipboard_app_blacklist: Vec<String>, // apps whose clipboard content is not recorded
+    #[serde(default = "default_record_clipboard_content")]
+    pub record_images: bool,
+    #[serde(default = "default_record_clipboard_content")]
+    pub record_files: bool,
     #[serde(default)]
     pub language: String, // "zh_CN" or "en", empty = follow system
     #[serde(default)]
@@ -251,6 +255,10 @@ fn default_paste_click_mode() -> String {
 }
 
 fn default_qr_enabled() -> bool {
+    true
+}
+
+fn default_record_clipboard_content() -> bool {
     true
 }
 
@@ -359,6 +367,8 @@ impl Default for AppSettings {
             retention_days: 0,
             hotkey_blacklist: Vec::new(),
             clipboard_app_blacklist: Vec::new(),
+            record_images: true,
+            record_files: true,
             language: String::new(),
             pinned_tag_ids: Vec::new(),
             tag_order: Vec::new(),
@@ -1463,6 +1473,27 @@ pub fn capture_gate(source_app_name: &str, blacklist: &[String], startup_done: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_capture_options_default_on_and_round_trip_independently() {
+        let mut old = toml::Value::try_from(AppSettings::default()).unwrap();
+        let table = old.as_table_mut().unwrap();
+        table.remove("record_images");
+        table.remove("record_files");
+        let loaded: AppSettings = old.try_into().unwrap();
+        assert!(loaded.record_images);
+        assert!(loaded.record_files);
+
+        let changed = AppSettings {
+            record_images: false,
+            record_files: true,
+            ..loaded
+        };
+        let saved = toml::to_string(&changed).unwrap();
+        let restored: AppSettings = toml::from_str(&saved).unwrap();
+        assert!(!restored.record_images);
+        assert!(restored.record_files);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
