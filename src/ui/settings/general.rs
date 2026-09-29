@@ -67,7 +67,7 @@ impl SettingsPanel {
         } else {
             I18nKey::DescAutoStart
         };
-        let mut startup_rows: Vec<AnyElement> = vec![
+        let startup_rows: Vec<AnyElement> = vec![
             self.render_toggle_row(
                 I18nKey::SettingAutoStart,
                 auto_start_desc_on,
@@ -128,6 +128,8 @@ impl SettingsPanel {
             )
             .into_any_element(),
         ];
+        #[cfg(target_os = "windows")]
+        let mut startup_rows = startup_rows;
         #[cfg(target_os = "windows")]
         startup_rows.insert(
             1,

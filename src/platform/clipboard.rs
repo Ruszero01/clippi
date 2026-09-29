@@ -246,10 +246,10 @@ fn detect_clipboard_content(
         if let Some(image) = detect_image(ctx, source_info) {
             return DetectionResult::Image(image);
         }
-    } else if has_image {
-        return DetectionResult::None;
     }
 
+    // When image capture is off, another available text representation can
+    // still be useful (for example, a bitmap copied with plain text).
     if let Some(item) = detect_text_content(ctx, source_info) {
         return DetectionResult::Item(Box::new(item));
     }
