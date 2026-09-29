@@ -114,7 +114,13 @@ impl RenderOnce for Toast {
         }
 
         // Left: icon + message
-        let mut left = div().flex().flex_row().items_center().gap(px(8.));
+        let mut left = div()
+            .flex()
+            .flex_row()
+            .flex_1()
+            .min_w(px(0.))
+            .items_center()
+            .gap(px(8.));
 
         if let Some(icon) = self.icon {
             left = left.child(
@@ -128,6 +134,8 @@ impl RenderOnce for Toast {
 
         left = left.child(
             div()
+                .flex_1()
+                .min_w(px(0.))
                 .text_size(fs(12.))
                 .text_color(text_color)
                 .child(self.message),
@@ -140,38 +148,36 @@ impl RenderOnce for Toast {
             let accent = self.theme.accent;
             let btn_hover = self.theme.btn_hover;
             let text_2 = self.theme.text_2;
-            let buttons =
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(6.))
-                    .children(self.actions.into_iter().map(move |action| {
-                        let is_primary = action.primary;
-                        let btn_bg = if is_primary { accent } else { rgba(0x00000000) };
-                        let btn_text = if is_primary { rgb(0xffffff) } else { text_2 };
-                        div()
-                            .h(px(22.))
-                            .px(px(10.))
-                            .rounded(px(4.))
-                            .bg(btn_bg)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| {
-                                style.bg(if is_primary { accent } else { btn_hover })
-                            })
-                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                                (action.on_click)(window, cx);
-                            })
-                            .child(
-                                div()
-                                    .text_size(fs(11.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(btn_text)
-                                    .child(action.label),
-                            )
-                    }));
+            let buttons = div()
+                .flex()
+                .flex_row()
+                .flex_shrink_0()
+                .gap(px(6.))
+                .children(self.actions.into_iter().map(move |action| {
+                    let is_primary = action.primary;
+                    let btn_bg = if is_primary { accent } else { rgba(0x00000000) };
+                    let btn_text = if is_primary { rgb(0xffffff) } else { text_2 };
+                    div()
+                        .h(px(22.))
+                        .px(px(10.))
+                        .rounded(px(4.))
+                        .bg(btn_bg)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |style| style.bg(if is_primary { accent } else { btn_hover }))
+                        .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                            (action.on_click)(window, cx);
+                        })
+                        .child(
+                            div()
+                                .text_size(fs(11.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(btn_text)
+                                .child(action.label),
+                        )
+                }));
             row = row.child(buttons);
         }
 
