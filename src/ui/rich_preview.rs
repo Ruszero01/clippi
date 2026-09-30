@@ -456,6 +456,7 @@ pub fn normalize_clipboard_html_for_render(html: &str) -> String {
 pub fn render_styled_html_lines(
     lines: Vec<Vec<StyledHtmlSpan>>,
     fallback: Rgba,
+    background: Rgba,
 ) -> impl IntoElement {
     div()
         .flex()
@@ -470,7 +471,12 @@ pub fn render_styled_html_lines(
                     let mut d = div()
                         .text_size(fs(12.))
                         .font_family(crate::ui::font::PREVIEW_FONT_FAMILY)
-                        .text_color(span.color.unwrap_or(fallback))
+                        .text_color(preview_text_color(
+                            span.color.unwrap_or(fallback),
+                            span.background_color
+                                .map_or(background, |bg| composite(bg, background)),
+                            fallback,
+                        ))
                         .font_weight(span.font_weight.unwrap_or_default());
                     if span.font_style == Some(FontStyle::Italic) {
                         d = d.italic();
@@ -484,6 +490,128 @@ pub fn render_styled_html_lines(
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────
+
+fn composite(color: Rgba, background: Rgba) -> Rgba {
+    Rgba {
+        r: color.r * color.a + background.r * (1.0 - color.a),
+        g: color.g * color.a + background.g * (1.0 - color.a),
+        b: color.b * color.a + background.b * (1.0 - color.a),
+        a: 1.0,
+    }
+}
+
+fn luminance(color: Rgba) -> f32 {
+    let linear = |v: f32| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+}
+
+fn contrast(a: Rgba, b: Rgba) -> f32 {
+    let a = luminance(a);
+    let b = luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Adapt only the displayed color; clipboard HTML and parsed styles stay intact.
+/// Readable colors keep their alpha. Failing colors become opaque so even very
+/// transparent text can reach the target against its actual background.
+fn preview_text_color(color: Rgba, background: Rgba, fallback: Rgba) -> Rgba {
+    const TARGET: f32 = 4.5;
+    let visible = composite(color, background);
+    if contrast(visible, background) >= TARGET {
+        return color;
+    }
+    let max = color.r.max(color.g).max(color.b);
+    let min = color.r.min(color.g).min(color.b);
+    if max - min < 0.02 && contrast(composite(fallback, background), background) >= TARGET {
+        return fallback;
+    }
+    let black = rgb(0x000000);
+    let white = rgb(0xffffff);
+    let target = if contrast(white, background) >= contrast(black, background) {
+        white
+    } else {
+        black
+    };
+    let mix = |t: f32| Rgba {
+        r: visible.r + (target.r - visible.r) * t,
+        g: visible.g + (target.g - visible.g) * t,
+        b: visible.b + (target.b - visible.b) * t,
+        a: 1.0,
+    };
+    // Bounded search preserves the RGB hue while tinting/shading only as needed.
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..12 {
+        let mid = (low + high) / 2.0;
+        if contrast(mix(mid), background) >= TARGET {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    mix(high)
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::{composite, contrast, preview_text_color};
+    use gpui::{rgb, rgba};
+
+    #[test]
+    fn office_black_and_white_follow_theme_when_unreadable() {
+        for theme in [
+            super::super::theme::ClippiTheme::dark(),
+            super::super::theme::ClippiTheme::light(),
+        ] {
+            for color in [rgb(0), rgb(0xffffff)] {
+                let result = preview_text_color(color, theme.surface, theme.text_1);
+                assert!(contrast(result, theme.surface) >= 4.5);
+                if contrast(color, theme.surface) >= 4.5 {
+                    assert_eq!(result, color);
+                } else {
+                    assert_eq!(result, theme.text_1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn readable_highlights_and_transparency_are_preserved() {
+        let yellow = rgb(0xffff00);
+        assert_eq!(preview_text_color(rgb(0), yellow, rgb(0xffffff)), rgb(0));
+        let translucent = rgba(0xffffffcc);
+        assert_eq!(
+            preview_text_color(translucent, rgb(0), rgb(0xffffff)),
+            translucent
+        );
+    }
+
+    #[test]
+    fn colored_and_transparent_text_reaches_target_on_both_themes() {
+        for background in [
+            rgb(0x232425),
+            rgb(0xffffff),
+            composite(rgba(0xffff0080), rgb(0x232425)),
+        ] {
+            for color in [
+                rgb(0x110033),
+                rgb(0xffff88),
+                rgba(0xff000010),
+                rgba(0xffffff00),
+            ] {
+                let result = preview_text_color(color, background, rgb(0xeaebec));
+                assert!(contrast(composite(result, background), background) >= 4.5);
+            }
+        }
+        let adjusted = preview_text_color(rgb(0x110033), rgb(0x232425), rgb(0xeaebec));
+        assert!(adjusted.b > adjusted.r && adjusted.r > adjusted.g);
+    }
+}
 
 pub fn focus_styled_html_lines(
     lines: Vec<Vec<StyledHtmlSpan>>,

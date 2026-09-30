@@ -786,6 +786,7 @@ impl Render for EditPanel {
                                         self.last_item_id,
                                         preview_generation,
                                         text_1,
+                                        surface,
                                         window,
                                         cx,
                                     ),
@@ -972,6 +973,7 @@ fn render_rich_preview(
     item_id: i64,
     generation: u64,
     fallback_color: Rgba,
+    background: Rgba,
     window: &mut Window,
     cx: &mut Context<EditPanel>,
 ) -> AnyElement {
@@ -993,6 +995,7 @@ fn render_rich_preview(
                 .child(rich_preview::render_styled_html_lines(
                     lines,
                     fallback_color,
+                    background,
                 ))
                 .into_any_element();
         }

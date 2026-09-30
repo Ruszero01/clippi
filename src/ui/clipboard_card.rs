@@ -2464,7 +2464,7 @@ impl RenderOnce for ClipboardCard {
                             } => {
                                 if search_terms.is_empty() {
                                     content_box.child(rich_preview::render_styled_html_lines(
-                                        lines, text_1,
+                                        lines, text_1, surface,
                                     ))
                                 } else {
                                     let lines =
@@ -2477,7 +2477,7 @@ impl RenderOnce for ClipboardCard {
                                     );
                                     if rich_preview::has_highlighted_span(&lines, highlight_bg) {
                                         content_box.child(rich_preview::render_styled_html_lines(
-                                            lines, text_1,
+                                            lines, text_1, surface,
                                         ))
                                     } else {
                                         content_box.child(
