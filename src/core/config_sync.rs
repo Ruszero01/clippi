@@ -11,8 +11,10 @@
 //! `schema_version` is independent of the clipboard sync protocol version.
 //! - Unknown JSON fields are silently ignored so older Clippi versions can
 //!   read newer snapshots with non-breaking additions.
-//! - Known v1 fields are required: a snapshot missing any of them is rejected
+//! - Original v1 fields are required: a snapshot missing any of them is rejected
 //!   wholesale instead of silently resetting local settings to defaults.
+//! - Additive v1 fields are optional; absence preserves the receiving device's
+//!   value so snapshots from older builds remain safe to apply.
 //! - A schema version other than the exactly supported one
 //!   (`CURRENT_SCHEMA_VERSION`) is rejected with
 //!   `ConfigSyncError::UnsupportedVersion`; no downgrade/guess is attempted.
@@ -131,9 +133,11 @@ pub struct ConfigSnapshotSource {
 ///
 /// # Field policy
 ///
-/// All v1 fields are **required** on the wire. A snapshot missing any known
-/// v1 field fails deserialisation and is rejected wholesale — a truncated
+/// Original v1 fields are **required** on the wire. A snapshot missing any
+/// original v1 field fails deserialisation and is rejected wholesale — a truncated
 /// snapshot must never silently reset local settings to `false`/`0` defaults.
+/// Additive fields use `Option` to distinguish absence from an explicit value:
+/// older snapshots preserve local preferences rather than resetting them.
 /// Unknown *additional* fields from newer builds are still ignored (serde
 /// default behaviour; `deny_unknown_fields` is intentionally not enabled).
 ///
@@ -154,6 +158,25 @@ pub struct PortableSettingsV1 {
     pub auto_focus_search: bool,
     pub clear_search_on_show: bool,
     pub always_reset_to_clipboard: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub quick_window_sync_filters: Option<bool>,
+    // Outer None = absent in an older snapshot; Some(None) = system/default size.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub font_size_scale: Option<Option<f32>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub font_size_level: Option<String>,
 
     // ── List & Content ──
     pub sort_by_created: bool,
@@ -162,6 +185,24 @@ pub struct PortableSettingsV1 {
     pub copy_as_plain_text: bool,
     pub show_original_on_hover: bool,
     pub type_filter_config: Vec<TypeFilterEntry>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub search_favorites_first: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub paste_click_mode: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub filter_foreign_paths: Option<bool>,
 
     // ── Clipboard Features ──
     pub ocr_enabled: bool,
@@ -170,6 +211,18 @@ pub struct PortableSettingsV1 {
     pub copy_sound_enabled: bool,
     pub copy_sound_file: String,
     pub image_alt_mode: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub record_images: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub record_files: Option<bool>,
 
     // ── Data Retention ──
     pub max_items: u32,
@@ -190,6 +243,16 @@ pub struct PortableSettingsV1 {
 
     // ── Updates ──
     pub auto_check_updates: bool,
+}
+
+/// Preserve field presence, including an explicit null for a nullable setting.
+/// Unlike plain Option<T>, null is rejected when T itself is not nullable.
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 // ── Construction ──────────────────────────────────────────────────────────
@@ -283,6 +346,9 @@ impl PortableSettingsV1 {
             auto_focus_search: settings.auto_focus_search,
             clear_search_on_show: settings.clear_search_on_show,
             always_reset_to_clipboard: settings.always_reset_to_clipboard,
+            quick_window_sync_filters: Some(settings.quick_window_sync_filters),
+            font_size_scale: Some(settings.font_size_scale),
+            font_size_level: Some(settings.font_size_level.clone()),
 
             sort_by_created: settings.sort_by_created,
             show_source_app: settings.show_source_app,
@@ -290,6 +356,9 @@ impl PortableSettingsV1 {
             copy_as_plain_text: settings.copy_as_plain_text,
             show_original_on_hover: settings.show_original_on_hover,
             type_filter_config: settings.type_filter_config.clone(),
+            search_favorites_first: Some(settings.search_favorites_first),
+            paste_click_mode: Some(settings.paste_click_mode.clone()),
+            filter_foreign_paths: Some(settings.filter_foreign_paths),
 
             ocr_enabled: settings.ocr_enabled,
             qr_enabled: settings.qr_enabled,
@@ -297,6 +366,8 @@ impl PortableSettingsV1 {
             copy_sound_enabled: settings.copy_sound_enabled,
             copy_sound_file: settings.copy_sound_file.clone(),
             image_alt_mode: settings.image_alt_mode.clone(),
+            record_images: Some(settings.record_images),
+            record_files: Some(settings.record_files),
 
             max_items: settings.max_items,
             retention_days: settings.retention_days,
@@ -334,6 +405,15 @@ impl PortableSettingsV1 {
         result.auto_focus_search = self.auto_focus_search;
         result.clear_search_on_show = self.clear_search_on_show;
         result.always_reset_to_clipboard = self.always_reset_to_clipboard;
+        if let Some(value) = self.quick_window_sync_filters {
+            result.quick_window_sync_filters = value;
+        }
+        if let Some(value) = self.font_size_scale {
+            result.font_size_scale = value;
+        }
+        if let Some(value) = &self.font_size_level {
+            result.font_size_level = value.clone();
+        }
 
         // ── List & Content ──
         result.sort_by_created = self.sort_by_created;
@@ -342,6 +422,15 @@ impl PortableSettingsV1 {
         result.copy_as_plain_text = self.copy_as_plain_text;
         result.show_original_on_hover = self.show_original_on_hover;
         result.type_filter_config = self.type_filter_config.clone();
+        if let Some(value) = self.search_favorites_first {
+            result.search_favorites_first = value;
+        }
+        if let Some(value) = &self.paste_click_mode {
+            result.paste_click_mode = value.clone();
+        }
+        if let Some(value) = self.filter_foreign_paths {
+            result.filter_foreign_paths = value;
+        }
 
         // ── Clipboard Features ──
         result.ocr_enabled = self.ocr_enabled;
@@ -350,6 +439,12 @@ impl PortableSettingsV1 {
         result.copy_sound_enabled = self.copy_sound_enabled;
         result.copy_sound_file = self.copy_sound_file.clone();
         result.image_alt_mode = self.image_alt_mode.clone();
+        if let Some(value) = self.record_images {
+            result.record_images = value;
+        }
+        if let Some(value) = self.record_files {
+            result.record_files = value;
+        }
 
         // ── Data Retention ──
         result.max_items = self.max_items;
@@ -378,6 +473,28 @@ impl PortableSettingsV1 {
     /// `ConfigSyncError::InvalidFieldValue`. Any invalid value rejects the
     /// whole snapshot — fields are never silently repaired.
     fn validate(&self) -> Result<(), ConfigSyncError> {
+        if let Some(Some(scale)) = self.font_size_scale {
+            // Match the range supported by ui::font::apply_scale.
+            if !scale.is_finite() || !(0.8..=1.6).contains(&scale) {
+                return Err(ConfigSyncError::InvalidFieldValue(format!(
+                    "font_size_scale out of range: {scale}"
+                )));
+            }
+        }
+        if let Some(level) = &self.font_size_level {
+            if !["compact", "standard", "large", "xlarge"].contains(&level.as_str()) {
+                return Err(ConfigSyncError::InvalidFieldValue(format!(
+                    "unknown font_size_level: {level}"
+                )));
+            }
+        }
+        if let Some(mode) = &self.paste_click_mode {
+            if !["single_click", "double_click"].contains(&mode.as_str()) {
+                return Err(ConfigSyncError::InvalidFieldValue(format!(
+                    "unknown paste_click_mode: {mode}"
+                )));
+            }
+        }
         // theme
         if !["system", "dark", "light"].contains(&self.theme.as_str()) {
             return Err(ConfigSyncError::InvalidFieldValue(format!(
@@ -563,6 +680,127 @@ mod tests {
             },
             "settings": full_settings_json(theme)
         })
+    }
+
+    #[test]
+    fn added_preferences_roundtrip_and_apply_explicit_false() {
+        let source = AppSettings {
+            quick_window_sync_filters: false,
+            font_size_scale: Some(1.225),
+            font_size_level: "large".into(),
+            search_favorites_first: true,
+            paste_click_mode: "single_click".into(),
+            filter_foreign_paths: true,
+            record_images: false,
+            record_files: false,
+            ..AppSettings::default()
+        };
+        let snapshot = ConfigSnapshot::from_local(&source, "test");
+        let parsed = ConfigSnapshot::from_slice(&snapshot.to_vec().unwrap()).unwrap();
+        let target = AppSettings {
+            hotkey: "Alt+Z".into(),
+            font_family: "Local Font".into(),
+            ..AppSettings::default()
+        };
+        let result = parsed.settings.apply_to(&target);
+        assert!(!result.quick_window_sync_filters);
+        assert_eq!(result.font_size_scale, source.font_size_scale);
+        assert_eq!(result.font_size_level, "large");
+        assert!(result.search_favorites_first);
+        assert_eq!(result.paste_click_mode, "single_click");
+        assert!(result.filter_foreign_paths);
+        assert!(!result.record_images);
+        assert!(!result.record_files);
+        assert_eq!(result.hotkey, "Alt+Z");
+        assert_eq!(result.font_family, "Local Font");
+    }
+
+    #[test]
+    fn older_v1_snapshot_preserves_added_local_preferences() {
+        // This fixture intentionally contains only the original 33 fields.
+        let data = serde_json::to_vec(&snapshot_json("dark")).unwrap();
+        let parsed = ConfigSnapshot::from_slice(&data).unwrap();
+        let current = AppSettings {
+            quick_window_sync_filters: false,
+            font_size_scale: Some(1.3),
+            font_size_level: "xlarge".into(),
+            search_favorites_first: true,
+            paste_click_mode: "single_click".into(),
+            filter_foreign_paths: true,
+            record_images: false,
+            record_files: false,
+            ..AppSettings::default()
+        };
+        let result = parsed.settings.apply_to(&current);
+        assert_eq!(result.theme, "dark");
+        assert_eq!(
+            result.quick_window_sync_filters,
+            current.quick_window_sync_filters
+        );
+        assert_eq!(result.font_size_scale, current.font_size_scale);
+        assert_eq!(result.font_size_level, current.font_size_level);
+        assert_eq!(
+            result.search_favorites_first,
+            current.search_favorites_first
+        );
+        assert_eq!(result.paste_click_mode, current.paste_click_mode);
+        assert_eq!(result.filter_foreign_paths, current.filter_foreign_paths);
+        assert_eq!(result.record_images, current.record_images);
+        assert_eq!(result.record_files, current.record_files);
+        let reserialized: serde_json::Value =
+            serde_json::from_slice(&parsed.to_vec().unwrap()).unwrap();
+        assert!(reserialized["settings"].get("font_size_scale").is_none());
+    }
+
+    #[test]
+    fn explicit_null_font_scale_restores_legacy_size() {
+        let source = AppSettings {
+            font_size_scale: None,
+            font_size_level: "compact".into(),
+            ..AppSettings::default()
+        };
+        let bytes = ConfigSnapshot::from_local(&source, "test")
+            .to_vec()
+            .unwrap();
+        let parsed = ConfigSnapshot::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.settings.font_size_scale, Some(None));
+        let current = AppSettings {
+            font_size_scale: Some(1.3),
+            ..AppSettings::default()
+        };
+        let result = parsed.settings.apply_to(&current);
+        assert_eq!(result.font_size_scale, None);
+        assert_eq!(result.font_size_level, "compact");
+    }
+
+    #[test]
+    fn rejects_invalid_added_preferences() {
+        for (key, value) in [
+            ("font_size_scale", serde_json::json!(0.0)),
+            ("font_size_scale", serde_json::json!(1.7)),
+            ("font_size_scale", serde_json::json!("large")),
+            ("font_size_level", serde_json::json!("huge")),
+            ("paste_click_mode", serde_json::json!("triple_click")),
+            ("record_images", serde_json::Value::Null),
+            ("record_files", serde_json::json!("false")),
+            ("quick_window_sync_filters", serde_json::Value::Null),
+            ("search_favorites_first", serde_json::json!(1)),
+            ("filter_foreign_paths", serde_json::json!([])),
+        ] {
+            let mut json = snapshot_json("system");
+            json["settings"][key] = value;
+            let bytes = serde_json::to_vec(&json).unwrap();
+            assert!(ConfigSnapshot::from_slice(&bytes).is_err(), "{key}");
+        }
+        for scale in [f32::NAN, f32::INFINITY, -1.0, 2.0] {
+            let source = AppSettings {
+                font_size_scale: Some(scale),
+                ..AppSettings::default()
+            };
+            assert!(ConfigSnapshot::from_local(&source, "test")
+                .to_vec()
+                .is_err());
+        }
     }
 
     #[test]
