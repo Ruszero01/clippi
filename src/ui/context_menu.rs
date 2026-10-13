@@ -622,7 +622,8 @@ impl RenderOnce for ContextMenu {
 
         let surface = theme.panel_surface;
         let sep_line = theme.panel_sep_line;
-        let btn_hover = theme.btn_hover;
+        // Floating menus need more contrast than buttons on the main surface.
+        let item_hover = theme.surface_press;
         let accent = theme.accent;
         let text_1 = theme.text_1;
         let text_2 = theme.text_2;
@@ -730,7 +731,7 @@ impl RenderOnce for ContextMenu {
                     .justify_between()
                     .px(px(8.))
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(btn_hover))
+                    .hover(move |style| style.bg(item_hover))
                     .child(
                         div()
                             .flex()
