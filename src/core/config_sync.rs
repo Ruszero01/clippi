@@ -150,6 +150,12 @@ pub struct ConfigSnapshotSource {
 pub struct PortableSettingsV1 {
     // ── Appearance & Interaction ──
     pub theme: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub theme_color: Option<String>,
     pub language: String,
     pub auto_hide: bool,
     pub silent_start: bool,
@@ -338,6 +344,7 @@ impl PortableSettingsV1 {
     pub fn from_local(settings: &AppSettings) -> Self {
         Self {
             theme: settings.theme.clone(),
+            theme_color: Some(settings.theme_color.clone()),
             language: settings.language.clone(),
             auto_hide: settings.auto_hide,
             silent_start: settings.silent_start,
@@ -397,6 +404,9 @@ impl PortableSettingsV1 {
 
         // ── Appearance & Interaction ──
         result.theme = self.theme.clone();
+        if let Some(value) = &self.theme_color {
+            result.theme_color = value.clone();
+        }
         result.language = self.language.clone();
         result.auto_hide = self.auto_hide;
         result.silent_start = self.silent_start;
@@ -535,6 +545,14 @@ impl PortableSettingsV1 {
                 "unknown copy sound file: {}",
                 self.copy_sound_file
             )));
+        }
+
+        if let Some(value) = &self.theme_color {
+            if !["default", "system"].contains(&value.as_str()) {
+                return Err(ConfigSyncError::InvalidFieldValue(format!(
+                    "unknown theme_color: {value}"
+                )));
+            }
         }
 
         // image_alt_mode
@@ -685,6 +703,7 @@ mod tests {
     #[test]
     fn added_preferences_roundtrip_and_apply_explicit_false() {
         let source = AppSettings {
+            theme_color: "system".into(),
             quick_window_sync_filters: false,
             font_size_scale: Some(1.225),
             font_size_level: "large".into(),
@@ -703,6 +722,7 @@ mod tests {
             ..AppSettings::default()
         };
         let result = parsed.settings.apply_to(&target);
+        assert_eq!(result.theme_color, "system");
         assert!(!result.quick_window_sync_filters);
         assert_eq!(result.font_size_scale, source.font_size_scale);
         assert_eq!(result.font_size_level, "large");
@@ -721,6 +741,7 @@ mod tests {
         let data = serde_json::to_vec(&snapshot_json("dark")).unwrap();
         let parsed = ConfigSnapshot::from_slice(&data).unwrap();
         let current = AppSettings {
+            theme_color: "system".into(),
             quick_window_sync_filters: false,
             font_size_scale: Some(1.3),
             font_size_level: "xlarge".into(),
@@ -733,6 +754,7 @@ mod tests {
         };
         let result = parsed.settings.apply_to(&current);
         assert_eq!(result.theme, "dark");
+        assert_eq!(result.theme_color, current.theme_color);
         assert_eq!(
             result.quick_window_sync_filters,
             current.quick_window_sync_filters
@@ -776,6 +798,9 @@ mod tests {
     #[test]
     fn rejects_invalid_added_preferences() {
         for (key, value) in [
+            ("theme_color", serde_json::json!("unknown")),
+            ("theme_color", serde_json::Value::Null),
+            ("theme_color", serde_json::json!(false)),
             ("font_size_scale", serde_json::json!(0.0)),
             ("font_size_scale", serde_json::json!(1.7)),
             ("font_size_scale", serde_json::json!("large")),
@@ -915,6 +940,7 @@ mod tests {
 
         // Whitelist from source.
         assert_eq!(result.theme, "dark");
+        assert_eq!(result.theme_color, source.theme_color);
         assert!(!result.auto_hide);
         assert_eq!(result.card_height_mode, "medium");
         assert_eq!(result.max_items, 500);
