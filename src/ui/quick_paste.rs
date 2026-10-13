@@ -1525,7 +1525,11 @@ impl Render for QuickPasteView {
                                             highlight_text,
                                             13.0,
                                             QUICK_HIGHLIGHT_LEADING_CHARS,
-                                        );
+                                        )
+                                        // Size the label to its text instead of sharing
+                                        // unused width equally with the subtitle.
+                                        .flex_initial()
+                                        .min_w(px(0.0));
                                         let subtitle = quick_line_cell(
                                             subtitle,
                                             &row_terms,
@@ -1544,6 +1548,7 @@ impl Render for QuickPasteView {
                                             .child(label)
                                             .child(
                                                 div()
+                                                    .flex_shrink_0()
                                                     .text_size(fs(13.0))
                                                     .text_color(t.text_3)
                                                     .whitespace_nowrap()
