@@ -1555,7 +1555,17 @@ impl WindowManager {
                 break;
             };
             match event {
-                HotkeyEvent::Main => self.show_and_focus(cx),
+                HotkeyEvent::Main => {
+                    if self.visible {
+                        // Ignore duplicate events from the gesture that opened
+                        // the window, just like the quick-window toggle.
+                        if !self.is_suppressed() {
+                            self.hide(cx);
+                        }
+                    } else {
+                        self.show_and_focus(cx);
+                    }
+                }
                 HotkeyEvent::Quick => {
                     if self.quick_visible {
                         // Debounce: ignore toggle-hide if the window was just
@@ -1930,12 +1940,14 @@ impl WindowManager {
             .map(|fg| fg.clone())
             .unwrap_or_default();
 
-        // While Clippi's own window is foreground, unregister the hotkeys so a
-        // single-key hotkey does not swallow input in Clippi's search box.
-        // (update_foreground_app_name clears fg_name for self, so the blacklist
-        // match alone can never cover this case.)
+        // Keep the main toggle available in Clippi while protecting text input
+        // from plain single-key shortcuts and disabling paste shortcuts.
         let self_foreground = self.is_self_foreground();
-        if self_foreground || (!fg_name.is_empty() && self.blacklist.contains(&fg_name)) {
+        if self_foreground {
+            if let Some(ref mut hk) = self.hotkey {
+                hk.register_main_only();
+            }
+        } else if !fg_name.is_empty() && self.blacklist.contains(&fg_name) {
             if let Some(ref mut hk) = self.hotkey {
                 hk.unregister();
             }

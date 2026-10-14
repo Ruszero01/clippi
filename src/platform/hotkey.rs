@@ -115,6 +115,10 @@ pub trait HotkeyListener {
     /// Re-register the hotkey after unregister().
     /// Does nothing if already registered.
     fn register(&mut self);
+    /// Keep only the main toggle active in Clippi, protecting text input.
+    fn register_main_only(&mut self) {
+        self.unregister();
+    }
     /// The actual main hotkey string (may differ from config if fallback was
     /// used during construction).
     fn actual_main_hotkey(&self) -> &str {
@@ -367,6 +371,18 @@ fn is_hook_hotkey(hotkey: HotKey) -> bool {
             hotkey.key,
             Code::LaunchMail | Code::LaunchApp1 | Code::LaunchApp2
         )
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn main_hotkey_works_in_clippi(hotkey: HotKey) -> bool {
+    if !hotkey.mods.is_empty() {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    if is_hook_hotkey(hotkey) {
+        return true;
+    }
+    false
 }
 
 fn is_double_hotkey(value: &str) -> bool {
@@ -1433,6 +1449,30 @@ impl HotkeyListener for DesktopHotkeyListener {
         }
     }
 
+    fn register_main_only(&mut self) {
+        if self.is_recording {
+            return;
+        }
+        // Clear gestures once when switching modes, not on every poll:
+        // repeated unregistering would interrupt double-press shortcuts.
+        let has_other_bindings = self.quick_registered
+            || self.paste_plain_registered
+            || self.item_hotkeys.iter().any(|binding| binding.registered)
+            || self.latest_hotkeys.iter().any(|binding| binding.registered);
+        if has_other_bindings {
+            self.unregister();
+        }
+        let allow_main = main_hotkey_works_in_clippi(self.hotkey);
+        if allow_main && !self.registered {
+            match self.register_hotkey(self.hotkey) {
+                Ok(()) => self.registered = true,
+                Err(e) => log::error!("main toggle hotkey register failed: {e}"),
+            }
+        } else if !allow_main && self.registered {
+            self.unregister();
+        }
+    }
+
     fn poll_event(&mut self) -> Option<HotkeyEvent> {
         if self.is_recording {
             while GlobalHotKeyEvent::receiver().try_recv().is_ok() {}
@@ -2109,6 +2149,65 @@ mod special_binding_tests {
             confirm_recording_single: false,
             recording_key_down: None,
         }
+    }
+
+    #[test]
+    fn foreground_mode_keeps_main_and_disables_paste_shortcuts() {
+        let mut listener = listener();
+        listener.update_quick_hotkey("Mouse4").unwrap();
+        listener.update_paste_plain_hotkey("Mouse5").unwrap();
+        listener.register_item_hotkey(42, "Ctrl+Mouse4").unwrap();
+        listener.register_latest_hotkey(0, "Ctrl+Mouse5").unwrap();
+        listener.register_main_only();
+        assert!(listener.registered);
+        assert!(!listener.quick_registered);
+        assert!(!listener.paste_plain_registered);
+        assert!(!listener.item_hotkeys[0].registered);
+        assert!(!listener.latest_hotkeys[0].registered);
+        listener
+            .manager
+            .push_test_event(InputEvent::Press(listener.hotkey, Instant::now()));
+        assert_eq!(listener.poll_event(), Some(HotkeyEvent::Main));
+        listener.register();
+        assert!(listener.quick_registered && listener.paste_plain_registered);
+        assert!(listener.item_hotkeys[0].registered && listener.latest_hotkeys[0].registered);
+    }
+
+    #[test]
+    fn foreground_polls_preserve_double_mouse_gestures() {
+        let mut listener = listener();
+        listener.update_hotkey("Double:Mouse4").unwrap();
+        listener.register_main_only();
+        let at = Instant::now();
+        listener
+            .manager
+            .push_test_event(InputEvent::Press(listener.hotkey, at));
+        assert_eq!(listener.poll_event(), None);
+        listener.register_main_only();
+        listener.manager.push_test_event(InputEvent::Press(
+            listener.hotkey,
+            at + Duration::from_millis(100),
+        ));
+        assert_eq!(listener.poll_event(), Some(HotkeyEvent::Main));
+    }
+
+    #[test]
+    fn foreground_main_policy_protects_typing_and_recording() {
+        assert!(!main_hotkey_works_in_clippi(parse_hotkey("V").unwrap()));
+        assert!(!main_hotkey_works_in_clippi(
+            parse_hotkey("Double:V").unwrap()
+        ));
+        assert!(main_hotkey_works_in_clippi(
+            parse_hotkey("Ctrl+Shift+V").unwrap()
+        ));
+        assert!(main_hotkey_works_in_clippi(
+            parse_hotkey("Double:Ctrl").unwrap()
+        ));
+        assert!(main_hotkey_works_in_clippi(parse_hotkey("Mouse4").unwrap()));
+        let mut listener = listener();
+        listener.start_custom_recording();
+        listener.register_main_only();
+        assert!(!listener.registered);
     }
 
     #[test]
