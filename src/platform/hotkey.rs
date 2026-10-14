@@ -55,8 +55,10 @@ pub enum HotkeyRecordingPress {
     Hotkey(String),
     AwaitingSingle(String),
     /// First clean modifier tap: feedback only, never confirmable as a single key.
+    #[cfg(target_os = "windows")]
     AwaitingDouble(String),
     /// An intervening input invalidated a pending single/double recording.
+    #[cfg(target_os = "windows")]
     PendingCleared,
     Cancel,
     /// The pressed key is a protected single key and was rejected.

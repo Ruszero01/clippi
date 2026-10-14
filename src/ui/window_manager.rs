@@ -1718,6 +1718,7 @@ impl WindowManager {
             // --- avoiding any AppState synchronization gap. ---
             if let Some(recording_press) = hk.poll_recording_pressed() {
                 let new_hotkey = match recording_press {
+                    #[cfg(target_os = "windows")]
                     HotkeyRecordingPress::AwaitingDouble(_) => {
                         self.state.update(cx, |state, cx| {
                             state.pending_single_hotkey = None;
@@ -1727,6 +1728,7 @@ impl WindowManager {
                         cx.notify();
                         return;
                     }
+                    #[cfg(target_os = "windows")]
                     HotkeyRecordingPress::PendingCleared => {
                         self.state.update(cx, |state, _cx| {
                             state.pending_single_hotkey = None;

@@ -16,11 +16,8 @@
 //! RTF entry: the original formatting cannot survive a plain-text edit, but the
 //! stored payload stays a valid RTF document.
 //!
-//! Code-page resolution lives in `platform::util::decode_ansi_bytes`; the
-//! non-Windows fallback is still an approximation, so a Windows-captured CJK
-//! payload synced to a Mac is decoded best-effort until the macOS side is
-//! adapted (the concrete CoreFoundation steps are listed in the `TODO(macOS)`
-//! on that function).
+//! Code-page resolution lives in `platform::util::decode_ansi_bytes`: Windows
+//! uses MultiByteToWideChar and macOS uses CoreFoundation's code-page mapping.
 
 use crate::platform::util::decode_ansi_bytes;
 
@@ -73,6 +70,7 @@ pub fn rtf_to_plain_text(rtf: &str) -> String {
     let mut codepage = initial_codepage(rtf);
     let mut unicode_fallback_skip = 1i32;
     let mut skip_pending = 0i32;
+    let mut group_settings = Vec::new();
     // Consecutive `\'hh` escapes form one byte run and must be decoded
     // together, because a multi-byte character spans several escapes.
     let mut ansi_run: Vec<u8> = Vec::new();
@@ -82,6 +80,8 @@ pub fn rtf_to_plain_text(rtf: &str) -> String {
         match ch {
             '{' => {
                 flush_ansi_run(&mut out, &mut ansi_run, codepage);
+                group_settings.push((codepage, unicode_fallback_skip));
+                skip_pending = 0;
                 depth += 1;
                 if group_depth_to_skip.is_none() && opens_skipped_group(&chars) {
                     group_depth_to_skip = Some(depth);
@@ -93,6 +93,27 @@ pub fn rtf_to_plain_text(rtf: &str) -> String {
                     group_depth_to_skip = None;
                 }
                 depth = depth.saturating_sub(1);
+                if let Some((page, fallback)) = group_settings.pop() {
+                    codepage = page;
+                    unicode_fallback_skip = fallback;
+                }
+                skip_pending = 0;
+            }
+            '\\' if group_depth_to_skip.is_some() => {
+                // Consume escaped syntax so literal braces cannot change depth.
+                match chars.peek() {
+                    Some('\\' | '{' | '}') => {
+                        chars.next();
+                    }
+                    Some('\'') => {
+                        chars.next();
+                        chars.next();
+                        chars.next();
+                    }
+                    _ => {
+                        read_rtf_control_word(&mut chars);
+                    }
+                }
             }
             '\\' if group_depth_to_skip.is_none() => match chars.peek().copied() {
                 Some('\\' | '{' | '}') => {
@@ -409,6 +430,7 @@ mod tests {
     /// Verbatim RichEdit clipboard RTF on a Chinese Windows system: non-ASCII
     /// text is escaped as `\'hh` bytes in the document code page (cp936), and
     /// the font table declares the font name the same way.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     const RICH_EDIT_GBK_RTF: &str = r"{\rtf1\ansi\ansicpg936\deff0\deflang1033\deflangfe2052{\fonttbl{\f0\fnil\fcharset134 \'cb\'ce\'cc\'e5;}}
 \viewkind4\uc1\pard\lang2052\f0\fs18\'b4\'ed\'ce\'f3\'d3\'a6\'d3\'c3\'b3\'cc\'d0\'f2\'c3\'fb\'b3\'c6: fluxdown-agent.exe\'a3\'ac\'b0\'e6\'b1\'be: 0.0.0.0\par
 \'b4\'ed\'ce\'f3\'c4\'a3\'bf\'e9\'c3\'fb\'b3\'c6: fluxdown-agent.exe}";
@@ -416,13 +438,14 @@ mod tests {
     /// Verbatim payload of the follow-up report: the same cp936 bytes with **no
     /// `\ansicpg`** — only the font table's `\fcharset134` hints at the code
     /// page — plus the `}\r\n\0` tail a control hands over.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     const NO_ANSICPG_CHARSET134_RTF: &str = r"{\rtf1\ansi\deff0\nouicompat{\fonttbl{\f0\fnil\fcharset134 \'ce\'a2\'c8\'ed\'d1\'c5\'ba\'da;}}
 \uc1 
 \pard\f0\fs18\lang2052 Background Intelligent Transfer Service \'b7\'fe\'ce\'f1\'b5\'c4\'c6\'f4\'b6\'af\'c0\'e0\'d0\'cd\'b4\'d3 \'d7\'d4\'b6\'af\'c6\'f4\'b6\'af \'b8\'fc\'b8\'c4\'ce\'aa \'b0\'b4\'d0\'e8\'c6\'f4\'b6\'af\'a1\'a3}";
 
     /// Issue #114: the card showed `´íÎóÓ¦ÓÃ³ÌÐòÃû³Æ` because the byte run was
     /// mapped to Latin-1 scalars instead of being decoded as cp936.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn gbk_byte_run_decodes_through_the_document_code_page() {
         assert_eq!(
@@ -433,7 +456,7 @@ mod tests {
 
     /// A payload that declares no code page still decodes: the font charset is
     /// the only hint, and the font name in the table must stay out of the text.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn missing_ansicpg_decodes_through_the_font_charset() {
         assert_eq!(
@@ -506,6 +529,27 @@ mod tests {
             ),
             "Body"
         );
+    }
+
+    #[test]
+    fn skipped_destinations_keep_escaped_braces_out_of_group_depth() {
+        for escaped in [r"\{", r"\}", r"\\{nested}"] {
+            let rtf = format!(r"{{\rtf1\ansi {{\*\generator hidden {escaped} text}}VISIBLE}}");
+            assert_eq!(rtf_to_plain_text(&rtf), "VISIBLE");
+        }
+    }
+
+    #[test]
+    fn unicode_fallback_count_is_restored_after_nested_groups() {
+        assert_eq!(
+            rtf_to_plain_text(r"{\rtf1\ansi\uc1 {\uc0\u65}\u66?C}"),
+            "ABC"
+        );
+        assert_eq!(
+            rtf_to_plain_text(r"{\rtf1\ansi\uc0 {\uc2\u65??}\u66C}"),
+            "ABC"
+        );
+        assert_eq!(rtf_to_plain_text(r"{\rtf1\uc1\u65{B}C}"), "ABC");
     }
 
     /// Control words that carry text, escaped literals, and raw CRLF handling.

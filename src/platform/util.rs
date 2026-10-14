@@ -219,36 +219,47 @@ pub fn decode_ansi_bytes(codepage: u16, bytes: &[u8]) -> String {
     }
 }
 
-/// Best-effort counterpart of [`decode_ansi_bytes`] for platforms without a
-/// code-page API. Byte values are mapped to the matching Latin-1 scalar, which
-/// is exact for ASCII and for the RTF default code page 1252 letters/accents,
-/// and approximate elsewhere. UTF-8 (65001) is decoded exactly everywhere.
-///
-/// TODO(macOS): resolve the declared code page instead of approximating it, so
-/// an RTF entry captured on Windows (cp936/cp950/cp932/cp949/1251 — the code
-/// page is already resolved for us by `core::rtf_text::initial_codepage`) keeps
-/// its text after syncing to a Mac. To be done on a Mac:
-///
-/// 1. `CFStringConvertWindowsCodepageToEncoding(codepage as u32)` returns the
-///    matching `CFStringEncoding`; treat `kCFStringEncodingInvalidId` as
-///    "unknown" and keep the Latin-1 fallback.
-/// 2. `CFStringCreateWithBytes(null, bytes.as_ptr(), bytes.len() as isize,
-///    encoding, false)` builds the string. Convert it to Rust with
-///    `CFStringGetMaximumSizeForEncoding` + `CFStringGetCString(..,
-///    kCFStringEncodingUTF8)` into a `Vec<u8>`, or wrap the ref in an
-///    `NSString` through `objc2-foundation` and read its UTF-8 bytes.
-/// 3. `CFRelease` the `CFStringRef` on both the success and the failure path,
-///    and fall back to [`latin1_to_string`] whenever either step fails.
-///
-/// CoreFoundation is already linked (`core-foundation` /
-/// `objc2-core-foundation` are dependencies) and `core::rtf_text` hands this
-/// function a plain numeric code page, so no RTF-side change is needed.
-/// Verification: `core::rtf_text::tests` asserts cp936 decoding in
-/// `gbk_byte_run_decodes_through_the_document_code_page` and
-/// `missing_ansicpg_decodes_through_the_font_charset`; both are
-/// `#[cfg(target_os = "windows")]` only because this fallback is approximate —
-/// drop the gates and run `cargo test rtf` on the Mac to prove the adaptation.
-#[cfg(not(target_os = "windows"))]
+/// Decode declared Windows code pages with CoreFoundation on macOS.
+/// Documents without a code-page hint use RTF's Windows-1252 default.
+#[cfg(target_os = "macos")]
+pub fn decode_ansi_bytes(codepage: u16, bytes: &[u8]) -> String {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::{
+        kCFStringEncodingInvalidId, CFString, CFStringConvertWindowsCodepageToEncoding,
+        CFStringCreateWithBytes,
+    };
+
+    if bytes.is_empty() {
+        return String::new();
+    }
+    if codepage == 65001 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let page = if codepage == 0 { 1252 } else { codepage };
+    // SAFETY: the conversion only inspects its numeric argument.
+    let encoding = unsafe { CFStringConvertWindowsCodepageToEncoding(u32::from(page)) };
+    if encoding == kCFStringEncodingInvalidId {
+        return latin1_to_string(bytes);
+    }
+    // SAFETY: the input slice remains valid during creation. A successful
+    // create result is owned by CFString, which releases it when dropped.
+    let string = unsafe {
+        CFStringCreateWithBytes(
+            std::ptr::null(),
+            bytes.as_ptr(),
+            bytes.len() as isize,
+            encoding,
+            0,
+        )
+    };
+    if string.is_null() {
+        return latin1_to_string(bytes);
+    }
+    unsafe { CFString::wrap_under_create_rule(string) }.to_string()
+}
+
+/// Best-effort fallback for platforms without a code-page API.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn decode_ansi_bytes(codepage: u16, bytes: &[u8]) -> String {
     if codepage == 65001 {
         return String::from_utf8_lossy(bytes).into_owned();
@@ -354,5 +365,41 @@ pub fn nsimage_to_base64_png(image: &objc2_app_kit::NSImage, _size: i32) -> Opti
         let result = CStr::from_ptr(ptr).to_string_lossy().into_owned();
         clippi_ocr_free_string(ptr);
         Some(result)
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod codepage_tests {
+    use super::decode_ansi_bytes;
+
+    #[test]
+    fn declared_windows_code_pages_decode_on_macos() {
+        assert_eq!(decode_ansi_bytes(936, &[0xb4, 0xed, 0xce, 0xf3]), "错误");
+        assert_eq!(decode_ansi_bytes(950, &[0xba, 0x7e, 0xa6, 0x72]), "漢字");
+        assert_eq!(
+            decode_ansi_bytes(932, &[0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]),
+            "日本語"
+        );
+        assert_eq!(
+            decode_ansi_bytes(949, &[0xc7, 0xd1, 0xb1, 0xb9, 0xbe, 0xee]),
+            "한국어"
+        );
+        assert_eq!(
+            decode_ansi_bytes(1251, &[0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+            "Привет"
+        );
+        assert_eq!(
+            decode_ansi_bytes(1252, &[0x80, 0x20, 0x93, 0x63, 0x61, 0x66, 0xe9, 0x94]),
+            "€ “café”"
+        );
+    }
+
+    #[test]
+    fn unknown_and_invalid_code_pages_have_safe_fallbacks() {
+        assert_eq!(decode_ansi_bytes(0, &[0x80]), "€");
+        assert_eq!(decode_ansi_bytes(65535, &[0xe9]), "é");
+        assert_eq!(decode_ansi_bytes(936, &[0x81]), "\u{81}");
+        assert_eq!(decode_ansi_bytes(936, &[]), "");
+        assert_eq!(decode_ansi_bytes(65001, "😀中文".as_bytes()), "😀中文");
     }
 }
