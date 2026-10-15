@@ -3583,6 +3583,9 @@ impl WindowManager {
         if self.quick_visible {
             self.hide_quick_window(cx);
         }
+        // The hidden window stops receiving key events, so an Alt held at
+        // hide time would otherwise leave the badge state stuck on next show.
+        self.state.update(cx, |state, _cx| state.set_alt_pressed(false));
         self.dismiss_ui(cx);
         self.release_memory(cx);
         cx.emit(WindowManagerEvent::WindowHidden);

@@ -1411,7 +1411,64 @@ impl Render for RootView {
                     cx.stop_propagation();
                 }
             })
+            .on_modifiers_changed({
+                let notify_this = root_this.clone();
+                let state_handle = root_state.clone();
+                move |event, _window, cx| {
+                    // Track the Alt modifier for floating shortcut badges and
+                    // Alt+key dispatch. The modifiers event only fires when a
+                    // modifier key actually changes state, so this is cheap and
+                    // fires on both press and release of Alt.
+                    let pressed = event.modifiers.alt;
+                    if state_handle.read(cx).alt_pressed != pressed {
+                        state_handle.update(cx, |state, _cx| state.set_alt_pressed(pressed));
+                        notify_this.update(cx, |_, cx| cx.notify());
+                    }
+                }
+            })
             .on_key_down(move |ev: &KeyDownEvent, window, cx| {
+                // --- Alt+key shortcuts (main window, clipboard view only) ---
+                let k = ev.keystroke.key.as_str();
+                if (k == "d" || (k.len() == 1 && k.chars().next().unwrap().is_ascii_digit()))
+                    && ev.keystroke.modifiers.alt
+                    && !ev.keystroke.modifiers.control
+                    && !ev.keystroke.modifiers.shift
+                {
+                    let is_clipboard = root_this.read(cx).current_view == "clipboard";
+                    let is_settings = root_this.read(cx).current_view == "settings";
+                    if is_clipboard || is_settings {
+                        // Alt+D toggles the favorites filter.
+                        if k == "d" {
+                            root_state.update(cx, |state, _cx| state.toggle_favorites_filter());
+                            root_list.update(cx, |list, cx| {
+                                list.set_items(root_state.read(cx).visible_items(), cx)
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                        // Alt+1..9 toggles the Nth visible type filter.
+                        if let Some(digit) = k.chars().next().and_then(|c| c.to_digit(10)) {
+                            let entries: Vec<String> = root_state
+                                .read(cx)
+                                .settings
+                                .type_filter_config
+                                .iter()
+                                .filter(|e| e.visible)
+                                .map(|e| e.key.clone())
+                                .collect();
+                            if let Some(type_name) = entries.get((digit - 1) as usize) {
+                                root_state.update(cx, |state, _cx| {
+                                    state.toggle_type_filter(type_name)
+                                });
+                                root_list.update(cx, |list, cx| {
+                                    list.set_items(root_state.read(cx).visible_items(), cx)
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                    }
+                }
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
                 }

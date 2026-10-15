@@ -107,6 +107,7 @@ impl Render for Titlebar {
                 fav_active || state.has_favorite_items,
             )
         };
+        let alt_pressed = self.state.read(cx).alt_pressed;
         let (transfer_active, show_transfer_filter) = {
             let state = self.state.read(cx);
             (
@@ -256,29 +257,57 @@ impl Render for Titlebar {
                     // --- Fav filter button (28x28) ---
                     .when(show_favorites_filter, |bar| {
                         bar.child(
-                            titlebar_button("titlebar-favorites-filter", theme)
-                                .tooltip(|window, cx| {
-                                    let label = I18nKey::TitlebarTooltipFavorites.text();
-                                    Tooltip::element(move |_window, _cx| {
-                                        div().text_size(fs(10.)).child(label)
-                                    })
-                                    .build(window, cx)
-                                })
-                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                    let items = fav_state.update(cx, |state, _cx| {
-                                        state.toggle_favorites_filter();
-                                        state.visible_items()
-                                    });
-                                    fav_list_view.update(cx, |list, cx| list.set_items(items, cx));
-                                    fav_titlebar.update(cx, |_titlebar, cx| cx.notify());
-                                })
+                            div()
+                                .relative()
                                 .child(
-                                    div()
-                                        .text_size(fs(15.))
-                                        .font_family("iconfont")
-                                        .text_color(if fav_active { fav_color } else { text_2 })
-                                        .child("\u{e630}"),
-                                ),
+                                    titlebar_button("titlebar-favorites-filter", theme)
+                                        .tooltip(|window, cx| {
+                                            let label = I18nKey::TitlebarTooltipFavorites.text();
+                                            Tooltip::element(move |_window, _cx| {
+                                                div().text_size(fs(10.)).child(label)
+                                            })
+                                            .build(window, cx)
+                                        })
+                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                            let items = fav_state.update(cx, |state, _cx| {
+                                                state.toggle_favorites_filter();
+                                                state.visible_items()
+                                            });
+                                            fav_list_view.update(cx, |list, cx| list.set_items(items, cx));
+                                            fav_titlebar.update(cx, |_titlebar, cx| cx.notify());
+                                        })
+                                        .child(
+                                            div()
+                                                .text_size(fs(15.))
+                                                .font_family("iconfont")
+                                                .text_color(if fav_active { fav_color } else { text_2 })
+                                                .child("\u{e630}"),
+                                        ),
+                                )
+                                // --- Alt shortcut badge: `D` ---
+                                .when(alt_pressed, |badge| {
+                                    badge.child(
+                                        div()
+                                            .absolute()
+                                            .top(px(-4.))
+                                            .right(px(-4.))
+                                            .min_w(px(14.))
+                                            .h(px(14.))
+                                            .px(px(3.))
+                                            .rounded(px(4.))
+                                            .bg(accent)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .text_size(px(9.))
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(rgb(0xffffff))
+                                                    .child("D"),
+                                            ),
+                                    )
+                                }),
                         )
                     })
                     // --- Pin button (28x28) ---
