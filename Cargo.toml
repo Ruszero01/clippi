@@ -11,7 +11,7 @@ build = "build.rs"
 [package.metadata.bundle]
 name = "Clippi"
 identifier = "com.clippi.app"
-icon = ["assets/LOGO.icns"]
+icon = ["assets/LOGO_notext.icns"]
 version = "0.5.1"
 copyright= "Copyright © 2026 Rains. MIT license."
 category = "Utility"

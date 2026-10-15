@@ -5,7 +5,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         let mut res = winresource::WindowsResource::new();
-        res.set_icon("assets/LOGO.ico");
+        res.set_icon("assets/LOGO_notext.ico");
         res.set("FileDescription", "Clippi");
         res.set("ProductName", "Clippi");
         res.set("OriginalFilename", "clippi.exe");

@@ -187,7 +187,7 @@ jobs:
           mkdir -p "$APP_DIR/Contents/MacOS"
           mkdir -p "$APP_DIR/Contents/Resources"
           cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/clippi"
-          cp "assets/LOGO.icns" "$APP_DIR/Contents/Resources/clippi.icns"
+          cp "assets/LOGO_notext.icns" "$APP_DIR/Contents/Resources/clippi.icns"
           cat > "$APP_DIR/Contents/Info.plist" << PLISTEOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

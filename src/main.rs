@@ -453,7 +453,7 @@ fn main() {
                                     SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON,
                                 };
                                 const LOGO_ICO: &[u8] =
-                                    include_bytes!("../assets/LOGO.ico");
+                                    include_bytes!("../assets/LOGO_notext.ico");
                                 if let Some(hicon) = load_icon_from_embedded_bytes(LOGO_ICO)
                                 {
                                     unsafe {
