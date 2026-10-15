@@ -277,7 +277,7 @@ mod info_row_tests {
     }
 
     #[test]
-    fn rtf_with_text_keeps_markdown_preview() {
+    fn rtf_with_text_uses_plain_preview() {
         let item = rich_item(
             "Hello World",
             RichData {
@@ -287,8 +287,8 @@ mod info_row_tests {
         );
 
         match rich_preview(&item) {
-            RichPreview::Markdown(text) => assert_eq!(text, "Hello World"),
-            _ => panic!("expected markdown preview"),
+            RichPreview::Plain(text) => assert_eq!(text, "Hello World"),
+            _ => panic!("expected plain preview"),
         }
     }
 
@@ -305,7 +305,7 @@ mod info_row_tests {
         );
 
         match rich_preview(&item) {
-            RichPreview::Markdown(text) => assert_eq!(text, "富文本内容"),
+            RichPreview::Plain(text) => assert_eq!(text, "富文本内容"),
             _ => panic!("expected RTF fallback preview"),
         }
     }
@@ -545,11 +545,34 @@ mod rtf_preview_tests {
         );
 
         match rich_preview(&item) {
-            RichPreview::Markdown(text) => assert_eq!(text, "错误 detail"),
+            RichPreview::Plain(text) => assert_eq!(text, "错误 detail"),
             _ => panic!("expected RTF preview"),
         }
     }
 
+    #[test]
+    fn rtf_code_is_displayed_literally() {
+        let code = "<imgbtn pos=\"0,0\" name=\"btn_max\" skin=\"_skin.sys.btn.maximize\" animate=\"1\" />\n<imgbtn pos=\"0,0\" name=\"btn_restore\" show=\"0\" />";
+        for text in [
+            code,
+            "# Heading\n**bold** _italic_ [link](https://example.com)",
+        ] {
+            for html in [None, Some("<html><body></body></html>".to_string())] {
+                let item = rich_item(
+                    text,
+                    RichData {
+                        html,
+                        rtf: Some(crate::core::rtf_text::plain_text_to_rtf(text)),
+                        ..Default::default()
+                    },
+                );
+                match rich_preview(&item) {
+                    RichPreview::Plain(preview) => assert_eq!(preview, text),
+                    _ => panic!("decoded RTF must render as literal text"),
+                }
+            }
+        }
+    }
     /// An RTF payload with no readable content keeps the captured plain text.
     #[test]
     fn rtf_without_text_falls_back_to_full_text() {
@@ -1089,7 +1112,10 @@ fn rtf_fallback_preview(rich: &RichData, item: &ClipboardItem) -> RichPreview {
     if let Some(rtf) = rich.rtf.as_deref().filter(|rtf| !rtf.trim().is_empty()) {
         let plain = rtf_text::rtf_to_plain_text(rtf);
         if !plain.is_empty() {
-            return RichPreview::Markdown(plain);
+            // Decoding removes RTF formatting; the result is literal text.
+            // Markdown would interpret code such as <imgbtn ... /> as HTML
+            // and hide it (issue #120).
+            return RichPreview::Plain(plain);
         }
     }
     RichPreview::Plain(item.full_text.clone())
