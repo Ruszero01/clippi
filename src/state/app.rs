@@ -2241,6 +2241,26 @@ impl AppState {
         })
     }
 
+    /// Paste picker text without inserting an application-generated history entry.
+    pub fn paste_picker_text(&mut self, text: &str) -> bool {
+        if !self.write_text_to_clipboard_internal(text) {
+            self.show_warning_toast(I18nKey::EmojiPasteFailed.text());
+            return false;
+        }
+        if crate::core::emoji::emojis()
+            .iter()
+            .any(|entry| entry.text == text)
+        {
+            self.settings.recent_emojis.retain(|value| value != text);
+            self.settings.recent_emojis.insert(0, text.to_string());
+            self.settings.recent_emojis.truncate(32);
+            self.settings.save();
+        }
+        crate::platform::paste::restore_paste_target();
+        crate::platform::paste::paste_after_delay(Arc::new(self.settings.paste_shortcuts.clone()));
+        true
+    }
+
     /// Copy a single item to the system clipboard (no paste simulation).
     pub fn copy_item(&mut self, id: i64, copy_as_plain_text: bool) {
         let item = match self.db.get_by_id(id) {

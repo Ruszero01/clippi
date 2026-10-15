@@ -202,6 +202,26 @@ impl SettingsPanel {
         container =
             container.child(self.settings_group(I18nKey::GroupStartup.text(), startup_rows));
 
+        let emoji_row = self
+            .render_toggle_row(
+                I18nKey::EmojiEnable,
+                I18nKey::EmojiEnableDesc,
+                I18nKey::EmojiEnableDesc,
+                self.state.read(cx).settings.emoji_panel_enabled,
+                window,
+                cx,
+                |state, _this, _window, cx| {
+                    state.update(cx, |state, cx| {
+                        state.settings.emoji_panel_enabled = !state.settings.emoji_panel_enabled;
+                        state.settings.save();
+                        cx.notify();
+                    });
+                },
+            )
+            .into_any_element();
+        container = container
+            .child(self.settings_group(I18nKey::EmojiFeatureGroup.text(), vec![emoji_row]));
+
         // --- Window behaviour ---
         let mut window_rows: Vec<AnyElement> = vec![
             {

@@ -1,12 +1,14 @@
 //! UI module declarations and re-exports for Clippi GPUI components.
 
 pub mod add_backend;
+pub mod assets;
 pub mod bottom_bar;
 pub mod clipboard_card;
 pub mod clipboard_list;
 pub mod components;
 pub mod context_menu;
 pub mod edit_panel;
+pub mod emoji_panel;
 pub mod filter_bar;
 pub mod font;
 pub mod hover_toolbar;

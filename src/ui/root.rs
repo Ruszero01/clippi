@@ -35,6 +35,7 @@ use super::components::spinner::activity_spinner;
 use super::components::toast::Toast;
 use super::context_menu::{ContextMenu, MenuItemContext};
 use super::edit_panel::{EditPanel, EditPanelEvent};
+use super::emoji_panel::{EmojiPanel, EmojiPanelEvent};
 use super::filter_bar::FilterBar;
 use super::search_box::{SearchBox, SearchBoxEvent};
 use super::settings::hotkey;
@@ -52,6 +53,7 @@ pub struct RootView {
     titlebar: Entity<Titlebar>,
     list_view: Entity<ClipboardListView>,
     search_box: Entity<SearchBox>,
+    emoji_panel: Entity<EmojiPanel>,
     filter_bar: Entity<FilterBar>,
     settings_panel: Entity<SettingsPanel>,
     edit_panel: Entity<EditPanel>,
@@ -90,6 +92,8 @@ pub struct RootView {
     last_toast_message: Option<String>,
     /// Set to true on WindowHidden, cleared after auto-focusing the search bar.
     needs_auto_focus: bool,
+    /// Mode switches focus their destination without applying clear-on-window-show.
+    mode_focus_pending: bool,
     /// Root-level clear-data dialog state, outside the clipped settings list.
     /// The include-* selection itself lives in `AppState`.
     clear_data_confirm: bool,
@@ -154,6 +158,7 @@ impl RootView {
         self.edit_panel.update(cx, |panel, cx| {
             panel.set_theme(theme.clone(), cx);
         });
+        self.emoji_panel.update(cx, |_, cx| cx.notify());
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_theme(&theme, cx);
         });
@@ -188,6 +193,7 @@ impl RootView {
             .new(|cx| SearchBox::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
         let filter_bar =
             cx.new(|_cx| FilterBar::new(state.clone(), list_view.clone(), theme.clone()));
+        let emoji_panel = cx.new(|cx| EmojiPanel::new(state.clone(), window, cx));
         // Wire up search_box reference for Ctrl+F keyboard shortcut.
         list_view.update(cx, |list, _cx| {
             list.search_bar = Some(search_box.clone());
@@ -559,6 +565,7 @@ impl RootView {
         let backend_panel = settings_panel.read(cx).backend_panel();
         let _subscriptions = vec![
             cx.observe(&state, |this, _, cx| {
+                this.titlebar.update(cx, |_, cx| cx.notify());
                 this.sidebar.update(cx, |_, cx| cx.notify());
                 this.tag_filter_panel.update(cx, |_, cx| cx.notify());
                 cx.notify();
@@ -688,6 +695,26 @@ impl RootView {
                         });
                         cx.notify();
                     }
+                    TitlebarEvent::ToggleEmoji => {
+                        if !this.state.read(cx).settings.emoji_panel_enabled {
+                            return;
+                        }
+                        let opening = this.current_view != "emoji";
+                        this.switch_view(if opening { "emoji" } else { "clipboard" });
+                        this.filter_bar.update(cx, |bar, cx| {
+                            bar.close_tag_panel(cx);
+                            bar.close_filter_config(cx);
+                        });
+                        this.list_view.update(cx, |list, cx| {
+                            list.dismiss_context_menu(cx);
+                            list.hide_tag_picker(cx);
+                        });
+                        if opening {
+                            this.emoji_panel.update(cx, |panel, cx| panel.refresh(cx));
+                        }
+                        this.mode_focus_pending = true;
+                        cx.notify();
+                    }
                     TitlebarEvent::OpenSettings => {
                         this.switch_view("settings");
                         this.filter_bar
@@ -695,10 +722,20 @@ impl RootView {
                         cx.notify();
                     }
                     TitlebarEvent::ToggleTransfer => {
+                        if this.current_view == "emoji" {
+                            this.switch_view("clipboard");
+                        }
                         this.handle_toggle_transfer(cx);
                     }
                 },
             ),
+            cx.subscribe(&emoji_panel, |this, _, event, cx| {
+                match event {
+                    EmojiPanelEvent::Back => this.switch_view("clipboard"),
+                }
+                this.mode_focus_pending = true;
+                cx.notify();
+            }),
             cx.subscribe(
                 &settings_panel,
                 move |this, _panel, event: &SettingsEvent, cx| match event {
@@ -842,6 +879,7 @@ impl RootView {
             titlebar,
             list_view,
             search_box,
+            emoji_panel,
             filter_bar,
             settings_panel,
             edit_panel,
@@ -866,6 +904,7 @@ impl RootView {
             toast_timer_expiry: None,
             last_toast_message: None,
             needs_auto_focus: true,
+            mode_focus_pending: false,
             clear_data_confirm: false,
             _wm_subscription,
             _subscriptions,
@@ -894,6 +933,16 @@ impl Render for RootView {
         let edit_panel = self.edit_panel.clone();
         let tag_filter_panel = self.tag_filter_panel.clone();
         let tag_panel_open = self.filter_bar.read(cx).tag_panel_open();
+        if self.current_view == "emoji" && !self.state.read(cx).settings.emoji_panel_enabled {
+            self.switch_view("clipboard");
+            self.mode_focus_pending = true;
+        }
+        let is_emoji = self.current_view == "emoji";
+        self.search_box.update(cx, |search, cx| {
+            search.set_picker(is_emoji.then(|| self.emoji_panel.clone()), cx);
+        });
+        self.titlebar
+            .update(cx, |bar, cx| bar.set_emoji_active(is_emoji, cx));
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
@@ -1213,6 +1262,20 @@ impl Render for RootView {
             };
 
         // --- Auto-focus and clear search box when the window opens ---
+        if (self.needs_auto_focus || self.mode_focus_pending) && is_emoji {
+            self.needs_auto_focus = false;
+            self.mode_focus_pending = false;
+            self.emoji_panel
+                .update(cx, |panel, cx| panel.focus(window, cx));
+        }
+        if self.mode_focus_pending && is_clipboard {
+            self.mode_focus_pending = false;
+            if self.state.read(cx).settings.auto_focus_search {
+                self.search_box.update(cx, |bar, cx| bar.focus(window, cx));
+            } else {
+                self.list_view.update(cx, |list, _cx| list.focus(window));
+            }
+        }
         if self.needs_auto_focus && is_clipboard {
             self.needs_auto_focus = false;
             let clear_search = self.state.read(cx).settings.clear_search_on_show;
@@ -1362,7 +1425,19 @@ impl Render for RootView {
                 }
                 let is_settings = root_this.read(cx).current_view == "settings";
                 let is_edit = root_this.read(cx).current_view == "edit";
-                if is_settings {
+                let is_emoji = root_this.read(cx).current_view == "emoji";
+                if is_emoji {
+                    let composing = root_this.update(cx, |this, cx| {
+                        this.emoji_panel.update(cx, |panel, cx| panel.is_composing(window, cx))
+                    });
+                    if composing { return; }
+                    root_this.update(cx, |this, cx| {
+                        this.switch_view("clipboard");
+                        this.mode_focus_pending = true;
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                } else if is_settings {
                     // Close the innermost overlay first, then go back to clipboard
                     if root_settings.read(cx).font_picker_open {
                         root_settings.update(cx, |panel, cx| panel.close_font_picker(cx));
@@ -1405,7 +1480,7 @@ impl Render for RootView {
                     cx.stop_propagation();
                 }
             })
-            .child(div().absolute().left(px(0.)).top(px(65.)).child(sidebar))
+            .when(!is_emoji, |root| root.child(div().absolute().left(px(0.)).top(px(65.)).child(sidebar)))
             .child(
                 div()
                     .absolute()
@@ -1465,6 +1540,7 @@ impl Render for RootView {
                                             }),
                                     )
                             })
+                            .when(is_emoji, |view| view.child(search_box.clone()).child(self.emoji_panel.clone()))
                             .when(is_settings, |view| view.child(settings_panel))
                             .when(is_edit, |view| view.child(edit_panel)),
                     )

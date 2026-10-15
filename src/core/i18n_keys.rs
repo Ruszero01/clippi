@@ -6,6 +6,23 @@
 use crate::define_i18n;
 
 define_i18n! {
+    EmojiPanel: ("表情面板", "Emoji panel"),
+    EmojiEnable: ("启用表情面板", "Enable emoji panel"),
+    EmojiEnableDesc: ("在顶部显示表情入口，快速输入 Emoji、颜文字和符号", "Show the titlebar picker for emoji, kaomoji and symbols"),
+    EmojiFeatureGroup: ("功能入口", "Feature shortcuts"),
+    EmojiSearch: ("搜索表情…", "Search emoji…"),
+    EmojiSearchKaomoji: ("搜索颜文字…", "Search kaomoji…"),
+    EmojiSearchSymbols: ("搜索符号…", "Search symbols…"),
+    EmojiSearchResults: ("搜索结果", "Search results"),
+    EmojiScrollLeft: ("向左浏览分类", "Scroll categories left"),
+    EmojiScrollRight: ("向右浏览分类", "Scroll categories right"),
+    EmojiKaomoji: ("颜文字", "Kaomoji"),
+    EmojiSymbols: ("符号", "Symbols"),
+    EmojiRecent: ("最近使用", "Recently used"),
+    EmojiEmpty: ("没有找到相关内容，试试其他关键词", "No matches. Try another keyword"),
+    EmojiRecentEmpty: ("选择过的表情会显示在这里", "Emoji you use will appear here"),
+    EmojiHints: ("方向键选择 · Enter 粘贴 · Esc 返回", "Arrows to select · Enter to paste · Esc to return"),
+    EmojiPasteFailed: ("无法写入剪贴板，请重试", "Couldn't write to the clipboard. Try again"),
     GroupLocalBackup: ("本地备份与恢复", "Local backup and restore"),
     DescLocalBackup: ("按需备份或恢复设置和剪贴板数据，仅支持同一操作系统恢复", "Select settings and clipboard data; restore on the same operating system only"),
     BackupContents: ("选择备份内容", "Choose backup contents"),

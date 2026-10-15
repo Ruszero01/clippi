@@ -19,6 +19,19 @@ use super::theme::ClippiTheme;
 /// Titlebar height matching original Slint design.
 pub const TITLEBAR_HEIGHT: f32 = 30.0;
 
+/// Shared hit area and hover treatment for every titlebar action.
+fn titlebar_button(id: &'static str, theme: &ClippiTheme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(28.))
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.btn_hover))
+}
+
 fn titlebar_logo_image() -> Arc<Image> {
     static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
     LOGO.get_or_init(|| {
@@ -33,6 +46,7 @@ fn titlebar_logo_image() -> Arc<Image> {
 pub enum TitlebarEvent {
     TogglePin,
     ToggleTransfer,
+    ToggleEmoji,
     OpenSettings,
 }
 
@@ -40,6 +54,7 @@ pub struct Titlebar {
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
     pinned: bool,
+    emoji_active: bool,
     theme: ClippiTheme,
 }
 
@@ -53,6 +68,7 @@ impl Titlebar {
             state,
             list_view,
             pinned: false,
+            emoji_active: false,
             theme,
         }
     }
@@ -60,6 +76,13 @@ impl Titlebar {
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;
         cx.notify();
+    }
+
+    pub fn set_emoji_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.emoji_active != active {
+            self.emoji_active = active;
+            cx.notify();
+        }
     }
 
     pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
@@ -92,6 +115,9 @@ impl Render for Titlebar {
             )
         };
         let pinned = self.pinned;
+        let emoji_enabled = self.state.read(cx).settings.emoji_panel_enabled;
+        let emoji_active = self.emoji_active;
+        let emoji_titlebar = cx.entity().clone();
         let accent = theme.accent;
         let text_2 = theme.text_2;
         let fav_color = theme.fav_color;
@@ -151,17 +177,32 @@ impl Render for Titlebar {
                     .items_center()
                     .gap(px(2.))
                     .pr(px(4.))
+                    .when(emoji_enabled, |bar| {
+                        bar.child(
+                            titlebar_button("titlebar-emoji", theme)
+                                .when(emoji_active, |button| button.bg(theme.accent_soft))
+                                .tooltip(|window, cx| {
+                                    Tooltip::element(|_, _| {
+                                        div().text_size(fs(10.)).child(I18nKey::EmojiPanel.text())
+                                    })
+                                    .build(window, cx)
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    emoji_titlebar
+                                        .update(cx, |_, cx| cx.emit(TitlebarEvent::ToggleEmoji));
+                                })
+                                .child(
+                                    svg()
+                                        .path("picker-icons/smile.svg")
+                                        .size(px(17.))
+                                        .text_color(if emoji_active { accent } else { text_2 }),
+                                ),
+                        )
+                    })
                     // --- Custom hotkey filter button (28x28) ---
                     .when(show_hotkeys_filter, |bar| {
                         bar.child(
-                            div()
-                                .id("titlebar-hotkeys-filter")
-                                .w(px(28.))
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
+                            titlebar_button("titlebar-hotkeys-filter", theme)
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::TitlebarTooltipHotkeys.text();
                                     Tooltip::element(move |_window, _cx| {
@@ -190,14 +231,7 @@ impl Render for Titlebar {
                     // --- Transfer station filter button (28x28) ---
                     .when(show_transfer_filter, |bar| {
                         bar.child(
-                            div()
-                                .id("titlebar-transfer-filter")
-                                .w(px(28.))
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
+                            titlebar_button("titlebar-transfer-filter", theme)
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::TransferStation.text();
                                     Tooltip::element(move |_window, _cx| {
@@ -222,14 +256,7 @@ impl Render for Titlebar {
                     // --- Fav filter button (28x28) ---
                     .when(show_favorites_filter, |bar| {
                         bar.child(
-                            div()
-                                .id("titlebar-favorites-filter")
-                                .w(px(28.))
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
+                            titlebar_button("titlebar-favorites-filter", theme)
                                 .tooltip(|window, cx| {
                                     let label = I18nKey::TitlebarTooltipFavorites.text();
                                     Tooltip::element(move |_window, _cx| {
@@ -256,14 +283,7 @@ impl Render for Titlebar {
                     })
                     // --- Pin button (28x28) ---
                     .child(
-                        div()
-                            .id("titlebar-pin")
-                            .w(px(28.))
-                            .h(px(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor(CursorStyle::PointingHand)
+                        titlebar_button("titlebar-pin", theme)
                             .tooltip(move |window, cx| {
                                 let label = if pinned {
                                     I18nKey::TitlebarTooltipUnpin.text()
@@ -290,13 +310,15 @@ impl Render for Titlebar {
                     )
                     // --- Settings button (28x28) ---
                     .child(
-                        div()
-                            .w(px(28.))
-                            .h(px(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor(CursorStyle::PointingHand)
+                        titlebar_button("titlebar-settings", theme)
+                            .tooltip(|window, cx| {
+                                Tooltip::element(|_, _| {
+                                    div()
+                                        .text_size(fs(10.))
+                                        .child(I18nKey::SettingsTitle.text())
+                                })
+                                .build(window, cx)
+                            })
                             .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                                 settings_titlebar.update(cx, |_titlebar, cx| {
                                     cx.emit(TitlebarEvent::OpenSettings);

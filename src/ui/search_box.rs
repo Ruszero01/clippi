@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use gpui::prelude::FluentBuilder;
 use gpui::InteractiveElement;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -17,6 +18,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
 use super::clipboard_list::{ClipboardListEvent, ClipboardListView};
+use super::emoji_panel::EmojiPanel;
 use super::theme::ClippiTheme;
 
 /// Debounce for applying search keywords: only the last stable keyword typed
@@ -64,6 +66,7 @@ impl EventEmitter<SearchBoxEvent> for SearchBox {}
 
 pub struct SearchBox {
     input: Entity<InputState>,
+    picker: Option<Entity<EmojiPanel>>,
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
     theme: ClippiTheme,
@@ -126,6 +129,7 @@ impl SearchBox {
 
         Self {
             input,
+            picker: None,
             state,
             list_view,
             theme,
@@ -140,10 +144,24 @@ impl SearchBox {
         cx.notify();
     }
 
+    /// Reuse the complete search row, including its add button, for the picker.
+    /// The two inputs remain independent so switching modes preserves history search.
+    pub fn set_picker(&mut self, picker: Option<Entity<EmojiPanel>>, cx: &mut Context<Self>) {
+        if self.picker.is_some() != picker.is_some() {
+            self.picker = picker;
+            self.new_item_hovered = false;
+            cx.notify();
+        }
+    }
+
     /// Focus the search input. Called when the window opens and
     /// `auto_focus_search` setting is enabled.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.input.focus_handle(cx).focus(window);
+        if let Some(picker) = &self.picker {
+            picker.update(cx, |picker, cx| picker.focus(window, cx));
+        } else {
+            self.input.focus_handle(cx).focus(window);
+        }
     }
 
     /// Clear the search input text. Called when the window opens and
@@ -167,6 +185,11 @@ impl Render for SearchBox {
         }
 
         let theme = &self.theme;
+        let active_input = self
+            .picker
+            .as_ref()
+            .map(|picker| picker.read(cx).input_entity())
+            .unwrap_or_else(|| self.input.clone());
         let text_2 = theme.text_2;
         let text_3 = theme.text_3;
         let surface = theme.surface;
@@ -211,6 +234,11 @@ impl Render for SearchBox {
             .flex_shrink_0()
             .pt(px(1.))
             .px(px(8.))
+            .when_some(self.picker.clone(), |row, picker| {
+                row.capture_key_down(move |event, window, cx| {
+                    picker.update(cx, |picker, cx| picker.handle_key(event, window, cx));
+                })
+            })
             .child(
                 div()
                     .flex()
@@ -233,9 +261,13 @@ impl Render for SearchBox {
                             .border_color(divider)
                             .overflow_hidden()
                             .on_key_down({
+                                let picker_active = self.picker.is_some();
                                 let list = self.list_view.clone();
                                 let app_state = self.state.clone();
                                 move |ev: &KeyDownEvent, window, cx| {
+                                    if picker_active {
+                                        return;
+                                    }
                                     let key = ev.keystroke.key.as_str();
                                     let ctrl = primary_modifier_pressed(ev.keystroke.modifiers);
                                     let shift = ev.keystroke.modifiers.shift;
@@ -351,7 +383,7 @@ impl Render for SearchBox {
                                 }
                             })
                             .child(
-                                Input::new(&self.input)
+                                Input::new(&active_input)
                                     .appearance(false)
                                     .bordered(false)
                                     .focus_bordered(false)

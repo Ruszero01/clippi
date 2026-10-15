@@ -170,6 +170,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub transfer_station_enabled: bool, // transfer station feature gate
     #[serde(default)]
+    pub emoji_panel_enabled: bool,
+    #[serde(default)]
+    pub recent_emojis: Vec<String>,
+    #[serde(default)]
     pub transfer_backend_id: String, // explicitly selected backend for transfer station
     #[serde(default = "default_transfer_retention_days")]
     pub transfer_retention_days: u32, // transfer file retention days (default 3)
@@ -366,6 +370,8 @@ impl Default for AppSettings {
             sync_include_images: false,
             sync_compress_images: false,
             transfer_station_enabled: false,
+            emoji_panel_enabled: false,
+            recent_emojis: Vec::new(),
             transfer_backend_id: String::new(),
             transfer_retention_days: 3,
             max_items: 0,
@@ -2003,6 +2009,29 @@ mod tests {
 
         assert_eq!(parsed.paste_click_mode, "double_click");
         assert_eq!(parsed.paste_click_mode_normalized(), "double_click");
+    }
+
+    #[test]
+    fn emoji_picker_settings_are_backward_compatible_and_preserve_sequences() {
+        let mut serialized = toml::to_string(&AppSettings::default()).unwrap();
+        serialized = serialized
+            .lines()
+            .filter(|line| {
+                !line.starts_with("emoji_panel_enabled =") && !line.starts_with("recent_emojis =")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let legacy: AppSettings = toml::from_str(&serialized).unwrap();
+        assert!(!legacy.emoji_panel_enabled);
+        assert!(legacy.recent_emojis.is_empty());
+        let settings = AppSettings {
+            emoji_panel_enabled: true,
+            recent_emojis: vec!["🇨🇳".into(), "👨‍👩‍👧‍👦".into()],
+            ..Default::default()
+        };
+        let loaded: AppSettings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert!(loaded.emoji_panel_enabled);
+        assert_eq!(loaded.recent_emojis, settings.recent_emojis);
     }
 
     #[test]

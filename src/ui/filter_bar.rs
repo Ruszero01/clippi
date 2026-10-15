@@ -81,6 +81,51 @@ const TYPE_FILTER_TEXT_GAP: f32 = 4.0;
 const TYPE_FILTER_ICON_GAP: f32 = 3.0;
 const TYPE_FILTER_TEXT_MIN_SLOT_WIDTH: f32 = 50.0;
 
+/// Shared toolbar geometry for clipboard types and picker categories.
+pub(crate) fn filter_toolbar() -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_start()
+        .gap(px(TOOLBAR_GROUP_GAP))
+        .h(px(22.))
+        .w_full()
+        .px(px(8.))
+        .pb(px(2.))
+        .flex_shrink_0()
+}
+
+/// Keep picker choices visually identical to the existing clipboard type chips.
+pub(crate) fn filter_chip(
+    id: impl Into<ElementId>,
+    active: bool,
+    theme: &ClippiTheme,
+) -> Stateful<Div> {
+    let inactive = if theme.bg == rgb(0x191a1b) {
+        rgba(0xffffff0a)
+    } else {
+        rgba(0x00000008)
+    };
+    div()
+        .id(id)
+        .h(px(22.))
+        .flex_1()
+        .min_w(px(0.))
+        .flex_shrink_0()
+        .rounded(px(5.))
+        .bg(if active {
+            theme.accent_overlay()
+        } else {
+            inactive
+        })
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .cursor(CursorStyle::PointingHand)
+}
+
 pub struct FilterBar {
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
@@ -179,16 +224,7 @@ impl Render for FilterBar {
             rgba(0x00000014)
         };
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_start()
-            .gap(px(TOOLBAR_GROUP_GAP))
-            .h(px(22.))
-            .w_full()
-            .px(px(8.))
-            .pb(px(2.))
+        filter_toolbar()
             .on_mouse_down(MouseButton::Right, {
                 let this = this.clone();
                 move |_ev, _window, cx| {
@@ -223,11 +259,6 @@ impl Render for FilterBar {
                                 let label = filter_def.label_key.text();
                                 let key = filter_def.key;
                                 let is_active = state_snapshot.filters.is_type_active(key);
-                                let filter_bg = if is_active {
-                                    theme.accent_overlay()
-                                } else {
-                                    inactive_button_bg
-                                };
                                 let filter_text = if is_active { accent } else { text_2 };
                                 let filter_weight = if is_active {
                                     FontWeight::BOLD
@@ -239,9 +270,7 @@ impl Render for FilterBar {
                                 let this = this.clone();
 
                                 Some(
-                                    div()
-                                        .id(("filter-type", index))
-                                        .h(px(22.))
+                                    filter_chip(("filter-type", index), is_active, theme)
                                         .when(icon_only, |button| {
                                             button.flex_1().min_w(px(0.)).justify_center()
                                         })
@@ -253,13 +282,6 @@ impl Render for FilterBar {
                                                 .px(px(5.))
                                                 .gap(px(2.))
                                         })
-                                        .flex_shrink_0()
-                                        .rounded(px(5.))
-                                        .bg(filter_bg)
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .cursor(CursorStyle::PointingHand)
                                         .when(icon_only, move |button| {
                                             button.tooltip(move |window, cx| {
                                                 Tooltip::element(move |_window, _cx| {
