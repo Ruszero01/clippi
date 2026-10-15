@@ -1419,7 +1419,8 @@ impl Render for RootView {
                     // Alt+key dispatch. The modifiers event only fires when a
                     // modifier key actually changes state, so this is cheap and
                     // fires on both press and release of Alt.
-                    let pressed = event.modifiers.alt;
+                    let enabled = state_handle.read(cx).settings.alt_shortcuts_enabled;
+                    let pressed = enabled && event.modifiers.alt;
                     if state_handle.read(cx).alt_pressed != pressed {
                         state_handle.update(cx, |state, _cx| state.set_alt_pressed(pressed));
                         notify_this.update(cx, |_, cx| cx.notify());
@@ -1431,6 +1432,7 @@ impl Render for RootView {
                 let k = ev.keystroke.key.as_str();
                 if (k == "d" || (k.len() == 1 && k.chars().next().unwrap().is_ascii_digit()))
                     && ev.keystroke.modifiers.alt
+                    && root_state.read(cx).settings.alt_shortcuts_enabled
                     && !ev.keystroke.modifiers.control
                     && !ev.keystroke.modifiers.shift
                 {
