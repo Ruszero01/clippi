@@ -1430,7 +1430,7 @@ impl Render for RootView {
             .on_key_down(move |ev: &KeyDownEvent, window, cx| {
                 // --- Alt+key shortcuts (main window, clipboard view only) ---
                 let k = ev.keystroke.key.as_str();
-                if (k == "d" || (k.len() == 1 && k.chars().next().unwrap().is_ascii_digit()))
+                if (k == "d" || matches!(k.chars().next(), Some('1'..='9')))
                     && ev.keystroke.modifiers.alt
                     && root_state.read(cx).settings.alt_shortcuts_enabled
                     && !ev.keystroke.modifiers.control
