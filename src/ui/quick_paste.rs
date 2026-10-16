@@ -45,8 +45,6 @@ const HINT_BAR_HEIGHT: f32 = 34.0;
 /// never squeeze it out of the row.
 const QUICK_SEARCH_WIDTH: f32 = 158.0;
 const QUICK_SEARCH_HEIGHT: f32 = 22.0;
-/// 搜索框文字字号，与渲染里的 `fs(11.0)` 一致；输入法定位候选框时也要用。
-const QUICK_SEARCH_FONT_SIZE: f32 = 11.0;
 /// 光标闪烁半周期（可见 ↔ 不可见），接近 Windows 文本光标的默认节奏。
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 /// 搜索命中预览的裁剪预算：行内最多保留这么多字符。
@@ -287,9 +285,6 @@ pub struct QuickPasteView {
     /// 搜索框文本。快速窗口是 `WS_EX_NOACTIVATE` 窗口，永远不会获得焦点，
     /// 键盘输入由 `platform::keyboard_hook` 转发到 `push_query_char`。
     query: String,
-    /// 输入法正在组合的文本（拼音、注音、假名…），显示在输入内容之后并带
-    /// 下划线；提交后由 `push_query_string` 并入搜索词。没有组合时为空。
-    composition: String,
     /// 搜索框是否已聚焦：只有点击搜索框（或按 Tab，或开始输入）后光标才出现在框内。
     /// 快速窗口是 `WS_EX_NOACTIVATE` 窗口，这里记录的是「用户把输入目标指向了
     /// 搜索框」这一界面状态，决定光标与边框高亮。把按键从前景应用手里接过来的
@@ -337,7 +332,6 @@ impl QuickPasteView {
             first_visible: 0,
             hovered_index: None,
             query: String::new(),
-            composition: String::new(),
             query_focused: false,
             cursor_blink_on: false,
             cursor_blink_generation: 0,
@@ -409,26 +403,11 @@ impl QuickPasteView {
     /// 当成用户离开而自行关闭——那正是快速窗口存在的意义，也是这里不再借焦点的
     /// 原因。
     ///
-    /// 中文搜索本身也不需要输入法：搜索支持全拼与首字母，直接打 `gzjh` 就能搜到
-    /// 「工作计划」。确实要用输入法组合文字时另有显式入口（双击搜索框，见
-    /// `take_input_method`）。
+    /// 中文搜索使用全拼与首字母，例如 `gzjh` 匹配「工作计划」。
+    /// 快速窗口不接管系统输入法，任何搜索操作都不获取原生焦点。
     pub fn activate_search(&mut self, cx: &mut Context<Self>) {
         crate::platform::keyboard_hook::set_search_armed(true);
         self.focus_query(cx);
-    }
-
-    /// 双击搜索框：把键盘焦点借给弹窗，让系统输入法能在搜索框里组合中文。
-    ///
-    /// 输入法只会把组合文字送进拥有键盘焦点的窗口（`platform::quick_focus`），
-    /// 所以这条路径必然要借焦点，代价是前台应用在这段时间里失去插入点、Listary
-    /// 这类面板会自行关闭。正因为代价明确，它不做成自动动作，只有用户双击才会发生。
-    ///
-    /// 返回是否借到了焦点：失败时仍处于搜索态，按键继续由键盘钩子逐字转发。
-    #[cfg(target_os = "windows")]
-    pub fn take_input_method(&mut self, cx: &mut Context<Self>) -> bool {
-        let acquired = crate::platform::quick_focus::acquire_search_focus();
-        self.focus_query(cx);
-        acquired
     }
 
     /// 在搜索态与列表态之间切换（Tab）。
@@ -462,20 +441,10 @@ impl QuickPasteView {
         }
     }
 
-    /// 离开搜索态：不再把按键从前景应用手里接过来（数字键恢复槽位语义），归还
-    /// 可能借来的键盘焦点，收起光标并让闪烁循环退出。
-    ///
-    /// 输入法未提交的组合文本一并丢弃：它只属于当前这一次聚焦。
+    /// 离开搜索态并停止绘制光标；不改变任何原生窗口焦点。
     pub fn blur_query(&mut self, cx: &mut Context<Self>) {
         crate::platform::keyboard_hook::set_search_armed(false);
-        crate::platform::quick_focus::release_search_focus();
-        crate::platform::quick_focus::reset_ime_text();
-        let had_composition = !self.composition.is_empty();
-        self.composition.clear();
         if !self.query_focused {
-            if had_composition {
-                cx.notify();
-            }
             return;
         }
         self.query_focused = false;
@@ -536,25 +505,6 @@ impl QuickPasteView {
         query.push(character);
         self.set_query(query, cx);
         self.focus_query(cx);
-    }
-
-    /// 追加输入法提交的文本（一个词或一整句），与钩子转发的字符走同一条路径。
-    pub fn push_query_string(&mut self, text: &str, cx: &mut Context<Self>) {
-        if text.is_empty() {
-            return;
-        }
-        let mut query = self.query.clone();
-        query.push_str(text);
-        self.set_query(query, cx);
-    }
-
-    /// 更新输入法正在组合的文本（拼音等），显示在输入内容之后。
-    pub fn set_composition(&mut self, composition: String, cx: &mut Context<Self>) {
-        if self.composition == composition {
-            return;
-        }
-        self.composition = composition;
-        cx.notify();
     }
 
     /// 删除最后一个字符（键盘钩子的退格键）。
@@ -1021,23 +971,6 @@ impl Render for QuickPasteView {
                     .bg(theme.accent)
                     .into_any_element()
             });
-        // 输入法组合层：拼音等尚未提交的文本，跟在输入内容之后，下划线表示
-        // 还没有提交。输入法的组合窗口与候选框跟随搜索框里的文本起点。
-        let composition_layer: Option<AnyElement> = (!self.composition.is_empty()).then(|| {
-            div()
-                .flex_shrink_0()
-                .whitespace_nowrap()
-                .text_size(fs(11.0))
-                .text_color(theme.text_1)
-                .underline()
-                .child(SharedString::from(self.composition.clone()))
-                .into_any_element()
-        });
-        if self.query_focused {
-            let caret = quick_search_caret_point(window, &self.query, &self.composition);
-            crate::platform::quick_focus::set_caret_point(f32::from(caret.x), f32::from(caret.y));
-        }
-
         // ── 搜索词过滤后有效 `(源下标, 稳定 ID)` 快照 ──
         // 当次渲染的显示数量、空状态、行数据、选中态与高级粘贴浮层统一复用，
         // 同时存入 `display_indices` 供交互入口解析条目身份，避免同一帧内重复扫描。
@@ -1932,20 +1865,7 @@ impl Render for QuickPasteView {
                             .cursor(CursorStyle::IBeam)
                             .on_mouse_down(MouseButton::Left, {
                                 let view = view_entity.clone();
-                                move |ev, _window, cx| {
-                                    // 单击进入搜索态：不加任何输入前提，也不借键盘
-                                    // 焦点，前台应用照旧保持自己的插入点。Windows
-                                    // 双击才把输入法接过来；macOS 的快速搜索通过
-                                    // 键盘事件输入拼音，不接管输入法。
-                                    #[cfg(target_os = "windows")]
-                                    if ev.click_count >= 2 {
-                                        view.update(cx, |view, cx| {
-                                            view.take_input_method(cx);
-                                        });
-                                        return;
-                                    }
-                                    #[cfg(not(target_os = "windows"))]
-                                    let _ = ev;
+                                move |_ev, _window, cx| {
                                     view.update(cx, |view, cx| view.activate_search(cx));
                                 }
                             })
@@ -1966,7 +1886,6 @@ impl Render for QuickPasteView {
                                     .gap(px(2.0))
                                     .overflow_hidden()
                                     .children(query_text_layer)
-                                    .children(composition_layer)
                                     .children(caret_layer),
                             ),
                     ),
@@ -1975,48 +1894,6 @@ impl Render for QuickPasteView {
 }
 
 // ── Helpers (adapted from clipboard_card.rs) ──
-
-/// 搜索框内插入点（逻辑客户区坐标，相对窗口左上角）。
-///
-/// 输入法据此定位组合窗口与候选框，两者都跟着插入点走：搜索框宽度固定且贴右
-/// 对齐，所以起点只随窗口尺寸变化，但要加上已经输入的搜索词与正在组合的文字，
-/// 否则候选框会压在搜索词上。
-fn quick_search_caret_point(window: &Window, query: &str, composition: &str) -> Point<Pixels> {
-    // 搜索框边框与内边距，与渲染里的 `.border(px(1.0))`、`.px(px(6.0))` 一致。
-    const FIELD_BORDER: f32 = 1.0;
-    const FIELD_PADDING: f32 = 6.0;
-    // 搜索图标宽度与图标到文本的间距，与渲染里的图标字号和 `gap` 一致。
-    const ICON_WIDTH: f32 = 11.0;
-    const ICON_GAP: f32 = 5.0;
-    // 文本层之间的 `gap(px(2.0))`。
-    const TEXT_GAP: f32 = 2.0;
-
-    let window_size = window.bounds().size;
-    let field_left = f32::from(window_size.width) - HORIZONTAL_PADDING - QUICK_SEARCH_WIDTH;
-    let field_bottom =
-        f32::from(window_size.height) - (HINT_BAR_HEIGHT - QUICK_SEARCH_HEIGHT) / 2.0;
-    let mut text_width = quick_text_width(query, window);
-    if !composition.is_empty() {
-        text_width += TEXT_GAP + quick_text_width(composition, window);
-    }
-    point(
-        px(field_left + FIELD_BORDER + FIELD_PADDING + ICON_WIDTH + ICON_GAP + text_width),
-        px(field_bottom),
-    )
-}
-
-/// 一段搜索框文字占用的逻辑宽度，与渲染共用同一套字体度量。
-fn quick_text_width(text: &str, window: &Window) -> f32 {
-    if text.is_empty() {
-        return 0.0;
-    }
-    let text: SharedString = text.to_owned().into();
-    let run = window.text_style().to_run(text.len());
-    let line = window
-        .text_system()
-        .shape_line(text, fs(QUICK_SEARCH_FONT_SIZE), &[run], None);
-    f32::from(line.width)
-}
 
 fn type_icon(item: &ClipboardItem) -> &'static str {
     if item.meta_type == "email" {
