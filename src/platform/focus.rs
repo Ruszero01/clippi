@@ -262,18 +262,6 @@ fn is_own_process_window(hwnd: HWND) -> bool {
     tid != 0 && pid == std::process::id()
 }
 
-/// Whether `hwnd` is a window of Clippi's own process.
-///
-/// The quick popup asks before borrowing the keyboard focus (`quick_focus`): a
-/// focus taken while Clippi itself is in front would be taken from Clippi, with
-/// no foreign input queue to join, and the loan would collapse the moment the
-/// foreground settles back onto the application — armed for one frame, grey the
-/// next.
-#[cfg(target_os = "windows")]
-pub fn is_own_window(hwnd: HWND) -> bool {
-    is_own_process_window(hwnd)
-}
-
 /// Resolve the top-level window that owns `hwnd`.
 ///
 /// Win32 activates — and `SetForegroundWindow` accepts — only top-level
@@ -427,19 +415,17 @@ struct InputContext {
     focus: Option<HWND>,
 }
 
-/// Focused/borrowed controls can be children of hidden launcher roots, whereas
+/// Focused controls can be children of hidden launcher roots, whereas
 /// a foreground fallback must be visible. Keep these acceptance rules distinct.
 #[cfg(any(target_os = "windows", test))]
 fn select_input_owner<T: Copy>(
     focus: Option<T>,
-    borrowed: Option<T>,
     foreground: Option<T>,
     accepts_focus: impl Fn(T) -> bool,
     accepts_foreground: impl Fn(T) -> bool,
 ) -> Option<T> {
     focus
         .filter(|&window| accepts_focus(window))
-        .or_else(|| borrowed.filter(|&window| accepts_focus(window)))
         .or_else(|| foreground.filter(|&window| accepts_foreground(window)))
 }
 
@@ -464,7 +450,6 @@ impl InputContext {
     fn live_owner(&self) -> Option<HWND> {
         select_input_owner(
             self.focus,
-            crate::platform::quick_focus::borrowed_focus_owner().map(|hwnd| hwnd as HWND),
             (!self.foreground.is_null()).then_some(self.foreground),
             is_foreign_input_window,
             is_valid_paste_target,
@@ -561,28 +546,6 @@ fn is_foreign_input_window(hwnd: HWND) -> bool {
         return false;
     }
     !is_clippi_window(hwnd) && !is_own_process_window(hwnd) && !is_tray_window(hwnd)
-}
-
-/// Whether the window that owns the input sits outside the window in front.
-///
-/// That is the signature of a launcher palette: a non-activating window takes
-/// the keyboard without ever coming to the front (Quicker and the like), so the
-/// caret sits in a window the user is not "in" — the foreground underneath stays
-/// where it was. Such a palette keeps its caret only as long as nothing takes
-/// that focus from it, which is why the automatic search-box arm asks this
-/// first and leaves the palette alone.
-#[cfg(target_os = "windows")]
-pub fn input_detached_from_foreground() -> bool {
-    let context = InputContext::capture();
-    let Some(focus) = context.focus else {
-        return false;
-    };
-    // SAFETY: read-only query on a handle that is only observed.
-    let foreground = context.foreground;
-    if foreground.is_null() {
-        return false;
-    }
-    !same_top_level(focus, foreground)
 }
 
 /// Whether a simulated keystroke sent right now would land in `target`.
@@ -858,25 +821,19 @@ mod tests {
 
     #[test]
     fn focused_launcher_wins_even_when_its_root_is_hidden() {
-        let result = select_input_owner(Some(1), None, Some(2), |_| true, |w| w == 2);
+        let result = select_input_owner(Some(1), Some(2), |_| true, |w| w == 2);
         assert_eq!(result, Some(1));
     }
 
     #[test]
-    fn borrowed_control_wins_over_foreground_while_clippi_has_focus() {
-        let result = select_input_owner(Some(1), Some(2), Some(3), |w| w != 1, |_| true);
-        assert_eq!(result, Some(2));
-    }
-
-    #[test]
     fn tray_focus_and_foreground_do_not_supply_a_new_target() {
-        let result = select_input_owner(Some(1), None, Some(1), |_| false, |_| false);
+        let result = select_input_owner(Some(1), Some(1), |_| false, |_| false);
         assert_eq!(result, None);
     }
 
     #[test]
     fn foreground_is_used_when_no_valid_control_owns_input() {
-        let result = select_input_owner(Some(1), Some(2), Some(3), |_| false, |_| true);
+        let result = select_input_owner(Some(1), Some(3), |_| false, |_| true);
         assert_eq!(result, Some(3));
     }
 

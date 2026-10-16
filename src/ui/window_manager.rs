@@ -233,9 +233,6 @@ fn position_quick_window_windows(
     compensate_client_offset: bool,
 ) {
     use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    };
 
     let hwnd = hwnd as *mut std::ffi::c_void;
     if hwnd.is_null() {
@@ -252,18 +249,14 @@ fn position_quick_window_windows(
         (0, 0)
     };
 
-    let positioned = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x - left_offset,
-            y - top_offset,
-            win_w,
-            win_h,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        )
-    };
-    if positioned == 0 {
+    let positioned = crate::platform::quick_window::show_at(
+        hwnd as isize,
+        x - left_offset,
+        y - top_offset,
+        win_w,
+        win_h,
+    );
+    if !positioned {
         log::warn!("failed to position quick window: win32 error {}", unsafe {
             GetLastError()
         });
@@ -816,7 +809,6 @@ impl WindowManager {
                     // are matched against is the freshest one in this tick.
                     wm.poll_quick_click_outside(cx);
                     wm.poll_quick_keys(cx);
-                    wm.poll_quick_ime(cx);
                 })
                 .is_err()
             {
@@ -839,45 +831,6 @@ impl WindowManager {
         for key in keyboard_hook::take_events() {
             self.handle_quick_key(key, cx);
         }
-    }
-
-    /// Apply the input method text the popup received, and keep the keyboard
-    /// focus loan honest.
-    ///
-    /// While the search box is focused the popup owns the keyboard focus and the
-    /// input method delivers its composition and committed text through the
-    /// window subclass (`platform::quick_focus`). Both land here, where they are
-    /// applied to the search box exactly like the keys the hook forwards.
-    ///
-    /// A borrow that went stale — the user clicked another window, focus moved
-    /// on for any other reason — is dropped instead of leaving the two input
-    /// queues joined.
-    fn poll_quick_ime(&mut self, cx: &mut Context<Self>) {
-        if !self.quick_visible {
-            return;
-        }
-        let Some(view) = self.quick_view.clone() else {
-            return;
-        };
-        if keyboard_hook::is_input_method_taken() {
-            // A borrow the user walked away from is dropped; one that only
-            // slipped — the application underneath retaking its own focus — is
-            // asserted again, because the search box has to keep receiving what
-            // the user types into it.
-            if crate::platform::quick_focus::search_focus_lost()
-                || !crate::platform::quick_focus::reassert_search_focus()
-            {
-                crate::platform::quick_focus::abandon_search_focus();
-                view.update(cx, |view, cx| view.blur_query(cx));
-            }
-        }
-        let Some(update) = crate::platform::quick_focus::take_ime_update() else {
-            return;
-        };
-        if !update.committed.is_empty() {
-            view.update(cx, |view, cx| view.push_query_string(&update.committed, cx));
-        }
-        view.update(cx, |view, cx| view.set_composition(update.composition, cx));
     }
 
     /// Apply one claimed key to the quick popup.
@@ -3632,6 +3585,10 @@ impl WindowManager {
     }
 
     fn show_quick_window(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        if self.quick_hwnd == 0 {
+            return;
+        }
         let Some(view) = self.quick_view.clone() else {
             return;
         };
@@ -3641,9 +3598,10 @@ impl WindowManager {
         // Main and quick window are never shown simultaneously.
         if switching_from_main {
             self.hide(cx);
-            // A non-activating popup cannot receive the focus relinquished by
-            // the main window. Restore the previous application explicitly so
-            // keyboard shortcuts and paste keep targeting it on both platforms.
+            // Windows chooses the successor when the main window hides. The
+            // quick popup must not force-activate even a remembered paste target:
+            // it may be stale or may own a transient launcher/search panel.
+            #[cfg(target_os = "macos")]
             crate::platform::paste::restore_paste_target();
         }
 
@@ -3804,12 +3762,6 @@ impl WindowManager {
         // Release the keyboard hook together with the popup: keystrokes belong
         // to the application the user is typing in again.
         keyboard_hook::set_enabled(false);
-        // Hand the borrowed keyboard focus back before the window disappears.
-        // A hidden window cannot hold the focus, and giving it back here is what
-        // puts the caret in the application underneath exactly where the user
-        // left it — including the launcher palette the paste is about to land
-        // in.
-        crate::platform::quick_focus::release_search_focus();
         if let Some(view) = self.quick_view.clone() {
             view.update(cx, |view, cx| view.blur_query(cx));
         }
@@ -3832,27 +3784,8 @@ impl WindowManager {
         }
 
         #[cfg(target_os = "windows")]
-        {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            };
-            let hwnd = self.quick_hwnd as *mut std::ffi::c_void;
-            if !hwnd.is_null() {
-                // Use SWP_HIDEWINDOW instead of SW_HIDE — SW_HIDE minimises
-                // the window, causing GPUI to save request_frame and restore
-                // it with should_resize_renderer=false on next show.
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        std::ptr::null_mut(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_HIDEWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
-                    );
-                }
-            }
+        if self.quick_hwnd != 0 && !crate::platform::quick_window::hide(self.quick_hwnd) {
+            log::warn!("failed to hide quick window without activation");
         }
 
         #[cfg(target_os = "macos")]
@@ -4171,20 +4104,13 @@ impl WindowManager {
         use windows_sys::Win32::Graphics::Dwm::{
             DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
         };
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
-            SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-        };
-
         self.quick_hwnd = hwnd;
         let hwnd = hwnd as *mut std::ffi::c_void;
         if hwnd.is_null() {
             return;
         }
 
-        // Keep the quick popup out of Alt-Tab/taskbar and prevent mouse clicks
-        // from activating it while still allowing it to receive mouse messages.
+        // Explicitly round the native popup frame on Windows 11.
         unsafe {
             // Popup windows do not always receive Windows 11's automatic
             // rounding. Explicitly request the standard system radius so DWM
@@ -4196,25 +4122,6 @@ impl WindowManager {
                 &corner_preference as *const _ as *const _,
                 std::mem::size_of_val(&corner_preference) as u32,
             );
-            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE)
-                | WS_EX_NOACTIVATE as i32
-                | WS_EX_TOOLWINDOW as i32
-                | WS_EX_TOPMOST as i32;
-            SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style);
-            SetWindowPos(
-                hwnd,
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED
-                    | SWP_HIDEWINDOW
-                    | SWP_NOACTIVATE
-                    | SWP_NOMOVE
-                    | SWP_NOSIZE
-                    | SWP_NOZORDER,
-            );
         }
 
         // The popup never activates, so its keystrokes have to be observed
@@ -4224,10 +4131,12 @@ impl WindowManager {
         if let Err(error) = keyboard_hook::install() {
             log::warn!("quick paste keyboard hook unavailable: {error}");
         }
-        // The search box can only run an input method while it owns the keyboard
-        // focus, so the popup is subclassed to collect the input method messages
-        // that arrive once the focus has been borrowed.
-        crate::platform::quick_focus::install(self.quick_hwnd);
+        // Fail closed: a popup without the native non-activation policy must
+        // never be shown. Installation owns the window's complete input policy.
+        if let Err(error) = crate::platform::quick_window::install(self.quick_hwnd) {
+            log::error!("quick window non-activation policy unavailable: {error}");
+            self.quick_hwnd = 0;
+        }
     }
 
     /// Shared macOS window styling — transparent floating panel with no chrome buttons.
@@ -6106,7 +6015,6 @@ impl WindowManager {
             fw.stop();
         }
         keyboard_hook::uninstall();
-        crate::platform::quick_focus::uninstall();
     }
 
     /// Run periodic maintenance for local caches, retained history, and transfer files.

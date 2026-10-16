@@ -8,7 +8,8 @@ pub mod hotkey;
 pub mod keyboard_hook;
 pub mod monitor;
 pub mod paste;
-pub mod quick_focus;
+#[cfg(target_os = "windows")]
+pub mod quick_window;
 pub mod remote_path;
 pub mod source;
 pub mod text_input;

@@ -16,36 +16,10 @@
 //! the user is typing in, and a launcher palette never reads a search as "the
 //! user clicked outside me" and dismisses itself.
 //!
-//! The input method is the one thing that cannot work without the focus, so it is
-//! a separate, explicit action (`ui::quick_paste::take_input_method`, bound to a
-//! double click on the search box) that borrows the focus for as long as the user
-//! asked for it and no longer.
-//!
-//! Priority order, highest first:
-//! 1. An input method that is composing keeps every key — pinyin typing and,
-//!    above all, digit candidate selection. That is the composition of the
-//!    application underneath; the popup's own composition, which needs the input
-//!    method to have been taken over, is rule 2.
-//! 2. A search box that has taken the input method over
-//!    (`platform::quick_focus`) hands the text keys to it, so the composition —
-//!    and with it the candidate list — is built inside the popup instead of
-//!    being turned into latin letters here. The input method's own switch key is
-//!    handed over as well, so a composition can be turned on and off again.
-//! 3. The popup's own shortcuts: navigation, paste, close, slot digits, and the
-//!    Tab that turns the search state on and off.
-//! 4. A search box in its text-entry state (`SEARCH_ARMED`) takes every plain
-//!    key: the slot digits step aside for search input, and nothing the user
-//!    types reaches the application underneath while the search is under way.
-//! 5. Everything else without Ctrl/Alt/Win becomes search text.
-//!
-//! Shortcuts with Ctrl, Alt or Win are never claimed, so the application
-//! underneath still receives Ctrl+V and the like: entering the search state
-//! takes the typing, not the system's shortcuts. Everything goes back to the
-//! application the moment the search state ends.
-//!
-//! A takeover that cannot be proven — the popup does not really receive the keys
-//! — costs the input method rather than the search: the keys are translated here
-//! instead, and still nothing is handed to the application underneath.
+//! The popup never owns an input method or borrows another thread's input
+//! queue. Search characters are translated here; Chinese items can be found
+//! using full pinyin or initials. A composition already running in the target
+//! application keeps its keys, and modified shortcuts remain with that app.
 
 use std::collections::VecDeque;
 #[cfg(target_os = "windows")]
@@ -84,10 +58,6 @@ static QUERY_EMPTY: AtomicBool = AtomicBool::new(true);
 /// `auto_focus_search` setting). Held without the keyboard focus, because the
 /// keys the search box needs are translated here.
 static SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
-/// Whether the popup has borrowed the keyboard focus for its input method
-/// (`platform::quick_focus`). Held only while the popup can really receive keys,
-/// which is the condition for handing text keys over to it.
-static INPUT_METHOD_TAKEN: AtomicBool = AtomicBool::new(false);
 static EVENTS: OnceLock<Mutex<VecDeque<QuickKey>>> = OnceLock::new();
 
 fn events() -> &'static Mutex<VecDeque<QuickKey>> {
@@ -100,6 +70,7 @@ fn events() -> &'static Mutex<VecDeque<QuickKey>> {
 pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::SeqCst);
     if !enabled {
+        SEARCH_ARMED.store(false, Ordering::SeqCst);
         // Drop queued keys so the next session cannot replay them. Claimed keys
         // are kept on purpose: the popup is normally dismissed by the key that
         // is still held down (Enter), and that press's release has to stay
@@ -135,21 +106,6 @@ pub fn is_search_armed() -> bool {
     SEARCH_ARMED.load(Ordering::SeqCst)
 }
 
-/// Record whether the popup has borrowed the keyboard focus for its input
-/// method.
-///
-/// While it has, text keys belong to the focused popup: the input method has to
-/// see them to build a composition, so the hook hands them over instead of
-/// translating them itself.
-pub fn set_input_method_taken(taken: bool) {
-    INPUT_METHOD_TAKEN.store(taken, Ordering::SeqCst);
-}
-
-/// Whether the popup has borrowed the keyboard focus for its input method.
-pub fn is_input_method_taken() -> bool {
-    INPUT_METHOD_TAKEN.load(Ordering::SeqCst)
-}
-
 /// Drain the keys the hook claimed since the last call.
 pub fn take_events() -> Vec<QuickKey> {
     events()
@@ -164,12 +120,12 @@ mod windows_impl {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::Ime::{
-        ImmGetCompositionStringW, ImmGetContext, ImmGetOpenStatus, ImmReleaseContext, GCS_COMPSTR,
+        ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, GCS_COMPSTR,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, GetKeyboardLayout, ToUnicodeEx, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN,
-        VK_ESCAPE, VK_LEFT, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_PROCESSKEY,
-        VK_RETURN, VK_RIGHT, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
+        VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_PROCESSKEY, VK_RETURN,
+        VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW,
@@ -308,62 +264,6 @@ mod windows_impl {
         }
     }
 
-    /// Whether the input method is switched into its composing (Chinese,
-    /// Japanese, …) mode for the focused window.
-    ///
-    /// A hook can translate one key at a time; a composition has to happen in
-    /// the window that owns the focus. While the input method is open every text
-    /// key has to reach that window — whether or not a composition is already on
-    /// screen — so this is what tells the hook to keep its hands off text keys
-    /// while the search box is focused.
-    fn ime_is_open() -> bool {
-        let Some(target) = focus_window() else {
-            return false;
-        };
-        // SAFETY: read-only IMM query on a window handle; the context handed
-        // out by `ImmGetContext` is always released again.
-        unsafe {
-            let context = ImmGetContext(target);
-            if context.is_null() {
-                return false;
-            }
-            let open = ImmGetOpenStatus(context) != 0;
-            ImmReleaseContext(target, context);
-            open
-        }
-    }
-
-    /// Input method state that decides who owns the text keys: `(open,
-    /// composing)`.
-    ///
-    /// While the popup holds the keyboard focus on loan, only its own input
-    /// method context counts. What the application underneath is composing is
-    /// irrelevant — the keys belong to the search box either way — and reading it
-    /// there would hand the keys to that application the moment it starts a
-    /// composition of its own, which is exactly what leaves the search box unable
-    /// to be typed into.
-    fn input_method_state(input_method_taken: bool) -> (bool, bool) {
-        if input_method_taken {
-            if let Some(state) = crate::platform::quick_focus::search_ime_state() {
-                return state;
-            }
-        }
-        (ime_is_open(), ime_is_composing())
-    }
-
-    /// Whether the key exists only to switch the input method between its
-    /// Chinese and latin mode, and produces no text of its own.
-    ///
-    /// That is the bare Shift, which every Chinese input method uses as its
-    /// switch. The search box claims every key that turns into no character, and
-    /// claiming this one would make entering a composition a one-way trip: the
-    /// Shift that switches the input method out would also be the Shift that can
-    /// never switch it back in, leaving the search box stuck in latin with no way
-    /// back to Chinese.
-    fn switches_input_method(vk: u16) -> bool {
-        matches!(vk, VK_SHIFT | VK_LSHIFT | VK_RSHIFT)
-    }
-
     /// Translate a key press into the character it would produce under the
     /// layout of the thread that owns the focused window.
     ///
@@ -403,7 +303,7 @@ mod windows_impl {
                 state.as_ptr(),
                 buffer.as_mut_ptr(),
                 buffer.len() as i32,
-                1,
+                1 << 2, // Do not mutate the target keyboard layout's dead-key state.
                 layout,
             )
         };
@@ -492,18 +392,6 @@ mod windows_impl {
         if matches!(vk, 0x10..=0x12 | 0xa0..=0xa5 | 0x5b..=0x5c) {
             return pass_through();
         }
-        // Whether the popup is taking the typing — either its search box is in
-        // its text-entry state, or it has taken the input method over — and what
-        // its input method is doing. The input method is read from the popup
-        // while it holds the borrowed focus, so the application underneath cannot
-        // take the keys back by starting a composition of its own.
-        let search_editing = is_search_armed() || is_input_method_taken();
-        let (ime_open, ime_composing) = input_method_state(is_input_method_taken());
-        // `VK_PROCESSKEY` means the IME is already handling this key.
-        if vk == VK_PROCESSKEY || ime_composing {
-            return pass_through();
-        }
-
         if key_up {
             return if unclaim(info.vkCode) {
                 crate::platform::hotkey::observe_claimed_key(info.vkCode, true);
@@ -513,24 +401,16 @@ mod windows_impl {
             };
         }
 
+        let search_editing = is_search_armed();
+        let ime_composing = ime_is_composing();
+        // `VK_PROCESSKEY` means the IME is already handling this key.
+        if vk == VK_PROCESSKEY || ime_composing {
+            return pass_through();
+        }
+
         let ctrl = is_down(VK_CONTROL);
         let alt = is_down(VK_MENU);
         let win = is_down(VK_LWIN) || is_down(VK_RWIN);
-
-        // A search box in its text-entry state owns every typed key: the
-        // application underneath must not see a single one of them while the
-        // user is searching.
-        //
-        // The keys only change hands once the popup has taken the input method
-        // over — then the input method has to see them to build a composition in
-        // the search box (translating pinyin here would turn it into latin
-        // letters). In every other case they are translated here and land in the
-        // search box, so neither an application that takes its focus back nor an
-        // input method that never started can swallow the search. Composing
-        // already returned above, so this covers the keys that start one.
-        let popup_holds_keys =
-            is_input_method_taken() && crate::platform::quick_focus::popup_has_keyboard_focus();
-        let ime_owns_text = popup_holds_keys && ime_open;
 
         let action = match vk {
             VK_UP => Some(QuickKey::Previous),
@@ -564,19 +444,9 @@ mod windows_impl {
                 let first_digit = if vk >= 0x61 { 0x61 } else { 0x31 };
                 Some(QuickKey::Pick((vk - first_digit) as usize))
             }
-            // A search box that is taking the typing owns every plain key:
-            // whatever a key translates to is search text, and a key that
-            // translates to nothing (Home, Delete, …) has no meaning in a
-            // one-line search box either. Neither may reach the application
-            // underneath — that leak is what this state exists to close. While
-            // the input method has been taken over, the keys are handed to it
-            // instead, so the composition happens in the search box, and so is
-            // the input method's own switch so the user can turn the composition
-            // on and off again at will.
+            // Search text is translated by the hook, never by a focused widget.
             _ if search_editing && !ctrl && !alt && !win => {
-                if ime_owns_text || (popup_holds_keys && switches_input_method(vk)) {
-                    None
-                } else if let Some(character) =
+                if let Some(character) =
                     char_for_key(vk, info.scanCode, info.flags & LLKHF_EXTENDED != 0)
                 {
                     Some(QuickKey::Char(character))
@@ -859,24 +729,6 @@ mod tests {
         set_enabled(true);
         set_enabled(false);
         assert!(take_events().is_empty());
-    }
-
-    /// The search state and the input-method takeover are independent: entering
-    /// the search box must not be the same thing as taking the keyboard focus
-    /// away from the application underneath.
-    #[test]
-    fn search_state_and_input_method_takeover_are_tracked_separately() {
-        set_search_armed(true);
-        assert!(is_search_armed());
-        assert!(!is_input_method_taken());
-
-        set_input_method_taken(true);
-        set_search_armed(false);
-        assert!(!is_search_armed());
-        assert!(is_input_method_taken());
-
-        set_input_method_taken(false);
-        assert!(!is_input_method_taken());
     }
 
     #[test]
