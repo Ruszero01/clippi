@@ -9,7 +9,13 @@
   <p>
     <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/官网-访问网站-2EA44F?style=for-the-badge" alt="官网"></a>
     <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/文档-使用指南-0969DA?style=for-the-badge" alt="文档"></a>
-    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/badge/下载-最新版本-F97316?style=for-the-badge&logo=github&logoColor=white" alt="下载"></a>
+    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/github/downloads/Ruszero01/clippi/total?style=for-the-badge&amp;label=下载&amp;color=F97316&amp;logo=github&amp;logoColor=white" alt="下载最新版本，查看累计下载量"></a>
+  </p>
+
+  <p>
+    <img src="https://img.shields.io/badge/Rust-2021-000000?style=flat&amp;logo=rust&amp;logoColor=white" alt="Rust 2021">
+    <img src="https://img.shields.io/badge/GPUI-0.2.2-237a55?style=flat" alt="GPUI 0.2.2">
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-007EC6?style=flat" alt="Windows / macOS">
   </p>
 
   <strong>中文</strong> · <a href="README_EN.md">English</a>
