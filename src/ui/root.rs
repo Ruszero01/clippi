@@ -98,6 +98,7 @@ pub struct RootView {
     /// The include-* selection itself lives in `AppState`.
     clear_data_confirm: bool,
     _wm_subscription: Subscription,
+    _activation_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
     /// Focus handle for global keyboard events (ESC navigation).
@@ -560,6 +561,28 @@ impl RootView {
             },
         );
 
+        // --- Alt badges go stale when the window loses focus without hiding: ---
+        // --- Windows only reports modifier state on key messages, so an Alt ---
+        // --- release in another app never reaches us and the D / digit badges ---
+        // --- stay stuck. Re-read the live modifiers on every (de)activation. ---
+        let _activation_subscription = cx.observe_window_activation(
+            window,
+            move |this, window, cx| {
+                let enabled = this.state.read(cx).settings.alt_shortcuts_enabled;
+                let pressed = window.is_window_active() && enabled && window.modifiers().alt;
+                if this.state.read(cx).alt_pressed != pressed {
+                    // Notify on the `AppState` context too: the views that paint
+                    // the badges observe that entity, so they must be marked
+                    // dirty (same as the settings toggle path).
+                    this.state.update(cx, |state, cx| {
+                        state.set_alt_pressed(pressed);
+                        cx.notify();
+                    });
+                    cx.notify();
+                }
+            },
+        );
+
         let wm = window_manager.clone();
         let titlebar_for_events = titlebar.clone();
         let backend_panel = settings_panel.read(cx).backend_panel();
@@ -907,6 +930,7 @@ impl RootView {
             mode_focus_pending: false,
             clear_data_confirm: false,
             _wm_subscription,
+            _activation_subscription,
             _subscriptions,
             _appearance_subscription: Some(appearance_sub),
             focus_handle: cx.focus_handle(),
@@ -1435,6 +1459,10 @@ impl Render for RootView {
                     && root_state.read(cx).settings.alt_shortcuts_enabled
                     && !ev.keystroke.modifiers.control
                     && !ev.keystroke.modifiers.shift
+                    // Holding Alt+D / Alt+digit auto-repeats on Windows, which
+                    // would otherwise re-toggle the filter and re-run the DB
+                    // reload on every repeat; only act on the initial press.
+                    && !ev.is_held
                 {
                     let is_clipboard = root_this.read(cx).current_view == "clipboard";
                     let is_settings = root_this.read(cx).current_view == "settings";
