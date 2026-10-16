@@ -9,7 +9,7 @@
   <p>
     <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/官网-访问网站-2EA44F?style=for-the-badge" alt="官网"></a>
     <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/文档-使用指南-0969DA?style=for-the-badge" alt="文档"></a>
-    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/github/downloads/Ruszero01/clippi/total?style=for-the-badge&amp;label=下载&amp;color=F97316&amp;logo=github&amp;logoColor=white" alt="下载最新版本，查看累计下载量"></a>
+    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/github/downloads/Ruszero01/clippi/total?style=for-the-badge&amp;label=%E4%B8%8B%E8%BD%BD&amp;color=F97316&amp;logo=github&amp;logoColor=white" alt="下载"></a>
   </p>
 
   <p>
