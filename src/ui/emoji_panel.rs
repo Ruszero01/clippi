@@ -10,7 +10,7 @@ use super::font::fs;
 use super::theme::ClippiTheme;
 use crate::core::emoji::{self, EmojiEntry};
 use crate::core::i18n_keys::I18nKey;
-use crate::core::symbols;
+use crate::core::{kaomoji, symbols};
 use crate::state::app::AppState;
 
 const EMOJI_CATEGORIES: &[(&str, &str, &str)] = &[
@@ -25,18 +25,38 @@ const EMOJI_CATEGORIES: &[(&str, &str, &str)] = &[
     ("符号", "Symbols", "hash"),
     ("旗帜", "Flags", "flag"),
 ];
-const KAOMOJI_CATEGORIES: &[(&str, &str, &str)] = &[
-    ("开心", "Happy", "☺"),
-    ("难过", "Sad", "☂"),
-    ("生气", "Angry", "ϟ"),
-    ("可爱", "Cute", "♡"),
-    ("打招呼", "Greetings", "✌"),
-];
 
 fn category_scroll_edges(scroll: &ScrollHandle) -> (bool, bool) {
     let offset = f32::from(scroll.offset().x);
     let limit = f32::from(scroll.max_offset().width);
     (offset < -0.5, -offset < limit - 0.5)
+}
+
+// The recent row can be shorter than the regular grid and has a heading below it.
+fn vertical_selection(
+    index: usize,
+    down: bool,
+    columns: usize,
+    recent: usize,
+    len: usize,
+) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let next = if recent > 0 && index < recent {
+        if down && recent < len {
+            recent + index
+        } else {
+            index
+        }
+    } else if recent > 0 && index < recent + columns && !down {
+        (index - recent).min(recent - 1)
+    } else if down {
+        index.saturating_add(columns)
+    } else {
+        index.saturating_sub(columns)
+    };
+    next.min(len - 1)
 }
 
 pub enum EmojiPanelEvent {
@@ -105,7 +125,7 @@ impl EmojiPanel {
 
     fn categories(&self) -> &'static [(&'static str, &'static str, &'static str)] {
         match self.kind {
-            1 => KAOMOJI_CATEGORIES,
+            1 => kaomoji::CATEGORIES,
             2 => symbols::CATEGORIES,
             _ => EMOJI_CATEGORIES,
         }
@@ -148,14 +168,10 @@ impl EmojiPanel {
                     entry.matches(&self.query)
                 } else if self.kind == 2 {
                     symbols::in_category(entry, self.category)
+                } else if self.kind == 1 {
+                    kaomoji::in_category(entry, self.category)
                 } else {
-                    !entry.variant
-                        && entry.group
-                            == if self.kind == 0 {
-                                emoji::PICKER_GROUPS[self.category - 1]
-                            } else {
-                                self.category
-                            }
+                    !entry.variant && entry.group == emoji::PICKER_GROUPS[self.category - 1]
                 }
             }));
         }
@@ -232,18 +248,25 @@ impl EmojiPanel {
             return;
         }
         let input_focused = self.input.focus_handle(cx).is_focused(window);
-        let step = match key {
-            "down" => self.columns as isize,
-            "up" => -(self.columns as isize),
-            "right" if !input_focused => 1,
-            "left" if !input_focused => -1,
+        let recent = if self.kind == 0 && self.category == 1 && self.query.is_empty() {
+            self.recent_len
+        } else {
+            0
+        };
+        let selected = match key {
+            "down" | "up" => vertical_selection(
+                self.selected,
+                key == "down",
+                self.columns,
+                recent,
+                self.entries.len(),
+            ),
+            "right" if !input_focused => self.selected.saturating_add(1),
+            "left" if !input_focused => self.selected.saturating_sub(1),
             _ => return,
         };
         if !self.entries.is_empty() {
-            self.selected = self
-                .selected
-                .saturating_add_signed(step)
-                .min(self.entries.len() - 1);
+            self.selected = selected.min(self.entries.len() - 1);
             let row = if self.recent_len > 0 && self.category == 1 && self.query.is_empty() {
                 if self.selected < self.recent_len {
                     0
@@ -656,5 +679,30 @@ impl Render for EmojiPanel {
                             ),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vertical_selection;
+
+    #[test]
+    fn vertical_navigation_respects_partial_recent_row() {
+        assert_eq!(vertical_selection(0, true, 8, 1, 25), 1);
+        assert_eq!(vertical_selection(1, false, 8, 1, 25), 0);
+        assert_eq!(vertical_selection(8, false, 8, 1, 25), 0);
+        assert_eq!(vertical_selection(2, true, 8, 3, 25), 5);
+        assert_eq!(vertical_selection(5, false, 8, 3, 25), 2);
+        assert_eq!(vertical_selection(3, true, 8, 3, 25), 11);
+        assert_eq!(vertical_selection(11, false, 8, 3, 25), 3);
+    }
+
+    #[test]
+    fn vertical_navigation_handles_regular_and_empty_grids() {
+        assert_eq!(vertical_selection(0, true, 8, 0, 25), 8);
+        assert_eq!(vertical_selection(8, false, 8, 0, 25), 0);
+        assert_eq!(vertical_selection(24, true, 8, 0, 25), 24);
+        assert_eq!(vertical_selection(0, true, 8, 0, 0), 0);
+        assert_eq!(vertical_selection(0, true, 8, 1, 1), 0);
     }
 }

@@ -28,3 +28,5 @@ pub mod sync;
 pub mod sync_scope;
 pub mod transfer_types;
 pub mod types;
+
+pub mod kaomoji;

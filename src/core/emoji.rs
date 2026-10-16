@@ -13,6 +13,8 @@ pub struct EmojiEntry {
     pub keywords: String,
     pub group: usize,
     #[serde(default)]
+    pub groups: Vec<usize>,
+    #[serde(default)]
     pub variant: bool,
 }
 
@@ -46,31 +48,7 @@ pub fn extra_entries(kaomoji: bool) -> &'static [EmojiEntry] {
     if !kaomoji {
         return super::symbols::entries();
     }
-    static KAOMOJI: OnceLock<Vec<EmojiEntry>> = OnceLock::new();
-    let groups = &[
-
-            ("开心", "Happy", "(＾▽＾)|(≧▽≦)|(*^▽^*)|ヾ(≧▽≦*)o|( •̀ ω •́ )✧|(✿◡‿◡)|ヽ(✿ﾟ▽ﾟ)ノ|(oﾟ▽ﾟ)o|(๑•̀ㅂ•́)و✧|(｡･ω･｡)ﾉ♡|٩(๑❛ᴗ❛๑)۶|( ´ ▽ ` )ﾉ"),
-            ("难过", "Sad", "(╥﹏╥)|(ಥ_ಥ)|(；ω；)|(つ﹏⊂)|(｡•́︿•̀｡)|(っ˘̩╭╮˘̩)っ"),
-            ("生气", "Angry", "(╯°□°)╯︵ ┻━┻|(눈_눈)|(＃`Д´)|(¬_¬)|(ง •̀_•́)ง|(╬ Ò﹏Ó)"),
-            ("可爱", "Cute", "(=^･ω･^=)|ʕ •ᴥ•ʔ|(づ｡◕‿◕｡)づ|(｡♥‿♥｡)|(˶ᵔ ᵕ ᵔ˶)|(ฅ´ω`ฅ)"),
-            ("打招呼", "Greetings", "( ´ ▽ ` )ﾉ|(｡･∀･)ﾉﾞ|ヾ(•ω•`)o|(￣▽￣)ノ|(づ￣ ³￣)づ|( •̀ᴗ•́ )و"),
-            ][..];
-    KAOMOJI.get_or_init(|| {
-        groups
-            .iter()
-            .enumerate()
-            .flat_map(|(group, (zh, en, values))| {
-                values.split('|').map(move |text| EmojiEntry {
-                    text: text.into(),
-                    name: (*zh).into(),
-                    name_en: (*en).into(),
-                    keywords: String::new(),
-                    group,
-                    variant: false,
-                })
-            })
-            .collect()
-    })
+    super::kaomoji::entries()
 }
 
 #[cfg(test)]
