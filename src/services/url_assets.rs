@@ -111,7 +111,9 @@ fn run_job(job: UrlAssetJob) {
             ensure_url_favicon_cached(&url);
 
             if fetch_title
-                && RichData::from_json(&rich_data).page_title.is_none()
+                && crate::services::url_title::title_needs_refresh(
+                    RichData::from_json(&rich_data).page_title.as_deref(),
+                )
                 && crate::services::url_title::fetch_and_store_title(&url, content_hash, &db_path)
                 && mark_sync_dirty
             {
