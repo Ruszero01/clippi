@@ -54,4 +54,8 @@ Thanks to everyone who contributes!
   </picture>
 </a>
 
-[Contribute & report issues](https://github.com/Ruszero01/clippi/issues) · [Changelog](RELEASES.md) · [MIT License](LICENSE)
+<p align="center">
+  <a href="https://github.com/Ruszero01/clippi/issues"><img src="https://img.shields.io/badge/Contribute-237a55?style=flat&amp;logo=github&amp;logoColor=white" alt="Contribute and report issues" height="24"></a>
+  <a href="RELEASES.md"><img src="https://img.shields.io/badge/Changelog-237a55?style=flat&amp;logo=readthedocs&amp;logoColor=white" alt="Changelog" height="24"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/MIT%20License-237a55?style=flat&amp;logo=opensourceinitiative&amp;logoColor=white" alt="MIT License" height="24"></a>
+</p>

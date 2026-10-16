@@ -54,4 +54,8 @@ cargo run --release
   </picture>
 </a>
 
-[参与贡献与问题反馈](https://github.com/Ruszero01/clippi/issues) · [更新日志](RELEASES.md) · [MIT License](LICENSE)
+<p align="center">
+  <a href="https://github.com/Ruszero01/clippi/issues"><img src="https://img.shields.io/badge/贡献与反馈-237a55?style=flat&amp;logo=github&amp;logoColor=white" alt="贡献与反馈" height="24"></a>
+  <a href="RELEASES.md"><img src="https://img.shields.io/badge/更新日志-237a55?style=flat&amp;logo=readthedocs&amp;logoColor=white" alt="更新日志" height="24"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/MIT%20License-237a55?style=flat&amp;logo=opensourceinitiative&amp;logoColor=white" alt="MIT License" height="24"></a>
+</p>
