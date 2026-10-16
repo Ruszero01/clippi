@@ -1,189 +1,57 @@
 <div align="center">
-  <p>
-    <img src="assets/LOGO_notext.png" width="120" alt="Clippi Logo">
-  </p>
+  <img src="assets/LOGO_notext.png" width="96" alt="Clippi logo">
 
   # Clippi
 
-  **Simple · Lightweight · Open Source** Native Clipboard Manager<br>
-  Built with Rust + GPUI, available for Windows and macOS
+  **Simple · Lightweight · Open Source** native clipboard manager<br>
+  Rust + GPUI · Windows / macOS
 
   <p>
-    <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/Website-Visit%20Site-2EA44F?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website"></a>
-    <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/Docs-User%20Guide-0969DA?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Docs"></a>
-    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/badge/Download-Latest%20Release-F97316?style=for-the-badge&logo=github&logoColor=white" alt="Download"></a>
+    <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/Website-Visit-2EA44F?style=for-the-badge" alt="Website"></a>
+    <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/Docs-User%20Guide-0969DA?style=for-the-badge" alt="Docs"></a>
+    <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/badge/Download-Latest-F97316?style=for-the-badge&logo=github&logoColor=white" alt="Download"></a>
   </p>
 
-  <p>
-    <a href="README.md">中文</a> · <strong>English</strong>
-    &nbsp;|&nbsp;
-    <a href="https://github.com/Ruszero01/clippi/issues">Issues</a> ·
-    <a href="https://github.com/Ruszero01/clippi/releases">Changelog</a>
-  </p>
-
-  <p>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2EA44F?style=flat-square&logo=opensourceinitiative&logoColor=white" alt="License: MIT"></a>
-    <img src="https://img.shields.io/badge/Rust-2021-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021">
-    <img src="https://img.shields.io/badge/GPUI-0.2-555555?style=flat-square&logo=rust&logoColor=white" alt="GPUI 0.2">
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-007EC6?style=flat-square" alt="Platform: Windows | macOS">
-    <a href="https://deepwiki.com/Ruszero01/clippi"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-  </p>
+  <a href="README.md">中文</a> · <strong>English</strong>
 </div>
 
-![UI](./docs/images/UI.png)
-
----
-
-> Clippi is a lightweight, open-source clipboard history manager: it silently records everything you copy, then helps you search, filter, OCR images, detect QR codes, batch-process entries, and sync across devices — turning copied content into an organized, reusable, searchable asset.
-
----
-
-## Why Clippi?
-
-- **No WebView dependency**: a native Rust + GPUI interface with low idle memory usage and high performance
-- **Multi-tag system**: add multiple tags to entries and use versatile tag filtering modes
-- **Dual-window mode**: a focus-free quick-paste window never interrupts your current input
-- **Multi-backend sync architecture**: OneDrive / iCloud / WebDAV and other sync methods
-- **Privacy protection**: masked previews for sensitive content such as email addresses and phone numbers
+![Clippi interface](docs/images/UI.png)
 
 ## Features
 
-### Clipboard Monitoring
+- **Capture & organize**: save text, rich text, images, files, and more. Search, tag, favorite, annotate, and manage entries in batches.
+- **Quick paste**: summon Clippi with a global hotkey; the quick window preserves your typing focus. Hold Alt to see and use switching shortcuts.
+- **Content recognition**: extract text with image OCR and recognize QR codes.
+- **Cross-device sync**: sync text entries and tags through OneDrive, iCloud folders, or WebDAV, with multiple backends supported.
+- **Everyday tools**: an entry editor, emoji and symbol panel, and file transfer station.
+- **Appearance & privacy**: light/dark themes, custom fonts and accent colors, masked previews, and local backup and restore.
 
-![clipboard](./docs/images/clipboard.png)
+## Download & use
 
-- Multi-format content detection: plain text, rich text, files, images, links, paths, colors, phone numbers, email addresses
-- Content hash deduplication: re-copying the same content updates the timestamp without creating duplicate entries
-- Color normalization dedup: `#FF8000` ≡ `rgb(255,128,0)`, prevents duplicates
-- Image OCR: keyword search and paste OCR-extracted text
-- QR code detection: recognizes QR codes with one-click navigation
-- Hotkey blacklist: disable global hotkeys in specified applications
-- Plain text copy mode: discard rich formatting and keep plain text only
+Download from the [website](https://clippi.rains-ailurus.cn/) or [GitHub Releases](https://github.com/Ruszero01/clippi/releases). Press `Alt+V` to open the main window by default. See the [user guide](https://clippi.rains-ailurus.cn/docs) for details.
 
-### Content Management
+- **macOS**: the app is unsigned. Allow it in **System Settings → Privacy & Security** after installation or updates, and grant **Accessibility** permission for quick paste.
+- **Windows**: to paste into elevated applications, Clippi must also run as administrator. Change administrator mode in **Settings → Main → Startup**, then restart Clippi.
 
-![content1](./docs/images/content.png)
+## Run from source
 
-- Double-click cards for quick paste
-- Multi-type entry editing
-- Favorites & notes: pin favorite snippets and add notes to entries
-- Multi-select batch operations: batch paste (newline-separated), batch favorite, batch delete, batch tag
-- Combined type filters: freely mix multiple filter rules
-- Keyword search — matches both text content and tag names
-- Tag filtering — switchable AND/OR logic across multiple tags
-- Sorting: by creation time / by last used time
-- Sensitive info preview masking: email shows first 2 chars + domain, phone shows first 3 + last 4 digits
-
-### Tag System
-
-![tags](./docs/images/tags.png)
-
-- Create / Edit / Delete tags, 12 preset colors
-- Tag association with clipboard entries (many-to-many)
-- Side tag bar: pin filter tags to the left side of the window, with expand/collapse animation and pinning
-- Tag filter panel + tag picker panel (both support tag CRUD)
-- Single-item / batch tag assignment and removal
-- Cross-device tag synchronization (with color conflict resolution)
-
-### Window & Interaction
-
-![hotkey](./docs/images/hotkey.png)
-
-- Global hotkey to show/hide (default `Alt+V`, supports custom recording)
-- Window pin-on-top mode
-- Auto-hide on focus loss
-- Multi-monitor support (cursor's monitor)
-- Three popup positions: center / follow mouse / remember position
-- Dark / light theme with automatic system dark mode detection
-
-### Display Options
-
-![display](./docs/images/display.png)
-
-- Source app info display (clipboard source application name and icon)
-- Card height modes: tall / medium / short / auto
-- Show original content on hover (when notes exist)
-- Plain text copy
-
-### Cloud Sync
-
-![sync](./docs/images/sync.png)
-
-- Multi-backend architecture: supports multiple sync services simultaneously, each with independent toggle and interval
-- Local folder backend: sync via OneDrive / iCloud folders
-- WebDAV backend: supports WebDAV servers, ETag caching + Basic Auth
-- Auto-detect OneDrive (Windows + macOS) and iCloud (macOS) preset paths
-- Cross-device delete & unfavorite propagation (tombstone mechanism, 30-day window)
-- Last-writer-wins (LWW) conflict resolution
-- Semantic hash comparison, skip unchanged pushes (prevent sync loops)
-- Automatic conflict file merging and cleanup
-- Configurable sync interval (30s / 1min / 10min / 30min) + manual instant sync
-- Favorites-only sync mode
-- Async connection test
-
-## Quick Start
-
-### Download
-
-- Get the latest version from the [Official Website](https://clippi.rains-ailurus.cn/) or [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
-- Installers / DMGs are available for Windows and macOS
-
-### Build from Source
+Install [Rust](https://www.rust-lang.org/tools/install) and your platform's build tools, then run:
 
 ```bash
 git clone https://github.com/Ruszero01/clippi.git
 cd clippi
-cargo build
-cargo run
+cargo run --release
 ```
 
----
+## Contributor wall
 
-## macOS Users Notice
+Thanks to everyone who contributes!
 
-Clippi is not signed with an Apple Developer certificate (not enrolled in Apple Developer Program). On first launch or after each update, macOS Gatekeeper may block the app from running. Please follow the steps below:
+<a href="https://github.com/Ruszero01/clippi/graphs/contributors">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/contributors-dark.svg">
+    <img src="docs/images/contributors.svg" alt="Clippi contributors" width="840">
+  </picture>
+</a>
 
-### First Install / After Update
-
-1. After downloading the `.dmg`, drag Clippi into the `Applications` folder
-2. Double-click Clippi to open, then select **"Keep"** in the security dialog
-3. Go to **System Settings → Privacy & Security**, scroll to the bottom and click **"Open Anyway"** (required once per update)
-
-### Grant Accessibility Permission (Required for Quick Paste)
-
-Clippi's quick paste feature requires Accessibility permission to simulate keystrokes:
-
-1. Open **System Settings → Privacy & Security → Accessibility**
-2. Find **Clippi** in the list and enable the toggle
-3. If Clippi is not in the list, click the `+` button and add it manually from `/Applications/Clippi.app`
-
-> Without Accessibility permission, quick paste (double-click card / Enter key paste) will not work, but you can still copy and paste manually via the right-click menu.
-
----
-
-## Windows Users Notice
-
-### Administrator rights vs. auto-start and paste
-
-Windows UIPI only allows a process to send input to windows at the **same or a lower integrity level**, which means:
-
-- **Running unelevated**: auto-start works, but pasting into applications running as administrator (elevated terminals, editors, launchers) does nothing;
-- **Running elevated**: pasting works everywhere, but the registry `Run` entry cannot elevate the process at logon, so auto-start silently fails (Task Manager still lists it as "Enabled" while the process never starts).
-
-Use **Settings → Main → Startup → Administrator mode** to choose how Clippi starts next time; quit and reopen it to apply the change. Windows may ask for permission when you manually start administrator mode. Reopening normally after turning it off restores normal privileges. With auto-start enabled, administrator mode uses an "at logon" task with highest privileges (no UAC prompt at logon); normal mode uses the registry `Run` entry. After first enabling administrator mode from a normal session, reopen Clippi once so the elevated process can register the task. When switching back, Clippi tries to remove the old task. If that needs administrator rights, it asks you to launch Clippi elevated once to finish the change. It also tries to repair a moved executable or removed registration on the next launch. The one elevated launch performed by the installer does **not** change the mechanism.
-
-> When a paste into an elevated application is refused, the log records `Paste target runs as administrator while Clippi does not`; restart Clippi as administrator to paste there.
-
----
-
-## Links
-
-- [Official Website](https://clippi.rains-ailurus.cn/)
-- [Official Docs](https://clippi.rains-ailurus.cn/docs)
-- [GitHub Repository](https://github.com/Ruszero01/clippi)
-- [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
-- [Issue Tracker](https://github.com/Ruszero01/clippi/issues)
-
-## License
-
-[MIT](LICENSE)
+[Contribute & report issues](https://github.com/Ruszero01/clippi/issues) · [Changelog](RELEASES.md) · [MIT License](LICENSE)

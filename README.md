@@ -1,195 +1,57 @@
 <div align="center">
-  <p>
-    <img src="assets/LOGO_notext.png" width="120" alt="Clippi 图标">
-  </p>
+  <img src="assets/LOGO_notext.png" width="96" alt="Clippi 图标">
 
   # Clippi
 
   **简洁 · 轻量 · 开源** 的原生剪贴板管理器<br>
-  基于 Rust + GPUI 构建，支持 Windows 和 macOS
+  Rust + GPUI · Windows / macOS
 
   <p>
-    <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/官网-访问网站-2EA44F?style=for-the-badge&logo=googlechrome&logoColor=white" alt="官网"></a>
-    <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/文档-使用指南-0969DA?style=for-the-badge&logo=readthedocs&logoColor=white" alt="文档"></a>
+    <a href="https://clippi.rains-ailurus.cn/"><img src="https://img.shields.io/badge/官网-访问网站-2EA44F?style=for-the-badge" alt="官网"></a>
+    <a href="https://clippi.rains-ailurus.cn/docs"><img src="https://img.shields.io/badge/文档-使用指南-0969DA?style=for-the-badge" alt="文档"></a>
     <a href="https://github.com/Ruszero01/clippi/releases"><img src="https://img.shields.io/badge/下载-最新版本-F97316?style=for-the-badge&logo=github&logoColor=white" alt="下载"></a>
   </p>
 
-  <p>
-    <strong>中文</strong> · <a href="README_EN.md">English</a>
-    &nbsp;|&nbsp;
-    <a href="https://github.com/Ruszero01/clippi/issues">反馈问题</a> ·
-    <a href="https://github.com/Ruszero01/clippi/releases">更新日志</a>
-  </p>
-
-  <p>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2EA44F?style=flat-square&logo=opensourceinitiative&logoColor=white" alt="License: MIT"></a>
-    <img src="https://img.shields.io/badge/Rust-2021-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021">
-    <img src="https://img.shields.io/badge/GPUI-0.2-555555?style=flat-square&logo=rust&logoColor=white" alt="GPUI 0.2">
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-007EC6?style=flat-square" alt="Platform: Windows | macOS">
-    <a href="https://deepwiki.com/Ruszero01/clippi"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-  </p>
+  <strong>中文</strong> · <a href="README_EN.md">English</a>
 </div>
 
-![UI](./docs/images/UI.png)
+![Clippi 主界面](docs/images/UI.png)
 
----
+## 核心功能
 
-> Clippi 是一款轻量、开源的剪贴板历史管理工具：它默默记录你的复制内容，支持搜索、标签筛选、图片 OCR、二维码识别、批量操作和跨设备同步，让复制内容真正成为可整理、可复用、可搜索的资产。
+- **记录与整理**：保存文本、富文本、图片、文件等复制内容，支持搜索、标签、收藏、备注和批量操作。
+- **快速粘贴**：全局快捷键呼出，快速窗口不打断当前输入；按住 Alt 查看并使用切换快捷键。
+- **内容识别**：图片 OCR、二维码识别，快速提取和复用内容。
+- **跨设备同步**：通过 OneDrive、iCloud 文件夹或 WebDAV 同步文本条目与标签，支持多个后端。
+- **实用工具**：条目编辑、表情与符号面板、文件中转站。
+- **个性与隐私**：明暗主题、字体与主题色设置，敏感内容预览脱敏、本地备份与恢复。
 
----
+## 下载与使用
 
-## 为什么选择 Clippi？
+从 [官网](https://clippi.rains-ailurus.cn/) 或 [GitHub Releases](https://github.com/Ruszero01/clippi/releases) 下载安装，默认使用 `Alt+V` 呼出主窗口。更多操作见 [使用文档](https://clippi.rains-ailurus.cn/docs)。
 
-- **无 WebView 依赖**：使用 Rust + GPUI 构建原生界面，静默时内存占用低，性能与美观兼得
-- **多标签系统**：支持为条目添加多个标签，并提供多种标签筛选模式
-- **双窗口模式**：无焦点快速粘贴窗口不打断当前输入状态，分工明确
-- **多后端同步架构**：支持 OneDrive / iCloud / WebDAV 等同步方式
-- **隐私保护**：对邮箱、手机号等敏感内容进行脱敏预览，减少屏幕上的隐私暴露
+- **macOS**：应用尚未签名，首次打开或更新后需在「系统设置 → 隐私与安全性」中允许打开，并授予「辅助功能」权限以使用快速粘贴。
+- **Windows**：向管理员权限的应用粘贴时，Clippi 也需以管理员权限运行；可在「设置 → 通用 → 启动」中切换管理员模式，重启后生效。
 
-## 功能亮点
+## 从源码运行
 
-### 剪贴板监控
-
-![clipboard](./docs/images/clipboard.png)
-
-- 多格式内容检测：纯文本、富文本、文件、图片、链接、路径、颜色、电话、邮箱
-- 内容哈希去重：相同内容重复复制时更新时间戳，不重复记录
-- 颜色归一化去重：`#FF8000` ≡ `rgb(255,128,0)`，避免重复
-- 图片 OCR：关键词搜索与内容粘贴
-- 二维码识别：识别二维码，支持一键跳转
-- 快捷键黑名单：指定应用中禁用全局热键
-- 纯文本复制模式：开启后丢弃富文本格式，仅保留纯文本
-
-### 内容管理
-
-![content1](./docs/images/content.png)
-
-- 双击卡片快速粘贴
-- 多类型条目编辑
-- 收藏与备注：收藏常用片段，并为条目添加备注
-- 多选批量操作：批量粘贴（换行分隔）、批量收藏、批量删除、批量标签
-- 类型组合筛选：自由搭配多个筛选规则
-- 关键词搜索 — 同时匹配文本内容和标签名
-- 标签筛选 — 多标签 AND/OR 逻辑可切换
-- 排序：按创建时间 / 按最后使用时间
-- 敏感信息预览脱敏：邮箱仅显示前两位 + 域名，手机号仅显示前三位 + 后四位
-
-### 标签系统
-
-![tags](./docs/images/tags.png)
-
-- 创建/编辑/删除标签、12 种预设颜色
-- 标签关联到剪贴板条目（多对多）
-- 侧边标签栏：筛选标签固定到窗口左侧，支持展开/折叠动画和固定
-- 标签筛选面板 + 标签选择器面板（均支持标签 CRUD）
-- 单条目/批量标签分配与移除
-- 跨设备标签同步（含颜色冲突解决）
-
-### 窗口与交互
-
-![hotkey](./docs/images/hotkey.png)
-
-- 全局快捷键呼出（默认 `Alt+V`，支持录制自定义）
-- 窗口置顶（固定）模式
-- 失焦自动隐藏
-- 多显示器支持（光标所在屏幕）
-- 三种窗口呼出位置：居中 / 跟随鼠标 / 记住位置
-- 深色/亮色主题，自动检测系统深色模式
-
-### 显示选项
-
-![display](./docs/images/display.png)
-
-- 来源应用信息显示（剪贴板来源程序名称和图标）
-- 卡片高度模式：高 / 中 / 低 / 自适应
-- 悬停显示原始内容（有备注时）
-- 纯文本复制
-
-### 云同步
-
-![sync](./docs/images/sync.png)
-
-- 多后端架构：支持同时配置多个同步服务，每个后端独立开关与独立同步间隔
-- 本地文件夹后端：通过 OneDrive / iCloud 云盘同步
-- WebDAV 后端：支持 WebDAV 服务器，ETag 缓存 + Basic Auth
-- 自动检测 OneDrive (Windows + macOS) 和 iCloud (macOS) 预设路径
-- 跨设备删除与取消收藏传播（墓碑机制，30 天窗口）
-- 最后写入者胜出 (LWW) 冲突解决
-- 语义哈希比较，跳过无变更推送（避免同步循环）
-- 冲突文件自动合并与清理
-- 可配同步间隔（30秒 / 1分 / 10分 / 30分）+ 手动即时同步
-- 仅收藏条目同步模式
-- 异步连接测试
-
-### 本地备份与恢复
-
-在 **设置 → 数据 → 本地备份与恢复** 中，可分别勾选“设置”和“剪贴板数据”，所选内容保存为一个 ZIP 压缩包。剪贴板数据包含历史、收藏、标签、备注、同步状态、图片与文件缓存。恢复时直接选择 ZIP 文件，再勾选包中需要恢复的内容，无需手动解压。备份仅支持在同一操作系统上恢复；备份与恢复期间暂停数据清理和存储位置切换。
-
-恢复前会校验文件完整性，点击“恢复并重启”后生效，未选中的内容保留。只恢复设置时沿用当前数据位置；恢复剪贴板数据时使用独立目录，原数据目录保留。普通文件记录引用的外部原文件不属于备份范围；设置包含同步连接信息，请妥善保存。
-
-## 快速开始
-
-### 下载安装
-
-- 访问 [官方网站](https://clippi.rains-ailurus.cn/) 或 [GitHub Releases](https://github.com/Ruszero01/clippi/releases) 下载最新版本
-- 支持 Windows 与 macOS 安装包 / dmg
-
-### 从源码构建
+安装 [Rust](https://www.rust-lang.org/tools/install) 及对应平台的编译工具后：
 
 ```bash
 git clone https://github.com/Ruszero01/clippi.git
 cd clippi
-cargo build
-cargo run
+cargo run --release
 ```
 
----
+## 贡献墙
 
-## macOS 用户须知
+感谢每一位贡献者！
 
-Clippi 未经过 Apple 开发者签名（未加入 Apple Developer Program），首次打开或每次更新后，macOS Gatekeeper 会阻止应用运行。请按以下步骤操作：
+<a href="https://github.com/Ruszero01/clippi/graphs/contributors">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/contributors-dark.svg">
+    <img src="docs/images/contributors.svg" alt="Clippi 贡献者" width="840">
+  </picture>
+</a>
 
-### 首次安装 / 更新后打开
-
-1. 下载 `.dmg` 文件后，将 Clippi 拖入 `应用程序` 文件夹
-2. 双击 Clippi 打开，弹出安全性弹窗后选择 **"完成"**
-3. 前往 **系统设置 → 隐私与安全性**，在页面底部点击 **"仍要打开"**（每次更新后需重新执行此步骤）
-
-### 授予辅助功能权限（快速粘贴功能必需）
-
-Clippi 的快速粘贴功能需要辅助功能权限来模拟按键输入：
-
-1. 打开 **系统设置 → 隐私与安全性 → 辅助功能**
-2. 在列表中找到 **Clippi** 并开启开关
-3. 如果 Clippi 不在列表中，点击 `+` 按钮手动添加，路径为 `/Applications/Clippi.app`
-
-> 未授予辅助功能权限时，快速粘贴（双击卡片/Enter 键粘贴）将无法工作，但你仍然可以使用右键菜单手动复制粘贴。
-
----
-
-## Windows 用户须知
-
-### 管理员权限与开机自启、粘贴的关系
-
-Windows 的 UIPI 机制规定：程序只能向**权限相同或更低**的窗口发送按键。因此
-
-- **普通权限运行**：可以正常开机自启，但无法向"以管理员身份运行"的程序（管理员终端、提权编辑器等）粘贴；
-- **管理员权限运行**：可以对任何程序粘贴，但注册表 Run 项无法在登录时提权，开机自启会失效（任务管理器里仍显示"已启用"，实际进程起不来）。
-
-可在 **设置 → 通用 → 启动 → 管理员模式** 中切换后续启动方式，退出并重新打开 Clippi 后生效。手动启动管理员模式时 Windows 可能要求授权；关闭后通过普通方式重新打开会恢复普通权限。如果开机自启已开启，管理员模式使用"登录时"计划任务（最高权限，不会在登录时弹 UAC），普通模式使用注册表 Run 项。首次从普通模式开启管理员模式后，请先重新打开一次 Clippi，让提权后的进程完成计划任务注册。切换回普通模式时，Clippi 会尝试删除旧计划任务；若当前权限不足，会提示以管理员身份启动一次以完成迁移。移动程序位置或注册项被清理后会在下次启动时尝试修复。安装器在完成后启动的那一次提权**不会**改变自启方式。
-
-> 粘贴到管理员权限程序时若 Clippi 未提权，日志会记录 `Paste target runs as administrator while Clippi does not`；此时请以管理员身份运行 Clippi。
-
----
-
-## 相关链接
-
-- [官方网站](https://clippi.rains-ailurus.cn/)
-- [官方文档](https://clippi.rains-ailurus.cn/docs)
-- [GitHub 仓库](https://github.com/Ruszero01/clippi)
-- [GitHub Releases](https://github.com/Ruszero01/clippi/releases)
-- [问题反馈](https://github.com/Ruszero01/clippi/issues)
-
-## License
-
-[MIT](LICENSE)
+[参与贡献与问题反馈](https://github.com/Ruszero01/clippi/issues) · [更新日志](RELEASES.md) · [MIT License](LICENSE)
