@@ -15,6 +15,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
+use super::components::shortcut_hint::external_shortcut;
 use super::theme::ClippiTheme;
 
 pub(crate) struct FilterDef {
@@ -79,7 +80,30 @@ const TOOLBAR_DIVIDER_WIDTH: f32 = 1.0;
 const TAG_FILTER_BUTTON_WIDTH: f32 = 24.0;
 const TYPE_FILTER_TEXT_GAP: f32 = 4.0;
 const TYPE_FILTER_ICON_GAP: f32 = 3.0;
-const TYPE_FILTER_TEXT_MIN_SLOT_WIDTH: f32 = 50.0;
+
+/// Rendering and Alt dispatch must use this exact same ordered set.
+pub(crate) fn visible_filter_types(
+    config: &[crate::core::settings::TypeFilterEntry],
+) -> Vec<&'static FilterDef> {
+    config
+        .iter()
+        .filter(|entry| entry.visible)
+        .filter_map(|entry| FILTER_TYPES.iter().find(|filter| filter.key == entry.key))
+        .collect()
+}
+
+fn filter_label_width(label: &'static str, window: &Window) -> f32 {
+    let text: SharedString = label.into();
+    let mut style = window.text_style();
+    style.font_weight = FontWeight::BOLD;
+    let run = style.to_run(text.len());
+    f32::from(
+        window
+            .text_system()
+            .shape_line(text, fs(11.), &[run], None)
+            .width,
+    )
+}
 
 /// Shared toolbar geometry for clipboard types and picker categories.
 pub(crate) fn filter_toolbar() -> Div {
@@ -131,6 +155,7 @@ pub struct FilterBar {
     list_view: Entity<ClipboardListView>,
     tag_panel_open: bool,
     filter_config_open: bool,
+    alt_shortcuts_available: bool,
     theme: ClippiTheme,
 }
 
@@ -145,6 +170,7 @@ impl FilterBar {
             list_view,
             tag_panel_open: false,
             filter_config_open: false,
+            alt_shortcuts_available: false,
             theme,
         }
     }
@@ -165,6 +191,13 @@ impl FilterBar {
     pub fn close_filter_config(&mut self, cx: &mut Context<Self>) {
         self.filter_config_open = false;
         cx.notify();
+    }
+
+    pub fn set_alt_shortcuts_available(&mut self, available: bool, cx: &mut Context<Self>) {
+        if self.alt_shortcuts_available != available {
+            self.alt_shortcuts_available = available;
+            cx.notify();
+        }
     }
 
     pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
@@ -193,15 +226,17 @@ impl Render for FilterBar {
         let text_2 = theme.text_2;
         let this = cx.entity().clone();
         let state_snapshot = self.state.read(cx);
+        let alt_pressed = self.alt_shortcuts_available
+            && state_snapshot.alt_pressed
+            && state_snapshot.settings.alt_shortcuts_enabled;
         let has_tag_filter = !state_snapshot.filters.tag_ids.is_empty();
         let viewport = window.viewport_size();
         let toolbar_width =
             f32::from(viewport.width) - PANEL_OFFSET_X - SEARCH_BAR_HORIZONTAL_PADDING;
-        let visible_entries: Vec<&crate::core::settings::TypeFilterEntry> = state_snapshot
-            .settings
-            .type_filter_config
+        let visible_entries = visible_filter_types(&state_snapshot.settings.type_filter_config);
+        let active_types: Vec<bool> = visible_entries
             .iter()
-            .filter(|e| e.visible)
+            .map(|filter| state_snapshot.filters.is_type_active(filter.key))
             .collect();
         let visible_count = visible_entries.len() as f32;
         let type_toolbar_width = (toolbar_width
@@ -212,7 +247,15 @@ impl Render for FilterBar {
         let text_gap_total = TYPE_FILTER_TEXT_GAP * (visible_count - 1.0).max(0.0);
         let type_slot_width =
             (type_toolbar_width - text_gap_total).max(0.0) / visible_count.max(1.0);
-        let icon_only = type_slot_width < TYPE_FILTER_TEXT_MIN_SLOT_WIDTH;
+        // Measure the actual translated label in the selected font. Alt never
+        // participates in this decision: labels and gaps stay stable on press.
+        let label_width = visible_entries
+            .iter()
+            .map(|filter| filter_label_width(filter.label_key.text(), window))
+            .fold(0.0_f32, f32::max);
+
+        let text_slot_width = f32::from(fs(12.)) + 2.0 + label_width + 10.0;
+        let icon_only = type_slot_width < text_slot_width;
         let inactive_button_bg = if theme.bg == rgb(0x191a1b) {
             rgba(0xffffff0a)
         } else {
@@ -235,97 +278,109 @@ impl Render for FilterBar {
                     });
                 }
             })
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .items_center()
-                    .gap(if icon_only {
-                        px(TYPE_FILTER_ICON_GAP)
-                    } else {
-                        px(TYPE_FILTER_TEXT_GAP)
-                    })
-                    .children(
-                        visible_entries
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, entry)| {
-                                // Look up from FILTER_TYPES; unknown keys are silently skipped
-                                let filter_def =
-                                    FILTER_TYPES.iter().find(|fd| fd.key == entry.key)?;
-                                let icon = filter_def.icon;
-                                let label = filter_def.label_key.text();
-                                let key = filter_def.key;
-                                let is_active = state_snapshot.filters.is_type_active(key);
-                                let filter_text = if is_active { accent } else { text_2 };
-                                let filter_weight = if is_active {
-                                    FontWeight::BOLD
-                                } else {
-                                    FontWeight::default()
-                                };
-                                let state = self.state.clone();
-                                let list_view = self.list_view.clone();
-                                let this = this.clone();
+            .when(!visible_entries.is_empty(), |toolbar| {
+                toolbar.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .items_center()
+                        .gap(if icon_only {
+                            px(TYPE_FILTER_ICON_GAP)
+                        } else {
+                            px(TYPE_FILTER_TEXT_GAP)
+                        })
+                        .children(
+                            visible_entries
+                                .iter()
+                                .enumerate()
+                                .map(|(index, filter_def)| {
+                                    let icon = filter_def.icon;
+                                    let label = filter_def.label_key.text();
+                                    let key = filter_def.key;
+                                    let is_active = active_types[index];
+                                    let filter_text = if is_active { accent } else { text_2 };
+                                    let filter_weight = if is_active {
+                                        FontWeight::BOLD
+                                    } else {
+                                        FontWeight::default()
+                                    };
+                                    let state = self.state.clone();
+                                    let list_view = self.list_view.clone();
+                                    let this = this.clone();
 
-                                Some(
-                                    filter_chip(("filter-type", index), is_active, theme)
-                                        .when(icon_only, |button| {
-                                            button.flex_1().min_w(px(0.)).justify_center()
-                                        })
-                                        .when(!icon_only, |button| {
-                                            button
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .justify_center()
-                                                .px(px(5.))
-                                                .gap(px(2.))
-                                        })
-                                        .when(icon_only, move |button| {
-                                            button.tooltip(move |window, cx| {
-                                                Tooltip::element(move |_window, _cx| {
-                                                    div().text_size(fs(10.)).child(label)
-                                                })
-                                                .build(window, cx)
-                                            })
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_ev, _window, cx| {
-                                                Self::apply_type_filter(
-                                                    &state, &list_view, key, cx,
-                                                );
-                                                this.update(cx, |_bar, cx| cx.notify());
-                                            },
-                                        )
+                                    let content = div()
+                                        .flex()
+                                        .flex_shrink_0()
+                                        .items_center()
+                                        .gap(px(2.))
                                         .child(
                                             div()
+                                                .flex_shrink_0()
                                                 .text_size(fs(12.))
                                                 .font_family("iconfont")
                                                 .text_color(filter_text)
                                                 .child(icon.to_string()),
                                         )
-                                        .when(!icon_only, |button| {
-                                            button.child(
+                                        .when(!icon_only, |group| {
+                                            group.child(
                                                 div()
                                                     .text_size(fs(11.))
                                                     .font_weight(filter_weight)
                                                     .text_color(filter_text)
                                                     .child(label),
                                             )
-                                        }),
-                                )
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .w(px(TOOLBAR_DIVIDER_WIDTH))
-                    .h(px(14.))
-                    .flex_shrink_0()
-                    .bg(toolbar_divider),
-            )
+                                        });
+
+                                    let button =
+                                        filter_chip(("filter-type", index), is_active, theme)
+                                            .overflow_hidden()
+                                            .when(icon_only, move |button| {
+                                                button.tooltip(move |window, cx| {
+                                                    Tooltip::element(move |_window, _cx| {
+                                                        div().text_size(fs(10.)).child(label)
+                                                    })
+                                                    .build(window, cx)
+                                                })
+                                            })
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_ev, _window, cx| {
+                                                    Self::apply_type_filter(
+                                                        &state, &list_view, key, cx,
+                                                    );
+                                                    this.update(cx, |_bar, cx| cx.notify());
+                                                },
+                                            )
+                                            .child(content);
+                                    external_shortcut(
+                                        SharedString::from(format!(
+                                            "filter-shortcut-external-{key}"
+                                        )),
+                                        (index + 1).to_string(),
+                                        alt_pressed && index < 9,
+                                        button,
+                                        theme,
+                                        window,
+                                        cx,
+                                    )
+                                }),
+                        ),
+                )
+            })
+            .when(visible_entries.is_empty(), |toolbar| {
+                toolbar.child(div().flex_1())
+            })
+            .when(!visible_entries.is_empty(), |toolbar| {
+                toolbar.child(
+                    div()
+                        .w(px(TOOLBAR_DIVIDER_WIDTH))
+                        .h(px(14.))
+                        .flex_shrink_0()
+                        .bg(toolbar_divider),
+                )
+            })
             .child(
                 div()
                     .w(px(TAG_FILTER_BUTTON_WIDTH))
@@ -374,5 +429,57 @@ impl Render for FilterBar {
                             ),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_filter_types;
+    use crate::core::settings::TypeFilterEntry;
+
+    #[test]
+    fn hidden_and_unknown_types_do_not_consume_shortcut_positions() {
+        let config: Vec<_> = [
+            ("plain_text", true),
+            ("rich_text", false),
+            ("obsolete", true),
+            ("image", false),
+            ("file", true),
+            ("link", true),
+        ]
+        .into_iter()
+        .map(|(key, visible)| TypeFilterEntry {
+            key: key.into(),
+            visible,
+        })
+        .collect();
+        let keys: Vec<_> = visible_filter_types(&config)
+            .iter()
+            .map(|filter| filter.key)
+            .collect();
+        assert_eq!(keys, ["plain_text", "file", "link"]);
+    }
+
+    #[test]
+    fn reordered_single_and_empty_type_lists_keep_their_visible_order() {
+        let mut config: Vec<_> = ["link", "plain_text", "file"]
+            .into_iter()
+            .map(|key| TypeFilterEntry {
+                key: key.into(),
+                visible: true,
+            })
+            .collect();
+        assert_eq!(
+            visible_filter_types(&config)
+                .iter()
+                .map(|filter| filter.key)
+                .collect::<Vec<_>>(),
+            ["link", "plain_text", "file"]
+        );
+        config[0].visible = false;
+        config[1].visible = false;
+        assert_eq!(visible_filter_types(&config)[0].key, "file");
+        config[2].visible = false;
+        assert!(visible_filter_types(&config).is_empty());
     }
 }

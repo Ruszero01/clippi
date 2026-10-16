@@ -47,6 +47,16 @@ use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
 use super::type_filter_config::TypeFilterConfigPanel;
 
+/// Mode shortcuts may always close their own panel, but cannot jump between
+/// emoji and transfer modes. Hint visibility is a separate clipboard-only rule.
+fn mode_shortcut_allowed(view: &str, transfer_active: bool, key: char) -> bool {
+    match key {
+        'e' => view == "emoji" || (view == "clipboard" && !transfer_active),
+        't' => view == "clipboard",
+        _ => false,
+    }
+}
+
 pub struct RootView {
     state: Entity<AppState>,
     window_manager: Entity<WindowManager>,
@@ -94,10 +104,13 @@ pub struct RootView {
     needs_auto_focus: bool,
     /// Mode switches focus their destination without applying clear-on-window-show.
     mode_focus_pending: bool,
+    /// Recheck focus against the rebuilt dispatch tree after a theme refresh.
+    focus_recovery_pending: bool,
     /// Root-level clear-data dialog state, outside the clipped settings list.
     /// The include-* selection itself lives in `AppState`.
     clear_data_confirm: bool,
     _wm_subscription: Subscription,
+    _activation_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
     /// Focus handle for global keyboard events (ESC navigation).
@@ -162,6 +175,7 @@ impl RootView {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_theme(&theme, cx);
         });
+        self.focus_recovery_pending = true;
         cx.notify();
     }
 
@@ -560,6 +574,26 @@ impl RootView {
             },
         );
 
+        // --- Alt badges go stale when the window loses focus without hiding: ---
+        // --- Windows only reports modifier state on key messages, so an Alt ---
+        // --- release in another app never reaches us and the D / digit badges ---
+        // --- stay stuck. Re-read the live modifiers on every (de)activation. ---
+        let _activation_subscription =
+            cx.observe_window_activation(window, move |this, window, cx| {
+                let enabled = this.state.read(cx).settings.alt_shortcuts_enabled;
+                let pressed = window.is_window_active() && enabled && window.modifiers().alt;
+                if this.state.read(cx).alt_pressed != pressed {
+                    // Notify on the `AppState` context too: the views that paint
+                    // the badges observe that entity, so they must be marked
+                    // dirty (same as the settings toggle path).
+                    this.state.update(cx, |state, cx| {
+                        state.set_alt_pressed(pressed);
+                        cx.notify();
+                    });
+                    cx.notify();
+                }
+            });
+
         let wm = window_manager.clone();
         let titlebar_for_events = titlebar.clone();
         let backend_panel = settings_panel.read(cx).backend_panel();
@@ -568,6 +602,10 @@ impl RootView {
                 this.titlebar.update(cx, |_, cx| cx.notify());
                 this.sidebar.update(cx, |_, cx| cx.notify());
                 this.tag_filter_panel.update(cx, |_, cx| cx.notify());
+                cx.notify();
+            }),
+            cx.observe(&list_view, |_this, _, cx| {
+                // Inline edits and card popovers change shortcut availability.
                 cx.notify();
             }),
             cx.observe(&search_box, |_this, _, cx| {
@@ -695,38 +733,14 @@ impl RootView {
                         });
                         cx.notify();
                     }
-                    TitlebarEvent::ToggleEmoji => {
-                        if !this.state.read(cx).settings.emoji_panel_enabled {
-                            return;
-                        }
-                        let opening = this.current_view != "emoji";
-                        this.switch_view(if opening { "emoji" } else { "clipboard" });
-                        this.filter_bar.update(cx, |bar, cx| {
-                            bar.close_tag_panel(cx);
-                            bar.close_filter_config(cx);
-                        });
-                        this.list_view.update(cx, |list, cx| {
-                            list.dismiss_context_menu(cx);
-                            list.hide_tag_picker(cx);
-                        });
-                        if opening {
-                            this.emoji_panel.update(cx, |panel, cx| panel.refresh(cx));
-                        }
-                        this.mode_focus_pending = true;
-                        cx.notify();
-                    }
+                    TitlebarEvent::ToggleEmoji => this.toggle_emoji_panel(cx),
                     TitlebarEvent::OpenSettings => {
                         this.switch_view("settings");
                         this.filter_bar
                             .update(cx, |bar, cx| bar.close_tag_panel(cx));
                         cx.notify();
                     }
-                    TitlebarEvent::ToggleTransfer => {
-                        if this.current_view == "emoji" {
-                            this.switch_view("clipboard");
-                        }
-                        this.handle_toggle_transfer(cx);
-                    }
+                    TitlebarEvent::ToggleTransfer => this.toggle_transfer_panel(cx),
                 },
             ),
             cx.subscribe(&emoji_panel, |this, _, event, cx| {
@@ -905,8 +919,10 @@ impl RootView {
             last_toast_message: None,
             needs_auto_focus: true,
             mode_focus_pending: false,
+            focus_recovery_pending: false,
             clear_data_confirm: false,
             _wm_subscription,
+            _activation_subscription,
             _subscriptions,
             _appearance_subscription: Some(appearance_sub),
             focus_handle: cx.focus_handle(),
@@ -946,6 +962,23 @@ impl Render for RootView {
         let is_clipboard = self.current_view == "clipboard";
         let is_settings = self.current_view == "settings";
         let is_edit = self.current_view == "edit";
+        let shortcuts_available = self.alt_shortcuts_available(cx);
+        let emoji_shortcut_available = self.emoji_shortcut_available(cx);
+        let hotkeys_shortcut_available = self.hotkeys_shortcut_available(cx);
+        let transfer_shortcut_available = self.transfer_shortcut_available(cx);
+        self.titlebar.update(cx, |bar, cx| {
+            // Hide mode hints inside either panel without disabling its exit key.
+            bar.set_alt_shortcuts_available(
+                shortcuts_available,
+                shortcuts_available && emoji_shortcut_available,
+                hotkeys_shortcut_available,
+                shortcuts_available && transfer_shortcut_available,
+                cx,
+            );
+        });
+        self.filter_bar.update(cx, |bar, cx| {
+            bar.set_alt_shortcuts_available(shortcuts_available, cx);
+        });
         // A pending tag-delete confirmation only makes sense while the tag
         // panel is open in the clipboard view. Drop stale requests (e.g. the
         // panel was closed programmatically while the dialog was up) so an
@@ -1261,20 +1294,32 @@ impl Render for RootView {
                 0.0
             };
 
+        if std::mem::take(&mut self.focus_recovery_pending) {
+            // The old frame can still contain the removed focus node here.
+            // Check after the refreshed tree has actually been rendered, and
+            // preserve any valid input/dialog focus rather than stealing it.
+            cx.on_next_frame(window, |this, window, cx| {
+                if window.is_window_active() && !this.focus_handle.contains_focused(window, cx) {
+                    this.focus_current_view(window, cx);
+                    cx.notify();
+                }
+            });
+        }
+
+        if self.mode_focus_pending && is_settings {
+            self.mode_focus_pending = false;
+            self.focus_current_view(window, cx);
+        }
+
         // --- Auto-focus and clear search box when the window opens ---
         if (self.needs_auto_focus || self.mode_focus_pending) && is_emoji {
             self.needs_auto_focus = false;
             self.mode_focus_pending = false;
-            self.emoji_panel
-                .update(cx, |panel, cx| panel.focus(window, cx));
+            self.focus_current_view(window, cx);
         }
         if self.mode_focus_pending && is_clipboard {
             self.mode_focus_pending = false;
-            if self.state.read(cx).settings.auto_focus_search {
-                self.search_box.update(cx, |bar, cx| bar.focus(window, cx));
-            } else {
-                self.list_view.update(cx, |list, _cx| list.focus(window));
-            }
+            self.focus_current_view(window, cx);
         }
         if self.needs_auto_focus && is_clipboard {
             self.needs_auto_focus = false;
@@ -1411,7 +1456,92 @@ impl Render for RootView {
                     cx.stop_propagation();
                 }
             })
+            .on_modifiers_changed({
+                let notify_this = root_this.clone();
+                let state_handle = root_state.clone();
+                move |event, _window, cx| {
+                    // Track the Alt modifier for floating shortcut badges and
+                    // Alt+key dispatch. The modifiers event only fires when a
+                    // modifier key actually changes state, so this is cheap and
+                    // fires on both press and release of Alt.
+                    let enabled = state_handle.read(cx).settings.alt_shortcuts_enabled;
+                    let pressed = enabled && event.modifiers.alt;
+                    if state_handle.read(cx).alt_pressed != pressed {
+                        state_handle.update(cx, |state, cx| {
+                            state.set_alt_pressed(pressed);
+                            cx.notify();
+                        });
+                        notify_this.update(cx, |_, cx| cx.notify());
+                    }
+                }
+            })
             .on_key_down(move |ev: &KeyDownEvent, window, cx| {
+                // --- Alt shortcuts for the visible main-window controls ---
+                let k = ev.keystroke.key.as_str();
+                if (matches!(k, "d" | "e" | "h" | "t") || matches!(k.chars().next(), Some('1'..='9')))
+                    && ev.keystroke.modifiers.alt
+                    && root_state.read(cx).settings.alt_shortcuts_enabled
+                    && !ev.keystroke.modifiers.control
+                    && !ev.keystroke.modifiers.shift
+                    // Holding Alt+D / Alt+digit auto-repeats on Windows, which
+                    // would otherwise re-toggle the filter and re-run the DB
+                    // reload on every repeat; only act on the initial press.
+                    && !ev.is_held
+                    && match k {
+                        "e" => root_this.read(cx).emoji_shortcut_available(cx),
+                        "h" => root_this.read(cx).hotkeys_shortcut_available(cx),
+                        "t" => root_this.read(cx).transfer_shortcut_available(cx),
+                        _ => root_this.read(cx).alt_shortcuts_available(cx),
+                    }
+                {
+                    let composing = root_this.update(cx, |this, cx| {
+                        this.current_view == "emoji" && this.emoji_panel.update(cx, |panel, cx| {
+                            panel.is_composing(window, cx)
+                        })
+                    });
+                    if composing { return; }
+                    match k {
+                        "e" => {
+                            root_this.update(cx, |this, cx| this.toggle_emoji_panel(cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                        "t" => {
+                            root_this.update(cx, |this, cx| this.toggle_transfer_panel(cx));
+                            cx.stop_propagation();
+                            return;
+                        }
+                        "d" | "h" => {
+                            root_state.update(cx, |state, _cx| {
+                                if k == "h" { state.toggle_hotkeys_filter(); }
+                                else { state.toggle_favorites_filter(); }
+                            });
+                            root_list.update(cx, |list, cx| {
+                                list.set_items(root_state.read(cx).visible_items(), cx)
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                        _ => {}
+                    }
+                        // Alt+1..9 toggles the Nth visible type filter.
+                        if let Some(digit) = k.chars().next().and_then(|c| c.to_digit(10)) {
+                            let entries = super::filter_bar::visible_filter_types(
+                                &root_state.read(cx).settings.type_filter_config,
+                            );
+                            if let Some(filter) = entries.get((digit - 1) as usize) {
+                                let type_name = filter.key;
+                                root_state.update(cx, |state, _cx| {
+                                    state.toggle_type_filter(type_name)
+                                });
+                                root_list.update(cx, |list, cx| {
+                                    list.set_items(root_state.read(cx).visible_items(), cx)
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                }
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
                 }
@@ -3070,9 +3200,95 @@ impl RootView {
         cx.notify();
     }
 
+    fn toggle_emoji_panel(&mut self, cx: &mut Context<Self>) {
+        if !self.state.read(cx).settings.emoji_panel_enabled {
+            return;
+        }
+        let opening = self.current_view != "emoji";
+        self.switch_view(if opening { "emoji" } else { "clipboard" });
+        self.filter_bar.update(cx, |bar, cx| {
+            bar.close_tag_panel(cx);
+            bar.close_filter_config(cx);
+        });
+        self.list_view.update(cx, |list, cx| {
+            list.dismiss_context_menu(cx);
+            list.hide_tag_picker(cx);
+        });
+        if opening {
+            self.emoji_panel.update(cx, |panel, cx| panel.refresh(cx));
+        }
+        self.mode_focus_pending = true;
+        cx.notify();
+    }
+
+    fn toggle_transfer_panel(&mut self, cx: &mut Context<Self>) {
+        if self.current_view == "emoji" {
+            self.switch_view("clipboard");
+        }
+        self.handle_toggle_transfer(cx);
+    }
+
+    fn emoji_shortcut_available(&self, cx: &App) -> bool {
+        self.mode_shortcut_available('e', cx) && self.state.read(cx).settings.emoji_panel_enabled
+    }
+
+    fn transfer_shortcut_available(&self, cx: &App) -> bool {
+        self.mode_shortcut_available('t', cx)
+            && self.state.read(cx).settings.transfer_station_enabled
+    }
+
+    fn mode_shortcut_available(&self, key: char, cx: &App) -> bool {
+        mode_shortcut_allowed(
+            &self.current_view,
+            self.state.read(cx).transfer_filter_active,
+            key,
+        ) && self.shortcut_controls_unblocked(cx)
+    }
+
+    fn shortcut_controls_unblocked(&self, cx: &App) -> bool {
+        (self.current_view == "emoji" || !self.list_view.read(cx).has_any_panel_or_editing())
+            && !self.filter_bar.read(cx).tag_panel_open()
+            && !self.filter_bar.read(cx).filter_config_open()
+            && self.pending_tag_delete.is_none()
+            && !self.clear_data_confirm
+    }
+
+    fn hotkeys_shortcut_available(&self, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        self.alt_shortcuts_available(cx)
+            && (state.has_hotkey_items || state.filters.is_hotkeys_active())
+    }
+
+    /// Clipboard filtering and all hint visibility require the normal list.
+    /// Mode exit keys use `mode_shortcut_available` independently.
+    fn alt_shortcuts_available(&self, cx: &App) -> bool {
+        self.current_view == "clipboard"
+            && !self.state.read(cx).transfer_filter_active
+            && self.shortcut_controls_unblocked(cx)
+    }
+
+    fn focus_current_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.current_view.as_str() {
+            "clipboard" => {
+                if self.state.read(cx).settings.auto_focus_search {
+                    self.search_box.update(cx, |bar, cx| bar.focus(window, cx));
+                } else {
+                    self.list_view.update(cx, |list, _cx| list.focus(window));
+                }
+            }
+            "emoji" => self
+                .emoji_panel
+                .update(cx, |panel, cx| panel.focus(window, cx)),
+            _ => self.focus_handle.focus(window),
+        }
+    }
+
     fn switch_view(&mut self, view: &str) {
         if self.current_view != view {
             self.current_view = view.into();
+            // The previous view's focused element is about to leave the tree.
+            // Give settings and every return path an explicit destination.
+            self.mode_focus_pending = matches!(view, "clipboard" | "settings" | "emoji");
             self.view_transition_generation = self.view_transition_generation.wrapping_add(1);
             self.view_transition_started = Some(Instant::now());
         }
@@ -3185,5 +3401,35 @@ impl RootView {
 
     fn toast_ease_out(_delta: f32) -> f32 {
         1.0 - (1.0 - _delta).powi(3)
+    }
+}
+
+#[cfg(test)]
+mod shortcut_policy_tests {
+    use super::mode_shortcut_allowed;
+
+    #[test]
+    fn mode_shortcuts_open_from_clipboard_and_only_close_their_own_panel() {
+        for (view, transfer_active, emoji_allowed, transfer_allowed) in [
+            ("clipboard", false, true, true),
+            ("emoji", false, true, false),
+            ("emoji", true, true, false),
+            ("clipboard", true, false, true),
+            ("settings", false, false, false),
+            ("settings", true, false, false),
+            ("edit", false, false, false),
+            ("edit", true, false, false),
+        ] {
+            assert_eq!(
+                mode_shortcut_allowed(view, transfer_active, 'e'),
+                emoji_allowed,
+                "Alt+E in {view}, transfer={transfer_active}"
+            );
+            assert_eq!(
+                mode_shortcut_allowed(view, transfer_active, 't'),
+                transfer_allowed,
+                "Alt+T in {view}, transfer={transfer_active}"
+            );
+        }
     }
 }

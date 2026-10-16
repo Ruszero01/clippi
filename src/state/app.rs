@@ -133,6 +133,11 @@ pub struct AppState {
     /// Page the quick popup renders while the filters are separate. Always empty
     /// while they are shared, because the popup renders `items` directly then.
     quick_items: Vec<ClipboardItem>,
+    /// Whether the Alt modifier is currently held down.
+    ///
+    /// Updated from the window's modifiers-changed callback; drives the
+    /// floating shortcut badges and Alt+key dispatch.
+    pub alt_pressed: bool,
     /// Whether any persisted item currently has a custom hotkey.
     pub has_hotkey_items: bool,
     /// Whether any persisted item is currently favorited.
@@ -461,6 +466,7 @@ impl AppState {
             filters: ClipboardFilters::default(),
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
+            alt_pressed: false,
             last_usage_touched_ids: Vec::new(),
             usage_sync_requires_full_reload: false,
             has_hotkey_items: stats.has_hotkey_items,
@@ -960,6 +966,17 @@ impl AppState {
         self.filters.toggle_hotkeys_only();
         self.selected_ids.clear();
         self.reload_items();
+    }
+
+    /// Record whether the Alt modifier is currently held down.
+    ///
+    /// Drives the floating shortcut badges (titlebar favorites button shows
+    /// `D`, type filter buttons show their positional digit) and gates the
+    /// Alt+key shortcuts in the root view. Persisting the pressed state in
+    /// the app state (instead of a render-local variable) lets child views
+    /// re-render consistently when the modifier changes.
+    pub fn set_alt_pressed(&mut self, pressed: bool) {
+        self.alt_pressed = pressed;
     }
 
     /// Toggle a tag filter and reload visible items.
@@ -3606,6 +3623,7 @@ mod tests {
             filters: ClipboardFilters::default(),
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
+            alt_pressed: false,
             has_hotkey_items: false,
             has_favorite_items: false,
             clearable_history_count: 0,

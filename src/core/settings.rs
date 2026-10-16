@@ -252,6 +252,10 @@ pub struct AppSettings {
     pub image_alt_mode: String, // advanced paste mode for images: "bitmap" | "path" | "ocr"
     #[serde(default = "default_paste_click_mode")]
     pub paste_click_mode: String, // main-window paste gesture: "double_click" | "single_click"
+    /// 「Alt 快捷切换」：按住 Alt 浮出快捷键提示（收藏按钮 D、类型标签 1~9），
+    /// 并允许 Alt+D / Alt+1~9 直接切换收藏与标签页。默认开启，旧配置缺失该项时保持原行为。
+    #[serde(default = "default_alt_shortcuts_enabled")]
+    pub alt_shortcuts_enabled: bool,
 }
 
 fn default_image_alt_mode() -> String {
@@ -317,6 +321,11 @@ fn default_latest_hotkeys() -> Vec<LatestHotkeyEntry> {
 
 /// 快速窗口默认与主窗口共用筛选状态，与引入该开关之前的行为一致。
 fn default_quick_sync_filters() -> bool {
+    true
+}
+
+/// Alt 快捷切换默认开启，与引入该开关之前的行为一致。
+fn default_alt_shortcuts_enabled() -> bool {
     true
 }
 
@@ -408,6 +417,7 @@ impl Default for AppSettings {
             always_reset_to_clipboard: false,
             image_alt_mode: default_image_alt_mode(),
             paste_click_mode: default_paste_click_mode(),
+            alt_shortcuts_enabled: true,
         }
     }
 }
@@ -1572,6 +1582,26 @@ mod tests {
         let loaded: AppSettings = toml::from_str(&legacy_toml).unwrap();
 
         assert!(loaded.auto_fetch_url_title);
+    }
+
+    #[test]
+    fn alt_shortcuts_enabled_defaults_on_and_round_trips_off() {
+        // Configs written before the key exist must keep the feature on.
+        let mut value = toml::Value::try_from(AppSettings::default()).unwrap();
+        value
+            .as_table_mut()
+            .unwrap()
+            .remove("alt_shortcuts_enabled");
+        let loaded: AppSettings = value.try_into().unwrap();
+        assert!(loaded.alt_shortcuts_enabled);
+
+        let changed = AppSettings {
+            alt_shortcuts_enabled: false,
+            ..loaded
+        };
+        let saved = toml::to_string(&changed).unwrap();
+        let restored: AppSettings = toml::from_str(&saved).unwrap();
+        assert!(!restored.alt_shortcuts_enabled);
     }
 
     fn bk(id: &str, name: &str) -> BackendConfig {
