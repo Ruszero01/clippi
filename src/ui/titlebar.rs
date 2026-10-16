@@ -1,8 +1,4 @@
-//! Custom titlebar — matches original Slint design (app.slint).
-//!
-//! --- 38px height, logo + "Clippi" app name on the left (12px, 700 weight), ---
-//! --- three icon buttons on the right (fav filter, pin, settings). ---
-//! --- The drag area covers the left portion (width - 92px). ---
+//! Compact window chrome with animated shortcut hints.
 
 use crate::ui::font::fs;
 use gpui::prelude::*;
@@ -14,16 +10,16 @@ use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
+use super::components::shortcut_hint::{shortcut_popover, shortcut_progress};
 use super::theme::ClippiTheme;
 
-/// Titlebar height matching original Slint design.
-pub const TITLEBAR_HEIGHT: f32 = 30.0;
+const TITLEBAR_BUTTON_SIZE: f32 = 28.0;
 
 /// Shared hit area and hover treatment for every titlebar action.
 fn titlebar_button(id: &'static str, theme: &ClippiTheme) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(28.))
+        .size(px(TITLEBAR_BUTTON_SIZE))
         .rounded(px(6.))
         .flex()
         .items_center()
@@ -55,6 +51,10 @@ pub struct Titlebar {
     list_view: Entity<ClipboardListView>,
     pinned: bool,
     emoji_active: bool,
+    alt_shortcuts_available: bool,
+    emoji_shortcut_available: bool,
+    hotkeys_shortcut_available: bool,
+    transfer_shortcut_available: bool,
     theme: ClippiTheme,
 }
 
@@ -69,6 +69,10 @@ impl Titlebar {
             list_view,
             pinned: false,
             emoji_active: false,
+            alt_shortcuts_available: false,
+            emoji_shortcut_available: false,
+            hotkeys_shortcut_available: false,
+            transfer_shortcut_available: false,
             theme,
         }
     }
@@ -85,6 +89,27 @@ impl Titlebar {
         }
     }
 
+    pub fn set_alt_shortcuts_available(
+        &mut self,
+        available: bool,
+        emoji_available: bool,
+        hotkeys_available: bool,
+        transfer_available: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.alt_shortcuts_available != available
+            || self.emoji_shortcut_available != emoji_available
+            || self.hotkeys_shortcut_available != hotkeys_available
+            || self.transfer_shortcut_available != transfer_available
+        {
+            self.alt_shortcuts_available = available;
+            self.emoji_shortcut_available = emoji_available;
+            self.hotkeys_shortcut_available = hotkeys_available;
+            self.transfer_shortcut_available = transfer_available;
+            cx.notify();
+        }
+    }
+
     pub fn set_theme(&mut self, theme: ClippiTheme, cx: &mut Context<Self>) {
         self.theme = theme;
         cx.notify();
@@ -94,7 +119,7 @@ impl Titlebar {
 impl EventEmitter<TitlebarEvent> for Titlebar {}
 
 impl Render for Titlebar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &self.theme;
         let (hotkeys_active, fav_active, show_hotkeys_filter, show_favorites_filter) = {
             let state = self.state.read(cx);
@@ -107,7 +132,21 @@ impl Render for Titlebar {
                 fav_active || state.has_favorite_items,
             )
         };
-        let alt_pressed = self.state.read(cx).alt_pressed;
+        let state = self.state.read(cx);
+        let alt_pressed = state.alt_pressed && state.settings.alt_shortcuts_enabled;
+        let emoji_enabled = state.settings.emoji_panel_enabled;
+        let favorite_hint_progress = shortcut_progress(
+            "titlebar-favorites-shortcut",
+            alt_pressed && self.alt_shortcuts_available && show_favorites_filter,
+            window,
+            cx,
+        );
+        let emoji_hint_progress = shortcut_progress(
+            "titlebar-emoji-shortcut",
+            alt_pressed && self.emoji_shortcut_available && emoji_enabled,
+            window,
+            cx,
+        );
         let (transfer_active, show_transfer_filter) = {
             let state = self.state.read(cx);
             (
@@ -115,8 +154,19 @@ impl Render for Titlebar {
                 state.settings.transfer_station_enabled,
             )
         };
+        let hotkeys_hint_progress = shortcut_progress(
+            "titlebar-hotkeys-shortcut",
+            alt_pressed && self.hotkeys_shortcut_available && show_hotkeys_filter,
+            window,
+            cx,
+        );
+        let transfer_hint_progress = shortcut_progress(
+            "titlebar-transfer-shortcut",
+            alt_pressed && self.transfer_shortcut_available && show_transfer_filter,
+            window,
+            cx,
+        );
         let pinned = self.pinned;
-        let emoji_enabled = self.state.read(cx).settings.emoji_panel_enabled;
         let emoji_active = self.emoji_active;
         let emoji_titlebar = cx.entity().clone();
         let accent = theme.accent;
@@ -138,7 +188,7 @@ impl Render for Titlebar {
             .flex_row()
             .items_center()
             .w_full()
-            .h(px(TITLEBAR_HEIGHT))
+            .h(px(30.0))
             .flex_shrink_0()
             .rounded_t(px(12.))
             .bg(theme.titlebar_bg)
@@ -180,77 +230,145 @@ impl Render for Titlebar {
                     .pr(px(4.))
                     .when(emoji_enabled, |bar| {
                         bar.child(
-                            titlebar_button("titlebar-emoji", theme)
-                                .when(emoji_active, |button| button.bg(theme.accent_soft))
-                                .tooltip(|window, cx| {
-                                    Tooltip::element(|_, _| {
-                                        div().text_size(fs(10.)).child(I18nKey::EmojiPanel.text())
-                                    })
-                                    .build(window, cx)
-                                })
-                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                    emoji_titlebar
-                                        .update(cx, |_, cx| cx.emit(TitlebarEvent::ToggleEmoji));
-                                })
+                            div()
+                                .relative()
                                 .child(
-                                    svg()
-                                        .path("picker-icons/smile.svg")
-                                        .size(px(17.))
-                                        .text_color(if emoji_active { accent } else { text_2 }),
+                                    titlebar_button("titlebar-emoji", theme)
+                                        .when(emoji_active, |button| button.bg(theme.accent_soft))
+                                        .tooltip(|window, cx| {
+                                            Tooltip::element(|_, _| {
+                                                div()
+                                                    .text_size(fs(10.))
+                                                    .child(I18nKey::EmojiPanel.text())
+                                            })
+                                            .build(window, cx)
+                                        })
+                                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                            emoji_titlebar.update(cx, |_, cx| {
+                                                cx.emit(TitlebarEvent::ToggleEmoji)
+                                            });
+                                        })
+                                        .child(
+                                            svg()
+                                                .path("picker-icons/smile.svg")
+                                                .size(px(17.))
+                                                .text_color(if emoji_active {
+                                                    accent
+                                                } else {
+                                                    text_2
+                                                }),
+                                        ),
+                                )
+                                .when(
+                                    self.emoji_shortcut_available && emoji_hint_progress > 0.001,
+                                    |slot| {
+                                        slot.child(shortcut_popover(
+                                            "E",
+                                            emoji_hint_progress,
+                                            theme,
+                                        ))
+                                    },
                                 ),
                         )
                     })
                     // --- Custom hotkey filter button (28x28) ---
                     .when(show_hotkeys_filter, |bar| {
                         bar.child(
-                            titlebar_button("titlebar-hotkeys-filter", theme)
-                                .tooltip(|window, cx| {
-                                    let label = I18nKey::TitlebarTooltipHotkeys.text();
-                                    Tooltip::element(move |_window, _cx| {
-                                        div().text_size(fs(10.)).child(label)
-                                    })
-                                    .build(window, cx)
-                                })
-                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                    let items = hotkey_state.update(cx, |state, _cx| {
-                                        state.toggle_hotkeys_filter();
-                                        state.visible_items()
-                                    });
-                                    hotkey_list_view
-                                        .update(cx, |list, cx| list.set_items(items, cx));
-                                    hotkey_titlebar.update(cx, |_titlebar, cx| cx.notify());
-                                })
+                            div()
+                                .relative()
                                 .child(
-                                    div()
-                                        .text_size(fs(15.))
-                                        .font_family("iconfont")
-                                        .text_color(if hotkeys_active { accent } else { text_2 })
-                                        .child("\u{e66b}"),
+                                    titlebar_button("titlebar-hotkeys-filter", theme)
+                                        .tooltip(|window, cx| {
+                                            let label = I18nKey::TitlebarTooltipHotkeys.text();
+                                            Tooltip::element(move |_window, _cx| {
+                                                div().text_size(fs(10.)).child(label)
+                                            })
+                                            .build(window, cx)
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, _window, cx| {
+                                                let items =
+                                                    hotkey_state.update(cx, |state, _cx| {
+                                                        state.toggle_hotkeys_filter();
+                                                        state.visible_items()
+                                                    });
+                                                hotkey_list_view.update(cx, |list, cx| {
+                                                    list.set_items(items, cx)
+                                                });
+                                                hotkey_titlebar
+                                                    .update(cx, |_titlebar, cx| cx.notify());
+                                            },
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(fs(15.))
+                                                .font_family("iconfont")
+                                                .text_color(if hotkeys_active {
+                                                    accent
+                                                } else {
+                                                    text_2
+                                                })
+                                                .child("\u{e66b}"),
+                                        ),
+                                )
+                                .when(
+                                    self.hotkeys_shortcut_available
+                                        && hotkeys_hint_progress > 0.001,
+                                    |slot| {
+                                        slot.child(shortcut_popover(
+                                            "H",
+                                            hotkeys_hint_progress,
+                                            theme,
+                                        ))
+                                    },
                                 ),
                         )
                     })
                     // --- Transfer station filter button (28x28) ---
                     .when(show_transfer_filter, |bar| {
                         bar.child(
-                            titlebar_button("titlebar-transfer-filter", theme)
-                                .tooltip(|window, cx| {
-                                    let label = I18nKey::TransferStation.text();
-                                    Tooltip::element(move |_window, _cx| {
-                                        div().text_size(fs(10.)).child(label)
-                                    })
-                                    .build(window, cx)
-                                })
-                                .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                    transfer_titlebar.update(cx, |_titlebar, cx| {
-                                        cx.emit(TitlebarEvent::ToggleTransfer);
-                                    });
-                                })
+                            div()
+                                .relative()
                                 .child(
-                                    div()
-                                        .text_size(fs(15.))
-                                        .font_family("iconfont")
-                                        .text_color(if transfer_active { accent } else { text_2 })
-                                        .child("\u{e794}"),
+                                    titlebar_button("titlebar-transfer-filter", theme)
+                                        .tooltip(|window, cx| {
+                                            let label = I18nKey::TransferStation.text();
+                                            Tooltip::element(move |_window, _cx| {
+                                                div().text_size(fs(10.)).child(label)
+                                            })
+                                            .build(window, cx)
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, _window, cx| {
+                                                transfer_titlebar.update(cx, |_titlebar, cx| {
+                                                    cx.emit(TitlebarEvent::ToggleTransfer);
+                                                });
+                                            },
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(fs(15.))
+                                                .font_family("iconfont")
+                                                .text_color(if transfer_active {
+                                                    accent
+                                                } else {
+                                                    text_2
+                                                })
+                                                .child("\u{e794}"),
+                                        ),
+                                )
+                                .when(
+                                    self.transfer_shortcut_available
+                                        && transfer_hint_progress > 0.001,
+                                    |slot| {
+                                        slot.child(shortcut_popover(
+                                            "T",
+                                            transfer_hint_progress,
+                                            theme,
+                                        ))
+                                    },
                                 ),
                         )
                     })
@@ -268,46 +386,42 @@ impl Render for Titlebar {
                                             })
                                             .build(window, cx)
                                         })
-                                        .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
-                                            let items = fav_state.update(cx, |state, _cx| {
-                                                state.toggle_favorites_filter();
-                                                state.visible_items()
-                                            });
-                                            fav_list_view.update(cx, |list, cx| list.set_items(items, cx));
-                                            fav_titlebar.update(cx, |_titlebar, cx| cx.notify());
-                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            move |_ev, _window, cx| {
+                                                let items = fav_state.update(cx, |state, _cx| {
+                                                    state.toggle_favorites_filter();
+                                                    state.visible_items()
+                                                });
+                                                fav_list_view.update(cx, |list, cx| {
+                                                    list.set_items(items, cx)
+                                                });
+                                                fav_titlebar
+                                                    .update(cx, |_titlebar, cx| cx.notify());
+                                            },
+                                        )
                                         .child(
                                             div()
                                                 .text_size(fs(15.))
                                                 .font_family("iconfont")
-                                                .text_color(if fav_active { fav_color } else { text_2 })
+                                                .text_color(if fav_active {
+                                                    fav_color
+                                                } else {
+                                                    text_2
+                                                })
                                                 .child("\u{e630}"),
                                         ),
                                 )
-                                // --- Alt shortcut badge: `D` ---
-                                .when(alt_pressed, |badge| {
-                                    badge.child(
-                                        div()
-                                            .absolute()
-                                            .top(px(-4.))
-                                            .right(px(-4.))
-                                            .min_w(px(14.))
-                                            .h(px(14.))
-                                            .px(px(3.))
-                                            .rounded(px(4.))
-                                            .bg(accent)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                div()
-                                                    .text_size(px(9.))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_color(rgb(0xffffff))
-                                                    .child("D"),
-                                            ),
-                                    )
-                                }),
+                                .when(
+                                    self.alt_shortcuts_available && favorite_hint_progress > 0.001,
+                                    |slot| {
+                                        slot.child(shortcut_popover(
+                                            "D",
+                                            favorite_hint_progress,
+                                            theme,
+                                        ))
+                                    },
+                                ),
                         )
                     })
                     // --- Pin button (28x28) ---

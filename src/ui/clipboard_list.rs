@@ -1628,7 +1628,7 @@ impl ClipboardListView {
 
     /// Check whether any floating panel or inline editing is active.
     /// When true, Enter key should NOT trigger paste.
-    fn has_any_panel_or_editing(&self) -> bool {
+    pub(crate) fn has_any_panel_or_editing(&self) -> bool {
         self.context_menu_visible
             || self.tag_picker_visible
             || self.confirm_dialog.is_some()
@@ -2425,6 +2425,9 @@ impl Render for ClipboardListView {
         // --- avoiding the virtual list subtree so GPUI releases its element cache. ---
         if empty_state {
             return div()
+                // Keep the focused list in the dispatch tree so root-level
+                // shortcuts and modifier releases still work with no results.
+                .track_focus(&focus_handle)
                 .flex_1()
                 .h_full()
                 .w_full()
