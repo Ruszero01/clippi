@@ -193,6 +193,7 @@ impl Render for FilterBar {
         let text_2 = theme.text_2;
         let this = cx.entity().clone();
         let state_snapshot = self.state.read(cx);
+        let alt_pressed = state_snapshot.alt_pressed;
         let has_tag_filter = !state_snapshot.filters.tag_ids.is_empty();
         let viewport = window.viewport_size();
         let toolbar_width =
@@ -270,49 +271,79 @@ impl Render for FilterBar {
                                 let this = this.clone();
 
                                 Some(
-                                    filter_chip(("filter-type", index), is_active, theme)
-                                        .when(icon_only, |button| {
-                                            button.flex_1().min_w(px(0.)).justify_center()
-                                        })
-                                        .when(!icon_only, |button| {
-                                            button
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .justify_center()
-                                                .px(px(5.))
-                                                .gap(px(2.))
-                                        })
-                                        .when(icon_only, move |button| {
-                                            button.tooltip(move |window, cx| {
-                                                Tooltip::element(move |_window, _cx| {
-                                                    div().text_size(fs(10.)).child(label)
-                                                })
-                                                .build(window, cx)
-                                            })
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_ev, _window, cx| {
-                                                Self::apply_type_filter(
-                                                    &state, &list_view, key, cx,
-                                                );
-                                                this.update(cx, |_bar, cx| cx.notify());
-                                            },
-                                        )
+                                    div()
+                                        .relative()
+                                        .flex_1()
+                                        .min_w(px(0.))
                                         .child(
-                                            div()
-                                                .text_size(fs(12.))
-                                                .font_family("iconfont")
-                                                .text_color(filter_text)
-                                                .child(icon.to_string()),
+                                            filter_chip(("filter-type", index), is_active, theme)
+                                                .when(icon_only, |button| {
+                                                    button.flex_1().min_w(px(0.)).justify_center()
+                                                })
+                                                .when(!icon_only, |button| {
+                                                    button
+                                                        .flex_1()
+                                                        .min_w(px(0.))
+                                                        .justify_center()
+                                                        .px(px(5.))
+                                                        .gap(px(2.))
+                                                })
+                                                .when(icon_only, move |button| {
+                                                    button.tooltip(move |window, cx| {
+                                                        Tooltip::element(move |_window, _cx| {
+                                                            div().text_size(fs(10.)).child(label)
+                                                        })
+                                                        .build(window, cx)
+                                                    })
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_ev, _window, cx| {
+                                                        Self::apply_type_filter(
+                                                            &state, &list_view, key, cx,
+                                                        );
+                                                        this.update(cx, |_bar, cx| cx.notify());
+                                                    },
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(fs(12.))
+                                                        .font_family("iconfont")
+                                                        .text_color(filter_text)
+                                                        .child(icon.to_string()),
+                                                )
+                                                .when(!icon_only, |button| {
+                                                    button.child(
+                                                        div()
+                                                            .text_size(fs(11.))
+                                                            .font_weight(filter_weight)
+                                                            .text_color(filter_text)
+                                                            .child(label),
+                                                    )
+                                                }),
                                         )
-                                        .when(!icon_only, |button| {
-                                            button.child(
+                                        // --- Alt shortcut badge: positional digit ---
+                                        .when(alt_pressed && index < 9, |badge| {
+                                            badge.child(
                                                 div()
-                                                    .text_size(fs(11.))
-                                                    .font_weight(filter_weight)
-                                                    .text_color(filter_text)
-                                                    .child(label),
+                                                    .absolute()
+                                                    .top(px(-5.))
+                                                    .right(px(-5.))
+                                                    .min_w(px(14.))
+                                                    .h(px(14.))
+                                                    .px(px(3.))
+                                                    .rounded(px(4.))
+                                                    .bg(accent)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(9.))
+                                                            .font_weight(FontWeight::BOLD)
+                                                            .text_color(rgb(0xffffff))
+                                                            .child((index + 1).to_string()),
+                                                    ),
                                             )
                                         }),
                                 )

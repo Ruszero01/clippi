@@ -98,6 +98,7 @@ pub struct RootView {
     /// The include-* selection itself lives in `AppState`.
     clear_data_confirm: bool,
     _wm_subscription: Subscription,
+    _activation_subscription: Subscription,
     _subscriptions: Vec<Subscription>,
     _appearance_subscription: Option<Subscription>,
     /// Focus handle for global keyboard events (ESC navigation).
@@ -560,6 +561,28 @@ impl RootView {
             },
         );
 
+        // --- Alt badges go stale when the window loses focus without hiding: ---
+        // --- Windows only reports modifier state on key messages, so an Alt ---
+        // --- release in another app never reaches us and the D / digit badges ---
+        // --- stay stuck. Re-read the live modifiers on every (de)activation. ---
+        let _activation_subscription = cx.observe_window_activation(
+            window,
+            move |this, window, cx| {
+                let enabled = this.state.read(cx).settings.alt_shortcuts_enabled;
+                let pressed = window.is_window_active() && enabled && window.modifiers().alt;
+                if this.state.read(cx).alt_pressed != pressed {
+                    // Notify on the `AppState` context too: the views that paint
+                    // the badges observe that entity, so they must be marked
+                    // dirty (same as the settings toggle path).
+                    this.state.update(cx, |state, cx| {
+                        state.set_alt_pressed(pressed);
+                        cx.notify();
+                    });
+                    cx.notify();
+                }
+            },
+        );
+
         let wm = window_manager.clone();
         let titlebar_for_events = titlebar.clone();
         let backend_panel = settings_panel.read(cx).backend_panel();
@@ -907,6 +930,7 @@ impl RootView {
             mode_focus_pending: false,
             clear_data_confirm: false,
             _wm_subscription,
+            _activation_subscription,
             _subscriptions,
             _appearance_subscription: Some(appearance_sub),
             focus_handle: cx.focus_handle(),
@@ -1411,7 +1435,70 @@ impl Render for RootView {
                     cx.stop_propagation();
                 }
             })
+            .on_modifiers_changed({
+                let notify_this = root_this.clone();
+                let state_handle = root_state.clone();
+                move |event, _window, cx| {
+                    // Track the Alt modifier for floating shortcut badges and
+                    // Alt+key dispatch. The modifiers event only fires when a
+                    // modifier key actually changes state, so this is cheap and
+                    // fires on both press and release of Alt.
+                    let enabled = state_handle.read(cx).settings.alt_shortcuts_enabled;
+                    let pressed = enabled && event.modifiers.alt;
+                    if state_handle.read(cx).alt_pressed != pressed {
+                        state_handle.update(cx, |state, _cx| state.set_alt_pressed(pressed));
+                        notify_this.update(cx, |_, cx| cx.notify());
+                    }
+                }
+            })
             .on_key_down(move |ev: &KeyDownEvent, window, cx| {
+                // --- Alt+key shortcuts (main window, clipboard view only) ---
+                let k = ev.keystroke.key.as_str();
+                if (k == "d" || matches!(k.chars().next(), Some('1'..='9')))
+                    && ev.keystroke.modifiers.alt
+                    && root_state.read(cx).settings.alt_shortcuts_enabled
+                    && !ev.keystroke.modifiers.control
+                    && !ev.keystroke.modifiers.shift
+                    // Holding Alt+D / Alt+digit auto-repeats on Windows, which
+                    // would otherwise re-toggle the filter and re-run the DB
+                    // reload on every repeat; only act on the initial press.
+                    && !ev.is_held
+                {
+                    let is_clipboard = root_this.read(cx).current_view == "clipboard";
+                    let is_settings = root_this.read(cx).current_view == "settings";
+                    if is_clipboard || is_settings {
+                        // Alt+D toggles the favorites filter.
+                        if k == "d" {
+                            root_state.update(cx, |state, _cx| state.toggle_favorites_filter());
+                            root_list.update(cx, |list, cx| {
+                                list.set_items(root_state.read(cx).visible_items(), cx)
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                        // Alt+1..9 toggles the Nth visible type filter.
+                        if let Some(digit) = k.chars().next().and_then(|c| c.to_digit(10)) {
+                            let entries: Vec<String> = root_state
+                                .read(cx)
+                                .settings
+                                .type_filter_config
+                                .iter()
+                                .filter(|e| e.visible)
+                                .map(|e| e.key.clone())
+                                .collect();
+                            if let Some(type_name) = entries.get((digit - 1) as usize) {
+                                root_state.update(cx, |state, _cx| {
+                                    state.toggle_type_filter(type_name)
+                                });
+                                root_list.update(cx, |list, cx| {
+                                    list.set_items(root_state.read(cx).visible_items(), cx)
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                    }
+                }
                 if ev.keystroke.key.as_str() != "escape" {
                     return;
                 }

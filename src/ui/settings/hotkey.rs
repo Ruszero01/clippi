@@ -642,6 +642,154 @@ impl SettingsPanel {
             )
     }
 
+    /// 「Alt 快捷切换」开关行。
+    ///
+    /// 抽成方法是为了让两个位置共用同一段渲染逻辑：Windows 放进「系统快捷键接管」
+    /// 分组、其余平台放进全局快捷键分组末尾。
+    fn render_alt_shortcuts_row(
+        &mut self,
+        value: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_toggle_row(
+            I18nKey::SettingAltShortcuts,
+            I18nKey::DescAltShortcutsOn,
+            I18nKey::DescAltShortcutsOff,
+            value,
+            window,
+            cx,
+            |state, _this, _window, _cx| {
+                state.update(_cx, |s, cx| {
+                    s.settings.alt_shortcuts_enabled = !s.settings.alt_shortcuts_enabled;
+                    s.settings.save();
+                    // 关掉时立即清除按住 Alt 的状态，徽标随之消失。
+                    s.set_alt_pressed(false);
+                    cx.notify();
+                });
+            },
+        )
+        .into_any_element()
+    }
+
+    /// 「接管系统剪贴板快捷键」(Win+V) 行。
+    ///
+    /// 与其它设置行一样走分组内的裸行约定：`row_shell()` 提供行内边距，
+    /// `setting_row_with_toggle()` 提供共享的动画开关，卡片边框与圆角由
+    /// `settings_group` 统一提供。此前这一行自绘了 `rounded/bg/border` 小卡片，
+    /// 嵌进分组卡片就成了双重描边、分割线风格与其它分组不一致。
+    ///
+    /// 可选的重检按钮与手动设置提示是这一行的第二段，跟在文字与开关下方：
+    /// 左右内边距与 `row_shell()` 对齐（`px(14.)`），所以右边缘与开关齐平、
+    /// 左边缘与标签齐平，不会看起来像另一张卡片。
+    fn render_win_v_takeover_row(
+        &mut self,
+        takeover_active: bool,
+        takeover_status: WinVTakeoverStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let status_text = match takeover_status {
+            WinVTakeoverStatus::Active => I18nKey::WinVStatusActive.text(),
+            WinVTakeoverStatus::HotkeyUnavailable => I18nKey::WinVStatusConflict.text(),
+            WinVTakeoverStatus::RegistryUpdateRequired => I18nKey::WinVStatusUpdateRequired.text(),
+            WinVTakeoverStatus::RegistryError => I18nKey::WinVStatusRegistryError.text(),
+            WinVTakeoverStatus::Disabled => I18nKey::WinVTakeoverDesc.text(),
+        };
+        let show_recheck = takeover_status == WinVTakeoverStatus::HotkeyUnavailable;
+        let show_manual = matches!(
+            takeover_status,
+            WinVTakeoverStatus::RegistryError | WinVTakeoverStatus::RegistryUpdateRequired
+        );
+
+        let accent = self.theme.accent;
+        let text_3 = self.theme.text_3;
+
+        let state_toggle = self.state.clone();
+        let this_toggle = cx.entity().clone();
+        let wm_recheck = self.window_manager.clone();
+        let this_recheck = cx.entity().clone();
+        let this_manual = cx.entity().clone();
+
+        // 点击只发确认事件，真正的开关由 RootView 确认后再落盘。
+        let on_toggle = move |_window: &mut Window, cx: &mut App| {
+            let current = state_toggle.read(cx).settings.replace_system_win_v;
+            let action = if current {
+                HotkeyConfirmAction::WinVTakeoverDisable
+            } else {
+                HotkeyConfirmAction::WinVTakeoverEnable
+            };
+            this_toggle.update(cx, |_panel, cx| {
+                cx.emit(super::SettingsEvent::ShowHotkeyConfirm(action));
+            });
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .child(self.setting_row_with_toggle(
+                I18nKey::WinVTakeoverLabel.text(),
+                status_text,
+                takeover_active,
+                window,
+                cx,
+                on_toggle,
+            ))
+            .when(show_recheck || show_manual, move |row| {
+                row.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_end()
+                        .px(px(14.))
+                        .pb(px(10.))
+                        .when(show_recheck, move |row| {
+                            row.child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(3.))
+                                    .rounded(px(5.))
+                                    .bg(accent)
+                                    .text_size(fs(10.))
+                                    .text_color(rgb(0xffffff))
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|style| style.opacity(0.85))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        wm_recheck.update(cx, |wm, cx| {
+                                            wm.recheck_win_v_takeover(cx);
+                                        });
+                                        this_recheck.update(cx, |_panel, cx| {
+                                            cx.notify();
+                                        });
+                                    })
+                                    .child(I18nKey::WinVRecheckBtn.text()),
+                            )
+                        })
+                        .when(show_manual, move |row| {
+                            row.child(
+                                div()
+                                    .px(px(6.))
+                                    .py(px(3.))
+                                    .text_size(fs(10.))
+                                    .text_color(text_3)
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(|style| style.opacity(0.7))
+                                    .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                        this_manual.update(cx, |_panel, cx| {
+                                            cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
+                                                HotkeyConfirmAction::WinVManualSetup,
+                                            ));
+                                        });
+                                    })
+                                    .child(I18nKey::WinVManualSetupHint.text()),
+                            )
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
     pub fn render_hotkey_tab(
         &mut self,
         _window: &mut Window,
@@ -664,6 +812,7 @@ impl SettingsPanel {
         let paste_plain_display = hotkey_display(&paste_plain_hotkey);
         let has_paste_plain_hotkey = !paste_plain_hotkey.is_empty();
         let recording_paste_plain = app.recording_paste_plain_hotkey;
+        let alt_shortcuts_enabled = app.settings.alt_shortcuts_enabled;
         #[cfg(target_os = "windows")]
         let _replace_system_win_v = app.settings.replace_system_win_v;
         // borrow released
@@ -672,7 +821,10 @@ impl SettingsPanel {
         let takeover_active =
             cfg!(target_os = "windows") && takeover_status != WinVTakeoverStatus::Disabled;
 
-        let theme = &self.theme;
+        // 借用本地克隆而不是 `self.theme`：下面的行构造闭包会捕获这个引用并活到函数尾部，
+        // 若直接借用 `self`，后面需要 `&mut self`（`toggle_states`）的开关行就无法构造。
+        let theme_owned = self.theme.clone();
+        let theme = &theme_owned;
 
         let mut container = div().flex().flex_col().gap(px(14.)).pt(px(8.));
 
@@ -871,198 +1023,19 @@ impl SettingsPanel {
             }
             .into_any_element(),
         );
+        // 非 Windows 平台没有「系统快捷键接管」分组，把开关放在全局快捷键组末尾。
+        #[cfg(not(target_os = "windows"))]
+        hotkey_rows.push(self.render_alt_shortcuts_row(alt_shortcuts_enabled, _window, cx));
         container = container.child(self.settings_group(I18nKey::GroupHotkeys.text(), hotkey_rows));
 
-        // --- System hotkey takeover (single row, no section title) ---
+        // --- System hotkey takeover: the group card holds the Win+V row (plus the
+        // Alt row), so there is exactly one card with inset hairlines, like every
+        // other settings group. ---
         if cfg!(target_os = "windows") {
-            let build_win_v = {
-                let takeover_active_val = takeover_active;
-                let takeover_status_val = takeover_status;
-                let this_winv = this.clone();
-                let state_winv = state.clone();
-                let wm_winv = wm.clone();
-                move |parent: Div| {
-                    let status_text = match takeover_status_val {
-                        WinVTakeoverStatus::Active => I18nKey::WinVStatusActive.text(),
-                        WinVTakeoverStatus::HotkeyUnavailable => I18nKey::WinVStatusConflict.text(),
-                        WinVTakeoverStatus::RegistryUpdateRequired => {
-                            I18nKey::WinVStatusUpdateRequired.text()
-                        }
-                        WinVTakeoverStatus::RegistryError => {
-                            I18nKey::WinVStatusRegistryError.text()
-                        }
-                        WinVTakeoverStatus::Disabled => I18nKey::WinVTakeoverDesc.text(),
-                    };
-                    let show_recheck = takeover_status_val == WinVTakeoverStatus::HotkeyUnavailable;
-                    let show_manual = matches!(
-                        takeover_status_val,
-                        WinVTakeoverStatus::RegistryError
-                            | WinVTakeoverStatus::RegistryUpdateRequired
-                    );
-
-                    parent.child(
-                        // Child is a container div.
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.))
-                            .child({
-                                // Simple toggle row without animation.
-                                let toggle_on = takeover_active_val;
-                                let accent = theme.accent;
-                                let divider = theme.divider;
-                                let toggle_bg = if toggle_on { accent } else { divider };
-                                let knob_x = if toggle_on { 20.0 } else { 2.0 };
-                                let this_toggle = this_winv.clone();
-                                let state_toggle = state_winv.clone();
-                                div()
-                                    .h(px(66.))
-                                    .rounded(px(10.))
-                                    .bg(theme.surface)
-                                    .border(px(1.))
-                                    .border_color(divider)
-                                    .px(px(14.))
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_1()
-                                            .min_w(px(0.))
-                                            .flex_col()
-                                            .gap(px(2.))
-                                            .child(
-                                                div()
-                                                    .max_w_full()
-                                                    .overflow_hidden()
-                                                    .text_ellipsis()
-                                                    .whitespace_nowrap()
-                                                    .text_size(fs(12.))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_color(theme.text_1)
-                                                    .child(I18nKey::WinVTakeoverLabel.text()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .max_w_full()
-                                                    .overflow_hidden()
-                                                    .text_ellipsis()
-                                                    .whitespace_nowrap()
-                                                    .text_size(fs(10.))
-                                                    .text_color(theme.text_3)
-                                                    .child(status_text),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(40.))
-                                            .h(px(22.))
-                                            .rounded(px(11.))
-                                            .bg(toggle_bg)
-                                            .flex()
-                                            .items_center()
-                                            .cursor(CursorStyle::PointingHand)
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                move |_ev, _window, cx| {
-                                                    let current = state_toggle
-                                                        .read(cx)
-                                                        .settings
-                                                        .replace_system_win_v;
-                                                    if !current {
-                                                        this_toggle.update(cx, |_panel, cx| {
-                                                            cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                                HotkeyConfirmAction::WinVTakeoverEnable,
-                                                            ));
-                                                        });
-                                                    } else {
-                                                        this_toggle.update(cx, |_panel, cx| {
-                                                            cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                                HotkeyConfirmAction::WinVTakeoverDisable,
-                                                            ));
-                                                        });
-                                                    }
-                                                },
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(18.))
-                                                    .h(px(18.))
-                                                    .rounded(px(9.))
-                                                    .bg(rgb(0xffffff))
-                                                    .ml(px(knob_x)),
-                                            ),
-                                    )
-                            })
-                            .when(show_recheck || show_manual, move |parent| {
-                                let accent = theme.accent;
-                                let wm_recheck = wm_winv.clone();
-                                let this_recheck = this_winv.clone();
-                                let this_manual = this_winv.clone();
-                                parent
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .justify_end()
-                                            .px(px(4.))
-                                            .when(show_recheck, |row| {
-                                                row.child(
-                                                    div()
-                                                        .px(px(8.))
-                                                        .py(px(3.))
-                                                        .rounded(px(5.))
-                                                        .bg(accent)
-                                                        .text_size(fs(10.))
-                                                        .text_color(rgb(0xffffff))
-                                                        .cursor(CursorStyle::PointingHand)
-                                                        .hover(|style| style.opacity(0.85))
-                                                        .on_mouse_down(
-                                                            MouseButton::Left,
-                                                            move |_ev, _window, cx| {
-                                                                wm_recheck.update(cx, |wm, cx| {
-                                                                    wm.recheck_win_v_takeover(cx);
-                                                                });
-                                                                this_recheck.update(cx, |_panel, cx| {
-                                                                    cx.notify();
-                                                                });
-                                                            },
-                                                        )
-                                                        .child(I18nKey::WinVRecheckBtn.text()),
-                                                )
-                                            })
-                                            .when(show_manual, |row| {
-                                                let text_3 = theme.text_3;
-                                                row.child(
-                                                    div()
-                                                        .px(px(6.))
-                                                        .py(px(3.))
-                                                        .text_size(fs(10.))
-                                                        .text_color(text_3)
-                                                        .cursor(CursorStyle::PointingHand)
-                                                        .hover(|style| style.opacity(0.7))
-                                                        .on_mouse_down(
-                                                            MouseButton::Left,
-                                                            move |_ev, _window, cx| {
-                                                                this_manual.update(cx, |_panel, cx| {
-                                                                    cx.emit(super::SettingsEvent::ShowHotkeyConfirm(
-                                                                        HotkeyConfirmAction::WinVManualSetup,
-                                                                    ));
-                                                                });
-                                                            },
-                                                        )
-                                                        .child(I18nKey::WinVManualSetupHint.text()),
-                                                )
-                                            }),
-                                    )
-                            }),
-                    )
-                }
-            };
-            let win_v_rows: Vec<AnyElement> = vec![build_win_v(div()).into_any_element()];
+            let win_v_rows: Vec<AnyElement> = vec![
+                self.render_win_v_takeover_row(takeover_active, takeover_status, _window, cx),
+                self.render_alt_shortcuts_row(alt_shortcuts_enabled, _window, cx),
+            ];
             container =
                 container.child(self.settings_group(I18nKey::GroupWinVTakeover.text(), win_v_rows));
         }
@@ -1071,7 +1044,9 @@ impl SettingsPanel {
         let mut list_rows: Vec<AnyElement> = vec![
             {
                 let this_click = this.clone();
-                let configured = app
+                let configured = self
+                    .state
+                    .read(cx)
                     .settings
                     .latest_hotkeys
                     .iter()
