@@ -4,7 +4,7 @@
 //! --- of clipboard items with dynamic card heights (68— 28px). ---
 
 use crate::ui::font::fs;
-use std::{collections::HashSet, rc::Rc};
+use std::{cell::Cell, collections::HashSet, rc::Rc};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -19,9 +19,10 @@ use crate::core::types::{
 };
 use crate::state::app::AppState;
 
-use super::clipboard_card::{estimate_card_height, ClipboardCard};
+use super::clipboard_card::{estimate_card_height, ClipboardCard, CARD_TOOLBAR_HEIGHT};
 use super::components::reorder::DragAutoScroll;
 use super::font::sx;
+use super::hover_toolbar::ToolbarBounds;
 use super::search_box::SearchBox;
 use super::tag_picker::TagState;
 use super::theme::ClippiTheme;
@@ -396,6 +397,10 @@ pub struct ClipboardListView {
     pub(crate) search_bar: Option<Entity<SearchBox>>,
     // --- Hover tracking ---
     hovered_index: Option<usize>,
+    toolbar_bounds: ToolbarBounds,
+    hover_scroll_y: Pixels,
+    hover_viewport: Bounds<Pixels>,
+    hover_blocked: bool,
     last_hover_pos: Option<Point<Pixels>>,
     // --- Context menu state ---
     context_menu_visible: bool,
@@ -466,6 +471,10 @@ impl ClipboardListView {
             state,
             search_bar: None,
             hovered_index: None,
+            toolbar_bounds: Rc::new(Cell::new(None)),
+            hover_scroll_y: px(0.),
+            hover_viewport: Bounds::default(),
+            hover_blocked: false,
             last_hover_pos: None,
             context_menu_visible: false,
             context_menu_x: 0.0,
@@ -504,6 +513,7 @@ impl ClipboardListView {
             .update(cx, |state, _| state.clear_usage_sync_request());
         self.pending_images = self.state.read(cx).pending_images.clone();
         let combined = self.combined_with_pending(items);
+        self.toolbar_bounds.set(None);
         self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
         self.sizes_font_scale = crate::ui::font::scale();
         // --- Persist current selection before swap (survives empty-item clears ---
@@ -608,6 +618,7 @@ impl ClipboardListView {
 
         self.items.clear();
         self.items.shrink_to_fit();
+        self.toolbar_bounds.set(None);
         self.item_sizes = Rc::new(Vec::new());
         self.selected_ids.clear();
         self.selected_ids.shrink_to_fit();
@@ -639,6 +650,7 @@ impl ClipboardListView {
         let app_items = self.state.read(cx).visible_items();
         self.pending_images = self.state.read(cx).pending_images.clone();
         let combined = self.combined_with_pending(app_items);
+        self.toolbar_bounds.set(None);
         self.item_sizes = Rc::new(Self::compute_sizes(&combined, &self.card_height_mode));
         self.sizes_font_scale = crate::ui::font::scale();
 
@@ -731,6 +743,7 @@ impl ClipboardListView {
 
         // Re-map the hovered row by ID too; a deleted item must not leave a
         // stale index pointing at a different card after the list shifts.
+        self.toolbar_bounds.set(None);
         self.hovered_index = item_index(&self.items, previous_hovered_id)
             .filter(|index| !item_is_pending(&self.items[*index]));
     }
@@ -781,6 +794,7 @@ impl ClipboardListView {
             });
             self.anchor_index = item_index(&self.items, anchor_id)
                 .or_else(|| self.anchor_index.filter(|index| *index < self.items.len()));
+            self.toolbar_bounds.set(None);
             self.hovered_index = item_index(&self.items, hovered_id);
             cx.notify();
         } else {
@@ -816,9 +830,11 @@ impl ClipboardListView {
                 new_sizes.push(size);
             }
             self.items = new_items;
+            self.toolbar_bounds.set(None);
             self.item_sizes = Rc::new(new_sizes);
             self.selected_index = item_index(&self.items, selected_id);
             self.anchor_index = item_index(&self.items, anchor_id);
+            self.toolbar_bounds.set(None);
             self.hovered_index = item_index(&self.items, hovered_id);
             cx.notify();
         }
@@ -846,6 +862,7 @@ impl ClipboardListView {
         let scale_changed = self.sizes_font_scale != crate::ui::font::scale();
         if self.card_height_mode != card_height_mode || scale_changed {
             self.card_height_mode = card_height_mode;
+            self.toolbar_bounds.set(None);
             self.item_sizes = Rc::new(Self::compute_sizes(&self.items, &self.card_height_mode));
             self.sizes_font_scale = crate::ui::font::scale();
         }
@@ -1471,6 +1488,60 @@ impl ClipboardListView {
         Some(y)
     }
 
+    pub(crate) fn set_hover_blocked(&mut self, blocked: bool, cx: &mut Context<Self>) {
+        if self.hover_blocked != blocked {
+            self.hover_blocked = blocked;
+            self.hovered_index = None;
+            self.toolbar_bounds.set(None);
+            cx.notify();
+        }
+    }
+
+    /// Hover is geometric, independent of keyboard selection and item ordering.
+    /// Run on pointer movement and after layout so wheel/scrollbar/programmatic
+    /// scrolling works even when the pointer is stationary.
+    fn refresh_pointer_hover(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let scroll_y = self.scroll_handle.offset().y;
+        if scroll_y != self.hover_scroll_y {
+            self.toolbar_bounds.set(None);
+            self.hover_scroll_y = scroll_y;
+        }
+        let pointer = window.mouse_position();
+        let bounds = self.scroll_handle.bounds();
+        if bounds != self.hover_viewport {
+            self.toolbar_bounds.set(None);
+            self.hover_viewport = bounds;
+        }
+        let toolbar = self.toolbar_bounds.get().filter(|(id, _)| {
+            self.hovered_index
+                .and_then(|index| self.items.get(index))
+                .is_some_and(|item| item.id == *id)
+        });
+        let next =
+            if self.hover_blocked || self.has_any_panel_or_editing() || !window.is_window_hovered()
+            {
+                None
+            } else {
+                pointer_hover_index(
+                    pointer,
+                    bounds,
+                    scroll_y,
+                    &self.item_sizes,
+                    self.items.len(),
+                    self.hovered_index,
+                    toolbar.map(|(_, bounds)| bounds),
+                )
+            };
+        if next != self.hovered_index {
+            self.hovered_index = next;
+            self.toolbar_bounds.set(None);
+            cx.notify();
+        }
+        if next.is_some() {
+            self.last_hover_pos = Some(pointer);
+        }
+    }
+
     fn pointer_tag_picker_y(&self) -> f32 {
         self.last_hover_pos
             .map(|p| f32::from(p.y))
@@ -1791,7 +1862,8 @@ impl ClipboardListView {
         self.anchor_index = Some(index);
         self.selected_count = 1;
         self.modified_double_click_candidate = None;
-        self.hovered_index = Some(index);
+        self.hovered_index = None;
+        self.toolbar_bounds.set(None);
         self.state.update(cx, |state, _cx| {
             state.select_single(item_id);
         });
@@ -2162,10 +2234,21 @@ impl ClipboardListView {
 
     fn handle_toolbar_action(
         &mut self,
+        item_id: i64,
         action: &str,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_pointer_hover(_window, cx);
+        // Bind the action to the rendered item's ID. A recycled row or a late
+        // click must never act on whichever item now occupies the old index.
+        if self
+            .hovered_index
+            .and_then(|index| self.items.get(index))
+            .is_none_or(|item| item.id != item_id)
+        {
+            return;
+        }
         if !action.starts_with("batch_") && action != "merge_selected" {
             let Some(index) = self.hovered_index else {
                 return;
@@ -2395,9 +2478,64 @@ fn synthesize_pending_item(p: &PendingImageView, index: usize) -> ClipboardItem 
     item
 }
 
+fn pointer_hover_index(
+    pointer: Point<Pixels>,
+    viewport: Bounds<Pixels>,
+    scroll_y: Pixels,
+    sizes: &[Size<Pixels>],
+    item_count: usize,
+    previous: Option<usize>,
+    toolbar: Option<Bounds<Pixels>>,
+) -> Option<usize> {
+    if viewport.size.width <= px(0.) || viewport.size.height <= px(0.) {
+        return None;
+    }
+    let mut top = viewport.top() + scroll_y;
+    let mut pointed_row = None;
+    let mut previous_card = None;
+    for (index, size) in sizes.iter().take(item_count).enumerate() {
+        let card = Bounds::new(
+            point(viewport.left(), top + px(4.)),
+            gpui::size(
+                (viewport.size.width - px(CLIPBOARD_SCROLLBAR_WIDTH)).max(px(0.)),
+                (size.height - px(8.)).max(px(0.)),
+            ),
+        );
+        if previous == Some(index)
+            && card.bottom() > viewport.top()
+            && card.top() < viewport.bottom()
+        {
+            previous_card = Some(card);
+        }
+        if viewport.contains(&pointer) && card.contains(&pointer) {
+            pointed_row = Some(index);
+        }
+        top += size.height;
+    }
+    // Keep a full-card-width corridor between the card and its tabs. A narrow
+    // toolbar-only hit area drops hover when approaching the first tab diagonally.
+    if let Some((card, toolbar)) = previous_card.zip(toolbar) {
+        let padding = px(sx(6.));
+        let top = card.top().min(toolbar.top()) - padding;
+        let bottom = card.bottom().max(toolbar.bottom()) + padding;
+        // Include the inset beside the last button and the card's outer edge.
+        // This is hover retention only; it does not add an input-blocking hitbox.
+        let right = viewport.right() + padding;
+        let corridor = Bounds::new(
+            point(card.left(), top),
+            gpui::size(right - card.left(), bottom - top),
+        );
+        if corridor.contains(&pointer) {
+            return previous;
+        }
+    }
+    pointed_row
+}
+
 impl Render for ClipboardListView {
     #[allow(refining_impl_trait_reachable)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.refresh_pointer_hover(window, cx);
         // 语言切换时刷新 InputState placeholder
         let current = crate::core::i18n::lang_version();
         if self.last_lang_version != current {
@@ -2460,7 +2598,10 @@ impl Render for ClipboardListView {
         let list_entity = view.clone();
         let image_cache = self.image_cache.clone();
 
+        let hover_view = cx.entity().downgrade();
+        let hover_events_view = hover_view.clone();
         div()
+            .relative()
             .flex_1()
             .overflow_hidden()
             .track_focus(&focus_handle)
@@ -2633,20 +2774,6 @@ impl Render for ClipboardListView {
                     });
                 }
             })
-            .on_mouse_move({
-                let list_for_clear = list_entity.clone();
-                move |_ev, _window, cx| {
-                    list_for_clear.update(cx, |this, cx| {
-                        if this.inline_locked_item_id().is_some() {
-                            return;
-                        }
-                        if this.hovered_index.is_some() {
-                            this.hovered_index = None;
-                            cx.notify();
-                        }
-                    });
-                }
-            })
             .pt(px(4.))
             .pb(px(8.))
             .px(px(8.))
@@ -2683,7 +2810,8 @@ impl Render for ClipboardListView {
                             view.clone(),
                             "clippi-clipboard-list",
                             item_sizes,
-                            move |this, range, _window, cx| {
+                            move |this, range, window, cx| {
+                                this.refresh_pointer_hover(window, cx);
                                 let selected_count = this.selected_count;
                                 let can_merge_selection =
                                     this.state.read(cx).can_merge_selected_items();
@@ -2710,16 +2838,22 @@ impl Render for ClipboardListView {
                                         state.pending_transfer_uploads.clone(),
                                     )
                                 };
+                                let mut row_top = this.item_sizes.iter().take(range.start)
+                                    .fold(px(0.), |height, size| height + size.height)
+                                    + this.scroll_handle.offset().y;
                                 range
                                     .filter_map(|i| {
                                         let item = this.items.get(i)?;
+                                        // Include shadow clearance; use geometry rather than
+                                        // index zero so partially scrolled rows work too.
+                                        let toolbar_below = row_top + px(4.) < px(sx(CARD_TOOLBAR_HEIGHT + 9.));
+                                        row_top += this.item_sizes[i].height;
                                         let item_id = item.id;
                                         let inline_locked = inline_locked_item_id == Some(item_id);
                                         let selected =
                                             inline_locked || this.selected_ids.contains(&item_id);
-                                        let is_hovered = inline_locked
-                                            || (inline_locked_item_id.is_none()
-                                                && hovered_index == Some(i));
+                                        let is_hovered = inline_locked_item_id.is_none()
+                                            && hovered_index == Some(i);
                                         let list_view = list_entity.clone();
                                         let focus_handle = this.focus_handle.clone();
                                         let item_clone = item.clone();
@@ -2766,7 +2900,6 @@ impl Render for ClipboardListView {
                                             div()
                                                 .w_full()
                                                 .h_full()
-                                                .overflow_hidden()
                                                 .py(px(4.))
                                                 .on_scroll_wheel({
                                                     let list_for_scroll_lock =
@@ -2786,18 +2919,20 @@ impl Render for ClipboardListView {
                                                     }
                                                 })
                                                 .on_mouse_move({
-                                                    move |ev, _window, cx| {
+                                                    move |ev, window, cx| {
                                                         cx.stop_propagation();
                                                         let modifiers = ev.modifiers;
                                                         list_for_hover.update(cx, |this, cx| {
+                                                            this.refresh_pointer_hover(window, cx);
                                                             if this
                                                                 .inline_locked_item_id()
                                                                 .is_some()
                                                             {
                                                                 return;
                                                             }
-                                                            if this.hovered_index != Some(i) {
-                                                                this.hovered_index = Some(i);
+                                                            if this.hovered_index == Some(i)
+                                                                && (this.selected_index != Some(i)
+                                                                    || !this.selected_ids.contains(&item_id)) {
                                                                 // --- Hover-to-select: when ≤1 item ---
                                                                 // --- is selected and no multi-select ---
                                                                 // --- modifier is held, hover drives  ---
@@ -2898,6 +3033,8 @@ impl Render for ClipboardListView {
                                                     )
                                                     .theme(theme.clone())
                                                     .hovered(is_hovered)
+                                                    .toolbar_below(toolbar_below)
+                                                    .toolbar_bounds(this.toolbar_bounds.clone())
                                                     .show_source_app(show_source_app)
                                                     .privacy_types(this.state.read(cx).settings.privacy_protection_types.clone())
                                                     .show_original_on_hover(show_original_on_hover)
@@ -2942,7 +3079,7 @@ impl Render for ClipboardListView {
                                                     .on_toolbar_action(move |action, window, cx| {
                                                         list_for_toolbar.update(cx, |this, cx| {
                                                             this.handle_toolbar_action(
-                                                                action, window, cx,
+                                                                item_id, action, window, cx,
                                                             );
                                                         });
                                                     })
@@ -3003,6 +3140,32 @@ impl Render for ClipboardListView {
                             }),
                     )
             })
+            .child(
+                canvas(
+                    move |_, window, cx| {
+                        let _ = hover_view.update(cx, |this, cx| this.refresh_pointer_hover(window, cx));
+                    },
+                    move |_, _, window, _cx| {
+                        let exit_view = hover_events_view.clone();
+                        window.on_mouse_event(move |_event: &MouseExitEvent, phase, _window, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = exit_view.update(cx, |this, cx| {
+                                    if this.hovered_index.take().is_some() {
+                                        this.toolbar_bounds.set(None);
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        });
+                        let view = hover_events_view.clone();
+                        window.on_mouse_event(move |_event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = view.update(cx, |this, cx| this.refresh_pointer_hover(window, cx));
+                            }
+                        });
+                    },
+                ).absolute().inset_0().size_full(),
+            )
             .into_any_element()
     }
 }
@@ -3011,11 +3174,260 @@ impl Render for ClipboardListView {
 mod tests {
     use super::{
         can_incrementally_sync_usage, classify_card_modifier, collect_selectable_ids, item_id_at,
-        item_index, item_is_pending, reorder_usage_pairs, resolve_card_click_action,
-        CardClickAction, CardModifier, PasteClickMode,
+        item_index, item_is_pending, pointer_hover_index, reorder_usage_pairs,
+        resolve_card_click_action, CardClickAction, CardModifier, PasteClickMode,
     };
     use crate::core::types::{ClipboardItem, ContentType};
-    use gpui::{Modifiers, Pixels};
+    use gpui::{point, px, size, Bounds, Modifiers, Pixels};
+
+    #[test]
+    fn pointer_hover_follows_stationary_mouse_after_scroll() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(200.)));
+        let rows = vec![size(px(300.), px(80.)); 5];
+        let pointer = point(px(100.), px(145.));
+        assert_eq!(
+            pointer_hover_index(
+                pointer,
+                viewport,
+                px(0.),
+                &rows,
+                5,
+                Option::None,
+                Option::None
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            pointer_hover_index(pointer, viewport, px(-80.), &rows, 5, Some(0), Option::None),
+            Some(1)
+        );
+        assert_eq!(
+            pointer_hover_index(
+                pointer,
+                viewport,
+                px(-160.),
+                &rows,
+                5,
+                Some(1),
+                Option::None
+            ),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn pointer_hover_excludes_header_footer_gaps_and_scroll_spacer() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(260.)));
+        let rows = vec![size(px(300.), px(80.)); 3];
+        for pointer in [
+            point(px(100.), px(90.)),
+            point(px(100.), px(365.)),
+            point(px(0.), px(145.)),
+            point(px(305.), px(145.)),
+            point(px(100.), px(102.)),
+            point(px(100.), px(178.)),
+            point(px(100.), px(300.)),
+        ] {
+            assert_eq!(
+                pointer_hover_index(pointer, viewport, px(0.), &rows, 2, Some(0), Option::None),
+                Option::None
+            );
+        }
+    }
+
+    #[test]
+    fn pointer_on_toolbar_keeps_its_owner_instead_of_underlying_row() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(200.)));
+        let rows = vec![size(px(300.), px(80.)); 3];
+        let toolbar = Bounds::new(point(px(100.), px(164.)), size(px(180.), px(20.)));
+        let pointer = point(px(120.), px(170.));
+        assert_eq!(
+            pointer_hover_index(pointer, viewport, px(0.), &rows, 3, Some(1), Some(toolbar)),
+            Some(1)
+        );
+        assert_eq!(
+            pointer_hover_index(pointer, viewport, px(0.), &rows, 3, Some(1), Option::None),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn diagonal_approach_uses_full_width_corridor_above_and_below_card() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(240.)));
+        let rows = vec![size(px(300.), px(80.)); 3];
+        let above = Bounds::new(point(px(150.), px(164.)), size(px(130.), px(20.)));
+        // Left of the first tab, in the preceding row or the inter-row gap.
+        for y in [170., 180.] {
+            assert_eq!(
+                pointer_hover_index(
+                    point(px(100.), px(y)),
+                    viewport,
+                    px(0.),
+                    &rows,
+                    3,
+                    Some(1),
+                    Some(above)
+                ),
+                Some(1)
+            );
+        }
+        let below = Bounds::new(point(px(150.), px(176.)), size(px(130.), px(20.)));
+        assert_eq!(
+            pointer_hover_index(
+                point(px(100.), px(190.)),
+                viewport,
+                px(0.),
+                &rows,
+                3,
+                Some(0),
+                Some(below)
+            ),
+            Some(0)
+        );
+        // Moving past the corridor still transfers hover to the next card.
+        assert_eq!(
+            pointer_hover_index(
+                point(px(100.), px(220.)),
+                viewport,
+                px(0.),
+                &rows,
+                3,
+                Some(0),
+                Some(below)
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn toolbar_right_edge_keeps_hover_across_card_padding() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(240.)));
+        let rows = vec![size(px(300.), px(80.)); 3];
+        let toolbar = Bounds::new(point(px(150.), px(164.)), size(px(150.), px(20.)));
+        for x in [302., 310., 314.] {
+            assert_eq!(
+                pointer_hover_index(
+                    point(px(x), px(180.)),
+                    viewport,
+                    px(0.),
+                    &rows,
+                    3,
+                    Some(1),
+                    Some(toolbar)
+                ),
+                Some(1)
+            );
+        }
+        assert_eq!(
+            pointer_hover_index(
+                point(px(330.), px(180.)),
+                viewport,
+                px(0.),
+                &rows,
+                3,
+                Some(1),
+                Some(toolbar)
+            ),
+            Option::None
+        );
+    }
+
+    #[test]
+    fn offscreen_or_deleted_toolbar_cannot_keep_hover() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(200.)));
+        let rows = vec![size(px(300.), px(80.)); 3];
+        let toolbar = Bounds::new(point(px(100.), px(70.)), size(px(180.), px(20.)));
+        let pointer = point(px(120.), px(80.));
+        assert_eq!(
+            pointer_hover_index(
+                pointer,
+                viewport,
+                px(-80.),
+                &rows,
+                3,
+                Some(0),
+                Some(toolbar)
+            ),
+            Option::None
+        );
+        assert_eq!(
+            pointer_hover_index(pointer, viewport, px(0.), &rows, 0, Some(0), Some(toolbar)),
+            Option::None
+        );
+    }
+
+    #[test]
+    fn selection_alone_does_not_keep_toolbar_hovered() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(200.)));
+        let rows = vec![size(px(300.), px(80.)); 3];
+        assert_eq!(
+            pointer_hover_index(
+                point(px(120.), px(50.)),
+                viewport,
+                px(0.),
+                &rows,
+                3,
+                Some(1),
+                Option::None
+            ),
+            Option::None
+        );
+        assert_eq!(
+            pointer_hover_index(
+                point(px(120.), px(145.)),
+                viewport,
+                px(0.),
+                &rows,
+                3,
+                Some(1),
+                Option::None
+            ),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn pointer_hover_handles_variable_heights_zoom_and_partial_rows() {
+        let viewport = Bounds::new(point(px(10.), px(100.)), size(px(300.), px(200.)));
+        let rows = vec![size(px(300.), px(120.)), size(px(300.), px(180.))];
+        assert_eq!(
+            pointer_hover_index(
+                point(px(120.), px(105.)),
+                viewport,
+                px(-90.),
+                &rows,
+                2,
+                Option::None,
+                Option::None
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            pointer_hover_index(
+                point(px(120.), px(145.)),
+                viewport,
+                px(-90.),
+                &rows,
+                2,
+                Some(0),
+                Option::None
+            ),
+            Some(1)
+        );
+        let empty = Bounds::default();
+        assert_eq!(
+            pointer_hover_index(
+                point(px(120.), px(145.)),
+                empty,
+                px(0.),
+                &rows,
+                2,
+                Some(1),
+                Option::None
+            ),
+            Option::None
+        );
+    }
 
     fn test_item(id: i64, updated_secs: i64, favorite: bool) -> ClipboardItem {
         let ts = chrono::Utc::now() - chrono::Duration::seconds(updated_secs);

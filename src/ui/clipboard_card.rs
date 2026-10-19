@@ -8,8 +8,10 @@
 //! - Bottom info row: tag pills + time label (9px font, 18px pills)
 //! - Dynamic height: 68/96/128px based on content type and card-height-mode
 
+use gpui_transitions::WindowUseTransition;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use base64::Engine;
 use gpui::prelude::FluentBuilder;
@@ -34,10 +36,12 @@ use crate::core::types::{
 use super::components::sensitive_text::SensitiveText;
 use super::components::spinner::activity_spinner;
 use super::font::{sc, scale};
-use super::hover_toolbar::{HoverToolbar, HoverToolbarProps};
+use super::hover_toolbar::{HoverToolbar, HoverToolbarProps, ToolbarBounds};
 use super::rich_preview::{self, StyledHtmlSpan};
 use super::search_highlight;
 use super::theme::ClippiTheme;
+
+pub const CARD_TOOLBAR_HEIGHT: f32 = 20.0;
 
 type CardClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
 type CardDoubleClickHandler = Rc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
@@ -1243,6 +1247,8 @@ pub struct ClipboardCard {
     selection_order: usize,
     on_click: Option<CardClickHandler>,
     is_hovered: bool,
+    toolbar_below: bool,
+    toolbar_bounds: Option<ToolbarBounds>,
     selected_count: usize,
     can_merge_selection: bool,
     on_toolbar_action: Option<CardActionHandler>,
@@ -1285,6 +1291,8 @@ impl ClipboardCard {
             selection_order: 0,
             on_click: None,
             is_hovered: false,
+            toolbar_below: false,
+            toolbar_bounds: None,
             selected_count: 0,
             can_merge_selection: false,
             on_toolbar_action: None,
@@ -1312,7 +1320,18 @@ impl ClipboardCard {
         self
     }
 
-    /// Set whether this card is hovered (shows toolbar).
+    /// Share the measured toolbar hit area with the list's pointer resolver.
+    pub fn toolbar_bounds(mut self, bounds: ToolbarBounds) -> Self {
+        self.toolbar_bounds = Some(bounds);
+        self
+    }
+
+    pub fn toolbar_below(mut self, below: bool) -> Self {
+        self.toolbar_below = below;
+        self
+    }
+
+    /// Set pointer hover independently of keyboard/multi-selection.
     pub fn hovered(mut self, hovered: bool) -> Self {
         self.is_hovered = hovered;
         self
@@ -1444,6 +1463,8 @@ impl RenderOnce for ClipboardCard {
             selection_order,
             on_click,
             is_hovered,
+            toolbar_below,
+            toolbar_bounds,
             selected_count,
             can_merge_selection,
             on_toolbar_action,
@@ -3116,20 +3137,77 @@ impl RenderOnce for ClipboardCard {
         // --- Hover toolbar (hidden during inline editing/recording, and for
         // non-persisted pending placeholders). Transfer entries keep their
         // toolbar even though they also use negative ids. ---
-        if is_hovered && !editing && !recording_hotkey && item.meta_type != "pending-image" {
+        let toolbar_visible =
+            is_hovered && !editing && !recording_hotkey && item.meta_type != "pending-image";
+        let reveal = window
+            .use_keyed_transition(
+                SharedString::from(format!("card-toolbar-{}", item.id)),
+                cx,
+                Duration::from_millis(160),
+                |_, _| 0.0_f32,
+            )
+            .with_easing(|t| 1.0 - (1.0 - t).powi(3));
+        reveal.update(cx, |value, cx| {
+            *value = if toolbar_visible { 1.0 } else { 0.0 };
+            cx.notify();
+        });
+        let reveal = *reveal.evaluate(window, cx);
+        // The wrapper allows tabs to extend above the clipped card without
+        // reserving list space. Deferred painting keeps them above adjacent rows
+        // and allows the toolbar shadow to extend beyond its own bounds.
+        let card = div().relative().w_full().h_full().child(card);
+        // A stale/fading toolbar must never float outside its hovered card after
+        // scrolling. Only animate entry; pointer exit removes it immediately.
+        if toolbar_visible && reveal > 0.0 {
             let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
                 .can_merge_selection(can_merge_selection);
-            card.child(
-                div().absolute().top(sc(3.)).right(sc(4.)).child(
-                    HoverToolbar::new(toolbar_props)
-                        .theme(theme.clone())
-                        .on_action(move |action, _window, cx| {
-                            if let Some(ref handler) = on_toolbar_action {
-                                handler(action, _window, cx);
-                            }
-                        }),
-                ),
-            )
+            // Keep the reveal anchored to the card edge. Near the viewport top,
+            // reveal downward from the bottom edge instead of covering filters.
+            // The shadow lives outside the clip so it stays compact but visible.
+            let exposed_height = CARD_TOOLBAR_HEIGHT * reveal;
+            card.child(deferred(
+                div()
+                    .absolute()
+                    .when(!toolbar_below, |el| el.top(sc(-exposed_height)))
+                    .when(toolbar_below, |el| el.bottom(sc(-exposed_height)))
+                    .right(sc(8.))
+                    .h(sc(exposed_height))
+                    .when(!toolbar_below, |el| el.rounded_t(sc(4.)))
+                    .when(toolbar_below, |el| el.rounded_b(sc(4.)))
+                    .bg(theme.bg)
+                    .shadow(vec![BoxShadow {
+                        color: rgba(0x00000028).into(),
+                        offset: point(sc(0.), sc(if toolbar_below { 3. } else { -3. })),
+                        blur_radius: sc(3.),
+                        spread_radius: sc(-1.),
+                    }])
+                    .child(
+                        div()
+                            .h_full()
+                            .when(reveal < 0.999, |el| el.overflow_hidden())
+                            .child(
+                                div()
+                                    .mt(sc(if toolbar_below {
+                                        exposed_height - CARD_TOOLBAR_HEIGHT
+                                    } else {
+                                        0.
+                                    }))
+                                    .child(
+                                        HoverToolbar::new(toolbar_props)
+                                            .below_card(toolbar_below)
+                                            .theme(theme.clone())
+                                            .when_some(toolbar_bounds, |toolbar, tracker| {
+                                                toolbar.track_bounds(item.id, tracker)
+                                            })
+                                            .on_action(move |action, _window, cx| {
+                                                if let Some(ref handler) = on_toolbar_action {
+                                                    handler(action, _window, cx);
+                                                }
+                                            }),
+                                    ),
+                            ),
+                    ),
+            ))
         } else {
             card
         }

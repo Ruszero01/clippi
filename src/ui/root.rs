@@ -1066,6 +1066,13 @@ impl Render for RootView {
             state.transfer_filter_active && state.transfer_refreshing
         };
 
+        // Deferred card tools paint above normal content. Suppress them while
+        // any root/list overlay owns input rather than letting them escape over
+        // a modal panel. The list also checks its own panels at action dispatch.
+        let hover_blocked = !is_clipboard || !self.shortcut_controls_unblocked(cx);
+        self.list_view
+            .update(cx, |list, cx| list.set_hover_blocked(hover_blocked, cx));
+
         let view_animating =
             Self::animation_running(self.view_transition_started, VIEW_ANIM_DURATION);
         let view_key = self.view_transition_generation;

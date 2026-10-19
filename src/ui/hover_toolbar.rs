@@ -1,14 +1,13 @@
-//! Hover toolbar — appears on card hover, top-right corner.
-//!
-//! --- Matches the original Slint ClipboardList.slint hover toolbar: ---
-//! --- - 22px height pill, 6px border-radius ---
-//! --- - Semi-transparent background, 1px border ---
-//! --- - 18x18 iconfont buttons with 2px spacing ---
-//! --- - Conditional buttons based on content type and selection count ---
+//! Individual action tabs extending above the clipboard card.
 
+use gpui_transitions::WindowUseTransition;
+use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::ui::font::sc;
+
+pub type ToolbarBounds = Rc<Cell<Option<(i64, Bounds<Pixels>)>>>;
 
 type ToolbarActionHandler = Rc<dyn Fn(&str, &mut gpui::Window, &mut gpui::App)>;
 
@@ -111,7 +110,9 @@ fn single_open_action(props: &HoverToolbarProps) -> Option<&'static str> {
 pub struct HoverToolbar {
     props: HoverToolbarProps,
     theme: ClippiTheme,
+    below_card: bool,
     on_action: Option<ToolbarActionHandler>,
+    bounds_tracker: Option<(i64, ToolbarBounds)>,
 }
 
 impl HoverToolbar {
@@ -119,8 +120,20 @@ impl HoverToolbar {
         Self {
             props,
             theme: ClippiTheme::dark(),
+            below_card: false,
             on_action: None,
+            bounds_tracker: None,
         }
+    }
+
+    pub fn below_card(mut self, below: bool) -> Self {
+        self.below_card = below;
+        self
+    }
+
+    pub fn track_bounds(mut self, item_id: i64, tracker: ToolbarBounds) -> Self {
+        self.bounds_tracker = Some((item_id, tracker));
+        self
     }
 
     pub fn theme(mut self, theme: ClippiTheme) -> Self {
@@ -135,33 +148,45 @@ impl HoverToolbar {
 }
 
 impl RenderOnce for HoverToolbar {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self {
             props,
             theme,
+            below_card,
             on_action,
+            bounds_tracker,
         } = self;
 
-        // Theme colors (dark mode — matching Slint original)
+        // Filled glyphs look heavier than body text at the same color. Soften
+        // light-theme icons without losing the dark-theme contrast boost.
         let accent = theme.accent;
-        let text_2 = theme.text_2;
+        let icon_color = if theme.bg == rgb(0x191a1b) {
+            theme.text_1
+        } else {
+            Rgba {
+                r: (theme.text_1.r + theme.text_2.r) * 0.5,
+                g: (theme.text_1.g + theme.text_2.g) * 0.5,
+                b: (theme.text_1.b + theme.text_2.b) * 0.5,
+                a: 1.0,
+            }
+        };
         let danger = theme.danger;
         let fav_color = theme.fav_color;
         let is_dark = theme.bg == rgb(0x191a1b);
         let pill_bg = if is_dark {
-            rgba(0x232425e8)
+            rgb(0x232425)
         } else {
-            rgba(0xfffffff0)
+            rgb(0xffffff)
         };
         let pill_border = if is_dark {
-            rgba(0xffffff20)
+            rgba(0xffffff40)
         } else {
-            rgba(0x00000014)
+            rgba(0x00000030)
         };
         let hover_bg = if is_dark {
-            rgba(0xffffff10)
+            rgb(0x484d51)
         } else {
-            rgba(0x0000000a)
+            rgb(0xe5e8ef)
         };
 
         let is_single = props.selected_count <= 1;
@@ -179,13 +204,13 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e603}",
                     "open_transfer_location",
-                    Box::new(move |hovered| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered| if hovered { accent } else { icon_color }),
                 ));
             } else {
                 buttons.push((
                     "\u{e7c8}",
                     "download_transfer",
-                    Box::new(move |hovered| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered| if hovered { accent } else { icon_color }),
                 ));
             }
             // Pin/unpin — between open/download and delete.
@@ -196,21 +221,21 @@ impl RenderOnce for HoverToolbar {
                     if hovered || transfer_pinned {
                         pin_color
                     } else {
-                        text_2
+                        icon_color
                     }
                 }),
             ));
             buttons.push((
                 "\u{e696}",
                 "delete_transfer",
-                Box::new(move |hovered| if hovered { danger } else { text_2 }),
+                Box::new(move |hovered| if hovered { danger } else { icon_color }),
             ));
         } else if is_single {
             // Copy
             buttons.push((
                 "\u{e7e1}",
                 "copy",
-                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
             ));
 
             // --- Paste Plain Text (only when item has actual rich formatting) ---
@@ -218,7 +243,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e606}",
                     "paste_plain",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
                 ));
             }
 
@@ -227,7 +252,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e626}",
                     "paste_image_bitmap",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
                 ));
             }
 
@@ -236,7 +261,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e605}",
                     "qr_action",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
                 ));
             }
 
@@ -245,7 +270,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e679}",
                     "edit",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
                 ));
             }
 
@@ -253,14 +278,14 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e6fa}",
                 "edit_note",
-                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
             ));
 
             // Tag
             buttons.push((
                 "\u{e886}",
                 "show_tag_picker",
-                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
             ));
 
             // --- Open (one button for the whole family, right of tag) ---
@@ -268,7 +293,7 @@ impl RenderOnce for HoverToolbar {
                 buttons.push((
                     "\u{e603}",
                     open_action,
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
                 ));
             }
 
@@ -288,34 +313,34 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e696}",
                 "delete",
-                Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { danger } else { icon_color }),
             ));
         } else if is_batch && props.is_transfer {
             buttons.push((
                 "\u{e696}",
                 "batch_delete_transfer",
-                Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { danger } else { icon_color }),
             ));
         } else if is_batch {
             // --- Batch paste ---
             buttons.push((
                 "\u{e63f}",
                 "batch_paste",
-                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
             ));
             if props.can_merge_selection {
                 // --- Merge selected ---
                 buttons.push((
                     "\u{e68a}",
                     "merge_selected",
-                    Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                    Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
                 ));
             }
             // --- Batch tag ---
             buttons.push((
                 "\u{e886}",
                 "batch_tag",
-                Box::new(move |hovered: bool| if hovered { accent } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { accent } else { icon_color }),
             ));
             // --- Batch favorite ---
             buttons.push((
@@ -327,7 +352,7 @@ impl RenderOnce for HoverToolbar {
             buttons.push((
                 "\u{e696}",
                 "batch_delete",
-                Box::new(move |hovered: bool| if hovered { danger } else { text_2 }),
+                Box::new(move |hovered: bool| if hovered { danger } else { icon_color }),
             ));
         }
 
@@ -335,26 +360,51 @@ impl RenderOnce for HoverToolbar {
             return div();
         }
 
-        // --- Compute width: N buttons x 18px + (N-1) x 2px spacing + 10px padding ---
-        let n = buttons.len();
-        let content_w = (n * 18 + (n.saturating_sub(1)) * 2) as f32;
-        let toolbar_w = content_w + 10.0;
         let is_favorite = props.is_favorite;
         let selected_count = props.selected_count;
         let meta_type = props.meta_type.clone();
 
+        // Include the gaps in one opaque hit area: neither the underlying
+        // filter controls nor the preceding row should show or receive clicks.
+        let toolbar_width = (buttons.len() * 20 + buttons.len().saturating_sub(1) * 2) as f32;
+        let item_id = bounds_tracker.as_ref().map_or(0, |(id, _)| *id);
         div()
-            .h(sc(22.))
-            .w(sc(toolbar_w))
-            .rounded(sc(6.))
-            .bg(pill_bg)
-            .border(sc(1.))
-            .border_color(pill_border)
+            .w(sc(toolbar_width))
+            .h(sc(20.))
+            .bg(theme.bg)
+            .when(!below_card, |el| el.rounded_t(sc(4.)))
+            .when(below_card, |el| el.rounded_b(sc(4.)))
+            .relative()
+            .children(bounds_tracker.map(|(item_id, tracker)| {
+                canvas(
+                    move |bounds, _, _| tracker.set(Some((item_id, bounds))),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+                .size_full()
+            }))
             .flex()
             .flex_row()
-            .px(sc(5.))
-            .items_center()
+            .when(!below_card, |el| el.items_end())
+            .when(below_card, |el| el.items_start())
             .gap(sc(2.))
+            // The tabs overlap the preceding row. Own their hit area so mouse
+            // movement cannot select that row or clear the active toolbar.
+            .occlude()
+            .on_mouse_move(|_event, _window, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_mouse_up(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_mouse_up(MouseButton::Right, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
             .children(buttons.into_iter().map(move |(icon, action, color_fn)| {
                 let on_action = on_action.clone();
                 let tooltip = match action {
@@ -391,20 +441,53 @@ impl RenderOnce for HoverToolbar {
                     }
                     _ => action.to_string(),
                 };
+                let is_delete = matches!(
+                    action,
+                    "delete" | "batch_delete" | "delete_transfer" | "batch_delete_transfer"
+                );
                 let action_id = action;
                 let action = action.to_string();
                 let icon = icon.to_string();
+                let hovered = window.use_keyed_state(
+                    SharedString::from(format!("toolbar-button-hover-{item_id}-{action_id}")),
+                    cx,
+                    |_, _| false,
+                );
+                let is_hovered = *hovered.read(cx);
+                let extend = window
+                    .use_keyed_transition(
+                        SharedString::from(format!("toolbar-button-extend-{item_id}-{action_id}")),
+                        cx,
+                        Duration::from_millis(110),
+                        |_, _| 0.0_f32,
+                    )
+                    .with_easing(|t| 1.0 - (1.0 - t).powi(3));
+                extend.update(cx, |value, cx| {
+                    *value = if is_hovered { 1.0 } else { 0.0 };
+                    cx.notify();
+                });
+                let extension = 6.0 * *extend.evaluate(window, cx);
 
                 div()
                     .id(action_id)
-                    .w(sc(18.))
-                    .h(sc(18.))
+                    .w(sc(20.))
+                    .h(sc(20. + extension))
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(sc(3.))
+                    .when(!below_card, |el| el.rounded_t(sc(4.)))
+                    .when(below_card, |el| el.rounded_b(sc(4.)))
+                    .bg(if is_hovered { hover_bg } else { pill_bg })
+                    .border(sc(1.))
+                    .border_color(if is_hovered { accent } else { pill_border })
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(hover_bg))
+                    .on_hover(move |value, _window, cx| {
+                        hovered.update(cx, |hovered, cx| {
+                            *hovered = *value;
+                            cx.notify();
+                        });
+                    })
                     .tooltip(move |window, cx| {
                         let label = tooltip.clone();
                         Tooltip::element(move |_window, _cx| {
@@ -414,13 +497,17 @@ impl RenderOnce for HoverToolbar {
                     })
                     .child({
                         let icon = icon.clone();
-                        let color_normal = color_fn(false);
-                        let color_hover = color_fn(true);
+                        let color = if is_delete {
+                            danger
+                        } else if is_hovered {
+                            accent
+                        } else {
+                            color_fn(false)
+                        };
                         div()
                             .font_family("iconfont")
                             .text_size(sc(12.))
-                            .text_color(color_normal)
-                            .hover(move |style| style.text_color(color_hover))
+                            .text_color(color)
                             .child(icon)
                     })
                     .on_mouse_down(MouseButton::Left, {
