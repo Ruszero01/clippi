@@ -20,6 +20,8 @@ pub mod search_box;
 pub mod search_highlight;
 pub mod settings;
 pub mod sidebar;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub mod sidebar_window;
 pub mod tag_filter;
 pub mod tag_picker;
 pub mod theme;

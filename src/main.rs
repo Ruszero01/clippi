@@ -362,25 +362,9 @@ fn main() {
             window_options,
             |window, cx| {
                 #[cfg(target_os = "windows")]
-                // SAFETY: `hwnd` comes from the GPUI WindowHandle which is
-                // guaranteed valid for the window's lifetime. DWMNCRP_DISABLED
-                // is a valid DWM attribute with a correctly-sized u32 value.
-                // DWM attribute calls are read-only to the window's render
-                // policy and don't affect the window procedure.
-                unsafe {
-                    use windows_sys::Win32::Graphics::Dwm::{
-                        DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY,
-                    };
-                    const DWMNCRP_DISABLED: u32 = 1;
-                    if let Ok(handle) = window.window_handle() {
-                        if let RawWindowHandle::Win32(wh) = handle.as_raw() {
-                            let _ = DwmSetWindowAttribute(
-                                wh.hwnd.get() as _,
-                                DWMWA_NCRENDERING_POLICY as u32,
-                                &DWMNCRP_DISABLED as *const u32 as *const _,
-                                std::mem::size_of::<u32>() as u32,
-                            );
-                        }
+                if let Ok(handle) = window.window_handle() {
+                    if let RawWindowHandle::Win32(wh) = handle.as_raw() {
+                        platform::window_frame::install(wh.hwnd.get());
                     }
                 }
                 let silent_start = settings.silent_start;
@@ -524,6 +508,11 @@ fn main() {
 
                 let view =
                     cx.new(|cx| RootView::new(window, state.clone(), window_manager.clone(), cx));
+
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                if let Err(error) = ui::sidebar_window::open(window, view.read(cx).sidebar(), window_manager.clone(), cx) {
+                    log::error!("Failed to create tag sidebar window: {error}");
+                }
 
                 let quick_h = {
                     let s = state.read(cx);

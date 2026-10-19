@@ -5,18 +5,36 @@
 use crate::platform::monitor;
 
 /// Default window size (width, height) in logical pixels.
-pub const DEFAULT_WINDOW_WIDTH: f32 = 360.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 324.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 
 /// Window minimum/maximum size range in logical pixels.
-pub const MIN_WINDOW_WIDTH: f32 = 360.0;
+pub const MIN_WINDOW_WIDTH: f32 = 324.0;
 pub const MIN_WINDOW_HEIGHT: f32 = 480.0;
-pub const MAX_WINDOW_WIDTH: f32 = 1200.0;
+pub const MAX_WINDOW_WIDTH: f32 = 1164.0;
 pub const MAX_WINDOW_HEIGHT: f32 = 1200.0;
 
 /// Content panel X offset from the window left edge (logical pixels).
-/// Matches the panel offset in `root.rs`.
-pub const PANEL_OFFSET_X: f32 = 36.0;
+/// Native tag windows leave no inset inside the main window.
+pub const PANEL_OFFSET_X: f32 = if cfg!(any(target_os = "windows", target_os = "macos")) {
+    0.0
+} else {
+    36.0
+};
+
+/// Transparent inset around the content panel.
+///
+/// The window's drop shadow is painted by the app inside the window, so the panel
+/// keeps a margin for it. The tag strip anchors to the panel's left edge instead
+/// of the window's, and the native resize border stays on the outer rectangle.
+pub const PANEL_MARGIN: f32 = if cfg!(target_os = "windows") {
+    8.0
+} else {
+    0.0
+};
+
+/// Corner radius of the content panel and the overlays clipped to it.
+pub const PANEL_RADIUS: f32 = 12.0;
 
 /// Duration in milliseconds that the auto-hide suppression window lasts
 /// after showing or focusing the window. Prevents immediate auto-hide.

@@ -190,7 +190,7 @@ impl Render for Titlebar {
             .w_full()
             .h(px(30.0))
             .flex_shrink_0()
-            .rounded_t(px(12.))
+            .rounded_t(px(crate::core::frontend::PANEL_RADIUS))
             .bg(theme.titlebar_bg)
             // --- Left: logo + app name (also serves as drag area) ---
             .child(

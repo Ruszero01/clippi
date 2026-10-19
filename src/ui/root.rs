@@ -1,9 +1,8 @@
 //! Root view — the main window's top-level component.
 //!
-//! --- Matches the original Slint `app.slint` layout: ---
-//! --- - Transparent window background ---
-//! --- - Sidebar at x=0, y=84px in the transparent margin ---
-//! --- - Main panel offset 36px from left, 12px border-radius, 1px border ---
+//! The panel is inset by a transparent margin that the app paints its own drop
+//! shadow into; tags use an attached window while sharing this view's Sidebar
+//! entity. Linux keeps the inline tag gutter and no shadow margin.
 //! --- - Titlebar + stacked views (clipboard / settings / edit) ---
 
 use std::collections::HashMap;
@@ -40,12 +39,13 @@ use super::filter_bar::FilterBar;
 use super::search_box::{SearchBox, SearchBoxEvent};
 use super::settings::hotkey;
 use super::settings::{SettingsEvent, SettingsPanel};
-use super::sidebar::Sidebar;
+use super::sidebar::{Sidebar, SidebarEvent};
 use super::tag_filter::{render_edit_panel, TagDeleteTarget, TagFilterEvent, TagFilterPanel};
 use super::tag_picker::TagPickerPanel;
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
 use super::type_filter_config::TypeFilterConfigPanel;
+use crate::core::frontend::{PANEL_MARGIN, PANEL_OFFSET_X, PANEL_RADIUS};
 
 /// Mode shortcuts may always close their own panel, but cannot jump between
 /// emoji and transfer modes. Hint visibility is a separate clipboard-only rule.
@@ -68,6 +68,7 @@ pub struct RootView {
     settings_panel: Entity<SettingsPanel>,
     edit_panel: Entity<EditPanel>,
     sidebar: Entity<Sidebar>,
+    sidebar_tooltip: Option<(String, f32)>,
     tag_filter_panel: Entity<TagFilterPanel>,
     type_filter_config_panel: Entity<TypeFilterConfigPanel>,
     current_view: String,
@@ -177,6 +178,11 @@ impl RootView {
         });
         self.focus_recovery_pending = true;
         cx.notify();
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub fn sidebar(&self) -> Entity<Sidebar> {
+        self.sidebar.clone()
     }
 
     pub fn new(
@@ -602,9 +608,15 @@ impl RootView {
         let titlebar_for_events = titlebar.clone();
         let backend_panel = settings_panel.read(cx).backend_panel();
         let _subscriptions = vec![
+            cx.subscribe(&sidebar, |this, _, event, cx| {
+                let SidebarEvent::Tooltip(tooltip) = event;
+                this.sidebar_tooltip = tooltip.clone();
+                cx.notify();
+            }),
             cx.observe(&state, |this, _, cx| {
                 this.titlebar.update(cx, |_, cx| cx.notify());
-                this.sidebar.update(cx, |_, cx| cx.notify());
+                this.sidebar
+                    .update(cx, |sidebar, cx| sidebar.refresh_window(cx));
                 this.filter_bar.update(cx, |_, cx| cx.notify());
                 this.tag_filter_panel.update(cx, |_, cx| cx.notify());
                 cx.notify();
@@ -903,6 +915,7 @@ impl RootView {
             settings_panel,
             edit_panel,
             sidebar,
+            sidebar_tooltip: None,
             tag_filter_panel,
             type_filter_config_panel,
             current_view: "clipboard".into(),
@@ -943,6 +956,7 @@ impl Render for RootView {
         // live font-size/family change needs this refresh at the subtree top.
         super::font::sync_window_rem_size(window);
         let root_entity = cx.entity().clone();
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let sidebar = self.sidebar.clone();
         let titlebar = self.titlebar.clone();
         let list_view = self.list_view.clone();
@@ -959,6 +973,9 @@ impl Render for RootView {
             self.mode_focus_pending = true;
         }
         let is_emoji = self.current_view == "emoji";
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.window_manager
+            .update(cx, |manager, _| manager.set_sidebar_allowed(!is_emoji));
         self.search_box.update(cx, |search, cx| {
             search.set_picker(is_emoji.then(|| self.emoji_panel.clone()), cx);
         });
@@ -1002,11 +1019,22 @@ impl Render for RootView {
         // scale factor keeps the rendered border at device-pixel thickness.
         let scale = window.scale_factor();
         let border_width = px(1.5 / scale.max(1.0));
+        // The panel is inset by the shadow margin so it can paint its own drop
+        // shadow; the root's transparent border makes every absolute child
+        // panel-relative. A maximized window fills the work area, so it drops both.
+        let maximized = window.is_maximized();
+        let panel_margin = if maximized { 0. } else { PANEL_MARGIN };
+        let panel_radius = if maximized { 0. } else { PANEL_RADIUS };
+        let panel_shadow = if theme.bg == rgb(0x191a1b) {
+            rgba(0x00000040)
+        } else {
+            rgba(0x00000014)
+        };
 
-        // Actual window dimensions for positioning overlays
+        // Panel dimensions: the window minus the transparent shadow margin.
         let viewport = window.viewport_size();
-        let win_w = f32::from(viewport.width);
-        let win_h = f32::from(viewport.height);
+        let win_w = (f32::from(viewport.width) - panel_margin * 2.).max(1.);
+        let win_h = (f32::from(viewport.height) - panel_margin * 2.).max(1.);
 
         let filter_config_open = self.filter_bar.read(cx).filter_config_open();
         let context_menu_open = self.list_view.read(cx).context_menu_visible();
@@ -1457,6 +1485,12 @@ impl Render for RootView {
         div()
             .relative()
             .size_full()
+            // An invisible border (not padding) is what insets absolutely
+            // positioned children: their containing block is the padding box, so
+            // the panel and every overlay stay panel-relative while the shadow
+            // paints into the transparent border ring.
+            .border(px(panel_margin))
+            .border_color(rgba(0x00000000))
             .font_family(gpui_component::Theme::global(cx).font_family.clone())
             .track_focus(&root_focus)
             .capture_key_down(move |ev: &KeyDownEvent, window, cx| {
@@ -1622,18 +1656,31 @@ impl Render for RootView {
                     cx.stop_propagation();
                 }
             })
-            .when(!is_emoji, |root| root.child(div().absolute().left(px(0.)).top(px(65.)).child(sidebar)))
+            .map(|root| {
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                let root = root.when(!is_emoji, |root| root.child(div().absolute().left(px(0.)).top(px(65.)).child(sidebar)));
+                root
+            })
             .child(
                 div()
                     .absolute()
-                    .left(px(36.))
+                    .left(px(PANEL_OFFSET_X))
                     .right(px(0.))
                     .top(px(0.))
                     .bottom(px(0.))
-                    .rounded(px(12.))
+                    .rounded(px(panel_radius))
                     .bg(theme.bg)
                     .border(border_width)
                     .border_color(panel_border)
+                    // A light, soft shadow in the same family as the tag chips.
+                    .when(panel_margin > 0., |panel| {
+                        panel.shadow(vec![BoxShadow {
+                            color: panel_shadow.into(),
+                            offset: point(px(0.), px(1.)),
+                            blur_radius: px(6.),
+                            spread_radius: px(0.),
+                        }])
+                    })
                     .flex()
                     .flex_col()
                     .overflow_hidden()
@@ -1702,8 +1749,8 @@ impl Render for RootView {
             .when(tag_panel_visible, |root| {
                 let search_for_backdrop = filter_bar.clone();
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(36.)
-                        .rounded(px(12.))
+                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                        .rounded(px(panel_radius))
                         .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                             search_for_backdrop.update(cx, |bar, cx| bar.close_tag_panel(cx));
@@ -1723,8 +1770,8 @@ impl Render for RootView {
                 let search_for_backdrop = filter_bar.clone();
                 let config_panel = self.type_filter_config_panel.clone();
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(36.)
-                        .rounded(px(12.))
+                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                        .rounded(px(panel_radius))
                         .opacity(filter_config_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
                             search_for_backdrop.update(cx, |bar, cx| bar.close_filter_config(cx));
@@ -1748,8 +1795,8 @@ impl Render for RootView {
                 let tag_filter = self.tag_filter_panel.clone();
 
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(36.)
-                        .rounded(px(12.))
+                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                        .rounded(px(panel_radius))
                         .opacity(edit_tag_opacity)
                         .flex()
                         .items_center()
@@ -1801,7 +1848,7 @@ impl Render for RootView {
 
                 // --- Backdrop — click / scroll to dismiss ---
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(36.)
+                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
                             move |_ev, _window, cx| {
@@ -1941,8 +1988,8 @@ impl Render for RootView {
                 let clamped_y = base_y + tag_picker_offset;
 
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(36.)
-                        .rounded(px(12.))
+                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                        .rounded(px(panel_radius))
                         .opacity(tag_picker_opacity)
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
@@ -2106,12 +2153,12 @@ impl Render for RootView {
                     None => div().into_any_element(),
                 };
 
-                // Constrain to main panel bounds (left=36px offset for sidebar).
+                // Constrain to the visible main panel bounds.
                 // ConfirmDialog fills this container and centers the modal card within it.
                 root.child(
                     div()
                         .absolute()
-                        .left(px(36.))
+                        .left(px(PANEL_OFFSET_X))
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
@@ -2185,11 +2232,11 @@ impl Render for RootView {
                     })
                     .render_animated(window, cx, tag_delete_confirm_gen);
 
-                // Constrain to main panel bounds (left=36px offset for sidebar).
+                // Constrain to the visible main panel bounds.
                 root.child(
                     div()
                         .absolute()
-                        .left(px(36.))
+                        .left(px(PANEL_OFFSET_X))
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
@@ -2592,7 +2639,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(36.))
+                        .left(px(PANEL_OFFSET_X))
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
@@ -3020,7 +3067,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(36.))
+                        .left(px(PANEL_OFFSET_X))
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
@@ -3031,7 +3078,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(36.))
+                        .left(px(PANEL_OFFSET_X))
                         .right(px(0.))
                         .top(px(0.))
                         .bottom(px(0.))
@@ -3103,7 +3150,7 @@ impl Render for RootView {
                     root.child(
                         div()
                             .absolute()
-                            .left(px(36.))
+                            .left(px(PANEL_OFFSET_X))
                             .right(px(0.))
                             .top(px(0.))
                             .bottom(px(0.))
@@ -3138,6 +3185,17 @@ impl Render for RootView {
                     )
                 },
             )
+            .when_some(self.sidebar_tooltip.clone().filter(|_| !is_emoji), |root, (label, y)| {
+                root.child(
+                    div().absolute().left(px(PANEL_OFFSET_X + 4.))
+                        .top(px(y.min((win_h - 32.).max(0.))))
+                        .max_w(px((win_w - PANEL_OFFSET_X - 8.).max(1.)))
+                        .px(px(7.)).py(px(4.)).rounded(px(4.))
+                        .bg(self.theme.bg).border_1().border_color(panel_border)
+                        .text_color(self.theme.text_1).text_size(super::font::fs(10.))
+                        .shadow_sm().child(label)
+                )
+            })
     }
 }
 
@@ -3296,6 +3354,7 @@ impl RootView {
     }
 
     fn switch_view(&mut self, view: &str) {
+        self.sidebar_tooltip = None;
         if self.current_view != view {
             self.current_view = view.into();
             // The previous view's focused element is about to leave the tree.
