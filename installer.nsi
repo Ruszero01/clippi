@@ -36,6 +36,9 @@ SetCompressor /SOLID lzma
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "启动 ${APP_NAME}"
 
+; In-app archive updates replace only the executable in the explicit /D directory.
+Var PortableUpdate
+
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${STAGING}\LICENSE.txt"
 !insertmacro MUI_PAGE_COMPONENTS
@@ -124,6 +127,9 @@ FunctionEnd
 !insertmacro CheckAndCloseApp ""
 
 Function .onInit
+  StrCpy $PortableUpdate ""
+  ${GetParameters} $0
+  ${GetOptions} $0 "/CLIPPI_PORTABLE=" $PortableUpdate
   Call CheckAndCloseApp
   Call RestoreExistingShortcutSections
 FunctionEnd
@@ -146,6 +152,10 @@ Section "!Clippi" SectionCore
 
   File "${STAGING}\${APP_EXE}"
 
+  ${If} $PortableUpdate == "1"
+    Goto core_done
+  ${EndIf}
+
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   WriteRegStr HKLM "${REG_UNINST}" "DisplayName" "${APP_NAME}"
@@ -159,6 +169,7 @@ Section "!Clippi" SectionCore
   WriteRegDWORD HKLM "${REG_UNINST}" "NoModify" 1
   WriteRegDWORD HKLM "${REG_UNINST}" "NoRepair" 1
 
+core_done:
 SectionEnd
 
 ; Automatic updates use silent mode. Restart only after every selected
@@ -180,6 +191,11 @@ Section "桌面快捷方式" SectionDesktop
 SectionEnd
 
 Function RestoreExistingShortcutSections
+  ${If} $PortableUpdate == "1"
+    SectionSetFlags ${SectionStartMenu} 0
+    SectionSetFlags ${SectionDesktop} 0
+    Return
+  ${EndIf}
   IfFileExists "$INSTDIR\${APP_EXE}" 0 done
 
   IfFileExists "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" 0 no_start_menu

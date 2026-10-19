@@ -34,10 +34,16 @@ pub fn launch_nsis_installer(installer_path: &Path, parent_hwnd: isize) -> Resul
     }
 
     let operation: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
-    let parameters: Vec<u16> = format!("/S /CLIPPI_PID={}", std::process::id())
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Cannot locate running executable: {e}"))?;
+    let target_dir = current_exe
+        .parent()
+        .ok_or("Running executable has no parent directory")?;
+    // Archives have no uninstaller, even when they use the system data directory.
+    // Detect the package layout rather than the independently configured data mode.
+    let portable = is_archive_install(target_dir);
+    let parameters = windows_update_parameters(std::process::id(), target_dir, portable);
+    let parameters: Vec<u16> = parameters.encode_wide().chain(std::iter::once(0)).collect();
     let exe_wide: Vec<u16> = installer_path
         .as_os_str()
         .encode_wide()
@@ -84,6 +90,23 @@ pub fn launch_nsis_installer(installer_path: &Path, parent_hwnd: isize) -> Resul
             shell_execute_error_message(ret),
         ))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn is_archive_install(target_dir: &Path) -> bool {
+    !target_dir.join("uninstall.exe").is_file()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_update_parameters(pid: u32, target_dir: &Path, portable: bool) -> std::ffi::OsString {
+    let mut parameters = std::ffi::OsString::from(format!("/S /CLIPPI_PID={pid}"));
+    if portable {
+        parameters.push(" /CLIPPI_PORTABLE=1");
+    }
+    // NSIS requires /D to be the last argument, with no quotes even for spaces.
+    parameters.push(" /D=");
+    parameters.push(crate::core::paths::without_verbatim_prefix(target_dir));
+    parameters
 }
 
 #[cfg(target_os = "windows")]
@@ -298,3 +321,34 @@ if [ -e "$backup" ]; then
 fi
 exit 1
 "#;
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn archive_detection_does_not_depend_on_portable_data_config() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(is_archive_install(dir.path()));
+        std::fs::write(dir.path().join("clippi.toml"), "").unwrap();
+        assert!(is_archive_install(dir.path()));
+        std::fs::write(dir.path().join("uninstall.exe"), "").unwrap();
+        assert!(!is_archive_install(dir.path()));
+    }
+
+    #[test]
+    fn portable_update_targets_original_directory_with_spaces_and_unicode() {
+        let parameters = windows_update_parameters(42, Path::new(r"G:\绿色 软件\Clippi"), true);
+        assert_eq!(
+            parameters,
+            "/S /CLIPPI_PID=42 /CLIPPI_PORTABLE=1 /D=G:\\绿色 软件\\Clippi"
+        );
+    }
+
+    #[test]
+    fn installed_update_preserves_directory_without_portable_flag() {
+        let parameters =
+            windows_update_parameters(42, Path::new(r"\\?\C:\Program Files\Clippi"), false);
+        assert_eq!(parameters, "/S /CLIPPI_PID=42 /D=C:\\Program Files\\Clippi");
+    }
+}

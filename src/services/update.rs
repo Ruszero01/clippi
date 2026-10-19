@@ -764,8 +764,8 @@ fn asset_patterns_for(
     version: &str,
 ) -> Result<(String, String), UpdateCheckError> {
     match (os, arch) {
-        // Always use the NSIS installer on Windows — portable mode only affects
-        // the data directory, not how the software itself is updated.
+        // Both package layouts use NSIS. Archive updates pass a replacement-only
+        // flag and the running executable's directory when launching the package.
         ("windows", "x86_64") => Ok((
             format!("Clippi_{version}_x64-setup.exe"),
             format!("Clippi_{version}_x64-setup.exe.sha256"),
