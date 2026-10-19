@@ -4076,6 +4076,9 @@ impl WindowManager {
     #[cfg(target_os = "windows")]
     pub fn set_hwnd(&mut self, hwnd: isize) {
         self.hwnd = hwnd;
+        if let Err(error) = crate::platform::ime::install(hwnd) {
+            log::error!("Failed to initialize main window IME handling: {error}");
+        }
         crate::platform::focus::set_clippi_hwnd(hwnd);
     }
 

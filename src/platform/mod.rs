@@ -5,6 +5,8 @@ pub mod blacklist;
 pub mod clipboard;
 pub mod focus;
 pub mod hotkey;
+#[cfg(target_os = "windows")]
+pub mod ime;
 pub mod keyboard_hook;
 pub mod monitor;
 pub mod paste;
