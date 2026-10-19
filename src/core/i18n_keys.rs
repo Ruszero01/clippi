@@ -6,6 +6,16 @@
 use crate::define_i18n;
 
 define_i18n! {
+    GroupSourceApp: ("来源应用", "Source applications"),
+    SourceAppFilterEnable: ("来源应用筛选", "Source app filter"),
+    SourceAppFilterDesc: ("在类型筛选栏下方显示可滚动的来源应用筛选栏", "Show a scrollable source app row below content types"),
+    SourceAppFilterAll: ("全部来源", "All sources"),
+    SourceAppResetOnShow: ("呼出时重置筛选", "Reset filter on open"),
+    SourceAppResetOnShowDesc: ("每次呼出时选中全部来源，并将来源栏滚回开头", "Select all sources and scroll to the start when opening the window"),
+    SourceAppScrollStart: ("回到开头", "Go to start"),
+    SourceAppScrollEnd: ("跳到末尾", "Go to end"),
+    SourceAppScrollLeft: ("向左浏览来源应用", "Scroll source apps left"),
+    SourceAppScrollRight: ("向右浏览来源应用", "Scroll source apps right"),
     EmojiPanel: ("表情面板", "Emoji panel"),
     EmojiEnable: ("启用表情面板", "Enable emoji panel"),
     EmojiEnableDesc: ("在顶部显示表情入口，快速输入 Emoji、颜文字和符号", "Show the titlebar picker for emoji, kaomoji and symbols"),

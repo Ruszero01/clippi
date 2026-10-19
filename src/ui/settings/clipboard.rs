@@ -98,6 +98,78 @@ impl SettingsPanel {
             container.child(self.settings_group(I18nKey::TabClipboard.text(), capture_rows));
 
         // --- List & display ---
+        let mut source_rows = vec![self
+            .render_toggle_row(
+                I18nKey::SettingShowSource,
+                I18nKey::DescShowSourceOn,
+                I18nKey::DescShowSourceOff,
+                show_source_app,
+                window,
+                cx,
+                |state, this, _window, _cx| {
+                    state.update(_cx, |s, _cx| {
+                        s.toggle_show_source_app();
+                        _cx.notify();
+                    });
+                    this.update(_cx, |_panel, cx| {
+                        cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                            reload_items: true,
+                            scroll_to_top: false,
+                        });
+                    });
+                },
+            )
+            .into_any_element()];
+        if show_source_app {
+            let source_row = self
+                .render_toggle_row(
+                    I18nKey::SourceAppFilterEnable,
+                    I18nKey::SourceAppFilterDesc,
+                    I18nKey::SourceAppFilterDesc,
+                    self.state.read(cx).settings.source_app_filter_enabled,
+                    window,
+                    cx,
+                    |state, this, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.toggle_source_app_filter_enabled();
+                            cx.notify();
+                        });
+                        this.update(cx, |_, cx| {
+                            cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
+                                reload_items: true,
+                                scroll_to_top: true,
+                            });
+                        });
+                    },
+                )
+                .into_any_element();
+
+            source_rows.push(source_row);
+            if self.state.read(cx).settings.source_app_filter_enabled {
+                source_rows.push(
+                    self.render_toggle_row(
+                        I18nKey::SourceAppResetOnShow,
+                        I18nKey::SourceAppResetOnShowDesc,
+                        I18nKey::SourceAppResetOnShowDesc,
+                        self.state.read(cx).settings.reset_source_filter_on_show,
+                        window,
+                        cx,
+                        |state, _, _, cx| {
+                            state.update(cx, |state, cx| {
+                                state.settings.reset_source_filter_on_show =
+                                    !state.settings.reset_source_filter_on_show;
+                                state.settings.save();
+                                cx.notify();
+                            });
+                        },
+                    )
+                    .into_any_element(),
+                );
+            }
+        }
+        container =
+            container.child(self.settings_group(I18nKey::GroupSourceApp.text(), source_rows));
+
         let list_rows: Vec<AnyElement> = vec![
             self.render_toggle_row(
                 I18nKey::SettingSortCreated,
@@ -135,27 +207,6 @@ impl SettingsPanel {
                     this.update(_cx, |_panel, cx| {
                         cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
                             reload_items: true,
-                            scroll_to_top: false,
-                        });
-                    });
-                },
-            )
-            .into_any_element(),
-            self.render_toggle_row(
-                I18nKey::SettingShowSource,
-                I18nKey::DescShowSourceOn,
-                I18nKey::DescShowSourceOff,
-                show_source_app,
-                window,
-                cx,
-                |state, this, _window, _cx| {
-                    state.update(_cx, |s, _cx| {
-                        s.settings.show_source_app = !s.settings.show_source_app;
-                        s.settings.save();
-                    });
-                    this.update(_cx, |_panel, cx| {
-                        cx.emit(super::SettingsEvent::ClipboardSettingsChanged {
-                            reload_items: false,
                             scroll_to_top: false,
                         });
                     });

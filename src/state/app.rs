@@ -116,6 +116,8 @@ pub struct AppState {
     pub db: Database,
     /// Clipboard items loaded from DB
     pub items: Vec<ClipboardItem>,
+    pub source_app_names: Vec<String>,
+    pub source_app_icons: std::collections::HashMap<String, std::path::PathBuf>,
     /// In-memory image placeholders awaiting background persistence.
     /// Not persisted; consumed by the list view for immediate feedback.
     pub pending_images: Vec<crate::core::types::PendingImageView>,
@@ -458,7 +460,15 @@ impl AppState {
         });
 
         Self {
+            source_app_icons: db.source_app_icon_paths().unwrap_or_else(|error| {
+                log::error!("Failed to load source app icons: {error}");
+                Default::default()
+            }),
             settings,
+            source_app_names: db.source_app_names().unwrap_or_else(|error| {
+                log::error!("Failed to load source apps: {error}");
+                Vec::new()
+            }),
             db,
             items,
             pending_images: Vec::new(),
@@ -542,6 +552,16 @@ impl AppState {
 
     /// Reload items from database with current filters.
     pub fn reload_items(&mut self) {
+        if self.settings.source_app_filter_enabled {
+            match self.db.source_app_icon_paths() {
+                Ok(icons) => self.source_app_icons = icons,
+                Err(error) => log::error!("Failed to load source app icons: {error}"),
+            }
+            match self.db.source_app_names() {
+                Ok(names) => self.source_app_names = names,
+                Err(error) => log::error!("Failed to load source apps: {error}"),
+            }
+        }
         let result = if self.filters.has_keyword() {
             self.load_keyword_filtered_items()
         } else {
@@ -951,6 +971,41 @@ impl AppState {
     pub fn toggle_type_filter(&mut self, type_name: &str) {
         self.filters.toggle_type(type_name);
         self.selected_ids.clear();
+        self.reload_items();
+    }
+
+    pub fn set_source_app_filter(&mut self, name: Option<&str>) {
+        self.filters.set_source_app(name);
+        self.selected_ids.clear();
+        self.reload_items();
+    }
+
+    /// Reset only the source dimension before the main window reloads its items.
+    pub fn reset_source_filter_for_show(&mut self) -> bool {
+        if !self.settings.reset_source_filter_on_show {
+            return false;
+        }
+        self.filters.clear_source_apps();
+        self.selected_ids.clear();
+        true
+    }
+
+    pub fn toggle_show_source_app(&mut self) {
+        self.settings.show_source_app = !self.settings.show_source_app;
+        if !self.settings.show_source_app {
+            self.settings.source_app_filter_enabled = false;
+            self.filters.clear_source_apps();
+            self.selected_ids.clear();
+        }
+        self.settings.save();
+        self.reload_items();
+    }
+
+    pub fn toggle_source_app_filter_enabled(&mut self) {
+        self.settings.source_app_filter_enabled = !self.settings.source_app_filter_enabled;
+        self.filters.clear_source_apps();
+        self.selected_ids.clear();
+        self.settings.save();
         self.reload_items();
     }
 
@@ -2259,20 +2314,20 @@ impl AppState {
     }
 
     /// Paste picker text without inserting an application-generated history entry.
-    pub fn paste_picker_text(&mut self, text: &str) -> bool {
+    pub fn paste_picker_text(&mut self, text: &str, kind: usize) -> bool {
         if !self.write_text_to_clipboard_internal(text) {
             self.show_warning_toast(I18nKey::EmojiPasteFailed.text());
             return false;
         }
-        if crate::core::emoji::emojis()
-            .iter()
-            .any(|entry| entry.text == text)
-        {
-            self.settings.recent_emojis.retain(|value| value != text);
-            self.settings.recent_emojis.insert(0, text.to_string());
-            self.settings.recent_emojis.truncate(32);
-            self.settings.save();
-        }
+        let recent = match kind {
+            1 => &mut self.settings.recent_kaomojis,
+            2 => &mut self.settings.recent_symbols,
+            _ => &mut self.settings.recent_emojis,
+        };
+        recent.retain(|value| value != text);
+        recent.insert(0, text.to_string());
+        recent.truncate(32);
+        self.settings.save();
         crate::platform::paste::restore_paste_target();
         crate::platform::paste::paste_after_delay(Arc::new(self.settings.paste_shortcuts.clone()));
         true
@@ -3617,6 +3672,8 @@ mod tests {
         let state = AppState {
             settings,
             db,
+            source_app_names: Vec::new(),
+            source_app_icons: Default::default(),
             items: Vec::new(),
             pending_images: Vec::new(),
             tags: Vec::new(),
@@ -4236,6 +4293,85 @@ mod tests {
         let (state, _dirty) = test_state();
         let item = make_item(1, ContentType::Image, false, "img.png");
         assert!(!state.should_mark_sync_dirty(&item));
+    }
+
+    #[test]
+    fn source_filter_reset_on_show_is_optional_and_preserves_other_filters() {
+        let (mut state, _) = test_state();
+        state.filters.set_source_app(Some("Browser"));
+        state.filters.toggle_favorites_only();
+        state.filters.set_keyword("hello");
+        assert!(!state.reset_source_filter_for_show());
+        assert!(state.filters.is_source_app_active("Browser"));
+        state.settings.reset_source_filter_on_show = true;
+        assert!(state.reset_source_filter_for_show());
+        assert!(!state.filters.has_source_app_filter());
+        assert!(state.filters.is_favorites_active());
+        assert_eq!(state.filters.keyword_terms(), ["hello"]);
+    }
+
+    #[test]
+    fn source_apps_sort_by_total_count_independent_of_active_filter() {
+        let (mut state, _) = test_state();
+        state.settings.source_app_filter_enabled = true;
+        for (id, app) in [
+            (1, "Editor"),
+            (2, "Browser"),
+            (3, "Editor"),
+            (4, "Terminal"),
+            (5, "Terminal"),
+            (6, " "),
+        ] {
+            let mut item = make_item(id, ContentType::PlainText, false, &format!("clip-{id}"));
+            item.source_app_name = app.into();
+            state.db.upsert(&item).unwrap();
+        }
+        state.set_source_app_filter(Some("Browser"));
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.source_app_names, ["Editor", "Terminal", "Browser"]);
+        let mut item = make_item(7, ContentType::PlainText, false, "another-terminal-item");
+        item.source_app_name = "Terminal".into();
+        state.db.upsert(&item).unwrap();
+        state.reload_items();
+        assert_eq!(state.source_app_names, ["Terminal", "Editor", "Browser"]);
+    }
+
+    #[test]
+    fn source_app_filter_is_single_select_and_preserves_all_choices() {
+        let (mut state, _) = test_state();
+        state.settings.source_app_filter_enabled = true;
+        for (id, app, favorite) in [
+            (1, "O'Reilly", true),
+            (2, "Browser", false),
+            (3, "Editor", true),
+            (4, "", true),
+        ] {
+            let mut item = make_item(id, ContentType::PlainText, favorite, &format!("clip-{id}"));
+            item.source_app_name = app.into();
+            state.db.upsert(&item).unwrap();
+            if favorite {
+                let saved = state.db.get_by_hash(item.content_hash).unwrap().unwrap();
+                state.db.set_favorite(saved.id, true).unwrap();
+            }
+        }
+        state.set_source_app_filter(Some("O'Reilly"));
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.source_app_names, ["Browser", "Editor", "O'Reilly"]);
+        state.set_source_app_filter(Some("Browser"));
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].source_app_name, "Browser");
+        assert!(!state.filters.is_source_app_active("O'Reilly"));
+        state.set_source_app_filter(Some("Browser"));
+        assert_eq!(state.items.len(), 1);
+        assert!(state.filters.is_source_app_active("Browser"));
+        state.toggle_favorites_filter();
+        assert!(state.items.is_empty());
+        state.set_source_app_filter(Some("O'Reilly"));
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].source_app_name, "O'Reilly");
+        state.set_source_app_filter(None);
+        assert_eq!(state.items.len(), 3);
+        assert!(state.filters.is_favorites_active());
     }
 
     #[test]

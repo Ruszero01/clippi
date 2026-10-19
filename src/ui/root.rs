@@ -343,6 +343,10 @@ impl RootView {
                     });
                     cx.notify();
                 }
+                WindowManagerEvent::ResetSourceFilter => {
+                    this.filter_bar
+                        .update(cx, |bar, cx| bar.reset_source_scroll(cx));
+                }
                 WindowManagerEvent::ResetToClipboard => {
                     this.switch_view("clipboard");
                     cx.notify();
@@ -601,6 +605,7 @@ impl RootView {
             cx.observe(&state, |this, _, cx| {
                 this.titlebar.update(cx, |_, cx| cx.notify());
                 this.sidebar.update(cx, |_, cx| cx.notify());
+                this.filter_bar.update(cx, |_, cx| cx.notify());
                 this.tag_filter_panel.update(cx, |_, cx| cx.notify());
                 cx.notify();
             }),

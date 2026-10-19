@@ -26,12 +26,6 @@ const EMOJI_CATEGORIES: &[(&str, &str, &str)] = &[
     ("旗帜", "Flags", "flag"),
 ];
 
-fn category_scroll_edges(scroll: &ScrollHandle) -> (bool, bool) {
-    let offset = f32::from(scroll.offset().x);
-    let limit = f32::from(scroll.max_offset().width);
-    (offset < -0.5, -offset < limit - 0.5)
-}
-
 // The recent row can be shorter than the regular grid and has a heading below it.
 fn vertical_selection(
     index: usize,
@@ -77,6 +71,7 @@ pub struct EmojiPanel {
     columns: usize,
     scroll: UniformListScrollHandle,
     category_scroll: ScrollHandle,
+    category_scroll_left: std::cell::Cell<bool>,
     lang_version: u64,
     _subscription: Subscription,
 }
@@ -104,6 +99,7 @@ impl EmojiPanel {
             columns: 8,
             scroll: UniformListScrollHandle::new(),
             category_scroll: ScrollHandle::new(),
+            category_scroll_left: std::cell::Cell::new(false),
             lang_version: crate::core::i18n::lang_version(),
             _subscription: subscription,
         };
@@ -123,11 +119,15 @@ impl EmojiPanel {
         self.rebuild(cx);
     }
 
-    fn categories(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+    fn categories(&self) -> Vec<(&'static str, &'static str, &'static str)> {
         match self.kind {
-            1 => kaomoji::CATEGORIES,
-            2 => symbols::CATEGORIES,
-            _ => EMOJI_CATEGORIES,
+            1 => std::iter::once(EMOJI_CATEGORIES[0])
+                .chain(kaomoji::CATEGORIES.iter().copied())
+                .collect(),
+            2 => std::iter::once(EMOJI_CATEGORIES[0])
+                .chain(symbols::CATEGORIES.iter().copied())
+                .collect(),
+            _ => EMOJI_CATEGORIES.to_vec(),
         }
     }
 
@@ -149,8 +149,14 @@ impl EmojiPanel {
         self.entries.clear();
         self.recent_len = 0;
         let searching = !self.query.trim().is_empty();
-        if self.kind == 0 && !searching && self.category <= 1 {
-            for text in &self.state.read(cx).settings.recent_emojis {
+        if !searching && (self.category == 0 || (self.kind == 0 && self.category == 1)) {
+            let settings = &self.state.read(cx).settings;
+            let recent = match self.kind {
+                1 => &settings.recent_kaomojis,
+                2 => &settings.recent_symbols,
+                _ => &settings.recent_emojis,
+            };
+            for text in recent {
                 if let Some(entry) = source.iter().find(|entry| entry.text == *text) {
                     if !self.entries.iter().any(|old| old.text == entry.text) {
                         self.entries.push(entry);
@@ -162,20 +168,20 @@ impl EmojiPanel {
             }
             self.recent_len = self.entries.len();
         }
-        if searching || self.kind != 0 || self.category != 0 {
+        if searching || self.category != 0 {
             self.entries.extend(source.iter().filter(|entry| {
                 if searching {
                     entry.matches(&self.query)
                 } else if self.kind == 2 {
-                    symbols::in_category(entry, self.category)
+                    symbols::in_category(entry, self.category - 1)
                 } else if self.kind == 1 {
-                    kaomoji::in_category(entry, self.category)
+                    kaomoji::in_category(entry, self.category - 1)
                 } else {
                     !entry.variant && entry.group == emoji::PICKER_GROUPS[self.category - 1]
                 }
             }));
         }
-        if self.kind == 2 && self.category == 0 && !searching {
+        if self.kind == 2 && self.category == 1 && !searching {
             self.entries.sort_by_key(|entry| {
                 symbols::COMMON
                     .find(entry.text.as_str())
@@ -201,7 +207,7 @@ impl EmojiPanel {
         };
         self.selected = index;
         self.state.update(cx, |state, cx| {
-            state.paste_picker_text(&entry.text);
+            state.paste_picker_text(&entry.text, self.kind);
             cx.notify();
         });
         cx.notify();
@@ -209,7 +215,22 @@ impl EmojiPanel {
 
     fn choose_category(&mut self, category: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.category = category;
-        self.category_scroll.scroll_to_item(category);
+        // The first category is pinned outside the shared scrolling viewport.
+        if category > 0 {
+            let start = (category - 1) as f32 * 35.;
+            let offset = -f32::from(self.category_scroll.offset().x);
+            let width = f32::from(self.category_scroll.bounds().size.width);
+            let limit = f32::from(self.category_scroll.max_offset().width);
+            let target = if start < offset {
+                start
+            } else if start + 32. > offset + width {
+                ((start + 32. - width) / 35.).ceil() * 35.
+            } else {
+                offset
+            };
+            self.category_scroll
+                .set_offset(point(px(-target.clamp(0., limit)), px(0.)));
+        }
         self.query.clear();
         let placeholder = self.search_placeholder();
         self.input.update(cx, |input, cx| {
@@ -339,25 +360,13 @@ impl Render for EmojiPanel {
                         cx.listener(move |this, _, window, cx| {
                             this.kind = index;
                             this.category_scroll.set_offset(Point::default());
-                            this.choose_category(if index == 0 { 1 } else { 0 }, window, cx);
+                            this.choose_category(1, window, cx);
                         }),
                     )
                     .child(label),
             );
         }
-        // GPUI maps a vertical wheel to horizontal movement when only X scrolls.
-        // Fixed-size children keep targets legible instead of squeezing every category to fit.
-        let mut catbar = div()
-            .flex()
-            .items_center()
-            .flex_1()
-            .min_w(px(0.))
-            .id("emoji-categories")
-            .h(px(22.))
-            .gap(px(3.))
-            .overflow_x_scroll()
-            .overflow_y_hidden()
-            .track_scroll(&self.category_scroll);
+        let mut choices_ui = Vec::new();
         for (index, &(zh, en, icon)) in categories.iter().enumerate() {
             let label = if crate::core::i18n::is_en() { en } else { zh };
             let color = if self.category == index {
@@ -365,21 +374,23 @@ impl Render for EmojiPanel {
             } else {
                 theme.text_2
             };
-            let mut button = filter_chip(("emoji-cat", index), self.category == index, &theme)
-                .flex_none()
-                .flex_basis(px(32.))
-                .w(px(32.))
-                .text_size(fs(12.))
-                .text_color(color)
-                .tooltip(move |window, cx| {
-                    Tooltip::element(move |_, _| div().text_size(fs(11.)).child(label))
-                        .build(window, cx)
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| this.choose_category(index, window, cx)),
-                );
-            if self.kind == 0 {
+            let mut button = super::components::scroll_filter_bar::scroll_filter_chip(
+                ("emoji-cat", index),
+                self.category == index,
+                &theme,
+                32.,
+            )
+            .text_size(fs(12.))
+            .text_color(color)
+            .tooltip(move |window, cx| {
+                Tooltip::element(move |_, _| div().text_size(fs(10.)).child(label))
+                    .build(window, cx)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| this.choose_category(index, window, cx)),
+            );
+            if self.kind == 0 || index == 0 {
                 button = button.child(
                     svg()
                         .path(format!("picker-icons/{icon}.svg"))
@@ -389,81 +400,20 @@ impl Render for EmojiPanel {
             } else {
                 button = button.child(icon);
             }
-            catbar = catbar.child(button);
+            choices_ui.push(button);
         }
-        let edges = category_scroll_edges(&self.category_scroll);
-        let arrow = |left: bool, cx: &mut Context<Self>| {
-            filter_chip(
-                if left {
-                    "category-scroll-left"
-                } else {
-                    "category-scroll-right"
-                },
-                false,
-                &theme,
-            )
-            .flex_none()
-            .flex_basis(px(22.))
-            .w(px(22.))
-            .text_color(theme.text_2)
-            .hover(|style| style.bg(theme.btn_hover))
-            .tooltip(move |window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_size(fs(10.)).child(if left {
-                        I18nKey::EmojiScrollLeft.text()
-                    } else {
-                        I18nKey::EmojiScrollRight.text()
-                    })
-                })
-                .build(window, cx)
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    let scroll = &this.category_scroll;
-                    let step = f32::from(scroll.bounds().size.width) * 0.75;
-                    let offset = f32::from(scroll.offset().x) + if left { step } else { -step };
-                    let limit = f32::from(scroll.max_offset().width);
-                    scroll.set_offset(point(px(offset.clamp(-limit, 0.)), px(0.)));
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
-            .child(
-                svg()
-                    .path(if left {
-                        "picker-icons/chevron-left.svg"
-                    } else {
-                        "picker-icons/chevron-right.svg"
-                    })
-                    .size(fs(12.))
-                    .text_color(theme.text_2),
-            )
-        };
-        let scroll = self.category_scroll.clone();
-        let view_id = cx.entity().entity_id();
-        let category_bar = filter_toolbar()
-            .relative()
-            .pb(px(0.))
-            .gap(px(3.))
-            .when(edges.0, |bar| bar.child(arrow(true, cx)))
-            .child(catbar)
-            .when(edges.1, |bar| bar.child(arrow(false, cx)))
-            // Reconcile after layout, including initial display and window resizing.
-            .child(
-                canvas(
-                    |_, _, _| (),
-                    move |_, _, _, cx| {
-                        if category_scroll_edges(&scroll) != edges {
-                            cx.notify(view_id);
-                        }
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            );
+        let category_bar = super::components::scroll_filter_bar::scroll_filter_bar(
+            "emoji-categories",
+            &theme,
+            &self.category_scroll,
+            cx.entity().entity_id(),
+            choices_ui,
+            super::components::scroll_filter_bar::ScrollFilterLayout {
+                chip_width: 32.,
+                chip_gap: 3.,
+                scroll_left: &self.category_scroll_left,
+            },
+        );
         let has_recent =
             self.kind == 0 && self.category == 1 && self.query.is_empty() && self.recent_len > 0;
         let title = if has_recent {
@@ -493,13 +443,11 @@ impl Render for EmojiPanel {
                 .px(px(16.))
                 .text_size(fs(11.))
                 .text_color(theme.text_2)
-                .child(
-                    if self.kind == 0 && self.category == 0 && self.query.is_empty() {
-                        I18nKey::EmojiRecentEmpty.text()
-                    } else {
-                        I18nKey::EmojiEmpty.text()
-                    },
-                )
+                .child(if self.category == 0 && self.query.is_empty() {
+                    I18nKey::EmojiRecentEmpty.text()
+                } else {
+                    I18nKey::EmojiEmpty.text()
+                })
                 .into_any_element()
         } else {
             uniform_list(
@@ -546,11 +494,14 @@ impl Render for EmojiPanel {
                                         })
                                     })
                                     .when(this.kind == 1, |button| button.bg(list_theme.surface))
+                                    .border(px(1.))
+                                    .border_color(if index == this.selected {
+                                        list_theme.accent
+                                    } else {
+                                        rgba(0x00000000)
+                                    })
                                     .when(index == this.selected, |button| {
-                                        button
-                                            .bg(list_theme.accent_soft)
-                                            .border(px(1.))
-                                            .border_color(list_theme.accent)
+                                        button.bg(list_theme.accent_soft)
                                     })
                                     .hover(|style| style.bg(list_theme.btn_hover))
                                     .tooltip(move |window, cx| {
@@ -591,7 +542,6 @@ impl Render for EmojiPanel {
             .min_h(px(0.))
             .into_any_element()
         };
-        let selected = self.entries.get(self.selected).copied();
         div()
             .id("emoji-panel")
             .track_focus(&self.focus_handle)
@@ -633,51 +583,6 @@ impl Render for EmojiPanel {
                                 ),
                         )
                     }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .flex_shrink_0()
-                    .px(px(12.))
-                    .py(px(9.))
-                    .border_t(px(1.))
-                    .border_color(theme.divider)
-                    .child(
-                        div()
-                            .text_size(fs(if self.kind == 1 { 12. } else { 25. }))
-                            .max_w(px(140.))
-                            .overflow_hidden()
-                            .text_color(theme.text_1)
-                            .child(selected.map(|entry| entry.text.clone()).unwrap_or_default()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(
-                                div()
-                                    .text_size(fs(11.))
-                                    .text_color(theme.text_1)
-                                    .text_ellipsis()
-                                    .overflow_hidden()
-                                    .child(
-                                        selected
-                                            .map(|entry| entry.label().to_string())
-                                            .unwrap_or_default(),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(fs(9.))
-                                    .text_color(theme.text_2)
-                                    .child(I18nKey::EmojiHints.text()),
-                            ),
-                    ),
             )
     }
 }

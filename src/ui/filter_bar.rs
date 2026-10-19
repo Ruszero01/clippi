@@ -120,6 +120,18 @@ pub(crate) fn filter_toolbar() -> Div {
         .flex_shrink_0()
 }
 
+/// Identical trailing action slot for the type and source toolbars.
+pub(crate) fn filter_action_slot() -> Div {
+    div()
+        .w(px(TAG_FILTER_BUTTON_WIDTH))
+        .min_w(px(TAG_FILTER_BUTTON_WIDTH))
+        .max_w(px(TAG_FILTER_BUTTON_WIDTH))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+}
+
 /// Keep picker choices visually identical to the existing clipboard type chips.
 pub(crate) fn filter_chip(
     id: impl Into<ElementId>,
@@ -157,6 +169,9 @@ pub struct FilterBar {
     filter_config_open: bool,
     alt_shortcuts_available: bool,
     theme: ClippiTheme,
+    source_scroll: ScrollHandle,
+    measured_width: std::rc::Rc<std::cell::Cell<f32>>,
+    source_scroll_left: std::cell::Cell<bool>,
 }
 
 impl FilterBar {
@@ -166,6 +181,9 @@ impl FilterBar {
         theme: ClippiTheme,
     ) -> Self {
         Self {
+            source_scroll: ScrollHandle::new(),
+            measured_width: Default::default(),
+            source_scroll_left: std::cell::Cell::new(false),
             state,
             list_view,
             tag_panel_open: false,
@@ -177,6 +195,12 @@ impl FilterBar {
 
     pub fn tag_panel_open(&self) -> bool {
         self.tag_panel_open
+    }
+
+    pub fn reset_source_scroll(&mut self, cx: &mut Context<Self>) {
+        self.source_scroll.set_offset(Point::default());
+        self.source_scroll_left.set(false);
+        cx.notify();
     }
 
     pub fn close_tag_panel(&mut self, cx: &mut Context<Self>) {
@@ -205,6 +229,93 @@ impl FilterBar {
         cx.notify();
     }
 
+    fn source_bar(
+        &self,
+        chip_width: f32,
+        chip_gap: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = &self.theme;
+        let snapshot = self.state.read(cx);
+        let mut choices = vec![None];
+        choices.extend(snapshot.source_app_names.iter().cloned().map(Some));
+        let mut choices_ui = Vec::new();
+        for (index, name) in choices.into_iter().enumerate() {
+            let active = name
+                .as_deref()
+                .map_or(!snapshot.filters.has_source_app_filter(), |name| {
+                    snapshot.filters.is_source_app_active(name)
+                });
+            let label = name
+                .clone()
+                .unwrap_or_else(|| I18nKey::SourceAppFilterAll.text().to_string());
+            let content = if let Some(path) = name
+                .as_ref()
+                .and_then(|name| snapshot.source_app_icons.get(name))
+            {
+                img(path.clone()).size(px(16.)).into_any_element()
+            } else if name.is_none() {
+                svg()
+                    .path("picker-icons/layout-grid.svg")
+                    .size(fs(12.))
+                    .text_color(if active { theme.accent } else { theme.text_2 })
+                    .into_any_element()
+            } else {
+                // Apps without an icon keep the same fixed target size.
+                div()
+                    .font_family("iconfont")
+                    .text_size(fs(14.))
+                    .child("\u{e616}")
+                    .into_any_element()
+            };
+            let tooltip = label.clone();
+            let state = self.state.clone();
+            let list = self.list_view.clone();
+            let scroll = self.source_scroll.clone();
+            choices_ui.push(
+                super::components::scroll_filter_bar::scroll_filter_chip(
+                    ("source-app", index),
+                    active,
+                    theme,
+                    chip_width,
+                )
+                .overflow_hidden()
+                .text_size(fs(11.))
+                .text_color(if active { theme.accent } else { theme.text_2 })
+                .tooltip(move |window, cx| {
+                    let label = tooltip.clone();
+                    Tooltip::element(move |_, _| div().text_size(fs(10.)).child(label.clone()))
+                        .build(window, cx)
+                })
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    if name.is_none() {
+                        scroll.set_offset(Point::default());
+                    }
+                    let items = state.update(cx, |state, cx| {
+                        state.set_source_app_filter(name.as_deref());
+                        cx.notify();
+                        state.visible_items()
+                    });
+                    list.update(cx, |list, cx| list.set_items(items, cx));
+                })
+                .child(content),
+            );
+        }
+        super::components::scroll_filter_bar::scroll_filter_bar(
+            "source-apps",
+            theme,
+            &self.source_scroll,
+            cx.entity().entity_id(),
+            choices_ui,
+            super::components::scroll_filter_bar::ScrollFilterLayout {
+                chip_width,
+                chip_gap,
+                scroll_left: &self.source_scroll_left,
+            },
+        )
+    }
+
     fn apply_type_filter(
         state: &Entity<AppState>,
         list_view: &Entity<ClipboardListView>,
@@ -229,10 +340,16 @@ impl Render for FilterBar {
         let alt_pressed = self.alt_shortcuts_available
             && state_snapshot.alt_pressed
             && state_snapshot.settings.alt_shortcuts_enabled;
+        let source_enabled = state_snapshot.settings.show_source_app
+            && state_snapshot.settings.source_app_filter_enabled;
         let has_tag_filter = !state_snapshot.filters.tag_ids.is_empty();
         let viewport = window.viewport_size();
-        let toolbar_width =
-            f32::from(viewport.width) - PANEL_OFFSET_X - SEARCH_BAR_HORIZONTAL_PADDING;
+        let measured_width = self.measured_width.get();
+        let toolbar_width = if measured_width > 0. {
+            measured_width - SEARCH_BAR_HORIZONTAL_PADDING
+        } else {
+            f32::from(viewport.width) - PANEL_OFFSET_X - SEARCH_BAR_HORIZONTAL_PADDING
+        };
         let visible_entries = visible_filter_types(&state_snapshot.settings.type_filter_config);
         let active_types: Vec<bool> = visible_entries
             .iter()
@@ -256,6 +373,15 @@ impl Render for FilterBar {
 
         let text_slot_width = f32::from(fs(12.)) + 2.0 + label_width + 10.0;
         let icon_only = type_slot_width < text_slot_width;
+        let chip_gap = if icon_only {
+            TYPE_FILTER_ICON_GAP
+        } else {
+            TYPE_FILTER_TEXT_GAP
+        };
+        let source_columns = visible_count.max(2.);
+        let chip_width =
+            (type_toolbar_width - chip_gap * (source_columns - 1.)).max(0.) / source_columns;
+
         let inactive_button_bg = if theme.bg == rgb(0x191a1b) {
             rgba(0xffffff0a)
         } else {
@@ -267,35 +393,33 @@ impl Render for FilterBar {
             rgba(0x00000014)
         };
 
-        filter_toolbar()
-            .on_mouse_down(MouseButton::Right, {
-                let this = this.clone();
-                move |_ev, _window, cx| {
-                    cx.stop_propagation();
-                    this.update(cx, |bar, cx| {
-                        bar.filter_config_open = !bar.filter_config_open;
-                        cx.notify();
-                    });
-                }
-            })
-            .when(!visible_entries.is_empty(), |toolbar| {
-                toolbar.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .items_center()
-                        .gap(if icon_only {
-                            px(TYPE_FILTER_ICON_GAP)
-                        } else {
-                            px(TYPE_FILTER_TEXT_GAP)
-                        })
-                        .children(
-                            visible_entries
-                                .iter()
-                                .enumerate()
-                                .map(|(index, filter_def)| {
+        let type_bar =
+            filter_toolbar()
+                .on_mouse_down(MouseButton::Right, {
+                    let this = this.clone();
+                    move |_ev, _window, cx| {
+                        cx.stop_propagation();
+                        this.update(cx, |bar, cx| {
+                            bar.filter_config_open = !bar.filter_config_open;
+                            cx.notify();
+                        });
+                    }
+                })
+                .when(!visible_entries.is_empty(), |toolbar| {
+                    toolbar.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .items_center()
+                            .gap(if icon_only {
+                                px(TYPE_FILTER_ICON_GAP)
+                            } else {
+                                px(TYPE_FILTER_TEXT_GAP)
+                            })
+                            .children(visible_entries.iter().enumerate().map(
+                                |(index, filter_def)| {
                                     let icon = filter_def.icon;
                                     let label = filter_def.label_key.text();
                                     let key = filter_def.key;
@@ -335,6 +459,15 @@ impl Render for FilterBar {
 
                                     let button =
                                         filter_chip(("filter-type", index), is_active, theme)
+                                            .border_1()
+                                            .border_color(if is_active {
+                                                Rgba {
+                                                    a: 0.45,
+                                                    ..theme.accent
+                                                }
+                                            } else {
+                                                rgba(0x00000000)
+                                            })
                                             .overflow_hidden()
                                             .when(icon_only, move |button| {
                                                 button.tooltip(move |window, cx| {
@@ -365,30 +498,24 @@ impl Render for FilterBar {
                                         window,
                                         cx,
                                     )
-                                }),
-                        ),
-                )
-            })
-            .when(visible_entries.is_empty(), |toolbar| {
-                toolbar.child(div().flex_1())
-            })
-            .when(!visible_entries.is_empty(), |toolbar| {
-                toolbar.child(
-                    div()
-                        .w(px(TOOLBAR_DIVIDER_WIDTH))
-                        .h(px(14.))
-                        .flex_shrink_0()
-                        .bg(toolbar_divider),
-                )
-            })
-            .child(
-                div()
-                    .w(px(TAG_FILTER_BUTTON_WIDTH))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
+                                },
+                            )),
+                    )
+                })
+                .when(visible_entries.is_empty(), |toolbar| {
+                    toolbar.child(div().flex_1())
+                })
+                .when(!visible_entries.is_empty(), |toolbar| {
+                    toolbar.child(
+                        div()
+                            .w(px(TOOLBAR_DIVIDER_WIDTH))
+                            .h(px(14.))
+                            .flex_shrink_0()
+                            .bg(toolbar_divider),
+                    )
+                })
+                .child(
+                    filter_action_slot().child(
                         div()
                             .id("filter-tags")
                             .w(px(24.))
@@ -428,6 +555,35 @@ impl Render for FilterBar {
                                     .child("\u{e886}"),
                             ),
                     ),
+                );
+        let measured_width = self.measured_width.clone();
+        let owner = cx.entity().entity_id();
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .w_full()
+            .gap(px(4.))
+            .child(type_bar)
+            .when(source_enabled, |bar| {
+                bar.child(self.source_bar(chip_width, chip_gap, cx))
+            })
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, _, cx| {
+                        let width = f32::from(bounds.size.width);
+                        if (measured_width.get() - width).abs() > 0.1 {
+                            measured_width.set(width);
+                            cx.notify(owner);
+                        }
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
             )
     }
 }

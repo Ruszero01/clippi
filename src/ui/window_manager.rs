@@ -361,6 +361,7 @@ pub enum WindowManagerEvent {
     DataOperationChanged,
     /// Reset RootView to clipboard history page (when always_reset_to_clipboard is on).
     ResetToClipboard,
+    ResetSourceFilter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3036,6 +3037,13 @@ impl WindowManager {
         self.pinned = false;
         cx.emit(WindowManagerEvent::PinnedChanged(false));
 
+        // Reset the source before loading, so the first visible frame uses all sources.
+        let reset_source = self
+            .state
+            .update(cx, |state, _| state.reset_source_filter_for_show());
+        if reset_source {
+            cx.emit(WindowManagerEvent::ResetSourceFilter);
+        }
         // --- Reload items from DB (they were cleared on hide) ---
         self.state.update(cx, |state, _cx| state.reload_items());
         cx.emit(WindowManagerEvent::ClipboardChanged);

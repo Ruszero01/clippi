@@ -35,6 +35,8 @@ pub use crate::core::search::split_keyword_terms;
 pub struct ClipboardFilters {
     /// Content type filter: empty = all types, non-empty = any of these types
     type_filters: Vec<String>,
+    /// None means all sources; otherwise exactly one application is selected.
+    source_app: Option<String>,
     /// Keyword search: None = no filter, Some = LIKE %keyword% on searchable_text
     keyword: Option<String>,
     /// Favorites filter: true = show only favorites
@@ -48,6 +50,24 @@ pub struct ClipboardFilters {
 }
 
 impl ClipboardFilters {
+    pub fn set_source_app(&mut self, name: Option<&str>) {
+        self.source_app = name
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned);
+    }
+
+    pub fn is_source_app_active(&self, name: &str) -> bool {
+        self.source_app.as_deref() == Some(name)
+    }
+
+    pub fn has_source_app_filter(&self) -> bool {
+        self.source_app.is_some()
+    }
+
+    pub fn clear_source_apps(&mut self) {
+        self.source_app = None;
+    }
+
     /// Toggle a content type filter on/off
     pub fn toggle_type(&mut self, type_name: &str) {
         if let Some(pos) = self.type_filters.iter().position(|t| t == type_name) {
@@ -139,6 +159,11 @@ impl ClipboardFilters {
     pub fn db_where(&self) -> (String, Vec<rusqlite::types::Value>) {
         let mut conditions = Vec::new();
         let mut params = Vec::new();
+
+        if let Some(name) = &self.source_app {
+            conditions.push("source_app_name = ?".to_string());
+            params.push(rusqlite::types::Value::Text(name.clone()));
+        }
 
         // --- Favorites filter ---
         if self.favorites_only {

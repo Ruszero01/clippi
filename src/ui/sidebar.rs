@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::tooltip::Tooltip;
 use gpui_transitions::WindowUseTransition;
 
 use crate::core::types::TagInfo;
@@ -401,6 +402,7 @@ impl Render for Sidebar {
                     animated_y
                 };
 
+                let tooltip_label = label.clone();
                 let row_visual = std::rc::Rc::new(move || {
                     div()
                         .w(px(56.))
@@ -430,6 +432,11 @@ impl Render for Sidebar {
 
                 let row = row_visual()
                     .id(("sidebar-tag", tag_id as u64))
+                    .tooltip(move |window, cx| {
+                        let label = tooltip_label.clone();
+                        Tooltip::element(move |_, _| div().text_size(fs(10.)).child(label.clone()))
+                            .build(window, cx)
+                    })
                     .absolute()
                     .left(row_x)
                     .top(row_y)

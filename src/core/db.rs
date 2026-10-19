@@ -353,6 +353,35 @@ impl Database {
     /// Load items with unified filter support.
     /// Uses ClipboardFilters to build WHERE clause with AND logic across all filter dimensions.
     /// `order_by` must be one of the allowed column names — see `validate_order_by`.
+    /// Read all source names independently of active filters and list paging.
+    pub fn source_app_icon_paths(
+        &self,
+    ) -> SqlResult<std::collections::HashMap<String, std::path::PathBuf>> {
+        let mut statement = self.conn.prepare(
+            "SELECT source_app_name, MAX(CASE WHEN length(source_app_icon) <= ?1 THEN source_app_icon ELSE '' END)
+             FROM clipboard_items WHERE trim(source_app_name) <> '' GROUP BY source_app_name",
+        )?;
+        let rows = statement.query_map([SOURCE_APP_ICON_INLINE_LIMIT as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut icons = std::collections::HashMap::new();
+        for row in rows {
+            let (name, icon) = row?;
+            if let Some(path) = crate::core::paths::cache_app_icon(&name, &icon) {
+                icons.insert(name, path);
+            }
+        }
+        Ok(icons)
+    }
+
+    pub fn source_app_names(&self) -> SqlResult<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT source_app_name FROM clipboard_items WHERE trim(source_app_name) <> '' GROUP BY source_app_name ORDER BY COUNT(*) DESC, source_app_name COLLATE NOCASE, source_app_name",
+        )?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
+
     pub fn load_filtered(
         &self,
         filters: &ClipboardFilters,

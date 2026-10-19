@@ -12,6 +12,9 @@ impl AssetSource for PickerAssets {
             "picker-icons/chevron-right.svg" => {
                 include_bytes!("../../assets/picker-icons/chevron-right.svg")
             }
+            "picker-icons/layout-grid.svg" => {
+                include_bytes!("../../assets/picker-icons/layout-grid.svg")
+            }
             "picker-icons/smile.svg" => include_bytes!("../../assets/picker-icons/smile.svg"),
             "picker-icons/clock.svg" => include_bytes!("../../assets/picker-icons/clock.svg"),
             "picker-icons/hand.svg" => include_bytes!("../../assets/picker-icons/hand.svg"),
@@ -32,6 +35,7 @@ impl AssetSource for PickerAssets {
         Ok([
             "picker-icons/chevron-left.svg",
             "picker-icons/chevron-right.svg",
+            "picker-icons/layout-grid.svg",
             "picker-icons/smile.svg",
             "picker-icons/clock.svg",
             "picker-icons/hand.svg",

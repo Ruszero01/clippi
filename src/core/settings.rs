@@ -172,7 +172,15 @@ pub struct AppSettings {
     #[serde(default)]
     pub emoji_panel_enabled: bool,
     #[serde(default)]
+    pub source_app_filter_enabled: bool,
+    #[serde(default)]
+    pub reset_source_filter_on_show: bool,
+    #[serde(default)]
     pub recent_emojis: Vec<String>,
+    #[serde(default)]
+    pub recent_kaomojis: Vec<String>,
+    #[serde(default)]
+    pub recent_symbols: Vec<String>,
     #[serde(default)]
     pub transfer_backend_id: String, // explicitly selected backend for transfer station
     #[serde(default = "default_transfer_retention_days")]
@@ -380,7 +388,11 @@ impl Default for AppSettings {
             sync_compress_images: false,
             transfer_station_enabled: false,
             emoji_panel_enabled: false,
+            source_app_filter_enabled: false,
+            reset_source_filter_on_show: false,
             recent_emojis: Vec::new(),
+            recent_kaomojis: Vec::new(),
+            recent_symbols: Vec::new(),
             transfer_backend_id: String::new(),
             transfer_retention_days: 3,
             max_items: 0,
@@ -2042,26 +2054,60 @@ mod tests {
     }
 
     #[test]
+    fn source_filter_setting_defaults_off_and_roundtrips() {
+        let defaults = AppSettings::default();
+        let legacy = toml::to_string(&defaults)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("source_app_filter_enabled ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !toml::from_str::<AppSettings>(&legacy)
+                .unwrap()
+                .source_app_filter_enabled
+        );
+        let enabled = AppSettings {
+            source_app_filter_enabled: true,
+            ..defaults
+        };
+        assert!(
+            toml::from_str::<AppSettings>(&toml::to_string(&enabled).unwrap())
+                .unwrap()
+                .source_app_filter_enabled
+        );
+    }
+
+    #[test]
     fn emoji_picker_settings_are_backward_compatible_and_preserve_sequences() {
         let mut serialized = toml::to_string(&AppSettings::default()).unwrap();
         serialized = serialized
             .lines()
             .filter(|line| {
-                !line.starts_with("emoji_panel_enabled =") && !line.starts_with("recent_emojis =")
+                !line.starts_with("emoji_panel_enabled =")
+                    && !line.starts_with("recent_emojis =")
+                    && !line.starts_with("recent_kaomojis =")
+                    && !line.starts_with("recent_symbols =")
             })
             .collect::<Vec<_>>()
             .join("\n");
         let legacy: AppSettings = toml::from_str(&serialized).unwrap();
         assert!(!legacy.emoji_panel_enabled);
         assert!(legacy.recent_emojis.is_empty());
+        assert!(legacy.recent_kaomojis.is_empty());
+        assert!(legacy.recent_symbols.is_empty());
         let settings = AppSettings {
             emoji_panel_enabled: true,
             recent_emojis: vec!["🇨🇳".into(), "👨‍👩‍👧‍👦".into()],
+            recent_kaomojis: vec!["(•̀ᴗ•́)و".into(), "( ˘ ³˘)♥".into()],
+            recent_symbols: vec!["✓".into(), "→".into()],
             ..Default::default()
         };
         let loaded: AppSettings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
         assert!(loaded.emoji_panel_enabled);
         assert_eq!(loaded.recent_emojis, settings.recent_emojis);
+        assert_eq!(loaded.recent_kaomojis, settings.recent_kaomojis);
+        assert_eq!(loaded.recent_symbols, settings.recent_symbols);
     }
 
     #[test]
