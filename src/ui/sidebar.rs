@@ -1,6 +1,6 @@
-//! Sidebar - tag navigation sidebar matching Slint `SideTagBar.slint`.
+//! Shared tag navigation, rendered in an attached native window on Windows/macOS.
 //!
-//! --- Slint behavior: ---
+//! Tag behavior:
 //! --- - width 56px, rows placed every 24px; ---
 //! --- - checked tags slide to x=0 and are fully opaque; ---
 //! --- - unchecked pinned tags remain visible with dimmed text; ---
@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::tooltip::Tooltip;
 use gpui_transitions::WindowUseTransition;
 
 use crate::core::types::TagInfo;
@@ -32,6 +31,12 @@ const SIDEBAR_TOP_OFFSET: f32 = 65.0;
 const ROW_HEIGHT: f32 = 24.0;
 /// Bottom padding to keep the last row from touching the window edge.
 const SIDEBAR_BOTTOM_PADDING: f32 = 8.0;
+/// Transparent margin around the strip inside its native window, sized for the
+/// per-tag shadows. The inline (Linux) layout keeps no margin.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const TAG_MARGIN: f32 = crate::platform::tag_window::SHADOW;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const TAG_MARGIN: f32 = 0.;
 
 /// A reorder preview is local to the sidebar until the button is released.
 struct SidebarDrag {
@@ -49,7 +54,16 @@ fn drag_position(pointer_y: f32, grab_y: f32, count: usize) -> (f32, usize) {
 }
 
 /// Sidebar entity for displaying and managing tags.
+pub enum SidebarEvent {
+    Tooltip(Option<(String, f32)>),
+}
+
+impl EventEmitter<SidebarEvent> for Sidebar {}
+
 pub struct Sidebar {
+    tooltip_task: Option<Task<()>>,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    attachment: Option<Rc<crate::platform::tag_window::Attachment>>,
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
     rendered_tag_ids: Vec<i64>,
@@ -69,6 +83,9 @@ impl Sidebar {
     ) -> Self {
         let dark_mode = theme.bg == rgb(0x191a1b);
         Self {
+            tooltip_task: None,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            attachment: None,
             state,
             list_view,
             rendered_tag_ids: Vec::new(),
@@ -81,7 +98,48 @@ impl Sidebar {
         }
     }
 
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub fn attach_window(
+        &mut self,
+        attachment: Rc<crate::platform::tag_window::Attachment>,
+        cx: &mut Context<Self>,
+    ) {
+        self.attachment = Some(attachment);
+        self.refresh_window(cx);
+    }
+
+    pub fn refresh_window(&self, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if let Some(attachment) = &self.attachment {
+            let state = self.state.read(cx);
+            let count = state
+                .tags
+                .iter()
+                .filter(|tag| {
+                    state.filters.tag_ids.contains(&tag.id)
+                        || state.settings.pinned_tag_ids.contains(&tag.id)
+                })
+                .count();
+            // Keep the surface alive until exiting rows finish their animation.
+            attachment.set_rows(count.max(self.rendered_tag_ids.len()));
+        }
+        cx.notify();
+    }
+
+    fn hover_tooltip(&mut self, hovered: bool, label: String, y: f32, cx: &mut Context<Self>) {
+        self.tooltip_task = None;
+        cx.emit(SidebarEvent::Tooltip(None));
+        if hovered && self.drag.is_none() {
+            self.tooltip_task = Some(cx.spawn(async move |this, cx| {
+                Timer::after(Duration::from_millis(500)).await;
+                let _ = this.update(cx, |_, cx| cx.emit(SidebarEvent::Tooltip(Some((label, y)))));
+            }));
+        }
+    }
+
     pub fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        self.tooltip_task = None;
+        cx.emit(SidebarEvent::Tooltip(None));
         let drag = self.drag.take();
         let cancelled = drag.is_some();
         if let Some(drag) = drag.filter(|drag| drag.moved) {
@@ -124,8 +182,9 @@ impl Sidebar {
                 });
             }
         } else if self.bounds.get().contains(&position) {
-            let items = self.state.update(cx, |state, _| {
+            let items = self.state.update(cx, |state, cx| {
                 state.toggle_tag_filter(drag.id);
+                cx.notify();
                 state.visible_items()
             });
             self.list_view
@@ -143,6 +202,7 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::font::sync_window_rem_size(window);
         let (tags, active_tag_ids, pinned_tag_ids) = {
             let app_state = self.state.read(cx);
             (
@@ -172,6 +232,9 @@ impl Render for Sidebar {
                 && now.duration_since(*started_at) < Duration::from_millis(300)
         });
 
+        if !self.unchecked_unpinned_since.is_empty() {
+            window.request_animation_frame();
+        }
         let mut display_tags = ordered_sidebar_tags(
             &tags,
             &active_tag_ids,
@@ -190,11 +253,27 @@ impl Render for Sidebar {
         self.rendered_tag_ids = display_tags.iter().map(|tag| tag.id).collect();
 
         // ── Collapse tags that don't fit in the available vertical space ──
-        let available_height =
-            f32::from(window.viewport_size().height) - SIDEBAR_TOP_OFFSET - SIDEBAR_BOTTOM_PADDING;
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let main_height = self
+            .attachment
+            .as_ref()
+            .map_or(480., |attachment| attachment.available_height());
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let main_height = f32::from(window.viewport_size().height);
+        let available_height = (main_height - SIDEBAR_TOP_OFFSET - SIDEBAR_BOTTOM_PADDING).max(0.);
         let max_visible = (available_height / ROW_HEIGHT).floor() as usize;
 
-        let hidden_count = display_tags.len().saturating_sub(max_visible);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if let Some(attachment) = &self.attachment {
+            attachment.set_rows(display_tags.len());
+        }
+        let hidden_count = if display_tags.len() > max_visible {
+            display_tags
+                .len()
+                .saturating_sub(max_visible.saturating_sub(1))
+        } else {
+            0
+        };
         if hidden_count > 0 {
             // Keep last slot for the "+N" overflow indicator row.
             let overflow_start = max_visible.saturating_sub(1);
@@ -247,6 +326,20 @@ impl Render for Sidebar {
         let text_1 = if dark { rgb(0xeaebec) } else { rgb(0x1a1c2e) };
         let row_bg_default = if dark { rgb(0x2a2b2e) } else { rgb(0xf5f6fa) };
         let row_bg_hover = if dark { rgb(0x353638) } else { rgb(0xeceef4) };
+        // Each tag is its own chip: a hairline stroke plus a soft shadow so it
+        // reads as a separate surface against the desktop behind the strip. The
+        // shadow is deep enough to ground the chip on a light desktop without
+        // reading as a halo.
+        let row_border = if dark {
+            rgba(0xffffff22)
+        } else {
+            rgba(0x0000001c)
+        };
+        let row_shadow = if dark {
+            rgba(0x0000004d)
+        } else {
+            rgba(0x00000026)
+        };
         let state_for_click = self.state.clone();
         let sidebar_for_notify = cx.entity().clone();
         let duration = Duration::from_millis(250);
@@ -257,7 +350,10 @@ impl Render for Sidebar {
             .h(px(
                 rows_height + if hidden_count > 0 { ROW_HEIGHT } else { 0. }
             ))
-            .overflow_hidden()
+            // The shadow margin around the strip is transparent; the window clips
+            // the rows on the right, where they meet the main panel's stroke.
+            .ml(px(TAG_MARGIN))
+            .mt(px(TAG_MARGIN))
             .bg(rgba(0x00000000))
             .child(
                 canvas(
@@ -410,6 +506,12 @@ impl Render for Sidebar {
                         .opacity(opacity)
                         .rounded(px(4.))
                         .bg(row_bg_default)
+                        .shadow(vec![BoxShadow {
+                            color: row_shadow.into(),
+                            offset: point(px(0.), px(1.)),
+                            blur_radius: px(4.),
+                            spread_radius: px(0.),
+                        }])
                         .flex()
                         .flex_row()
                         .items_center()
@@ -428,15 +530,29 @@ impl Render for Sidebar {
                                 .overflow_hidden()
                                 .child(label.clone()),
                         )
+                        // Hairline stroke drawn on top so it never changes the
+                        // row's layout. Its right side is clipped by the window and
+                        // meets the main panel's stroke.
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(4.))
+                                .border(px(1.))
+                                .border_color(row_border),
+                        )
                 });
 
                 let row = row_visual()
                     .id(("sidebar-tag", tag_id as u64))
-                    .tooltip(move |window, cx| {
-                        let label = tooltip_label.clone();
-                        Tooltip::element(move |_, _| div().text_size(fs(10.)).child(label.clone()))
-                            .build(window, cx)
-                    })
+                    .on_hover(cx.listener(move |sidebar, hovered, _, cx| {
+                        sidebar.hover_tooltip(
+                            *hovered,
+                            tooltip_label.clone(),
+                            SIDEBAR_TOP_OFFSET + f32::from(row_y),
+                            cx,
+                        );
+                    }))
                     .absolute()
                     .left(row_x)
                     .top(row_y)
@@ -456,6 +572,7 @@ impl Render for Sidebar {
                     row.on_mouse_down(MouseButton::Left, move |event, _, cx| {
                         cx.stop_propagation();
                         sidebar.update(cx, |sidebar, cx| {
+                            sidebar.hover_tooltip(false, String::new(), 0., cx);
                             sidebar.settling = None;
                             sidebar.drag = Some(SidebarDrag {
                                 id: tag_id,
@@ -472,7 +589,10 @@ impl Render for Sidebar {
                         });
                     })
                     .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                        state_for_right.update(cx, |state, _| state.toggle_pinned_tag(tag_id));
+                        state_for_right.update(cx, |state, cx| {
+                            state.toggle_pinned_tag(tag_id);
+                            cx.notify();
+                        });
                         sidebar_for_right.update(cx, |_, cx| cx.notify());
                     })
                 } else {
@@ -491,12 +611,13 @@ impl Render for Sidebar {
                     rgba(0x00000014)
                 };
                 let text_2 = if dark { rgb(0x919496) } else { rgb(0x7c809a) };
-                // 38px = 36px visible + 2px overlap to prevent gap with main panel edge
+                // The surface is exactly one row wide, so the pill's open right
+                // side ends on the main panel's stroke like the tag rows do.
                 parent.child(
                     div()
                         .absolute()
                         .top(px(rows_height))
-                        .w(px(38.))
+                        .w(px(36.))
                         .flex()
                         .justify_end()
                         .child(

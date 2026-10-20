@@ -14,8 +14,10 @@ pub mod paste;
 pub mod quick_window;
 pub mod remote_path;
 pub mod source;
+pub mod tag_window;
 pub mod text_input;
 pub mod tray;
 pub mod util;
+pub mod window_frame;
 #[cfg(target_os = "windows")]
 pub mod windows_hotkeys;

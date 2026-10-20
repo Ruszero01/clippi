@@ -144,6 +144,9 @@ pub struct AppSettings {
     pub saved_window_width: f32, // user-adjusted window width (0=use default)
     #[serde(default)]
     pub saved_window_height: f32, // user-adjusted window height (0=use default)
+    /// Local geometry version: 0 includes the old 36px inline tag margin.
+    #[serde(default)]
+    pub window_geometry_version: u8,
     // --- ── Cloud sync ── ---
     #[serde(default)]
     pub sync_enabled: bool,
@@ -375,6 +378,7 @@ impl Default for AppSettings {
             show_original_on_hover: false,
             saved_window_width: 0.0,
             saved_window_height: 0.0,
+            window_geometry_version: 1,
             sync_enabled: false,
             sync_data_dir: String::new(),
             sync_device_name: String::new(),
@@ -458,6 +462,14 @@ impl AppSettings {
         } else {
             Self::default()
         };
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            let scale = crate::platform::monitor::get_scale_factor(
+                settings.saved_window_x,
+                settings.saved_window_y,
+            );
+            settings.migrate_window_geometry(scale);
+        }
         // --- Migrate old flat sync fields → BackendConfig list ---
         settings.migrate_sync_fields();
         // --- Migrate old single WebDAV URL configs to split form fields ---
@@ -467,6 +479,22 @@ impl AppSettings {
         // --- Migrate type filter config (seed from BUILTIN_TYPE_KEYS) ---
         settings.migrate_type_filter_config();
         settings
+    }
+
+    /// Keep the visible main panel in place when removing the inline tag gutter.
+    /// The marker stays local and is deliberately absent from PortableSettingsV1.
+    pub fn migrate_window_geometry(&mut self, desktop_scale: f32) {
+        if self.window_geometry_version != 0 {
+            return;
+        }
+        if self.saved_window_width > 0. && self.saved_window_height > 0. {
+            self.saved_window_width =
+                (self.saved_window_width - 36.).max(crate::core::frontend::MIN_WINDOW_WIDTH);
+            self.saved_window_x = self
+                .saved_window_x
+                .saturating_add((36. * desktop_scale.max(1.)).round() as i32);
+        }
+        self.window_geometry_version = 1;
     }
 
     /// One-time migration: old `sync_enabled` + `sync_data_dir` → `sync_backends` entry.
@@ -2379,4 +2407,43 @@ mod privacy_tests {
 
 fn default_theme_color() -> String {
     "default".to_string()
+}
+
+#[cfg(test)]
+mod sidebar_geometry_tests {
+    use super::AppSettings;
+
+    #[test]
+    fn old_geometry_preserves_panel_width_and_physical_origin_once() {
+        let mut settings = AppSettings {
+            window_geometry_version: 0,
+            saved_window_width: 500.,
+            saved_window_height: 600.,
+            saved_window_x: -1000,
+            ..AppSettings::default()
+        };
+        settings.migrate_window_geometry(1.5);
+        assert_eq!(settings.saved_window_width, 464.);
+        assert_eq!(settings.saved_window_x, -946);
+        settings.migrate_window_geometry(2.);
+        assert_eq!(settings.saved_window_width, 464.);
+        assert_eq!(settings.saved_window_x, -946);
+        let encoded = toml::to_string(&settings).unwrap();
+        let mut restored: AppSettings = toml::from_str(&encoded).unwrap();
+        restored.migrate_window_geometry(2.);
+        assert_eq!(restored.saved_window_x, -946);
+    }
+
+    #[test]
+    fn missing_geometry_version_migrates_but_unsaved_geometry_stays_unsaved() {
+        let encoded = toml::to_string(&AppSettings::default())
+            .unwrap()
+            .replace("window_geometry_version = 1\n", "");
+        let mut settings: AppSettings = toml::from_str(&encoded).unwrap();
+        assert_eq!(settings.window_geometry_version, 0);
+        settings.migrate_window_geometry(2.);
+        assert_eq!(settings.saved_window_width, 0.);
+        assert_eq!(settings.saved_window_x, -1);
+        assert_eq!(settings.window_geometry_version, 1);
+    }
 }

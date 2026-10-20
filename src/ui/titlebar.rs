@@ -182,6 +182,13 @@ impl Render for Titlebar {
         let pin_titlebar = cx.entity().clone();
         let settings_titlebar = cx.entity().clone();
         let logo = titlebar_logo_image();
+        // DWM clips the rounded window on Windows, so the bar must stay square
+        // or its own arc would show inside the system corner.
+        let top_radius = if crate::core::frontend::SYSTEM_DRAWN_FRAME {
+            0.
+        } else {
+            crate::core::frontend::PANEL_RADIUS
+        };
 
         div()
             .flex()
@@ -190,7 +197,7 @@ impl Render for Titlebar {
             .w_full()
             .h(px(30.0))
             .flex_shrink_0()
-            .rounded_t(px(12.))
+            .rounded_t(px(top_radius))
             .bg(theme.titlebar_bg)
             // --- Left: logo + app name (also serves as drag area) ---
             .child(

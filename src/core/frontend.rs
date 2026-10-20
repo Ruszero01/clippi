@@ -5,18 +5,47 @@
 use crate::platform::monitor;
 
 /// Default window size (width, height) in logical pixels.
-pub const DEFAULT_WINDOW_WIDTH: f32 = 360.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 324.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 
 /// Window minimum/maximum size range in logical pixels.
-pub const MIN_WINDOW_WIDTH: f32 = 360.0;
+pub const MIN_WINDOW_WIDTH: f32 = 324.0;
 pub const MIN_WINDOW_HEIGHT: f32 = 480.0;
-pub const MAX_WINDOW_WIDTH: f32 = 1200.0;
+pub const MAX_WINDOW_WIDTH: f32 = 1164.0;
 pub const MAX_WINDOW_HEIGHT: f32 = 1200.0;
 
 /// Content panel X offset from the window left edge (logical pixels).
-/// Matches the panel offset in `root.rs`.
-pub const PANEL_OFFSET_X: f32 = 36.0;
+/// Native tag windows leave no inset inside the main window.
+pub const PANEL_OFFSET_X: f32 = if cfg!(any(target_os = "windows", target_os = "macos")) {
+    0.0
+} else {
+    36.0
+};
+
+/// Transparent inset around the content panel.
+///
+/// Windows and macOS let the app fill the whole window and hand the rounded
+/// corners and the drop shadow to the window manager, so the panel sits flush
+/// with the window and keeps no inset. Linux paints its own frame, but its tag
+/// strip is an inline gutter instead of a native window, so it needs none
+/// either. The constant stays so platform code keeps one source of truth for
+/// where the panel starts.
+pub const PANEL_MARGIN: f32 = 0.0;
+
+/// True when the window manager draws the window's rounded corners and drop
+/// shadow instead of the app.
+///
+/// On Windows the DWM frame is the only antialiased rounded edge that is not
+/// composited through the transparent-window path, so the panel stays square and
+/// skips its own stroke there. macOS lets the `NSWindow` content layer clip the
+/// same square panel to a rounded corner with Core Animation's own antialiasing
+/// and draws the native window shadow, so it is system framed as well. Linux
+/// keeps the app-drawn frame because there is no cross-desktop frame API to lean
+/// on.
+pub const SYSTEM_DRAWN_FRAME: bool = cfg!(any(target_os = "windows", target_os = "macos"));
+
+/// Corner radius of the content panel and the overlays clipped to it.
+pub const PANEL_RADIUS: f32 = 12.0;
 
 /// Duration in milliseconds that the auto-hide suppression window lasts
 /// after showing or focusing the window. Prevents immediate auto-hide.

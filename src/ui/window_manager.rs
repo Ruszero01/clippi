@@ -457,6 +457,10 @@ pub struct WindowManager {
     /// Timestamp of last periodic registry re-check for Win+V takeover.
     #[cfg(target_os = "windows")]
     last_win_v_recheck: Option<Instant>,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    sidebar_attachment: Option<std::rc::Rc<crate::platform::tag_window::Attachment>>,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    sidebar_allowed: bool,
     focus_watcher: Option<FocusWatcher>,
     foreground_app_name: ForegroundAppName,
 
@@ -669,6 +673,10 @@ impl WindowManager {
             win_v_takeover_status: WinVTakeoverStatus::Disabled,
             #[cfg(target_os = "windows")]
             last_win_v_recheck: None,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            sidebar_attachment: None,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            sidebar_allowed: true,
             focus_watcher,
             foreground_app_name,
             saved_x: settings.saved_window_x,
@@ -3013,6 +3021,8 @@ impl WindowManager {
 
         let was_already_visible = self.visible;
         self.visible = true;
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.set_sidebar_allowed(self.sidebar_allowed);
 
         if was_already_visible {
             // --- Window is already open (e.g. user is in settings recording a ---
@@ -3535,6 +3545,10 @@ impl WindowManager {
 
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if let Some(attachment) = &self.sidebar_attachment {
+            attachment.set_enabled(false);
+        }
         self.cancel_active_hotkey_recording(cx);
         #[cfg(target_os = "windows")]
         {
@@ -4078,6 +4092,23 @@ impl WindowManager {
         // --- observing WindowManager events and clearing its own state. ---
     }
 
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub fn set_sidebar_attachment(
+        &mut self,
+        attachment: std::rc::Rc<crate::platform::tag_window::Attachment>,
+    ) {
+        attachment.set_enabled(self.visible && self.sidebar_allowed);
+        self.sidebar_attachment = Some(attachment);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub fn set_sidebar_allowed(&mut self, allowed: bool) {
+        self.sidebar_allowed = allowed;
+        if let Some(attachment) = &self.sidebar_attachment {
+            attachment.set_enabled(self.visible && allowed);
+        }
+    }
+
     // --- Public setters ---
 
     /// Store the raw window handle (HWND on Windows) for platform operations.
@@ -4182,6 +4213,17 @@ impl WindowManager {
         }
         let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
         Self::_style_ns_window(window);
+        window.setHasShadow(true);
+        if let Some(view) = window.contentView() {
+            view.setWantsLayer(true);
+            if let Some(layer) = view.layer() {
+                // The app paints a square panel (`SYSTEM_DRAWN_FRAME`), so the
+                // window's own layer does the rounding; keep its radius in sync
+                // with the panel design radius.
+                layer.setCornerRadius(crate::core::frontend::PANEL_RADIUS as f64);
+                layer.setMasksToBounds(true);
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -4923,6 +4965,10 @@ impl WindowManager {
             }
         }
 
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if let Some(attachment) = &self.sidebar_attachment {
+            attachment.refresh();
+        }
         cx.emit(WindowManagerEvent::PinnedChanged(pinned));
     }
 
