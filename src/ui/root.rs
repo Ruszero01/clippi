@@ -1,8 +1,8 @@
 //! Root view — the main window's top-level component.
 //!
-//! The panel is inset by a transparent margin that the app paints its own drop
-//! shadow into; tags use an attached window while sharing this view's Sidebar
-//! entity. Linux keeps the inline tag gutter and no shadow margin.
+//! The panel fills the window; the window manager owns the rounded corners, the
+//! stroke and the drop shadow. Tags use an attached window while sharing this
+//! view's Sidebar entity. Linux keeps the inline tag gutter.
 //! --- - Titlebar + stacked views (clipboard / settings / edit) ---
 
 use std::collections::HashMap;

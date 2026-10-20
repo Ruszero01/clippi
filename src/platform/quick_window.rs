@@ -1,16 +1,29 @@
-//! Native input policy for the Windows quick popup.
+//! Native input policy and frame for the Windows quick popup.
 //!
 //! The popup is a display surface, never a keyboard-focus owner. Search input
 //! comes exclusively from `keyboard_hook`; no input queues are joined and no
 //! focus is acquired, reasserted, or restored by this module.
+//!
+//! The popup also owns its native frame here: the client has to cover the whole
+//! window so the painted rows reach every edge, and DWM has to draw the rounded
+//! corners and the 1px stroke. GPUI's own `WM_NCCALCSIZE` handler insets the
+//! client by the frame thickness on the left, right and bottom (the top gets
+//! none), which showed up as three unpainted strips inside the popup.
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, MA_NOACTIVATE,
-    PA_NOACTIVATE, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WM_DISPLAYCHANGE, WM_MOUSEACTIVATE, WM_NCDESTROY,
-    WM_POINTERACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+use windows_sys::Win32::{
+    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+    Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    },
+    UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+    UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HTCLIENT,
+        HWND_TOPMOST, MA_NOACTIVATE, PA_NOACTIVATE, SWP_FRAMECHANGED, SWP_HIDEWINDOW,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        WM_DISPLAYCHANGE, WM_MOUSEACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST,
+        WM_POINTERACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_THICKFRAME,
+    },
 };
 
 const SUBCLASS_ID: usize = 0x434C_5050;
@@ -28,12 +41,36 @@ pub fn install(hwnd: isize) -> Result<(), &'static str> {
         if SetWindowSubclass(hwnd, Some(window_proc), SUBCLASS_ID, 0) == 0 {
             return Err("could not install quick window input policy");
         }
+        // Let DWM draw the popup frame: rounded corners plus the system 1px
+        // stroke. The popup paints square, so the corners are the system's and
+        // stay antialiased by DWM instead of the app's transparent surface.
+        let size = std::mem::size_of::<u32>() as u32;
+        let rounded = DWMWCP_ROUND as u32;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &rounded as *const _ as _,
+            size,
+        );
+        let border = DWMWA_COLOR_DEFAULT;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            &border as *const _ as _,
+            size,
+        );
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE)
             | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST) as i32;
         SetWindowLongW(hwnd, GWL_EXSTYLE, style);
         if GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE as i32 == 0 {
             return Err("could not apply WS_EX_NOACTIVATE");
         }
+        // DWM only gives a top-level window its drop shadow when the window has
+        // a sizing frame, so add one and keep the client covering it. The popup
+        // must not actually resize, so `WM_NCHITTEST` below keeps answering
+        // `HTCLIENT` and no native resize loop can start.
+        let window_style = GetWindowLongW(hwnd, GWL_STYLE);
+        SetWindowLongW(hwnd, GWL_STYLE, window_style | WS_THICKFRAME as i32);
         if SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
@@ -101,6 +138,13 @@ unsafe extern "system" fn window_proc(
     _data: usize,
 ) -> LRESULT {
     match message {
+        // The painted popup has to reach every edge: returning 0 makes the
+        // client cover the whole window instead of GPUI's left/right/bottom
+        // frame insets, and the DWM frame clips the square corners.
+        WM_NCCALCSIZE if wparam != 0 => 0,
+        // The sizing frame exists only so DWM draws the system shadow; the
+        // popup itself is fixed-size, so never answer with a resize border.
+        WM_NCHITTEST => HTCLIENT as LRESULT,
         // Handle both ordinary clicks/active-window tracking and touch/pen.
         // Preserve the input message so buttons and search still receive clicks.
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
