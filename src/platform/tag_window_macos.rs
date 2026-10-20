@@ -26,7 +26,7 @@ struct AttachmentState {
     pending: Cell<bool>,
 }
 
-unsafe extern "C" fn cannot_become_key(_: &AnyObject, _: Sel) -> Bool {
+unsafe extern "C" fn cannot_become_key(_: *mut AnyObject, _: Sel) -> Bool {
     Bool::NO
 }
 
@@ -40,11 +40,11 @@ fn nonactivating_class(panel: &NSWindow) -> &'static AnyClass {
         unsafe {
             builder.add_method(
                 sel!(canBecomeKeyWindow),
-                cannot_become_key as unsafe extern "C" fn(&AnyObject, Sel) -> Bool,
+                cannot_become_key as unsafe extern "C" fn(*mut AnyObject, Sel) -> Bool,
             );
             builder.add_method(
                 sel!(canBecomeMainWindow),
-                cannot_become_key as unsafe extern "C" fn(&AnyObject, Sel) -> Bool,
+                cannot_become_key as unsafe extern "C" fn(*mut AnyObject, Sel) -> Bool,
             );
         }
         builder.register()
