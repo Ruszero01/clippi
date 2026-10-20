@@ -53,7 +53,12 @@ unsafe extern "system" fn window_proc(
                         y: (position >> 16) as u16 as i16 as i32,
                     },
                 };
-                TranslateMessage(&msg);
+                if TranslateMessage(&msg) == 0 {
+                    log::warn!(
+                        "ime: TranslateMessage failed for VK_PROCESSKEY: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
             }
             0
         }

@@ -25,11 +25,17 @@ use crate::state::sync::SyncState;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 const KEYWORD_SEARCH_PAGE_SIZE: usize = 128;
 const KEYWORD_SEARCH_MIN_SCAN_LIMIT: usize = 1_000;
 const KEYWORD_SEARCH_MAX_SCAN_LIMIT: usize = 10_000;
 const KEYWORD_SEARCH_SCAN_MULTIPLIER: usize = 8;
+/// A keyword filter that blocks the UI thread longer than this is logged with
+/// its keyword and result count. The panel is unresponsive while it runs, so a
+/// future "the window froze while searching" report can be checked against the
+/// log instead of reproduced.
+const KEYWORD_SEARCH_SLOW_LOG: std::time::Duration = std::time::Duration::from_millis(100);
 const LIST_FULL_TEXT_LIMIT: usize = 8192;
 const LIST_RICH_HTML_LIMIT: usize = 4096;
 const LIST_RICH_AUX_LIMIT: usize = 2048;
@@ -963,7 +969,19 @@ impl AppState {
             // `visible_items()`; never touch the DB per keystroke here.
             return;
         }
+        let started = Instant::now();
         self.reload_items();
+        let elapsed = started.elapsed();
+        // This runs on the UI thread for every keystroke. A slow filter shows up
+        // as a frozen panel (issue #127), so leave a trail with enough context
+        // that a user's next report can be diagnosed from `clippi.log` alone.
+        if elapsed >= KEYWORD_SEARCH_SLOW_LOG {
+            log::warn!(
+                "search: keyword {:?} filtered in {elapsed:?} ({} items)",
+                keyword,
+                self.items.len()
+            );
+        }
     }
 
     /// Toggle a content-type filter and reload visible items.
