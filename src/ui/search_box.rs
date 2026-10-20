@@ -111,18 +111,31 @@ impl SearchBox {
                 if generation.load(Ordering::SeqCst) != my_generation {
                     return; // superseded by a newer keystroke
                 }
-                let Ok(items) = state_for_input.update(cx, |state, _cx| {
+                let items = match state_for_input.update(cx, |state, _cx| {
                     state.set_keyword(&keyword);
                     state.visible_items()
-                }) else {
-                    return;
+                }) {
+                    Ok(items) => items,
+                    // GPUI reports a nested `update` while its app borrow is
+                    // held as "already borrowed" and drops the work. Losing a
+                    // keyword update silently would leave the list showing the
+                    // previous query with nothing in the log to explain it.
+                    Err(error) => {
+                        log::warn!(
+                            "search: dropped keyword update for {:?}: {error:#}",
+                            keyword
+                        );
+                        return;
+                    }
                 };
-                let _ = list_for_input.update(cx, |list, cx| {
+                if let Err(error) = list_for_input.update(cx, |list, cx| {
                     list.set_items(items, cx);
                     // Typing a keyword is an explicit reorder intent: when
                     // favorites-first applies, follow the reorder to the top.
                     list.select_and_scroll_to_top_if_favorites_first(cx);
-                });
+                }) {
+                    log::warn!("search: could not apply results for {keyword:?}: {error:#}");
+                }
             })
             .detach();
         })];

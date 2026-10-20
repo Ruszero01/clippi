@@ -4,6 +4,24 @@
 //! Used by both the clipboard history search (`AppState`) and the transfer
 //! station name search, and by the highlight renderer (`ui::search_highlight`)
 //! so filtering and highlighting can never drift apart. Pure logic, no GPUI.
+//!
+//! # Cost model (issue #127)
+//!
+//! Pinyin matching makes a short Latin term (the 简拼 initials users type)
+//! match almost every Chinese character, so it must never pay for spans the
+//! caller does not need:
+//!
+//! * Boolean questions ("does this text match?") run the substring check and a
+//!   plain `str::contains` over the encoded pinyin forms — they never map
+//!   matches back to document offsets.
+//! * Offset questions (`first_match_range`, `match_ranges`,
+//!   `highlight_segments`) map encoded offsets back with a binary search over
+//!   the per-character table, and encode a text at most once per call.
+//!
+//! Both checks are skipped entirely when pinyin cannot possibly apply: pinyin
+//! forms are plain ASCII, so a non-ASCII term can never match them, and an
+//! ASCII-only text has no characters to encode. Without that guard a Chinese
+//! term paid for a full pinyin encode it could never use.
 
 use pinyin::ToPinyin;
 
@@ -24,7 +42,15 @@ pub fn split_keyword_terms(keyword: &str) -> Vec<String> {
 /// Whether `text` matches a single keyword term: case-insensitive substring,
 /// full pinyin or pinyin initials.
 pub fn text_matches_term(text: &str, term: &str) -> bool {
-    find_next_match(text, &[term], 0).is_some()
+    let term = term.trim().to_lowercase();
+    if term.is_empty() {
+        return false;
+    }
+    if find_next_direct_match(text, std::slice::from_ref(&term), 0).is_some() {
+        return true;
+    }
+    pinyin_index_if_reachable(text, std::slice::from_ref(&term))
+        .is_some_and(|index| index.matches(&term))
 }
 
 /// Whether `text` matches every keyword term (AND semantics).
@@ -33,12 +59,15 @@ pub fn text_matches_all_terms(text: &str, terms: &[String]) -> bool {
     if terms.is_empty() {
         return true;
     }
-    let index = PinyinIndex::encode(text);
-    terms.iter().all(|term| {
-        let term = term.trim().to_lowercase();
-        !term.is_empty()
-            && (find_next_direct_match(text, std::slice::from_ref(&term), 0).is_some()
-                || index.matches(&term))
+    let lower_terms = lowercase_terms(terms);
+    if lower_terms.len() != terms.len() {
+        // An all-whitespace term normalizes to nothing and matches nothing.
+        return false;
+    }
+    let index = pinyin_index_if_reachable(text, &lower_terms);
+    lower_terms.iter().all(|term| {
+        find_next_direct_match(text, std::slice::from_ref(term), 0).is_some()
+            || index.as_ref().is_some_and(|index| index.matches(term))
     })
 }
 
@@ -50,12 +79,32 @@ pub struct HighlightSegment {
 
 /// Whether any keyword term matches anywhere in `text`.
 pub fn contains_match(text: &str, terms: &[String]) -> bool {
-    find_next_match(text, terms, 0).is_some()
+    let lower_terms = lowercase_terms(terms);
+    if lower_terms.is_empty() {
+        return false;
+    }
+    if find_next_direct_match(text, &lower_terms, 0).is_some() {
+        return true;
+    }
+    pinyin_index_if_reachable(text, &lower_terms)
+        .is_some_and(|index| lower_terms.iter().any(|term| index.matches(term)))
 }
 
 /// Byte range of the first keyword match in `text`, if any.
 pub fn first_match_range(text: &str, terms: &[String]) -> Option<(usize, usize)> {
-    find_next_match(text, terms, 0)
+    let lower_terms = lowercase_terms(terms);
+    if lower_terms.is_empty() || text.is_empty() {
+        return None;
+    }
+    let mut best = find_next_direct_match(text, &lower_terms, 0);
+    if let Some(index) = pinyin_index_if_reachable(text, &lower_terms) {
+        for term in &lower_terms {
+            if let Some(span) = index.first_span(term) {
+                best = choose_better_match(best, span);
+            }
+        }
+    }
+    best
 }
 
 /// All non-overlapping match ranges (byte offsets) in `text`, covering every
@@ -66,12 +115,16 @@ pub fn match_ranges(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
     if text.is_empty() || terms.is_empty() {
         return Vec::new();
     }
-    let index = PinyinIndex::encode(text);
     let lower_terms = lowercase_terms(terms);
+    if lower_terms.is_empty() {
+        return Vec::new();
+    }
+
+    let mut cursor = MatchCursor::new(text, &lower_terms);
     let mut ranges = Vec::new();
     let mut pos = 0usize;
     while pos < text.len() {
-        let Some((start, end)) = find_next_match_with(text, &lower_terms, &index, pos) else {
+        let Some((start, end)) = cursor.next_match(pos) else {
             break;
         };
         ranges.push((start, end));
@@ -93,13 +146,19 @@ pub fn highlight_segments(text: &str, terms: &[String]) -> Vec<HighlightSegment>
             highlighted: false,
         }];
     }
-
-    let index = PinyinIndex::encode(text);
     let lower_terms = lowercase_terms(terms);
+    if lower_terms.is_empty() {
+        return vec![HighlightSegment {
+            text: text.to_string(),
+            highlighted: false,
+        }];
+    }
+
+    let mut cursor = MatchCursor::new(text, &lower_terms);
     let mut out = Vec::new();
     let mut pos = 0usize;
     while pos < text.len() {
-        let Some((start, end)) = find_next_match_with(text, &lower_terms, &index, pos) else {
+        let Some((start, end)) = cursor.next_match(pos) else {
             out.push(HighlightSegment {
                 text: text[pos..].to_string(),
                 highlighted: false,
@@ -131,27 +190,85 @@ fn lowercase_terms<T: AsRef<str>>(terms: &[T]) -> Vec<String> {
         .collect()
 }
 
-fn find_next_match<T: AsRef<str>>(text: &str, terms: &[T], start: usize) -> Option<(usize, usize)> {
-    let lower_terms = lowercase_terms(terms);
-    find_next_match_with(text, &lower_terms, &PinyinIndex::encode(text), start)
+/// Whether pinyin matching is worth attempting at all.
+///
+/// Pinyin forms are lowercased ASCII, so a term carrying a non-ASCII character
+/// can only ever match the text itself, and an ASCII-only text has nothing to
+/// encode. Skipping the encode in both cases is pure win — the Chinese half of
+/// issue #127 used to encode every candidate text for a term that could never
+/// hit it.
+fn pinyin_reachable(text: &str, lower_terms: &[String]) -> bool {
+    !text.is_ascii() && lower_terms.iter().any(|term| term.is_ascii())
 }
 
-/// Core match with pre-computed lowercase terms and a pre-encoded pinyin
-/// index, so a single text is encoded once across repeated lookups.
-fn find_next_match_with(
-    text: &str,
-    lower_terms: &[String],
-    index: &PinyinIndex,
-    start: usize,
-) -> Option<(usize, usize)> {
-    let mut best = find_next_direct_match(text, lower_terms, start);
-    for (span_start, span_end) in pinyin_match_spans(index, lower_terms) {
-        if span_start < start {
-            continue;
-        }
-        best = choose_better_match(best, (span_start, span_end));
+fn pinyin_index_if_reachable(text: &str, lower_terms: &[String]) -> Option<PinyinIndex> {
+    if pinyin_reachable(text, lower_terms) {
+        Some(PinyinIndex::encode(text))
+    } else {
+        None
     }
-    best
+}
+
+/// Walks the matches of one text in document order, computing the pinyin spans
+/// once for the whole walk instead of once per match.
+struct MatchCursor<'a> {
+    text: &'a str,
+    lower_terms: &'a [String],
+    /// Every pinyin span for every term, sorted by start offset.
+    pinyin_spans: Vec<(usize, usize)>,
+    /// Next unconsumed pinyin span. Spans are only ever compared against
+    /// offsets that grow, so consumption is monotonic.
+    pinyin_cursor: usize,
+    /// Set once a direct search found nothing: no later position can hold a
+    /// direct match either, so the scan is never repeated. Without this, a
+    /// text whose only hits are pinyin (a Chinese entry searched by 简拼) was
+    /// re-scanned to its end for every single hit.
+    direct_exhausted: bool,
+}
+
+impl<'a> MatchCursor<'a> {
+    fn new(text: &'a str, lower_terms: &'a [String]) -> Self {
+        let mut pinyin_spans = match pinyin_index_if_reachable(text, lower_terms) {
+            Some(index) => pinyin_match_spans(&index, lower_terms),
+            None => Vec::new(),
+        };
+        pinyin_spans.sort_unstable();
+        Self {
+            text,
+            lower_terms,
+            pinyin_spans,
+            pinyin_cursor: 0,
+            direct_exhausted: false,
+        }
+    }
+
+    /// The first match at or after `from`. Same rule as the single-shot
+    /// searches: earliest start, and the longest span when starts tie.
+    fn next_match(&mut self, from: usize) -> Option<(usize, usize)> {
+        let mut best = if self.direct_exhausted {
+            None
+        } else {
+            let direct = find_next_direct_match(self.text, self.lower_terms, from);
+            if direct.is_none() {
+                self.direct_exhausted = true;
+            }
+            direct
+        };
+        // A span starting before `from` can never be the next match again.
+        self.pinyin_cursor +=
+            self.pinyin_spans[self.pinyin_cursor..].partition_point(|(start, _)| *start < from);
+        // A text can hold several spans at the same start (full pinyin and
+        // initials, or overlapping terms); the longest one wins, so consume
+        // every tie instead of only the first.
+        while let Some(&(start, end)) = self.pinyin_spans.get(self.pinyin_cursor) {
+            if best.is_some_and(|(best_start, _)| start > best_start) {
+                break;
+            }
+            best = choose_better_match(best, (start, end));
+            self.pinyin_cursor += 1;
+        }
+        best
+    }
 }
 
 fn find_next_direct_match(
@@ -272,9 +389,22 @@ impl PinyinIndex {
         }
     }
 
-    /// Any pinyin span (full or initials) matching `term`.
+    /// Whether any pinyin span (full or initials) contains `term`. Boolean
+    /// only — no offset mapping, which is what makes the hot filtering path
+    /// cheap.
     fn matches(&self, term: &str) -> bool {
         self.full.contains(term) || self.initials.contains(term)
+    }
+
+    /// The earliest pinyin span matching `term`, mapped back to the original
+    /// text. Only the first occurrence of each form is located, so preview
+    /// cropping never enumerates matches it will not use.
+    fn first_span(&self, term: &str) -> Option<(usize, usize)> {
+        let mut best = first_encoded_span(&self.full, &self.full_chars, term);
+        if let Some(span) = first_encoded_span(&self.initials, &self.initial_chars, term) {
+            best = choose_better_match(best, span);
+        }
+        best
     }
 
     /// All pinyin spans (full + initials) matching `term`, mapped back to
@@ -298,6 +428,21 @@ fn pinyin_match_spans(index: &PinyinIndex, lower_terms: &[String]) -> Vec<(usize
     spans
 }
 
+/// Map the first occurrence of `term` in `encoded` back to the original text.
+fn first_encoded_span(encoded: &str, chars: &[PinyinChar], term: &str) -> Option<(usize, usize)> {
+    if encoded.is_empty() || term.is_empty() {
+        return None;
+    }
+    let match_start = encoded.find(term)?;
+    let match_end = match_start + term.len();
+    span_for_encoded_range(chars, match_start, match_end)
+}
+
+/// Every occurrence of `term` in `encoded`, mapped back to the original text.
+///
+/// `chars` is sorted by both offsets, so mapping a match back is a binary
+/// search, not a scan: a short term (the 简拼 case) matches thousands of times
+/// in a large clipboard entry, and a scan per match made that quadratic.
 fn encoded_match_spans(encoded: &str, chars: &[PinyinChar], term: &str) -> Vec<(usize, usize)> {
     if encoded.is_empty() || term.is_empty() {
         return Vec::new();
@@ -309,11 +454,8 @@ fn encoded_match_spans(encoded: &str, chars: &[PinyinChar], term: &str) -> Vec<(
         let match_start = search_from + rel_start;
         let match_end = match_start + term.len();
 
-        if let (Some(first), Some(last)) = (
-            chars.iter().find(|entry| entry.py_end > match_start),
-            chars.iter().rev().find(|entry| entry.py_start < match_end),
-        ) {
-            spans.push((first.byte_start, last.byte_end));
+        if let Some(span) = span_for_encoded_range(chars, match_start, match_end) {
+            spans.push(span);
         }
 
         search_from = match_start + 1;
@@ -321,8 +463,19 @@ fn encoded_match_spans(encoded: &str, chars: &[PinyinChar], term: &str) -> Vec<(
             break;
         }
     }
-
     spans
+}
+
+/// Byte range in the original text covered by `[match_start, match_end)` in the
+/// encoded pinyin string.
+fn span_for_encoded_range(
+    chars: &[PinyinChar],
+    match_start: usize,
+    match_end: usize,
+) -> Option<(usize, usize)> {
+    let first = chars.partition_point(|entry| entry.py_end <= match_start);
+    let last = chars.partition_point(|entry| entry.py_start < match_end);
+    (first < last).then(|| (chars[first].byte_start, chars[last - 1].byte_end))
 }
 
 #[cfg(test)]
@@ -475,5 +628,44 @@ mod tests {
             .collect();
 
         assert_eq!(highlighted, vec!["工作计划"]);
+    }
+
+    #[test]
+    fn highlight_segments_walk_consecutive_pinyin_matches() {
+        // Back-to-back initials hits must not be merged or dropped.
+        let terms = vec!["ab".to_string()];
+        let segments = highlight_segments("阿波 测试", &terms);
+        let highlighted: Vec<String> = segments
+            .iter()
+            .filter(|segment| segment.highlighted)
+            .map(|segment| segment.text.clone())
+            .collect();
+
+        assert_eq!(highlighted, vec!["阿波"]);
+    }
+
+    /// Regression scenario for issue #127: a single Latin letter matches the
+    /// pinyin initials of nearly every Chinese character, so this input makes
+    /// the matcher walk a long span list. Pinyin offset mapping used to be a
+    /// scan per match — quadratic in the text length — which froze the panel on
+    /// clipboard entries of a few thousand characters.
+    #[test]
+    fn chinese_text_walks_every_initial_match() {
+        let filler = "工作计划报告总结数据分析结果团队成员沟通协调会议记录项目进度安排\
+                      测试用例覆盖范围版本发布计划问题反馈跟踪文档整理归档工作交接说明";
+        let text: String = filler.repeat(40); // ~4 000 chars of Chinese
+        let terms = vec!["a".to_string()];
+
+        assert!(super::contains_match(&text, &terms));
+
+        let ranges = match_ranges(&text, &terms);
+        assert!(!ranges.is_empty());
+        // The focused-preview probe and the highlight walk must agree on the
+        // first hit.
+        assert_eq!(super::first_match_range(&text, &terms), Some(ranges[0]));
+        // Ranges never overlap and always advance, so the walk terminates even
+        // when one letter hits thousands of positions.
+        assert!(ranges.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+        assert!(ranges.iter().all(|(start, end)| start < end));
     }
 }

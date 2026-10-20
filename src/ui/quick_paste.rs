@@ -499,7 +499,8 @@ impl QuickPasteView {
     ///
     /// 输入即说明用户把输入目标放在了搜索框上：光标随之出现并闪烁。这里既不借
     /// 键盘焦点，也不代用户进入搜索态——数字键的归属由点击、Tab 或设置里的自动
-    /// 聚焦决定，输入法更是只有双击搜索框才接手，用户没表示之前什么都不动。
+    /// 聚焦决定；系统输入法始终留在主窗口，快速窗口不接管候选框（0.5.2 起），
+    /// 用户没表示之前什么都不动。
     pub fn push_query_char(&mut self, character: char, cx: &mut Context<Self>) {
         let mut query = self.query.clone();
         query.push(character);
