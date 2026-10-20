@@ -53,6 +53,31 @@ fn drag_position(pointer_y: f32, grab_y: f32, count: usize) -> (f32, usize) {
     row_drag_position(pointer_y, grab_y, count, ROW_HEIGHT)
 }
 
+#[derive(Default)]
+struct TooltipHover {
+    tag_id: Option<i64>,
+}
+
+impl TooltipHover {
+    fn update(&mut self, tag_id: i64, hovered: bool) -> bool {
+        if hovered {
+            if self.tag_id == Some(tag_id) {
+                return false;
+            }
+            self.tag_id = Some(tag_id);
+            true
+        } else if self.tag_id == Some(tag_id) {
+            self.clear()
+        } else {
+            false
+        }
+    }
+
+    fn clear(&mut self) -> bool {
+        self.tag_id.take().is_some()
+    }
+}
+
 /// Sidebar entity for displaying and managing tags.
 pub enum SidebarEvent {
     Tooltip(Option<(String, f32)>),
@@ -61,6 +86,7 @@ pub enum SidebarEvent {
 impl EventEmitter<SidebarEvent> for Sidebar {}
 
 pub struct Sidebar {
+    tooltip_hover: TooltipHover,
     tooltip_task: Option<Task<()>>,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     attachment: Option<Rc<crate::platform::tag_window::Attachment>>,
@@ -83,6 +109,7 @@ impl Sidebar {
     ) -> Self {
         let dark_mode = theme.bg == rgb(0x191a1b);
         Self {
+            tooltip_hover: TooltipHover::default(),
             tooltip_task: None,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             attachment: None,
@@ -126,20 +153,41 @@ impl Sidebar {
         cx.notify();
     }
 
-    fn hover_tooltip(&mut self, hovered: bool, label: String, y: f32, cx: &mut Context<Self>) {
+    fn hover_tooltip(
+        &mut self,
+        tag_id: i64,
+        hovered: bool,
+        label: &str,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        if self.drag.is_some() || !self.tooltip_hover.update(tag_id, hovered) {
+            return;
+        }
         self.tooltip_task = None;
         cx.emit(SidebarEvent::Tooltip(None));
-        if hovered && self.drag.is_none() {
+        if hovered {
+            let label = label.to_owned();
             self.tooltip_task = Some(cx.spawn(async move |this, cx| {
                 Timer::after(Duration::from_millis(500)).await;
-                let _ = this.update(cx, |_, cx| cx.emit(SidebarEvent::Tooltip(Some((label, y)))));
+                let _ = this.update(cx, |sidebar, cx| {
+                    if sidebar.tooltip_hover.tag_id == Some(tag_id) {
+                        cx.emit(SidebarEvent::Tooltip(Some((label, y))));
+                    }
+                });
             }));
         }
     }
 
-    pub fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
+    fn clear_tooltip(&mut self, cx: &mut Context<Self>) {
         self.tooltip_task = None;
-        cx.emit(SidebarEvent::Tooltip(None));
+        if self.tooltip_hover.clear() {
+            cx.emit(SidebarEvent::Tooltip(None));
+        }
+    }
+
+    pub fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        self.clear_tooltip(cx);
         let drag = self.drag.take();
         let cancelled = drag.is_some();
         if let Some(drag) = drag.filter(|drag| drag.moved) {
@@ -289,6 +337,13 @@ impl Render for Sidebar {
 
         let visible_ids: Vec<_> = display_tags.iter().map(|tag| tag.id).collect();
         if self
+            .tooltip_hover
+            .tag_id
+            .is_some_and(|tag_id| !visible_ids.contains(&tag_id))
+        {
+            self.clear_tooltip(cx);
+        }
+        if self
             .drag
             .as_ref()
             .is_some_and(|drag| drag.ids != visible_ids)
@@ -320,6 +375,7 @@ impl Render for Sidebar {
         let rows_height = visible_ids.len() as f32 * ROW_HEIGHT;
         let sidebar_bounds = self.bounds.clone();
         let sidebar_for_move = cx.entity();
+        let sidebar_for_exit = cx.entity();
         let sidebar_for_up = cx.entity();
         let sidebar_for_press = cx.entity();
         let dark = self.dark_mode;
@@ -359,6 +415,15 @@ impl Render for Sidebar {
                 canvas(
                     move |bounds, _, _| sidebar_bounds.set(bounds),
                     move |_, _, window, _| {
+                        // Crossing into the main window need not deliver another
+                        // MouseMoveEvent to this window, so row hover cannot clear it.
+                        window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                sidebar_for_exit.update(cx, |sidebar, cx| {
+                                    sidebar.clear_tooltip(cx);
+                                });
+                            }
+                        });
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                             if phase == DispatchPhase::Capture
                                 && sidebar_for_move.read(cx).drag.is_some()
@@ -499,6 +564,7 @@ impl Render for Sidebar {
                 };
 
                 let tooltip_label = label.clone();
+                let tooltip_move_label = label.clone();
                 let row_visual = std::rc::Rc::new(move || {
                     div()
                         .w(px(56.))
@@ -547,8 +613,20 @@ impl Render for Sidebar {
                     .id(("sidebar-tag", tag_id as u64))
                     .on_hover(cx.listener(move |sidebar, hovered, _, cx| {
                         sidebar.hover_tooltip(
+                            tag_id,
                             *hovered,
-                            tooltip_label.clone(),
+                            &tooltip_label,
+                            SIDEBAR_TOP_OFFSET + f32::from(row_y),
+                            cx,
+                        );
+                    }))
+                    // GPUI may retain the row's hover flag across a window exit.
+                    // A move on re-entry must also be able to start a fresh delay.
+                    .on_mouse_move(cx.listener(move |sidebar, _, _, cx| {
+                        sidebar.hover_tooltip(
+                            tag_id,
+                            true,
+                            &tooltip_move_label,
                             SIDEBAR_TOP_OFFSET + f32::from(row_y),
                             cx,
                         );
@@ -572,7 +650,7 @@ impl Render for Sidebar {
                     row.on_mouse_down(MouseButton::Left, move |event, _, cx| {
                         cx.stop_propagation();
                         sidebar.update(cx, |sidebar, cx| {
-                            sidebar.hover_tooltip(false, String::new(), 0., cx);
+                            sidebar.clear_tooltip(cx);
                             sidebar.settling = None;
                             sidebar.drag = Some(SidebarDrag {
                                 id: tag_id,
@@ -593,7 +671,10 @@ impl Render for Sidebar {
                             state.toggle_pinned_tag(tag_id);
                             cx.notify();
                         });
-                        sidebar_for_right.update(cx, |_, cx| cx.notify());
+                        sidebar_for_right.update(cx, |sidebar, cx| {
+                            sidebar.clear_tooltip(cx);
+                            cx.notify();
+                        });
                     })
                 } else {
                     row
@@ -672,9 +753,32 @@ fn ordered_sidebar_tags(
 
 #[cfg(test)]
 mod tests {
-    use super::{drag_position, ordered_sidebar_tags};
+    use super::{drag_position, ordered_sidebar_tags, TooltipHover};
     use crate::core::types::TagInfo;
     use std::{collections::HashMap, time::Instant};
+
+    #[test]
+    fn tooltip_window_exit_allows_reentering_the_same_tag() {
+        let mut hover = TooltipHover::default();
+        assert!(hover.update(1, true));
+        assert!(!hover.update(1, true));
+        assert!(hover.clear());
+        assert_eq!(hover.tag_id, None);
+        assert!(hover.update(1, true));
+        assert!(hover.update(1, false));
+        assert_eq!(hover.tag_id, None);
+    }
+
+    #[test]
+    fn tooltip_ignores_a_previous_tags_late_leave_event() {
+        let mut hover = TooltipHover::default();
+        assert!(hover.update(1, true));
+        assert!(hover.update(2, true));
+        assert!(!hover.update(1, false));
+        assert_eq!(hover.tag_id, Some(2));
+        assert!(hover.update(2, false));
+        assert!(!hover.update(2, false));
+    }
 
     #[test]
     fn sidebar_drag_clamps_to_rows_and_respects_the_grab_offset() {
