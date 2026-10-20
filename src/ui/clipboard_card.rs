@@ -3163,7 +3163,8 @@ impl RenderOnce for ClipboardCard {
                 .can_merge_selection(can_merge_selection);
             // Keep the reveal anchored to the card edge. Near the viewport top,
             // reveal downward from the bottom edge instead of covering filters.
-            // The shadow lives outside the clip so it stays compact but visible.
+            // Only the individual buttons cast shadows; a shadow on this reveal
+            // wrapper would merge them into a continuous strip.
             let exposed_height = CARD_TOOLBAR_HEIGHT * reveal;
             card.child(deferred(
                 div()
@@ -3175,12 +3176,6 @@ impl RenderOnce for ClipboardCard {
                     .when(!toolbar_below, |el| el.rounded_t(sc(4.)))
                     .when(toolbar_below, |el| el.rounded_b(sc(4.)))
                     .bg(theme.bg)
-                    .shadow(vec![BoxShadow {
-                        color: rgba(0x00000028).into(),
-                        offset: point(sc(0.), sc(if toolbar_below { 3. } else { -3. })),
-                        blur_radius: sc(3.),
-                        spread_radius: sc(-1.),
-                    }])
                     .child(
                         div()
                             .h_full()
