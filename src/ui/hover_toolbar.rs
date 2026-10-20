@@ -188,6 +188,14 @@ impl RenderOnce for HoverToolbar {
         } else {
             rgb(0xe5e8ef)
         };
+        // Every tab is its own floating chip, so the shadow has to live on the
+        // pill rather than only on the toolbar strip: otherwise the 2px gaps
+        // between tabs show a flat strip while the outer edge has falloff.
+        let pill_shadow = if is_dark {
+            rgba(0x00000040)
+        } else {
+            rgba(0x0000001a)
+        };
 
         let is_single = props.selected_count <= 1;
         let is_batch = props.selected_count > 1 && props.is_selected;
@@ -481,6 +489,12 @@ impl RenderOnce for HoverToolbar {
                     .bg(if is_hovered { hover_bg } else { pill_bg })
                     .border(sc(1.))
                     .border_color(if is_hovered { accent } else { pill_border })
+                    .shadow(vec![BoxShadow {
+                        color: pill_shadow.into(),
+                        offset: point(sc(0.), sc(1.)),
+                        blur_radius: sc(2.),
+                        spread_radius: sc(0.),
+                    }])
                     .cursor(CursorStyle::PointingHand)
                     .on_hover(move |value, _window, cx| {
                         hovered.update(cx, |hovered, cx| {
