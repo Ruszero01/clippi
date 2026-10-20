@@ -24,14 +24,22 @@ pub const PANEL_OFFSET_X: f32 = if cfg!(any(target_os = "windows", target_os = "
 
 /// Transparent inset around the content panel.
 ///
-/// The window's drop shadow is painted by the app inside the window, so the panel
-/// keeps a margin for it. The tag strip anchors to the panel's left edge instead
-/// of the window's, and the native resize border stays on the outer rectangle.
-pub const PANEL_MARGIN: f32 = if cfg!(target_os = "windows") {
-    8.0
-} else {
-    0.0
-};
+/// Windows and macOS let the app fill the whole window and hand the rounded
+/// corners and the drop shadow to the window manager, so the panel sits flush
+/// with the window and keeps no inset. Linux paints its own frame, but its tag
+/// strip is an inline gutter instead of a native window, so it needs none
+/// either. The constant stays so platform code keeps one source of truth for
+/// where the panel starts.
+pub const PANEL_MARGIN: f32 = 0.0;
+
+/// True when the window manager draws the window's rounded corners, 1px stroke
+/// and drop shadow instead of the app.
+///
+/// On Windows the DWM frame is the only antialiased rounded edge that is not
+/// composited through the transparent-window path, so the panel stays square
+/// and skips its own stroke there. macOS rows the panel inside a native rounded
+/// `NSWindow` but keeps the app stroke, so it does not count as system framed.
+pub const SYSTEM_DRAWN_FRAME: bool = cfg!(target_os = "windows");
 
 /// Corner radius of the content panel and the overlays clipped to it.
 pub const PANEL_RADIUS: f32 = 12.0;

@@ -1,8 +1,8 @@
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     },
     UI::{
         HiDpi::GetDpiForWindow,
@@ -17,32 +17,31 @@ pub fn install(main: isize) {
     let hwnd = main as HWND;
     // SAFETY: `hwnd` is the live main window handle for the process lifetime.
     unsafe {
-        // DWM's own frame would add a second border, its own corner radius and a
-        // shadow the app cannot lighten; the panel draws all three instead.
+        // Let DWM own the frame: rounded corners, the 1px window stroke and the
+        // drop shadow. These are the only antialiased rounded edges in the
+        // window that are not composited through the app's transparent-surface
+        // path, so the corners stay crisp; the panel itself is painted square
+        // and gets clipped by the system frame.
         let size = std::mem::size_of::<u32>() as u32;
-        let policy = DWMNCRP_DISABLED as u32;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_NCRENDERING_POLICY as u32,
-            &policy as *const _ as _,
-            size,
-        );
-        let unrounded = DWMWCP_DONOTROUND as u32;
+        let rounded = DWMWCP_ROUND as u32;
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-            &unrounded as *const _ as _,
+            &rounded as *const _ as _,
             size,
         );
-        let no_border = DWMWA_COLOR_NONE;
+        // `DWMWA_COLOR_DEFAULT` keeps the system stroke color, which follows the
+        // light/dark appearance instead of a hard-coded color.
+        let border = DWMWA_COLOR_DEFAULT;
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR as u32,
-            &no_border as *const _ as _,
+            &border as *const _ as _,
             size,
         );
-        // The client area must reach the window edge so the painted shadow has
-        // room; the frame procedure also keeps native resizing alive there.
+        // The client area still reaches the window edge so the app owns its
+        // layout; the frame procedure keeps native resizing alive at the edges
+        // that the client now covers.
         SetWindowSubclass(hwnd, Some(frame_proc), SUBCLASS, 0);
         SetWindowPos(
             hwnd,

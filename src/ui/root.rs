@@ -45,7 +45,7 @@ use super::tag_picker::TagPickerPanel;
 use super::theme::ClippiTheme;
 use super::titlebar::{Titlebar, TitlebarEvent};
 use super::type_filter_config::TypeFilterConfigPanel;
-use crate::core::frontend::{PANEL_MARGIN, PANEL_OFFSET_X, PANEL_RADIUS};
+use crate::core::frontend::{PANEL_MARGIN, PANEL_OFFSET_X, PANEL_RADIUS, SYSTEM_DRAWN_FRAME};
 
 /// Mode shortcuts may always close their own panel, but cannot jump between
 /// emoji and transfer modes. Hint visibility is a separate clipboard-only rule.
@@ -1019,17 +1019,16 @@ impl Render for RootView {
         // scale factor keeps the rendered border at device-pixel thickness.
         let scale = window.scale_factor();
         let border_width = px(1.5 / scale.max(1.0));
-        // The panel is inset by the shadow margin so it can paint its own drop
-        // shadow; the root's transparent border makes every absolute child
-        // panel-relative. A maximized window fills the work area, so it drops both.
+        // The panel fills the window. Windows hands the rounded corners, the
+        // window stroke and the drop shadow to DWM (`SYSTEM_DRAWN_FRAME`), so
+        // there the panel stays square and paints neither stroke nor shadow:
+        // DWM clips it to the rounded window and draws both. Everywhere else the
+        // app owns the stroke and the platform owns the shadow.
         let maximized = window.is_maximized();
         let panel_margin = if maximized { 0. } else { PANEL_MARGIN };
         let panel_radius = if maximized { 0. } else { PANEL_RADIUS };
-        let panel_shadow = if theme.bg == rgb(0x191a1b) {
-            rgba(0x00000040)
-        } else {
-            rgba(0x00000014)
-        };
+        let panel_corner = if SYSTEM_DRAWN_FRAME { 0. } else { panel_radius };
+        let panel_stroke = !SYSTEM_DRAWN_FRAME;
 
         // Panel dimensions: the window minus the transparent shadow margin.
         let viewport = window.viewport_size();
@@ -1668,18 +1667,12 @@ impl Render for RootView {
                     .right(px(0.))
                     .top(px(0.))
                     .bottom(px(0.))
-                    .rounded(px(panel_radius))
+                    .rounded(px(panel_corner))
                     .bg(theme.bg)
-                    .border(border_width)
-                    .border_color(panel_border)
-                    // A light, soft shadow in the same family as the tag chips.
-                    .when(panel_margin > 0., |panel| {
-                        panel.shadow(vec![BoxShadow {
-                            color: panel_shadow.into(),
-                            offset: point(px(0.), px(1.)),
-                            blur_radius: px(6.),
-                            spread_radius: px(0.),
-                        }])
+                    // DWM draws the window stroke on Windows (`SYSTEM_DRAWN_FRAME`);
+                    // the app draws it and its own shadow everywhere else.
+                    .when(panel_stroke, |panel| {
+                        panel.border(border_width).border_color(panel_border)
                     })
                     .flex()
                     .flex_col()

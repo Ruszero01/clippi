@@ -326,17 +326,19 @@ impl Render for Sidebar {
         let text_1 = if dark { rgb(0xeaebec) } else { rgb(0x1a1c2e) };
         let row_bg_default = if dark { rgb(0x2a2b2e) } else { rgb(0xf5f6fa) };
         let row_bg_hover = if dark { rgb(0x353638) } else { rgb(0xeceef4) };
-        // Each tag is its own chip: a hairline stroke plus a very light shadow so
-        // it reads as a separate surface against the desktop behind the strip.
+        // Each tag is its own chip: a hairline stroke plus a soft shadow so it
+        // reads as a separate surface against the desktop behind the strip. The
+        // shadow is deep enough to ground the chip on a light desktop without
+        // reading as a halo.
         let row_border = if dark {
             rgba(0xffffff22)
         } else {
             rgba(0x0000001c)
         };
         let row_shadow = if dark {
-            rgba(0x00000040)
+            rgba(0x0000004d)
         } else {
-            rgba(0x00000012)
+            rgba(0x00000026)
         };
         let state_for_click = self.state.clone();
         let sidebar_for_notify = cx.entity().clone();
@@ -507,7 +509,7 @@ impl Render for Sidebar {
                         .shadow(vec![BoxShadow {
                             color: row_shadow.into(),
                             offset: point(px(0.), px(1.)),
-                            blur_radius: px(3.),
+                            blur_radius: px(4.),
                             spread_radius: px(0.),
                         }])
                         .flex()
