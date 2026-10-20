@@ -5,7 +5,7 @@ use windows_sys::Win32::{
         DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     },
     UI::{
-        HiDpi::GetDpiForWindow,
+        HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::*,
     },
@@ -69,10 +69,18 @@ fn is_resize_hit_test(hit_test: isize) -> bool {
     )
 }
 
-/// Width of the resize band measured inwards from the window edge, in logical
-/// pixels. It covers the transparent shadow ring plus the panel's stroke, so the
-/// window still resizes where a native frame would.
-const RESIZE_BAND: f32 = 10.;
+/// Width of the resize band measured inwards from the window edge, in physical
+/// pixels.
+///
+/// This is exactly the system resize handle (`SM_CXSIZEFRAME`), so grabbing the
+/// window edge behaves like it does on a default window instead of eating into
+/// the painted content. `SM_CXPADDEDBORDER` is deliberately excluded: that extra
+/// space is not part of the handle.
+fn resize_band(dpi: u32) -> i32 {
+    // SAFETY: pure system-metric query, no handles involved.
+    let band = unsafe { GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) };
+    band.max(1)
+}
 
 /// Resize edge for a point given in window-relative physical pixels.
 fn resize_hit_for(width: i32, height: i32, x: i32, y: i32, band: i32) -> Option<u32> {
@@ -113,8 +121,7 @@ fn resize_hit_test(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
         if GetWindowRect(hwnd, &mut rect) == 0 {
             return None;
         }
-        let dpi = GetDpiForWindow(hwnd).max(96) as f32;
-        let band = (RESIZE_BAND * dpi / 96.).round() as i32;
+        let band = resize_band(GetDpiForWindow(hwnd));
         resize_hit_for(
             rect.right - rect.left,
             rect.bottom - rect.top,
@@ -145,9 +152,14 @@ unsafe extern "system" fn frame_proc(
         // Because the client covers the whole window, the default hit test no
         // longer finds a non-client resize border. Keep GPUI's answer (custom
         // titlebar drag areas, window buttons) and fall back to our own band.
+        //
+        // The band has to win over `HTCAPTION` as well: GPUI answers
+        // `HTCAPTION` while the pointer is over a `WindowControlArea::Drag`,
+        // which is the whole titlebar. Without this the top edge could only
+        // move the window and never resized.
         if message == WM_NCHITTEST {
             let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
-            if result == HTCLIENT as LRESULT {
+            if result == HTCLIENT as LRESULT || result == HTCAPTION as LRESULT {
                 if let Some(edge) = resize_hit_test(hwnd, lparam) {
                     return edge;
                 }
