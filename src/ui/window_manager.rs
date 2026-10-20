@@ -4217,7 +4217,10 @@ impl WindowManager {
         if let Some(view) = window.contentView() {
             view.setWantsLayer(true);
             if let Some(layer) = view.layer() {
-                layer.setCornerRadius(12.);
+                // The app paints a square panel (`SYSTEM_DRAWN_FRAME`), so the
+                // window's own layer does the rounding; keep its radius in sync
+                // with the panel design radius.
+                layer.setCornerRadius(crate::core::frontend::PANEL_RADIUS as f64);
                 layer.setMasksToBounds(true);
             }
         }
