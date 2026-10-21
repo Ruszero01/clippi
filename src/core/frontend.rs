@@ -37,11 +37,9 @@ pub const PANEL_MARGIN: f32 = 0.0;
 ///
 /// On Windows the DWM frame is the only antialiased rounded edge that is not
 /// composited through the transparent-window path, so the panel stays square and
-/// skips its own stroke there. macOS lets the `NSWindow` content layer clip the
-/// same square panel to a rounded corner with Core Animation's own antialiasing
-/// and draws the native window shadow, so it is system framed as well. Linux
-/// keeps the app-drawn frame because there is no cross-desktop frame API to lean
-/// on.
+/// skips its own stroke there. macOS uses the default `NSWindow` rounded frame
+/// and shadow without a custom corner mask on the content layer. Linux keeps
+/// the app-drawn frame because there is no cross-desktop frame API to lean on.
 pub const SYSTEM_DRAWN_FRAME: bool = cfg!(any(target_os = "windows", target_os = "macos"));
 
 /// Corner radius of the content panel and the overlays clipped to it.

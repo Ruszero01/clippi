@@ -439,6 +439,10 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub fn show_source_app_filter(&self) -> bool {
+        self.show_source_app && self.source_app_filter_enabled
+    }
+
     pub fn load() -> Self {
         let path = Self::config_path();
         let mut settings: Self = if path.exists() {

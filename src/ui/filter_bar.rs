@@ -162,6 +162,99 @@ pub(crate) fn filter_chip(
         .cursor(CursorStyle::PointingHand)
 }
 
+/// Always reserve at least two slots: all sources and an application choice.
+pub(crate) fn source_app_chip_width(width: f32, visible_types: usize, gap: f32) -> f32 {
+    let columns = visible_types.max(2) as f32;
+    let available = (width
+        - SEARCH_BAR_HORIZONTAL_PADDING
+        - TAG_FILTER_BUTTON_WIDTH
+        - TOOLBAR_DIVIDER_WIDTH
+        - TOOLBAR_GROUP_GAP * 2.)
+        .max(0.);
+    (available - gap * (columns - 1.)).max(0.) / columns
+}
+
+/// Source choices and interactions shared by the main and nonactivating quick window.
+pub(crate) fn source_app_filter_bar(
+    snapshot: &AppState,
+    filters: &crate::core::filters::ClipboardFilters,
+    theme: &ClippiTheme,
+    scroll: &ScrollHandle,
+    owner: EntityId,
+    layout: super::components::scroll_filter_bar::ScrollFilterLayout<'_>,
+    on_select: impl Fn(Option<&str>, &mut App) + 'static,
+) -> Div {
+    let chip_width = layout.chip_width;
+    let on_select = std::rc::Rc::new(on_select);
+    let mut choices = vec![None];
+    choices.extend(snapshot.source_app_names.iter().cloned().map(Some));
+    let mut choices_ui = Vec::new();
+    for (index, name) in choices.into_iter().enumerate() {
+        let active = name
+            .as_deref()
+            .map_or(!filters.has_source_app_filter(), |name| {
+                filters.is_source_app_active(name)
+            });
+        let label = name
+            .clone()
+            .unwrap_or_else(|| I18nKey::SourceAppFilterAll.text().to_string());
+        let content = if let Some(path) = name
+            .as_ref()
+            .and_then(|name| snapshot.source_app_icons.get(name))
+        {
+            img(path.clone()).size(px(16.)).into_any_element()
+        } else if name.is_none() {
+            svg()
+                .path("picker-icons/layout-grid.svg")
+                .size(fs(12.))
+                .text_color(if active { theme.accent } else { theme.text_2 })
+                .into_any_element()
+        } else {
+            // Apps without an icon keep the same fixed target size.
+            div()
+                .font_family("iconfont")
+                .text_size(fs(14.))
+                .child("\u{e616}")
+                .into_any_element()
+        };
+        let tooltip = label.clone();
+        let on_select = on_select.clone();
+        let scroll = scroll.clone();
+        choices_ui.push(
+            super::components::scroll_filter_bar::scroll_filter_chip(
+                ("source-app", index),
+                active,
+                theme,
+                chip_width,
+            )
+            .overflow_hidden()
+            .text_size(fs(11.))
+            .text_color(if active { theme.accent } else { theme.text_2 })
+            .tooltip(move |window, cx| {
+                let label = tooltip.clone();
+                Tooltip::element(move |_, _| div().text_size(fs(10.)).child(label.clone()))
+                    .build(window, cx)
+            })
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                cx.stop_propagation();
+                if name.is_none() {
+                    scroll.set_offset(Point::default());
+                }
+                on_select(name.as_deref(), cx);
+            })
+            .child(content),
+        );
+    }
+    super::components::scroll_filter_bar::scroll_filter_bar(
+        "source-apps",
+        theme,
+        scroll,
+        owner,
+        choices_ui,
+        layout,
+    )
+}
+
 pub struct FilterBar {
     state: Entity<AppState>,
     list_view: Entity<ClipboardListView>,
@@ -229,89 +322,27 @@ impl FilterBar {
         cx.notify();
     }
 
-    fn source_bar(
-        &self,
-        chip_width: f32,
-        chip_gap: f32,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = &self.theme;
-        let snapshot = self.state.read(cx);
-        let mut choices = vec![None];
-        choices.extend(snapshot.source_app_names.iter().cloned().map(Some));
-        let mut choices_ui = Vec::new();
-        for (index, name) in choices.into_iter().enumerate() {
-            let active = name
-                .as_deref()
-                .map_or(!snapshot.filters.has_source_app_filter(), |name| {
-                    snapshot.filters.is_source_app_active(name)
-                });
-            let label = name
-                .clone()
-                .unwrap_or_else(|| I18nKey::SourceAppFilterAll.text().to_string());
-            let content = if let Some(path) = name
-                .as_ref()
-                .and_then(|name| snapshot.source_app_icons.get(name))
-            {
-                img(path.clone()).size(px(16.)).into_any_element()
-            } else if name.is_none() {
-                svg()
-                    .path("picker-icons/layout-grid.svg")
-                    .size(fs(12.))
-                    .text_color(if active { theme.accent } else { theme.text_2 })
-                    .into_any_element()
-            } else {
-                // Apps without an icon keep the same fixed target size.
-                div()
-                    .font_family("iconfont")
-                    .text_size(fs(14.))
-                    .child("\u{e616}")
-                    .into_any_element()
-            };
-            let tooltip = label.clone();
-            let state = self.state.clone();
-            let list = self.list_view.clone();
-            let scroll = self.source_scroll.clone();
-            choices_ui.push(
-                super::components::scroll_filter_bar::scroll_filter_chip(
-                    ("source-app", index),
-                    active,
-                    theme,
-                    chip_width,
-                )
-                .overflow_hidden()
-                .text_size(fs(11.))
-                .text_color(if active { theme.accent } else { theme.text_2 })
-                .tooltip(move |window, cx| {
-                    let label = tooltip.clone();
-                    Tooltip::element(move |_, _| div().text_size(fs(10.)).child(label.clone()))
-                        .build(window, cx)
-                })
-                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                    cx.stop_propagation();
-                    if name.is_none() {
-                        scroll.set_offset(Point::default());
-                    }
-                    let items = state.update(cx, |state, cx| {
-                        state.set_source_app_filter(name.as_deref());
-                        cx.notify();
-                        state.visible_items()
-                    });
-                    list.update(cx, |list, cx| list.set_items(items, cx));
-                })
-                .child(content),
-            );
-        }
-        super::components::scroll_filter_bar::scroll_filter_bar(
-            "source-apps",
-            theme,
+    fn source_bar(&self, chip_width: f32, chip_gap: f32, cx: &mut Context<Self>) -> Div {
+        let state = self.state.clone();
+        let list = self.list_view.clone();
+        source_app_filter_bar(
+            self.state.read(cx),
+            &self.state.read(cx).filters,
+            &self.theme,
             &self.source_scroll,
             cx.entity().entity_id(),
-            choices_ui,
             super::components::scroll_filter_bar::ScrollFilterLayout {
                 chip_width,
                 chip_gap,
                 scroll_left: &self.source_scroll_left,
+            },
+            move |name, cx| {
+                let items = state.update(cx, |state, cx| {
+                    state.set_source_app_filter(name);
+                    cx.notify();
+                    state.visible_items()
+                });
+                list.update(cx, |list, cx| list.set_items(items, cx));
             },
         )
     }
@@ -340,8 +371,7 @@ impl Render for FilterBar {
         let alt_pressed = self.alt_shortcuts_available
             && state_snapshot.alt_pressed
             && state_snapshot.settings.alt_shortcuts_enabled;
-        let source_enabled = state_snapshot.settings.show_source_app
-            && state_snapshot.settings.source_app_filter_enabled;
+        let source_enabled = state_snapshot.settings.show_source_app_filter();
         let has_tag_filter = !state_snapshot.filters.tag_ids.is_empty();
         let viewport = window.viewport_size();
         let measured_width = self.measured_width.get();
@@ -378,9 +408,11 @@ impl Render for FilterBar {
         } else {
             TYPE_FILTER_TEXT_GAP
         };
-        let source_columns = visible_count.max(2.);
-        let chip_width =
-            (type_toolbar_width - chip_gap * (source_columns - 1.)).max(0.) / source_columns;
+        let chip_width = source_app_chip_width(
+            toolbar_width + SEARCH_BAR_HORIZONTAL_PADDING,
+            visible_entries.len(),
+            chip_gap,
+        );
 
         let inactive_button_bg = if theme.bg == rgb(0x191a1b) {
             rgba(0xffffff0a)
@@ -592,6 +624,20 @@ impl Render for FilterBar {
 mod tests {
     use super::visible_filter_types;
     use crate::core::settings::TypeFilterEntry;
+
+    #[test]
+    fn source_bar_leaves_room_for_an_app_when_types_are_hidden() {
+        for width in [324., 430.] {
+            for types in [0, 1] {
+                let slot = super::source_app_chip_width(width, types, 4.);
+                assert!(slot >= 24.);
+                assert!(
+                    slot < width / 2.,
+                    "the pinned all-sources chip must not fill the row"
+                );
+            }
+        }
+    }
 
     #[test]
     fn hidden_and_unknown_types_do_not_consume_shortcut_positions() {

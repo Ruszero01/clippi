@@ -768,9 +768,8 @@ impl SettingsPanel {
         let transition = window
             .use_keyed_transition(key, cx, TAB_ANIM_DURATION, move |_, _| initial)
             .with_easing(Self::ease_out);
-        transition.update(cx, |value, cx| {
+        transition.update(cx, |value, _cx| {
             *value = target;
-            cx.notify();
         });
         let value = *transition.evaluate(window, cx);
         value

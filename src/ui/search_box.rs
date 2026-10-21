@@ -227,9 +227,8 @@ impl Render for SearchBox {
                 |_, _| 0.0_f32,
             )
             .with_easing(ease_out_damped);
-        expand.update(cx, |value, cx| {
+        expand.update(cx, |value, _cx| {
             *value = if self.new_item_hovered { 1.0 } else { 0.0 };
-            cx.notify();
         });
         let expand = *expand.evaluate(window, cx);
         let new_item_w = NEW_ITEM_BUTTON_SIZE + NEW_ITEM_LABEL_SPAN * expand;

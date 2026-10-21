@@ -3147,9 +3147,9 @@ impl RenderOnce for ClipboardCard {
                 |_, _| 0.0_f32,
             )
             .with_easing(|t| 1.0 - (1.0 - t).powi(3));
-        reveal.update(cx, |value, cx| {
+        // evaluate() schedules animation frames; notifying here also redraws idle cards.
+        reveal.update(cx, |value, _cx| {
             *value = if toolbar_visible { 1.0 } else { 0.0 };
-            cx.notify();
         });
         let reveal = *reveal.evaluate(window, cx);
         // The wrapper allows tabs to extend above the clipped card without

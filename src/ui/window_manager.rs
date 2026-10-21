@@ -40,7 +40,7 @@ use crate::state::app::AppState;
 #[cfg(target_os = "macos")]
 use crate::ui::quick_paste::QUICK_WINDOW_CORNER_RADIUS;
 use crate::ui::quick_paste::{
-    calc_quick_window_height, QuickPasteEvent, QuickPasteView, QUICK_WINDOW_WIDTH,
+    quick_window_height, QuickPasteEvent, QuickPasteView, QUICK_WINDOW_WIDTH,
 };
 
 /// Shared foreground app name for cross-service coordination.
@@ -2361,18 +2361,9 @@ impl WindowManager {
     // calls any show/focus entry (`show_and_focus` / `show_quick_window`,
     // AC1) and none writes the visibility state bits (C2).
 
-    /// Current dynamic quick-window height from the visible bars, with the
-    /// `QUICK_WINDOW_WIDTH` × `calc_quick_window_height` semantics unchanged
-    /// (04-spec C4).
+    /// Use the same visible bars for popup creation, positioning, and rendering.
     fn current_quick_height(&self, cx: &mut Context<Self>) -> f32 {
-        let state = self.state.read(cx);
-        let pinned_tag_ids = &state.settings.pinned_tag_ids;
-        let tags = &state.tags;
-        let has_tag = pinned_tag_ids
-            .iter()
-            .any(|&id| tags.iter().any(|t| t.id == id));
-        let has_type = !state.settings.type_filter_config.is_empty();
-        calc_quick_window_height(has_tag, has_type)
+        quick_window_height(self.state.read(cx))
     }
 
     /// C4 terminal positioning fallback for the quick window: when the caret /
@@ -3636,8 +3627,11 @@ impl WindowManager {
         #[cfg(target_os = "windows")]
         crate::platform::focus::sample_paste_target();
 
-        self.state
-            .update(cx, |state, _cx| state.reload_quick_items());
+        self.state.update(cx, |state, cx| {
+            state.reset_quick_source_filter_for_show();
+            state.reload_quick_items();
+            cx.notify();
+        });
         view.update(cx, |view, cx| view.reset_for_show(cx));
         self.quick_visible = true;
         self.quick_mouse_down = Self::mouse_buttons_down();
@@ -4185,11 +4179,10 @@ impl WindowManager {
         }
     }
 
-    /// Shared macOS window styling — transparent floating panel with no chrome buttons.
+    /// Hide native macOS buttons while keeping the app's custom titlebar.
     #[cfg(target_os = "macos")]
-    fn _style_ns_window(window: &objc2_app_kit::NSWindow) {
-        use objc2_app_kit::{NSColor, NSWindowButton};
-        window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+    fn hide_ns_window_buttons(window: &objc2_app_kit::NSWindow) {
+        use objc2_app_kit::NSWindowButton;
         for btn_id in [
             NSWindowButton::CloseButton,
             NSWindowButton::MiniaturizeButton,
@@ -4199,10 +4192,6 @@ impl WindowManager {
                 btn.setHidden(true);
             }
         }
-        window.setHasShadow(false);
-        let clear = NSColor::clearColor();
-        window.setBackgroundColor(Some(&clear));
-        window.setOpaque(false);
     }
 
     #[cfg(target_os = "macos")]
@@ -4212,18 +4201,17 @@ impl WindowManager {
             return;
         }
         let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
-        Self::_style_ns_window(window);
+        crate::platform::frame_pacing::configure(window);
+        Self::hide_ns_window_buttons(window);
+        window.setLevel(if self.pinned {
+            objc2_app_kit::NSFloatingWindowLevel
+        } else {
+            objc2_app_kit::NSNormalWindowLevel
+        });
+        // Match native opacity to the solid main panel without changing its chrome.
+        window.setOpaque(true);
+        window.setBackgroundColor(Some(&objc2_app_kit::NSColor::blackColor()));
         window.setHasShadow(true);
-        if let Some(view) = window.contentView() {
-            view.setWantsLayer(true);
-            if let Some(layer) = view.layer() {
-                // The app paints a square panel (`SYSTEM_DRAWN_FRAME`), so the
-                // window's own layer does the rounding; keep its radius in sync
-                // with the panel design radius.
-                layer.setCornerRadius(crate::core::frontend::PANEL_RADIUS as f64);
-                layer.setMasksToBounds(true);
-            }
-        }
     }
 
     #[cfg(target_os = "macos")]
@@ -4235,7 +4223,11 @@ impl WindowManager {
             return;
         }
         let window = unsafe { &*(ns_window as *const objc2_app_kit::NSWindow) };
-        Self::_style_ns_window(window);
+        crate::platform::frame_pacing::configure(window);
+        Self::hide_ns_window_buttons(window);
+        window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+        window.setOpaque(false);
+        window.setBackgroundColor(Some(&objc2_app_kit::NSColor::clearColor()));
         window.setHasShadow(true);
 
         // Let AppKit/Core Animation own the actual window clipping. A

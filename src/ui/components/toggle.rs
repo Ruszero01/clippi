@@ -80,9 +80,8 @@ pub fn render_toggle(
             move |_, _| initial_x,
         )
         .with_easing(ease_in_out);
-    knob_transition.update(cx, |value, cx| {
+    knob_transition.update(cx, |value, _cx| {
         *value = target_x;
-        cx.notify();
     });
     let knob_x = *knob_transition.evaluate(window, cx);
 
@@ -94,9 +93,8 @@ pub fn render_toggle(
             move |_, _| initial_bg,
         )
         .with_easing(ease_in_out);
-    bg_transition.update(cx, |value, cx| {
+    bg_transition.update(cx, |value, _cx| {
         *value = target_bg;
-        cx.notify();
     });
     let track_bg = *bg_transition.evaluate(window, cx);
 

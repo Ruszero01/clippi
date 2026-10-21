@@ -8,7 +8,10 @@ use crate::core::filters::ClipboardFilters;
 use crate::core::html_text::FRAGMENT_MARKER;
 use crate::core::types::{ClipboardItem, ContentType, FileData, TagInfo};
 use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Statistics returned by [`Database::merge_from`].
@@ -31,6 +34,18 @@ pub struct TitlebarStats {
 
 pub struct Database {
     conn: Connection,
+    source_app_cache: RefCell<Option<SourceAppCache>>,
+}
+
+struct SourceAppCache {
+    revision: (u64, i64),
+    apps: Arc<SourceApps>,
+}
+
+#[derive(Default)]
+struct SourceApps {
+    names: Vec<String>,
+    icons: HashMap<String, std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,7 +191,10 @@ impl Database {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // --- WAL mode improves concurrency and reduces memory pressure. ---
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA cache_size = -2000;")?;
-        let db = Self { conn };
+        let db = Self {
+            conn,
+            source_app_cache: RefCell::new(None),
+        };
         db.init_schema()?;
         db.prune_oversized_source_icons()?;
         Ok(db)
@@ -272,6 +290,9 @@ impl Database {
         )?;
 
         crate::core::migration::run_db_migrations(&self.conn)?;
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_source_app ON clipboard_items(source_app_name);",
+        )?;
         Ok(())
     }
 
@@ -350,38 +371,59 @@ impl Database {
         }
     }
 
-    /// Load items with unified filter support.
-    /// Uses ClipboardFilters to build WHERE clause with AND logic across all filter dimensions.
-    /// `order_by` must be one of the allowed column names — see `validate_order_by`.
-    /// Read all source names independently of active filters and list paging.
-    pub fn source_app_icon_paths(
-        &self,
-    ) -> SqlResult<std::collections::HashMap<String, std::path::PathBuf>> {
+    fn source_apps(&self) -> SqlResult<Arc<SourceApps>> {
+        // total_changes covers this connection; data_version covers background
+        // connections (sync, cleanup, imports). Reads and keyword changes reuse it.
+        let revision = (
+            self.conn.total_changes(),
+            self.conn
+                .pragma_query_value(None, "data_version", |row| row.get(0))?,
+        );
+        if let Some(cache) = self.source_app_cache.borrow().as_ref() {
+            if cache.revision == revision {
+                return Ok(cache.apps.clone());
+            }
+        }
         let mut statement = self.conn.prepare(
-            "SELECT source_app_name, MAX(CASE WHEN length(source_app_icon) <= ?1 THEN source_app_icon ELSE '' END)
-             FROM clipboard_items WHERE trim(source_app_name) <> '' GROUP BY source_app_name",
+            "SELECT app.source_app_name, COALESCE((
+                 SELECT icon.source_app_icon FROM clipboard_items AS icon
+                 WHERE icon.source_app_name = app.source_app_name
+                   AND length(icon.source_app_icon) BETWEEN 1 AND ?1
+                 ORDER BY icon.id DESC LIMIT 1
+             ), '')
+             FROM clipboard_items AS app WHERE trim(app.source_app_name) <> ''
+             GROUP BY app.source_app_name
+             ORDER BY COUNT(*) DESC, app.source_app_name COLLATE NOCASE, app.source_app_name",
         )?;
         let rows = statement.query_map([SOURCE_APP_ICON_INLINE_LIMIT as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
-        let mut icons = std::collections::HashMap::new();
+        let mut apps = SourceApps::default();
         for row in rows {
             let (name, icon) = row?;
             if let Some(path) = crate::core::paths::cache_app_icon(&name, &icon) {
-                icons.insert(name, path);
+                apps.icons.insert(name.clone(), path);
             }
+            apps.names.push(name);
         }
-        Ok(icons)
+        let apps = Arc::new(apps);
+        *self.source_app_cache.borrow_mut() = Some(SourceAppCache {
+            revision,
+            apps: apps.clone(),
+        });
+        Ok(apps)
+    }
+
+    /// Source choices are independent of active filters and list paging.
+    pub fn source_app_icon_paths(&self) -> SqlResult<HashMap<String, std::path::PathBuf>> {
+        Ok(self.source_apps()?.icons.clone())
     }
 
     pub fn source_app_names(&self) -> SqlResult<Vec<String>> {
-        let mut statement = self.conn.prepare(
-            "SELECT source_app_name FROM clipboard_items WHERE trim(source_app_name) <> '' GROUP BY source_app_name ORDER BY COUNT(*) DESC, source_app_name COLLATE NOCASE, source_app_name",
-        )?;
-        let rows = statement.query_map([], |row| row.get(0))?;
-        rows.collect()
+        Ok(self.source_apps()?.names.clone())
     }
 
+    /// Load items with unified AND filters and a validated sort column.
     pub fn load_filtered(
         &self,
         filters: &ClipboardFilters,
@@ -2616,6 +2658,53 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> SqlResult<ClipboardItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_choices_reuse_cached_metadata_until_database_changes() {
+        let db = Database::open(":memory:").unwrap();
+        insert_item(&db, 1, "one", "2026-01-01T00:00:00Z");
+        insert_item(&db, 2, "two", "2026-01-01T00:00:00Z");
+        db.conn
+            .execute("UPDATE clipboard_items SET source_app_name = 'Editor'", [])
+            .unwrap();
+        let first = db.source_apps().unwrap();
+        assert_eq!(first.names, ["Editor"]);
+        db.load_filtered(&ClipboardFilters::default(), 200, "updated_at")
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &db.source_apps().unwrap()));
+        db.conn
+            .execute(
+                "UPDATE clipboard_items SET source_app_name = 'Browser' WHERE content_hash = 1",
+                [],
+            )
+            .unwrap();
+        let changed = db.source_apps().unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.names, ["Browser", "Editor"]);
+        db.conn
+            .execute("DELETE FROM clipboard_items WHERE content_hash = 1", [])
+            .unwrap();
+        assert_eq!(db.source_app_names().unwrap(), ["Editor"]);
+    }
+
+    #[test]
+    fn source_choices_refresh_after_another_connection_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sources.db");
+        let db = Database::open(path.to_str().unwrap()).unwrap();
+        insert_item(&db, 1, "one", "2026-01-01T00:00:00Z");
+        db.conn
+            .execute("UPDATE clipboard_items SET source_app_name = 'Editor'", [])
+            .unwrap();
+        let first = db.source_apps().unwrap();
+        let other = Connection::open(&path).unwrap();
+        other
+            .execute("UPDATE clipboard_items SET source_app_name = 'Browser'", [])
+            .unwrap();
+        let changed = db.source_apps().unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.names, ["Browser"]);
+    }
 
     static TEMP_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 

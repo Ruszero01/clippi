@@ -4,6 +4,8 @@ pub mod accent;
 pub mod blacklist;
 pub mod clipboard;
 pub mod focus;
+#[cfg(target_os = "macos")]
+pub mod frame_pacing;
 pub mod hotkey;
 #[cfg(target_os = "windows")]
 pub mod ime;

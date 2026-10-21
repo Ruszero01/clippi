@@ -481,9 +481,8 @@ impl Render for Sidebar {
                         initial_row_x
                     })
                     .with_easing(ease_in_out);
-                row_x_transition.update(cx, |value, cx| {
+                row_x_transition.update(cx, |value, _cx| {
                     *value = target_row_x;
-                    cx.notify();
                 });
                 let row_x = *row_x_transition.evaluate(window, cx);
 
@@ -495,9 +494,8 @@ impl Render for Sidebar {
                         move |_, _| initial_opacity,
                     )
                     .with_easing(ease_in_out);
-                opacity_transition.update(cx, |value, cx| {
+                opacity_transition.update(cx, |value, _cx| {
                     *value = target_opacity;
-                    cx.notify();
                 });
                 let opacity = *opacity_transition.evaluate(window, cx);
 
@@ -509,9 +507,8 @@ impl Render for Sidebar {
                         move |_, _| initial_text_opacity,
                     )
                     .with_easing(ease_in_out);
-                text_opacity_transition.update(cx, |value, cx| {
+                text_opacity_transition.update(cx, |value, _cx| {
                     *value = target_text_opacity;
-                    cx.notify();
                 });
                 let text_opacity = *text_opacity_transition.evaluate(window, cx);
 
@@ -523,9 +520,8 @@ impl Render for Sidebar {
                         move |_, _| initial_bar_height,
                     )
                     .with_easing(ease_in_out);
-                bar_height_transition.update(cx, |value, cx| {
+                bar_height_transition.update(cx, |value, _cx| {
                     *value = target_bar_height;
-                    cx.notify();
                 });
                 let bar_height = *bar_height_transition.evaluate(window, cx);
 

@@ -21,7 +21,7 @@ mod services;
 // Root view lives in ui::root — use that instead of inline ClippiApp
 use core::settings::AppSettings;
 use state::app::AppState;
-use ui::quick_paste::{calc_quick_window_height, QuickPasteView, QUICK_WINDOW_WIDTH};
+use ui::quick_paste::{quick_window_height, QuickPasteView, QUICK_WINDOW_WIDTH};
 use ui::root::RootView;
 use ui::window_manager::WindowManager;
 
@@ -334,7 +334,11 @@ fn main() {
         // --- hide takes effect.  The window is shown later via ---
         // --- WindowManager::show_and_focus() (hotkey / tray). ---
         let window_options = WindowOptions {
-            window_background: WindowBackgroundAppearance::Transparent,
+            window_background: if cfg!(target_os = "macos") {
+                WindowBackgroundAppearance::Opaque
+            } else {
+                WindowBackgroundAppearance::Transparent
+            },
             titlebar: Some(TitlebarOptions {
                 title: Some("Clippi".into()),
                 appears_transparent: true,
@@ -514,16 +518,7 @@ fn main() {
                     log::error!("Failed to create tag sidebar window: {error}");
                 }
 
-                let quick_h = {
-                    let s = state.read(cx);
-                    let has_tag = s
-                        .settings
-                        .pinned_tag_ids
-                        .iter()
-                        .any(|&id| s.tags.iter().any(|t| t.id == id));
-                    let has_type = !s.settings.type_filter_config.is_empty();
-                    calc_quick_window_height(has_tag, has_type)
-                };
+                let quick_h = quick_window_height(state.read(cx));
 
                 let quick_options = WindowOptions {
                     window_background: WindowBackgroundAppearance::Transparent,
@@ -552,7 +547,7 @@ fn main() {
                     #[cfg(not(target_os = "windows"))]
                     window_min_size: Some(size(
                         px(QUICK_WINDOW_WIDTH),
-                        px(calc_quick_window_height(false, false)),
+                        px(ui::quick_paste::calc_quick_window_height(false, false, false)),
                     )),
                     show: false,
                     focus: false,

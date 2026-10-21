@@ -20,9 +20,8 @@ pub fn shortcut_progress(
     let transition = window
         .use_keyed_transition(id, cx, Duration::from_millis(TRANSITION_MS), |_, _| 0.0_f32)
         .with_easing(|t| 1.0 - (1.0 - t).powi(3));
-    transition.update(cx, |value, cx| {
+    transition.update(cx, |value, _cx| {
         *value = if visible { 1.0 } else { 0.0 };
-        cx.notify();
     });
     let progress = *transition.evaluate(window, cx);
     progress.clamp(0.0, 1.0)

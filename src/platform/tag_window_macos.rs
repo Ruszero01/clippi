@@ -138,6 +138,7 @@ impl Attachment {
                 Retained::retain(sidebar as *mut NSWindow).ok_or("missing tag window")?,
             )
         };
+        crate::platform::frame_pacing::configure(&sidebar);
         sidebar.setOpaque(false);
         sidebar.setBackgroundColor(Some(&NSColor::clearColor()));
         sidebar.setHasShadow(false);

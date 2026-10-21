@@ -247,9 +247,8 @@ impl ConfirmDialog {
                 DIALOG_ANIM_DURATION,
                 move |_, _| 0.0,
             );
-            t_op.update(cx, |v, cx| {
+            t_op.update(cx, |v, _cx| {
                 *v = 1.0;
-                cx.notify();
             });
             let op = *t_op.evaluate(window, cx);
             let t_sc = window.use_keyed_transition(
@@ -258,9 +257,8 @@ impl ConfirmDialog {
                 DIALOG_ANIM_DURATION,
                 move |_, _| 0.96,
             );
-            t_sc.update(cx, |v, cx| {
+            t_sc.update(cx, |v, _cx| {
                 *v = 1.0;
-                cx.notify();
             });
             let sc = *t_sc.evaluate(window, cx);
             (op, sc)

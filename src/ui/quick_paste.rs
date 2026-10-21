@@ -18,7 +18,7 @@ use crate::core::types::{
 use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
 use crate::ui::clipboard_card::image_preview_path;
-use crate::ui::filter_bar::filter_type_display;
+use crate::ui::filter_bar::{filter_type_display, source_app_chip_width, source_app_filter_bar};
 use crate::ui::theme::ClippiTheme;
 use gpui_component::tooltip::Tooltip;
 use gpui_transitions::WindowUseTransition;
@@ -30,6 +30,7 @@ pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
 
 const TYPE_BAR_HEIGHT: f32 = 30.0;
 const TAG_ROW_HEIGHT: f32 = 26.0;
+const SOURCE_ROW_HEIGHT: f32 = 26.0;
 const TAG_INDICATOR_ANIM_DURATION: Duration = Duration::from_millis(180);
 /// Width of the favorites filter button (icon is ~14px, 3px padding each side).
 const FAV_BUTTON_SIZE: f32 = 20.0;
@@ -240,17 +241,41 @@ fn compute_alt_modes(
 
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
-pub fn calc_quick_window_height(has_tag_row: bool, has_type_bar: bool) -> f32 {
+fn quick_bars_height(has_tag_row: bool, has_type_bar: bool, has_source_bar: bool) -> f32 {
+    TYPE_BAR_HEIGHT
+        + if has_type_bar { 1.0 } else { 0.0 }
+        + if has_source_bar {
+            SOURCE_ROW_HEIGHT + 1.0
+        } else {
+            0.0
+        }
+        + if has_tag_row {
+            TAG_ROW_HEIGHT + 1.0
+        } else {
+            0.0
+        }
+}
+
+pub fn calc_quick_window_height(
+    has_tag_row: bool,
+    has_type_bar: bool,
+    has_source_bar: bool,
+) -> f32 {
     let mut h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET * 2.0;
-    // Top bar always exists (contains at minimum the favorites filter button).
-    h += TYPE_BAR_HEIGHT;
-    if has_type_bar {
-        h += 1.0; // divider below type bar area
-    }
-    if has_tag_row {
-        h += TAG_ROW_HEIGHT + 1.0; // bar + divider
-    }
+    h += quick_bars_height(has_tag_row, has_type_bar, has_source_bar);
     h + HINT_BAR_HEIGHT // always: bottom hint bar
+}
+
+pub fn quick_window_height(state: &AppState) -> f32 {
+    let has_tag_row = state.tags.iter().any(|tag| {
+        state.settings.pinned_tag_ids.contains(&tag.id)
+            || state.quick_filters().tag_ids.contains(&tag.id)
+    });
+    calc_quick_window_height(
+        has_tag_row,
+        !state.settings.type_filter_config.is_empty(),
+        state.settings.show_source_app_filter(),
+    )
 }
 
 /// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, preview_img_path, favicon_path, file_icon_path, path_color, styled_first_line)
@@ -317,6 +342,8 @@ pub struct QuickPasteView {
     pub(crate) available_alt_modes: Vec<String>,
     /// Accumulated scroll delta for page-flip threshold (prevents touchpad over-scroll).
     scroll_accumulator: f32,
+    source_scroll: ScrollHandle,
+    source_scroll_left: std::cell::Cell<bool>,
 }
 
 impl EventEmitter<QuickPasteEvent> for QuickPasteView {}
@@ -346,6 +373,8 @@ impl QuickPasteView {
             current_alt_mode: image_alt_mode,
             available_alt_modes: Vec::new(),
             scroll_accumulator: 0.0,
+            source_scroll: ScrollHandle::new(),
+            source_scroll_left: std::cell::Cell::new(false),
         }
     }
 
@@ -489,7 +518,6 @@ impl QuickPasteView {
         }
         self.query = query;
         crate::platform::keyboard_hook::set_query_empty(self.query.is_empty());
-        self.hovered_index = None;
         // 回到列表顶部并按新搜索词立即重建快照：一次轮询可能整批处理
         // 「连续输入字符 + 回车」，随后的粘贴必须已经看到过滤后的列表。
         self.reset_scroll(cx);
@@ -525,6 +553,10 @@ impl QuickPasteView {
 
     /// 每次呼出快速窗口时复位：清空搜索框、收起光标、回到列表顶部。
     pub fn reset_for_show(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).settings.reset_source_filter_on_show {
+            self.source_scroll.set_offset(Point::default());
+            self.source_scroll_left.set(false);
+        }
         self.query.clear();
         crate::platform::keyboard_hook::set_query_empty(true);
         self.blur_query(cx);
@@ -653,6 +685,7 @@ impl QuickPasteView {
 
     /// Reset scroll to top (called on filter change / window open).
     pub fn reset_scroll(&mut self, cx: &mut Context<Self>) {
+        self.hovered_index = None;
         self.selected_index = 0;
         self.first_visible = 0;
         self.alt_mode_item_id = None;
@@ -881,6 +914,7 @@ impl QuickPasteView {
         &self,
         has_tag_row: bool,
         has_type_bar: bool,
+        has_source_bar: bool,
         available_indices: &[(usize, i64)],
     ) -> Option<Pixels> {
         if available_indices.is_empty() {
@@ -888,13 +922,7 @@ impl QuickPasteView {
         }
 
         let visible_idx = self.selected_index.saturating_sub(self.first_visible);
-        let bars_offset = TYPE_BAR_HEIGHT // always present (fav button row)
-            + if has_type_bar { 1.0 } else { 0.0 } // divider only with type bar
-            + if has_tag_row {
-                TAG_ROW_HEIGHT + 1.0
-            } else {
-                0.0
-            };
+        let bars_offset = quick_bars_height(has_tag_row, has_type_bar, has_source_bar);
 
         let row_top = visible_idx as f32 * ROW_HEIGHT + LIST_INSET + bars_offset;
         let items = self.tooltip_items();
@@ -1033,6 +1061,7 @@ impl Render for QuickPasteView {
 
         let has_type_bar = !type_config.is_empty();
         let has_tag_row = !pinned_tags.is_empty();
+        let has_source_bar = self.state.read(cx).settings.show_source_app_filter();
         let fav_active = filters.is_favorites_active();
 
         // ── Tag compact mode detection ──
@@ -1070,7 +1099,34 @@ impl Render for QuickPasteView {
             rgba(0x00000008)
         };
 
-        let window_h = calc_quick_window_height(has_tag_row, has_type_bar);
+        let window_h = calc_quick_window_height(has_tag_row, has_type_bar, has_source_bar);
+        let source_bar = has_source_bar.then(|| {
+            let state = self.state.clone();
+            let view = view_entity.clone();
+            source_app_filter_bar(
+                self.state.read(cx),
+                &filters,
+                &theme,
+                &self.source_scroll,
+                view_entity.entity_id(),
+                super::components::scroll_filter_bar::ScrollFilterLayout {
+                    chip_width: source_app_chip_width(
+                        QUICK_WINDOW_WIDTH,
+                        visible_type_entries.len(),
+                        filter_gap,
+                    ),
+                    chip_gap: filter_gap,
+                    scroll_left: &self.source_scroll_left,
+                },
+                move |name, cx| {
+                    state.update(cx, |state, cx| {
+                        state.quick_set_source_app_filter(name);
+                        cx.notify();
+                    });
+                    view.update(cx, |view, cx| view.reset_scroll(cx));
+                },
+            )
+        });
         div()
             .w(px(QUICK_WINDOW_WIDTH))
             .h(px(window_h))
@@ -1231,6 +1287,17 @@ impl Render for QuickPasteView {
             .when(has_type_bar, |parent| {
                 parent.child(div().h(px(1.0)).w_full().bg(theme.divider))
             })
+            .when_some(source_bar, |parent, bar| {
+                parent
+                    .child(
+                        div()
+                            .h(px(SOURCE_ROW_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .child(bar),
+                    )
+                    .child(div().h(px(1.)).w_full().bg(theme.divider))
+            })
             // ── Pinned tag row ──
             .when(has_tag_row, |parent| {
                 parent.child(
@@ -1253,9 +1320,8 @@ impl Render for QuickPasteView {
                                     move |_, _| indicator_target,
                                 )
                                 .with_easing(quick_tag_indicator_ease);
-                            indicator_transition.update(cx, |value, cx| {
+                            indicator_transition.update(cx, |value, _cx| {
                                 *value = indicator_target;
-                                cx.notify();
                             });
                             let indicator_progress = (*indicator_transition.evaluate(window, cx))
                                 .clamp(0.0_f32, 1.0_f32);
@@ -1710,8 +1776,12 @@ impl Render for QuickPasteView {
                 if items.is_empty() {
                     return parent;
                 }
-                let tooltip_y =
-                    self.tooltip_position(has_tag_row, has_type_bar, &self.display_indices);
+                let tooltip_y = self.tooltip_position(
+                    has_tag_row,
+                    has_type_bar,
+                    has_source_bar,
+                    &self.display_indices,
+                );
                 let Some(tip_y) = tooltip_y else {
                     return parent;
                 };
@@ -2116,6 +2186,22 @@ fn color_border_for_swatch(swatch: Rgba) -> Rgba {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_row_expands_the_popup_without_shrinking_the_list() {
+        for has_tag in [false, true] {
+            for has_type in [false, true] {
+                let without = super::calc_quick_window_height(has_tag, has_type, false);
+                let with = super::calc_quick_window_height(has_tag, has_type, true);
+                assert_eq!(with - without, super::SOURCE_ROW_HEIGHT + 1.);
+                let bars = super::quick_bars_height(has_tag, has_type, true);
+                assert_eq!(
+                    with - bars - super::HINT_BAR_HEIGHT,
+                    super::VISIBLE_ROWS as f32 * super::ROW_HEIGHT + super::LIST_INSET * 2.
+                );
+            }
+        }
+    }
+
     // 注意：不使用 `use super::*`——quick_paste.rs 顶层 `use gpui::*` 会带入
     // gpui 的 `test` 属性宏，与 `#[test]` 冲突导致递归展开错误。
     use super::{

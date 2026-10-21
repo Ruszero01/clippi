@@ -469,9 +469,8 @@ impl RenderOnce for HoverToolbar {
                         |_, _| 0.0_f32,
                     )
                     .with_easing(|t| 1.0 - (1.0 - t).powi(3));
-                extend.update(cx, |value, cx| {
+                extend.update(cx, |value, _cx| {
                     *value = if is_hovered { 1.0 } else { 0.0 };
-                    cx.notify();
                 });
                 let extension = 6.0 * *extend.evaluate(window, cx);
 

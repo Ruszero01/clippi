@@ -466,15 +466,23 @@ impl AppState {
         });
 
         Self {
-            source_app_icons: db.source_app_icon_paths().unwrap_or_else(|error| {
-                log::error!("Failed to load source app icons: {error}");
+            source_app_icons: if settings.show_source_app_filter() {
+                db.source_app_icon_paths().unwrap_or_else(|error| {
+                    log::error!("Failed to load source app icons: {error}");
+                    Default::default()
+                })
+            } else {
                 Default::default()
-            }),
-            settings,
-            source_app_names: db.source_app_names().unwrap_or_else(|error| {
-                log::error!("Failed to load source apps: {error}");
+            },
+            source_app_names: if settings.show_source_app_filter() {
+                db.source_app_names().unwrap_or_else(|error| {
+                    log::error!("Failed to load source apps: {error}");
+                    Vec::new()
+                })
+            } else {
                 Vec::new()
-            }),
+            },
+            settings,
             db,
             items,
             pending_images: Vec::new(),
@@ -556,9 +564,8 @@ impl AppState {
         }
     }
 
-    /// Reload items from database with current filters.
-    pub fn reload_items(&mut self) {
-        if self.settings.source_app_filter_enabled {
+    fn refresh_source_apps(&mut self) {
+        if self.settings.show_source_app_filter() {
             match self.db.source_app_icon_paths() {
                 Ok(icons) => self.source_app_icons = icons,
                 Err(error) => log::error!("Failed to load source app icons: {error}"),
@@ -567,7 +574,15 @@ impl AppState {
                 Ok(names) => self.source_app_names = names,
                 Err(error) => log::error!("Failed to load source apps: {error}"),
             }
+        } else {
+            self.filters.clear_source_apps();
+            self.quick_filters.clear_source_apps();
         }
+    }
+
+    /// Reload items from database with current filters.
+    pub fn reload_items(&mut self) {
+        self.refresh_source_apps();
         let result = if self.filters.has_keyword() {
             self.load_keyword_filtered_items()
         } else {
@@ -653,6 +668,9 @@ impl AppState {
     /// edit — so this is the safety net for anything that reached the database
     /// without going through the main list.
     pub fn reload_quick_items(&mut self) {
+        if !self.quick_items_share_main_list() {
+            self.refresh_source_apps();
+        }
         if self.quick_items_share_main_list() {
             self.reload_items();
         } else {
@@ -707,6 +725,17 @@ impl AppState {
     pub fn quick_toggle_type_filter(&mut self, type_name: &str) {
         self.quick_filters_mut().toggle_type(type_name);
         self.after_quick_filter_change();
+    }
+
+    pub fn quick_set_source_app_filter(&mut self, name: Option<&str>) {
+        self.quick_filters_mut().set_source_app(name);
+        self.after_quick_filter_change();
+    }
+
+    pub fn reset_quick_source_filter_for_show(&mut self) {
+        if self.settings.reset_source_filter_on_show {
+            self.quick_filters_mut().clear_source_apps();
+        }
     }
 
     /// Toggle the favorites filter from the quick popup.
@@ -1013,6 +1042,7 @@ impl AppState {
         if !self.settings.show_source_app {
             self.settings.source_app_filter_enabled = false;
             self.filters.clear_source_apps();
+            self.quick_filters.clear_source_apps();
             self.selected_ids.clear();
         }
         self.settings.save();
@@ -1022,6 +1052,7 @@ impl AppState {
     pub fn toggle_source_app_filter_enabled(&mut self) {
         self.settings.source_app_filter_enabled = !self.settings.source_app_filter_enabled;
         self.filters.clear_source_apps();
+        self.quick_filters.clear_source_apps();
         self.selected_ids.clear();
         self.settings.save();
         self.reload_items();
@@ -4331,6 +4362,7 @@ mod tests {
     #[test]
     fn source_apps_sort_by_total_count_independent_of_active_filter() {
         let (mut state, _) = test_state();
+        state.settings.show_source_app = true;
         state.settings.source_app_filter_enabled = true;
         for (id, app) in [
             (1, "Editor"),
@@ -4357,6 +4389,7 @@ mod tests {
     #[test]
     fn source_app_filter_is_single_select_and_preserves_all_choices() {
         let (mut state, _) = test_state();
+        state.settings.show_source_app = true;
         state.settings.source_app_filter_enabled = true;
         for (id, app, favorite) in [
             (1, "O'Reilly", true),
@@ -5579,6 +5612,170 @@ mod tests {
         // The clipboard item survived; its tag association is gone.
         let item = state.db.get_by_id_with_tags(item_id).unwrap().unwrap();
         assert!(item.tags.is_empty());
+    }
+
+    fn source_filter_state() -> AppState {
+        let (mut state, _) = test_state();
+        state.settings.show_source_app = true;
+        state.settings.source_app_filter_enabled = true;
+        for (id, name) in [(1, "Browser"), (2, "Editor")] {
+            let mut item = make_item(id, ContentType::PlainText, false, &format!("item-{id}"));
+            item.source_app_name = name.into();
+            state.db.upsert(&item).unwrap();
+        }
+        state.reload_items();
+        state
+    }
+
+    #[test]
+    fn switching_windows_keeps_source_type_and_favorites_but_not_main_search() {
+        let (mut state, _) = test_state();
+        state.settings.show_source_app = true;
+        state.settings.source_app_filter_enabled = true;
+        for (id, app, kind, text, favorite) in [
+            (1, "Browser", ContentType::PlainText, "invoice april", true),
+            (2, "Browser", ContentType::PlainText, "meeting notes", false),
+            (3, "Browser", ContentType::Image, "invoice scan", false),
+            (4, "Editor", ContentType::PlainText, "invoice draft", true),
+        ] {
+            let mut item = make_item(id, kind, favorite, text);
+            item.source_app_name = app.into();
+            state.db.upsert(&item).unwrap();
+            if favorite {
+                let saved = state.db.get_by_hash(item.content_hash).unwrap().unwrap();
+                state.db.set_favorite(saved.id, true).unwrap();
+            }
+        }
+        state.set_source_app_filter(Some("Browser"));
+        state.toggle_type_filter("plain_text");
+        state.set_keyword("invoice");
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].full_text, "invoice april");
+
+        // Hiding the main window releases its items. The quick window has its
+        // own search, while retaining the visible source/type filter choices.
+        state.clear_items();
+        state.reload_quick_items();
+        assert_eq!(state.quick_items().len(), 2);
+        assert!(state
+            .quick_items()
+            .iter()
+            .all(|item| item.source_app_name == "Browser"
+                && item.content_type == ContentType::PlainText));
+        state.quick_toggle_favorites_filter();
+        assert_eq!(state.quick_items().len(), 1);
+        assert_eq!(state.quick_items()[0].full_text, "invoice april");
+        state.quick_set_source_app_filter(Some("Editor"));
+        assert_eq!(state.quick_items()[0].full_text, "invoice draft");
+
+        // Returning to the main window keeps its search and uses the source
+        // selected in the synced quick window.
+        state.reload_items();
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].full_text, "invoice draft");
+        assert_eq!(state.filters.keyword_terms(), ["invoice"]);
+        state.quick_set_source_app_filter(None);
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.quick_items().len(), 2);
+    }
+
+    #[test]
+    fn reopening_quick_window_after_copying_refreshes_sources_and_keeps_its_filter() {
+        let mut state = source_filter_state();
+        state.set_quick_window_sync_filters(false);
+        state.quick_set_source_app_filter(Some("Browser"));
+        state.clear_items();
+        for (id, app, text) in [
+            (3, "Terminal", "new terminal clip"),
+            (4, "Browser", "new browser clip"),
+        ] {
+            let mut item = make_item(id, ContentType::PlainText, false, text);
+            item.source_app_name = app.into();
+            state.db.upsert(&item).unwrap();
+        }
+        state.reset_quick_source_filter_for_show();
+        state.reload_quick_items();
+        assert_eq!(state.source_app_names, ["Browser", "Editor", "Terminal"]);
+        assert!(state.quick_filters().is_source_app_active("Browser"));
+        assert_eq!(state.quick_items().len(), 2);
+        assert!(state
+            .quick_items()
+            .iter()
+            .any(|item| item.full_text == "new browser clip"));
+        state.quick_set_source_app_filter(Some("Terminal"));
+        assert_eq!(state.quick_items().len(), 1);
+        assert_eq!(state.quick_items()[0].full_text, "new terminal clip");
+        state.quick_set_source_app_filter(None);
+        assert_eq!(state.quick_items().len(), 4);
+    }
+
+    #[test]
+    fn quick_source_filter_shares_selection_with_main_when_sync_is_on() {
+        let mut state = source_filter_state();
+        state.quick_set_source_app_filter(Some("Browser"));
+        assert!(state.filters.is_source_app_active("Browser"));
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.quick_items().len(), 1);
+        state.quick_set_source_app_filter(None);
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.quick_items().len(), 2);
+    }
+
+    #[test]
+    fn quick_source_filter_can_clear_its_seeded_selection_independently() {
+        let mut state = source_filter_state();
+        state.set_source_app_filter(Some("Browser"));
+        state.set_quick_window_sync_filters(false);
+        assert!(state.quick_filters().is_source_app_active("Browser"));
+        state.quick_set_source_app_filter(None);
+        assert_eq!(state.quick_items().len(), 2);
+        assert!(state.filters.is_source_app_active("Browser"));
+        assert_eq!(state.items.len(), 1);
+        state.quick_set_source_app_filter(Some("Editor"));
+        assert_eq!(state.quick_items()[0].source_app_name, "Editor");
+        state.set_quick_window_sync_filters(true);
+        assert_eq!(state.quick_items()[0].source_app_name, "Browser");
+    }
+
+    #[test]
+    fn disabling_source_controls_clears_both_windows_filters() {
+        let mut state = source_filter_state();
+        state.set_source_app_filter(Some("Browser"));
+        state.set_quick_window_sync_filters(false);
+        state.quick_set_source_app_filter(Some("Editor"));
+        state.toggle_source_app_filter_enabled();
+        assert!(!state.filters.has_source_app_filter());
+        assert!(!state.quick_filters().has_source_app_filter());
+        assert_eq!(state.quick_items().len(), 2);
+        state.toggle_source_app_filter_enabled();
+        state.set_source_app_filter(Some("Browser"));
+        state.quick_set_source_app_filter(Some("Editor"));
+        state.toggle_show_source_app();
+        assert!(!state.filters.has_source_app_filter());
+        assert!(!state.quick_filters().has_source_app_filter());
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.quick_items().len(), 2);
+    }
+
+    #[test]
+    fn quick_source_reset_respects_the_setting_and_filter_sync() {
+        let mut state = source_filter_state();
+        state.set_source_app_filter(Some("Browser"));
+        state.set_quick_window_sync_filters(false);
+        state.quick_set_source_app_filter(Some("Editor"));
+        state.reset_quick_source_filter_for_show();
+        assert!(state.quick_filters().is_source_app_active("Editor"));
+        state.settings.reset_source_filter_on_show = true;
+        state.reset_quick_source_filter_for_show();
+        state.reload_quick_items();
+        assert!(!state.quick_filters().has_source_app_filter());
+        assert_eq!(state.quick_items().len(), 2);
+        assert!(state.filters.is_source_app_active("Browser"));
+        state.set_quick_window_sync_filters(true);
+        state.reset_quick_source_filter_for_show();
+        state.reload_quick_items();
+        assert!(!state.filters.has_source_app_filter());
+        assert_eq!(state.items.len(), 2);
     }
 
     /// 默认与主窗口共用筛选：快速窗口内的筛选操作作用于同一份筛选状态。
