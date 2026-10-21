@@ -78,6 +78,20 @@ impl TooltipHover {
     }
 }
 
+/// Whether a redraw of the tag window means the pointer left it while a tooltip
+/// was pending or shown.
+///
+/// GPUI 0.2.2's Windows backend handles `WM_MOUSELEAVE` by clearing the window
+/// hover flag and scheduling a redraw; unlike macOS it never dispatches
+/// `MouseExitEvent`. Without an event the hovered row never receives its
+/// `hover(false)` callback when the pointer crosses into the main window, which
+/// left the tooltip stuck on screen. The flag change does dirty this window, so
+/// the redraw that follows is the platform signal to clear here.
+#[cfg(target_os = "windows")]
+fn tooltip_orphaned_on_window_exit(hovered_tag: Option<i64>, window_hovered: bool) -> bool {
+    hovered_tag.is_some() && !window_hovered
+}
+
 /// Sidebar entity for displaying and managing tags.
 pub enum SidebarEvent {
     Tooltip(Option<(String, f32)>),
@@ -341,6 +355,10 @@ impl Render for Sidebar {
             .tag_id
             .is_some_and(|tag_id| !visible_ids.contains(&tag_id))
         {
+            self.clear_tooltip(cx);
+        }
+        #[cfg(target_os = "windows")]
+        if tooltip_orphaned_on_window_exit(self.tooltip_hover.tag_id, window.is_window_hovered()) {
             self.clear_tooltip(cx);
         }
         if self
@@ -749,6 +767,8 @@ fn ordered_sidebar_tags(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    use super::tooltip_orphaned_on_window_exit;
     use super::{drag_position, ordered_sidebar_tags, TooltipHover};
     use crate::core::types::TagInfo;
     use std::{collections::HashMap, time::Instant};
@@ -774,6 +794,14 @@ mod tests {
         assert_eq!(hover.tag_id, Some(2));
         assert!(hover.update(2, false));
         assert!(!hover.update(2, false));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn tooltip_is_dropped_when_the_tag_window_loses_the_pointer() {
+        assert!(tooltip_orphaned_on_window_exit(Some(3), false));
+        assert!(!tooltip_orphaned_on_window_exit(Some(3), true));
+        assert!(!tooltip_orphaned_on_window_exit(None, false));
     }
 
     #[test]
