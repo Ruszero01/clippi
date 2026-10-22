@@ -423,6 +423,15 @@ impl EditPanel {
         });
     }
 
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.read(cx).settings.edit_auto_save {
+            // Reuse explicit Save so failed writes keep the editor open.
+            self.save(window, cx);
+        } else {
+            cx.emit(EditPanelEvent::Back);
+        }
+    }
+
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let text = self.content_input.read(cx).value().to_string();
         let editor_type = self.selected_type.clone();
@@ -545,10 +554,8 @@ impl Render for EditPanel {
                         Some(I18nKey::EditTooltipBack.text()),
                         {
                             let this = this.clone();
-                            move |_window, cx| {
-                                this.update(cx, |_panel, cx| {
-                                    cx.emit(EditPanelEvent::Back);
-                                });
+                            move |window, cx| {
+                                this.update(cx, |panel, cx| panel.go_back(window, cx));
                             }
                         },
                     ))

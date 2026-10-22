@@ -1478,6 +1478,7 @@ impl Render for RootView {
         let root_this = cx.entity().clone();
         let root_list = list_view.clone();
         let root_state = self.state.clone();
+        let root_edit_panel = self.edit_panel.clone();
         let root_backend = backend_panel.clone();
         let root_settings = self.settings_panel.clone();
 
@@ -1633,12 +1634,7 @@ impl Render for RootView {
                     }
                     cx.stop_propagation();
                 } else if is_edit {
-                    root_state.update(cx, |state, _cx| state.cancel_edit_item());
-                    root_this.update(cx, |this, cx| {
-                        this.switch_view("clipboard");
-                        cx.notify();
-                    });
-                    root_list.update(cx, |list, _cx| list.focus(window));
+                    root_edit_panel.update(cx, |panel, cx| panel.go_back(window, cx));
                     cx.stop_propagation();
                 } else {
                     // Clipboard view: delegate to list for panel/multi-select logic

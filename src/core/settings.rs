@@ -263,6 +263,8 @@ pub struct AppSettings {
     pub image_alt_mode: String, // advanced paste mode for images: "bitmap" | "path" | "ocr"
     #[serde(default = "default_paste_click_mode")]
     pub paste_click_mode: String, // main-window paste gesture: "double_click" | "single_click"
+    #[serde(default)]
+    pub edit_auto_save: bool,
     /// 「Alt 快捷切换」：按住 Alt 浮出快捷键提示（收藏按钮 D、类型标签 1~9），
     /// 并允许 Alt+D / Alt+1~9 直接切换收藏与标签页。默认开启，旧配置缺失该项时保持原行为。
     #[serde(default = "default_alt_shortcuts_enabled")]
@@ -433,6 +435,7 @@ impl Default for AppSettings {
             always_reset_to_clipboard: false,
             image_alt_mode: default_image_alt_mode(),
             paste_click_mode: default_paste_click_mode(),
+            edit_auto_save: false,
             alt_shortcuts_enabled: true,
         }
     }
@@ -1539,6 +1542,22 @@ pub fn capture_gate(source_app_name: &str, blacklist: &[String], startup_done: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_auto_save_defaults_off_for_old_configs_and_round_trips() {
+        assert!(!AppSettings::default().edit_auto_save);
+        let mut old = toml::Value::try_from(AppSettings::default()).unwrap();
+        old.as_table_mut().unwrap().remove("edit_auto_save");
+        let mut loaded: AppSettings = old.try_into().unwrap();
+        assert!(!loaded.edit_auto_save);
+
+        for enabled in [true, false] {
+            loaded.edit_auto_save = enabled;
+            let saved = toml::to_string(&loaded).unwrap();
+            let restored: AppSettings = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.edit_auto_save, enabled);
+        }
+    }
 
     #[test]
     fn clipboard_capture_options_default_on_and_round_trip_independently() {

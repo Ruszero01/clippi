@@ -36,6 +36,7 @@ impl SettingsPanel {
         let show_source_app = app.settings.show_source_app;
         let auto_scroll_to_top = app.settings.auto_scroll_to_top;
         let copy_as_plain_text = app.settings.copy_as_plain_text;
+        let edit_auto_save = app.settings.edit_auto_save;
         let show_original_on_hover = app.settings.show_original_on_hover;
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
@@ -96,6 +97,24 @@ impl SettingsPanel {
         ];
         container =
             container.child(self.settings_group(I18nKey::TabClipboard.text(), capture_rows));
+        let edit_rows = vec![self
+            .render_toggle_row(
+                I18nKey::SettingEditAutoSave,
+                I18nKey::DescEditAutoSaveOn,
+                I18nKey::DescEditAutoSaveOff,
+                edit_auto_save,
+                window,
+                cx,
+                |state, _this, _window, cx| {
+                    state.update(cx, |s, cx| {
+                        s.settings.edit_auto_save = !s.settings.edit_auto_save;
+                        s.settings.save();
+                        cx.notify();
+                    });
+                },
+            )
+            .into_any_element()];
+        container = container.child(self.settings_group(I18nKey::EditPanelTitle.text(), edit_rows));
 
         // --- List & display ---
         let mut source_rows = vec![self
