@@ -27,6 +27,7 @@ pub struct HoverToolbarProps {
     pub full_text: String,
     pub has_rich_content: bool,
     pub has_qr_code: bool,
+    pub has_links: bool,
     pub is_favorite: bool,
     pub selected_count: usize,
     pub is_selected: bool,
@@ -67,6 +68,7 @@ impl HoverToolbarProps {
                 let rich = RichData::from_json(&item.rich_data);
                 rich.qr_text.is_some()
             },
+            has_links: RichData::from_json(&item.rich_data).has_links == Some(true),
             is_favorite: item.is_favorite,
             selected_count,
             is_selected,
@@ -204,6 +206,19 @@ impl RenderOnce for HoverToolbar {
         type ColorFn = Box<dyn Fn(bool) -> Rgba>;
         let mut buttons: Vec<(&str, &str, ColorFn)> = Vec::new();
 
+        if is_single
+            && props.has_links
+            && matches!(
+                props.content_type,
+                ContentType::PlainText | ContentType::RichText
+            )
+        {
+            buttons.push((
+                "\u{e6d7}",
+                "extract_links",
+                Box::new(move |hovered| if hovered { accent } else { icon_color }),
+            ));
+        }
         if is_single && props.is_transfer {
             let transfer_pinned = props.transfer_pinned;
             let pin_color = theme.transfer_pin_color;
@@ -416,6 +431,7 @@ impl RenderOnce for HoverToolbar {
                 let on_action = on_action.clone();
                 let tooltip = match action {
                     "copy" => I18nKey::CtxCopy.text().to_string(),
+                    "extract_links" => I18nKey::ExtractLinks.text().to_string(),
                     "paste_plain" => I18nKey::CtxPastePlain.text().to_string(),
                     "paste_image_bitmap" => I18nKey::CtxPasteImageBitmap.text().to_string(),
                     "open_image" => I18nKey::CtxOpenImage.text().to_string(),

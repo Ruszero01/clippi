@@ -278,6 +278,8 @@ pub enum PathStatusReason {
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct RichData {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_links: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub html: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtf: Option<String>,

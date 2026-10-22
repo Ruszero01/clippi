@@ -1270,6 +1270,7 @@ pub struct ClipboardCard {
     /// Called when the hotkey paste format is changed while recording.
     on_hotkey_format_change: Option<CardFormatHandler>,
     show_source_app: bool,
+    detect_links: bool,
     show_original_on_hover: bool,
     privacy_types: Vec<String>,
     /// When true and a link item has a cached page title, show the title
@@ -1306,6 +1307,7 @@ impl ClipboardCard {
             hotkey_paste_format: String::new(),
             on_hotkey_format_change: None,
             show_source_app: false,
+            detect_links: false,
             show_original_on_hover: false,
             privacy_types: crate::core::settings::default_privacy_types(),
             show_page_title: false,
@@ -1417,6 +1419,11 @@ impl ClipboardCard {
         self
     }
 
+    pub fn detect_links(mut self, value: bool) -> Self {
+        self.detect_links = value;
+        self
+    }
+
     pub fn show_source_app(mut self, value: bool) -> Self {
         self.show_source_app = value;
         self
@@ -1473,6 +1480,7 @@ impl RenderOnce for ClipboardCard {
             note_input,
             on_commit_note,
             show_source_app,
+            detect_links,
             show_original_on_hover,
             privacy_types,
             show_page_title,
@@ -2838,7 +2846,14 @@ impl RenderOnce for ClipboardCard {
             .iter()
             .map(|tag| info_pill_width(&tag.name, INFO_PILL_PADDING_X, window))
             .collect::<Vec<_>>();
-        let mut fixed_widths = Vec::with_capacity(3);
+        let show_link_pill = detect_links
+            && meta_type != "link"
+            && matches!(content_type, ContentType::PlainText | ContentType::RichText)
+            && RichData::from_json(&item.rich_data).has_links == Some(true);
+        let mut fixed_widths = Vec::with_capacity(6);
+        if show_link_pill {
+            fixed_widths.push(18.);
+        }
         // Hotkey pill (if item has a custom hotkey)
         let hotkey_pill = if !item.custom_hotkey.is_empty() {
             Some(crate::platform::hotkey::hotkey_display(&item.custom_hotkey))
@@ -2908,6 +2923,17 @@ impl RenderOnce for ClipboardCard {
                         .h(sc(18.))
                         .rounded(sc(9.))
                         .bg(pill_bg)
+                        .shadow(vec![BoxShadow {
+                            color: if is_dark {
+                                rgba(0x00000066)
+                            } else {
+                                rgba(0x00000030)
+                            }
+                            .into(),
+                            offset: point(sc(0.), sc(1.)),
+                            blur_radius: sc(2.),
+                            spread_radius: sc(0.),
+                        }])
                         .border(sc(1.))
                         .border_color(pill_border)
                         .px(sc(5.))
@@ -2921,12 +2947,23 @@ impl RenderOnce for ClipboardCard {
                         ),
                 )
             })
-            .children(tags.iter().take(visible_tag_count).map(|tag| {
+            .children(display_tags.iter().take(visible_tag_count).map(|tag| {
                 let tag_color = color_from_hex(&tag.color, text_2);
                 div()
                     .h(sc(18.))
                     .rounded(sc(9.))
                     .bg(pill_bg)
+                    .shadow(vec![BoxShadow {
+                        color: if is_dark {
+                            rgba(0x00000066)
+                        } else {
+                            rgba(0x00000030)
+                        }
+                        .into(),
+                        offset: point(sc(0.), sc(1.)),
+                        blur_radius: sc(2.),
+                        spread_radius: sc(0.),
+                    }])
                     .border(sc(1.))
                     .border_color(tag_color)
                     .px(sc(5.))
@@ -2939,12 +2976,54 @@ impl RenderOnce for ClipboardCard {
                             .child(tag.name.clone()),
                     )
             }))
+            .when(show_link_pill, |el| {
+                el.child(
+                    div()
+                        .size(sc(18.))
+                        .rounded(sc(9.))
+                        .bg(pill_bg)
+                        .shadow(vec![BoxShadow {
+                            color: if is_dark {
+                                rgba(0x00000066)
+                            } else {
+                                rgba(0x00000030)
+                            }
+                            .into(),
+                            offset: point(sc(0.), sc(1.)),
+                            blur_radius: sc(2.),
+                            spread_radius: sc(0.),
+                        }])
+                        .border(sc(1.))
+                        .border_color(pill_border)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .font_family("iconfont")
+                                .text_size(sc(10.))
+                                .text_color(accent)
+                                .child("\u{e6d7}"),
+                        ),
+                )
+            })
             .when_some(hotkey_pill, |el, hk| {
                 el.child(
                     div()
                         .h(sc(18.))
                         .rounded(sc(9.))
                         .bg(pill_bg)
+                        .shadow(vec![BoxShadow {
+                            color: if is_dark {
+                                rgba(0x00000066)
+                            } else {
+                                rgba(0x00000030)
+                            }
+                            .into(),
+                            offset: point(sc(0.), sc(1.)),
+                            blur_radius: sc(2.),
+                            spread_radius: sc(0.),
+                        }])
                         .border(sc(1.))
                         .border_color(accent)
                         .px(sc(5.))
@@ -2973,6 +3052,17 @@ impl RenderOnce for ClipboardCard {
                         .h(sc(18.))
                         .rounded(sc(9.))
                         .bg(pill_bg)
+                        .shadow(vec![BoxShadow {
+                            color: if is_dark {
+                                rgba(0x00000066)
+                            } else {
+                                rgba(0x00000030)
+                            }
+                            .into(),
+                            offset: point(sc(0.), sc(1.)),
+                            blur_radius: sc(2.),
+                            spread_radius: sc(0.),
+                        }])
                         .border(sc(1.))
                         .border_color(pill_border)
                         .px(sc(5.))
@@ -3009,6 +3099,17 @@ impl RenderOnce for ClipboardCard {
                         .size(sc(18.))
                         .rounded(sc(9.))
                         .bg(pill_bg)
+                        .shadow(vec![BoxShadow {
+                            color: if is_dark {
+                                rgba(0x00000066)
+                            } else {
+                                rgba(0x00000030)
+                            }
+                            .into(),
+                            offset: point(sc(0.), sc(1.)),
+                            blur_radius: sc(2.),
+                            spread_radius: sc(0.),
+                        }])
                         .border(sc(1.))
                         .border_color(pill_border)
                         .flex()
@@ -3039,6 +3140,17 @@ impl RenderOnce for ClipboardCard {
                         .h(sc(18.))
                         .rounded(sc(9.))
                         .bg(pill_bg)
+                        .shadow(vec![BoxShadow {
+                            color: if is_dark {
+                                rgba(0x00000066)
+                            } else {
+                                rgba(0x00000030)
+                            }
+                            .into(),
+                            offset: point(sc(0.), sc(1.)),
+                            blur_radius: sc(2.),
+                            spread_radius: sc(0.),
+                        }])
                         .border(sc(1.))
                         .border_color(pill_border)
                         .px(sc(5.))
@@ -3057,6 +3169,17 @@ impl RenderOnce for ClipboardCard {
                     .h(sc(18.))
                     .rounded(sc(9.))
                     .bg(pill_bg)
+                    .shadow(vec![BoxShadow {
+                        color: if is_dark {
+                            rgba(0x00000066)
+                        } else {
+                            rgba(0x00000030)
+                        }
+                        .into(),
+                        offset: point(sc(0.), sc(1.)),
+                        blur_radius: sc(2.),
+                        spread_radius: sc(0.),
+                    }])
                     .border(sc(1.))
                     .border_color(pill_border)
                     .px(sc(7.))
@@ -3159,8 +3282,9 @@ impl RenderOnce for ClipboardCard {
         // A stale/fading toolbar must never float outside its hovered card after
         // scrolling. Only animate entry; pointer exit removes it immediately.
         if toolbar_visible && reveal > 0.0 {
-            let toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
+            let mut toolbar_props = HoverToolbarProps::from_item(&item, selected_count, selected)
                 .can_merge_selection(can_merge_selection);
+            toolbar_props.has_links &= detect_links;
             // Keep the reveal anchored to the card edge. Near the viewport top,
             // reveal downward from the bottom edge instead of covering filters.
             // Only the individual buttons cast shadows; a shadow on this reveal

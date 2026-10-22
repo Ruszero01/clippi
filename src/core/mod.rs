@@ -13,6 +13,7 @@ pub mod frontend;
 pub mod html_text;
 pub mod i18n;
 pub mod i18n_keys;
+pub mod links;
 pub mod migration;
 pub mod ocr;
 pub mod paste_plain;

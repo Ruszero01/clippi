@@ -338,6 +338,7 @@ fn shrink_item_for_list(item: &mut ClipboardItem) {
 
     let rich = RichData::from_json(&item.rich_data);
     let preview = RichData {
+        has_links: rich.has_links,
         html: rich
             .html
             .filter(|text| !text.is_empty())
@@ -2308,6 +2309,79 @@ impl AppState {
         }
     }
 
+    pub fn extract_item_links(&mut self, id: i64) {
+        let Ok(Some(item)) = self.db.get_by_id(id) else {
+            return;
+        };
+        if !matches!(
+            item.content_type,
+            ContentType::PlainText | ContentType::RichText
+        ) {
+            return;
+        }
+        let rich = RichData::from_json(&item.rich_data);
+        let links = crate::core::links::extract_content(&item.full_text, rich.html.as_deref());
+        if links.is_empty() {
+            self.show_toast(I18nKey::ToastNoLinks.text());
+            return;
+        }
+        let source = crate::core::types::SourceAppInfo {
+            app_name: item.source_app_name.clone(),
+            icon_base64: item.source_app_icon.clone(),
+        };
+        let mut all_extracted = true;
+        for link in links {
+            let mut entry =
+                ClipboardItem::new_text(0, &link, ContentType::PlainText, Some(&source), None);
+            entry.meta_type = "link".into();
+            entry.size = link.chars().count() as i64;
+            // Stable, source-specific identity keeps retries idempotent without
+            // colliding with ordinary copied links or the original item.
+            entry.content_hash = Self::hash_text(&format!(
+                "extract:{}:{}:{}",
+                item.id, item.content_hash, link
+            ));
+            match self.db.get_by_hash(entry.content_hash) {
+                Ok(Some(_)) => continue, // Preserve existing titles, tags and edits.
+                Ok(None) => {}
+                Err(e) => {
+                    all_extracted = false;
+                    log::error!("extract links lookup: {e}");
+                    continue;
+                }
+            }
+            if let Err(e) = self.db.upsert(&entry) {
+                all_extracted = false;
+                log::error!("extract links: {e}");
+                continue;
+            }
+            let dirty = self.should_mark_sync_dirty(&entry);
+            if dirty {
+                self.sync_dirty.store(true, Ordering::SeqCst);
+            }
+            crate::services::url_assets::spawn_link_metadata(
+                &entry,
+                &self.settings.db_path,
+                self.settings.auto_fetch_url_title,
+                self.needs_reload.clone(),
+                self.sync_dirty.clone(),
+                dirty,
+            );
+        }
+        if all_extracted
+            && self.settings.auto_detect_links
+            && self.settings.delete_source_after_link_extraction
+        {
+            self.delete_item(id);
+        }
+        if self.settings.max_items > 0 {
+            let _ = self
+                .db
+                .prune_items_over_limit_preserving(self.settings.max_items, Some(id));
+        }
+        self.reload_items();
+    }
+
     fn handle_qr_text(&mut self, text: String) {
         if text.starts_with("http://") || text.starts_with("https://") {
             // --- Spawn on a background thread — open_releases_page calls ---
@@ -3709,6 +3783,169 @@ mod tests {
             webdav_username: String::new(),
             webdav_password: String::new(),
         }
+    }
+
+    #[test]
+    fn extracting_links_preserves_original_source_and_source_filter() {
+        let (mut state, _) = test_state();
+        state.settings.auto_fetch_url_title = false;
+        let source = crate::core::types::SourceAppInfo {
+            app_name: "Browser".into(),
+            icon_base64: "original-source-icon".into(),
+        };
+        state.filters.set_source_app(Some(&source.app_name));
+        let original = ClipboardItem::new_text(
+            0,
+            "分享 https://b23.tv/abc https://b23.tv/abc 和 https://example.com/test",
+            ContentType::PlainText,
+            Some(&source),
+            None,
+        );
+        state.db.upsert(&original).unwrap();
+        let stored = state
+            .db
+            .get_by_hash(original.content_hash)
+            .unwrap()
+            .unwrap();
+        state.extract_item_links(stored.id);
+        assert_eq!(state.items.len(), 3);
+        assert_eq!(
+            state.db.get_by_id(stored.id).unwrap().unwrap().full_text,
+            original.full_text
+        );
+        let links: Vec<_> = state
+            .items
+            .iter()
+            .filter(|item| item.meta_type == "link")
+            .collect();
+        assert_eq!(links.len(), 2);
+        assert!(links
+            .iter()
+            .all(|item| item.source_app_name == source.app_name));
+        for link in &links {
+            let saved = state.db.get_by_id(link.id).unwrap().unwrap();
+            assert_eq!(saved.source_app_icon, source.icon_base64);
+        }
+        state.extract_item_links(stored.id);
+        assert_eq!(state.items.len(), 3);
+        assert_eq!(
+            state.db.get_by_id(stored.id).unwrap().unwrap().full_text,
+            original.full_text
+        );
+    }
+
+    #[test]
+    fn extracting_links_twice_at_history_limit_keeps_original() {
+        let (mut state, _) = test_state();
+        state.settings.auto_fetch_url_title = false;
+        state.settings.max_items = 2;
+        let original = ClipboardItem::new_text(
+            0,
+            "分享 https://example.com/test",
+            ContentType::PlainText,
+            None,
+            None,
+        );
+        state.db.upsert(&original).unwrap();
+        let stored = state
+            .db
+            .get_by_hash(original.content_hash)
+            .unwrap()
+            .unwrap();
+        for _ in 0..2 {
+            state.extract_item_links(stored.id);
+            assert_eq!(state.items.len(), 2);
+            let saved = state.db.get_by_id(stored.id).unwrap().unwrap();
+            assert_eq!(saved.full_text, original.full_text);
+            assert_eq!(saved.content_hash, original.content_hash);
+            assert_eq!(saved.updated_at, stored.updated_at);
+            assert_eq!(
+                state
+                    .items
+                    .iter()
+                    .filter(|item| item.meta_type == "link")
+                    .count(),
+                1
+            );
+        }
+        // Even when the output cannot fit alongside its input, keep the original.
+        state.settings.max_items = 1;
+        state.extract_item_links(stored.id);
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].id, stored.id);
+        assert_eq!(state.items[0].full_text, original.full_text);
+    }
+
+    #[test]
+    fn extracting_links_deletes_source_only_when_both_settings_are_enabled() {
+        for (detect, delete, text, should_delete) in [
+            (
+                true,
+                true,
+                "分享 https://example.com/one https://example.com/two",
+                true,
+            ),
+            (true, false, "分享 https://example.com/one", false),
+            (false, true, "分享 https://example.com/one", false),
+            (true, true, "普通文本", false),
+        ] {
+            let (mut state, _) = test_state();
+            state.settings.auto_fetch_url_title = false;
+            state.settings.auto_detect_links = detect;
+            state.settings.delete_source_after_link_extraction = delete;
+            let original = ClipboardItem::new_text(0, text, ContentType::PlainText, None, None);
+            state.db.upsert(&original).unwrap();
+            let id = state
+                .db
+                .get_by_hash(original.content_hash)
+                .unwrap()
+                .unwrap()
+                .id;
+            state.extract_item_links(id);
+            assert_eq!(state.db.get_by_id(id).unwrap().is_none(), should_delete);
+            if should_delete {
+                assert_eq!(state.items.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn extracting_links_keeps_source_when_one_link_fails_to_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("extraction.db");
+        let (mut state, _) = test_state();
+        state.db = Database::open(path.to_str().unwrap()).unwrap();
+        state.settings.auto_fetch_url_title = false;
+        state.settings.auto_detect_links = true;
+        state.settings.delete_source_after_link_extraction = true;
+        let original = ClipboardItem::new_text(
+            0,
+            "分享 https://example.com/one https://example.com/two",
+            ContentType::PlainText,
+            None,
+            None,
+        );
+        state.db.upsert(&original).unwrap();
+        let id = state
+            .db
+            .get_by_hash(original.content_hash)
+            .unwrap()
+            .unwrap()
+            .id;
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TRIGGER fail_second_link BEFORE INSERT ON clipboard_items WHEN NEW.full_text = 'https://example.com/two' BEGIN SELECT RAISE(FAIL, 'injected failure'); END;").unwrap();
+        state.extract_item_links(id);
+        assert_eq!(
+            state.db.get_by_id(id).unwrap().unwrap().full_text,
+            original.full_text
+        );
+        assert_eq!(state.items.len(), 2);
+        connection
+            .execute_batch("DROP TRIGGER fail_second_link")
+            .unwrap();
+        state.extract_item_links(id);
+        assert!(state.db.get_by_id(id).unwrap().is_none());
+        assert_eq!(state.items.len(), 2);
     }
 
     fn test_state() -> (AppState, Arc<AtomicBool>) {

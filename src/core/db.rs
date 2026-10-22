@@ -171,6 +171,7 @@ fn list_item_select_columns() -> String {
          CASE
              WHEN rich_data = '' OR NOT json_valid(rich_data) THEN ''
              ELSE json_object(
+                 'has_links', json(CASE json_extract(rich_data, '$.has_links') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END),
                  'html', NULLIF({html_preview}, ''),
                  'rtf', NULLIF(substr(coalesce(json_extract(rich_data, '$.rtf'), ''), 1, {LIST_RICH_HTML_LIMIT}), ''),
                  'ocr_text', NULLIF(substr(coalesce(json_extract(rich_data, '$.ocr_text'), ''), 1, {LIST_RICH_AUX_LIMIT}), ''),
@@ -339,6 +340,14 @@ impl Database {
                 ],
             )?;
         }
+        Ok(())
+    }
+
+    pub fn update_link_detection(&self, item: &ClipboardItem, has_links: bool) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE clipboard_items SET rich_data = json_set(CASE WHEN json_valid(rich_data) THEN rich_data ELSE '{}' END, '$.has_links', json(?1)) WHERE id = ?2 AND content_hash = ?3 AND full_text = ?4 AND rich_data = ?5",
+            params![if has_links { "true" } else { "false" }, item.id, item.content_hash as i64, item.full_text, item.rich_data],
+        )?;
         Ok(())
     }
 
@@ -1508,6 +1517,15 @@ impl Database {
     /// deleted; favorites, tagged items, noted items, and items with a custom
     /// hotkey are kept on top of the limit.
     pub fn prune_items_over_limit(&self, max_items: u32) -> SqlResult<Vec<i64>> {
+        self.prune_items_over_limit_preserving(max_items, None)
+    }
+
+    /// Preserve the input of an explicit derivation while enforcing the history limit.
+    pub fn prune_items_over_limit_preserving(
+        &self,
+        max_items: u32,
+        preserve_id: Option<i64>,
+    ) -> SqlResult<Vec<i64>> {
         if max_items == 0 {
             return Ok(Vec::new());
         }
@@ -1525,11 +1543,11 @@ impl Database {
         // Read only the IDs that will actually be deleted instead of loading
         // every eligible row and truncating in memory.
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT id FROM clipboard_items WHERE {MAINTENANCE_DELETABLE_PREDICATE} \
+            "SELECT id FROM clipboard_items WHERE {MAINTENANCE_DELETABLE_PREDICATE} AND (?2 IS NULL OR id != ?2) \
              ORDER BY created_at ASC LIMIT ?1"
         ))?;
         let pruned_ids: Vec<i64> = stmt
-            .query_map([excess as i64], |row| row.get(0))?
+            .query_map(params![excess as i64, preserve_id], |row| row.get(0))?
             .collect::<SqlResult<Vec<_>>>()?;
         if pruned_ids.is_empty() {
             return Ok(Vec::new());

@@ -2199,6 +2199,13 @@ impl ClipboardListView {
                     self.sync_items_from_state_for_usage(cx);
                 }
             }
+            "extract_links" => {
+                if let Some(ref item) = self.context_menu_item {
+                    let id = item.id;
+                    self.state.update(cx, |s, _| s.extract_item_links(id));
+                    self.sync_items_from_state(cx);
+                }
+            }
             "qr_detect" => {
                 if let Some(ref item) = self.context_menu_item {
                     let item_id = item.id;
@@ -2261,6 +2268,11 @@ impl ClipboardListView {
 
         let plain = self.state.read(cx).settings.copy_as_plain_text;
         match action {
+            "extract_links" => {
+                self.state.update(cx, |s, _| s.extract_item_links(item_id));
+                self.sync_items_from_state(cx);
+            }
+
             "download_transfer" => {
                 if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
                     let file_data = crate::core::types::FileData::from_json(&item.file_data);
@@ -2824,6 +2836,7 @@ impl Render for ClipboardListView {
                                 let note_input = this.note_input.clone();
                                 let (
                                     show_source_app,
+                                    detect_links,
                                     show_original_on_hover,
                                     show_page_title,
                                     search_terms,
@@ -2832,6 +2845,7 @@ impl Render for ClipboardListView {
                                     let state = this.state.read(cx);
                                     (
                                         state.settings.show_source_app,
+                                        state.settings.auto_detect_links,
                                         state.settings.show_original_on_hover,
                                         state.settings.auto_fetch_url_title,
                                         state.filters.keyword_terms(),
@@ -3036,6 +3050,7 @@ impl Render for ClipboardListView {
                                                     .toolbar_below(toolbar_below)
                                                     .toolbar_bounds(this.toolbar_bounds.clone())
                                                     .show_source_app(show_source_app)
+                                                    .detect_links(detect_links)
                                                     .privacy_types(this.state.read(cx).settings.privacy_protection_types.clone())
                                                     .show_original_on_hover(show_original_on_hover)
                                                     .show_page_title(show_page_title)

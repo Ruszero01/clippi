@@ -607,6 +607,39 @@ impl Render for EditPanel {
                     )
                     .child(div().flex_1())
                     .child(icon_button(
+                        "edit-extract-links",
+                        "\u{e6d7}",
+                        text_2,
+                        accent,
+                        hover_bg,
+                        Some(I18nKey::ExtractLinks.text()),
+                        {
+                            let this = this.clone();
+                            move |window, cx| {
+                                this.update(cx, |panel, cx| {
+                                    let text = panel.content_input.read(cx).value().to_string();
+                                    let html = panel.selected_type == "html";
+                                    let links = crate::core::links::extract_content(
+                                        if html { "" } else { &text },
+                                        html.then_some(text.as_str()),
+                                    );
+                                    if links.is_empty() {
+                                        panel.state.update(cx, |s, _| {
+                                            s.show_toast(I18nKey::ToastNoLinks.text())
+                                        });
+                                        return;
+                                    }
+                                    panel.selected_type = "plain_text".into();
+                                    panel.rich_cache = None;
+                                    panel.content_input.update(cx, |input, cx| {
+                                        input.set_value(links.join("\n"), window, cx)
+                                    });
+                                    cx.notify();
+                                });
+                            }
+                        },
+                    ))
+                    .child(icon_button(
                         "edit-find",
                         "\u{e64c}",
                         if self.find_open { accent } else { text_2 },

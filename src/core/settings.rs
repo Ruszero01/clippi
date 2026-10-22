@@ -212,6 +212,10 @@ pub struct AppSettings {
     pub tag_order: Vec<String>,
     #[serde(default = "default_ocr_enabled")]
     pub ocr_enabled: bool, // image OCR auto-detection toggle
+    #[serde(default)]
+    pub auto_detect_links: bool,
+    #[serde(default)]
+    pub delete_source_after_link_extraction: bool,
     #[serde(default = "default_qr_enabled")]
     pub qr_enabled: bool, // image QR auto-detection toggle
     #[serde(default)]
@@ -413,6 +417,8 @@ impl Default for AppSettings {
             tag_order: Vec::new(),
             ocr_enabled: false,
             qr_enabled: true,
+            auto_detect_links: false,
+            delete_source_after_link_extraction: false,
             hide_taskbar_icon: false,
             block_system_window_behaviors: false,
             auto_focus_search: false,

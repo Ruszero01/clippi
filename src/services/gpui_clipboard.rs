@@ -16,29 +16,27 @@ use crate::core::types::{ClipboardItem, ContentType, RichData};
 use crate::platform::clipboard::{create_listener, ClipboardListener, ClipboardShared};
 use crate::state::app::AppState;
 
-const MAX_IMAGE_ANALYSIS_QUEUE: usize = 64;
+const MAX_ANALYSIS_QUEUE: usize = 64;
 
 #[derive(Clone)]
-struct ImageAnalysisJob {
+struct AnalysisJob {
     img_path: String,
     content_hash: u64,
     db_path: String,
     do_qr: bool,
     do_ocr: bool,
+    do_links: bool,
 }
 
-struct ImageAnalysisWorker {
-    queue: Arc<(Mutex<VecDeque<ImageAnalysisJob>>, Condvar)>,
+struct AnalysisWorker {
+    queue: Arc<(Mutex<VecDeque<AnalysisJob>>, Condvar)>,
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
-impl ImageAnalysisWorker {
+impl AnalysisWorker {
     fn new(needs_refresh: Arc<AtomicBool>) -> Self {
-        let queue = Arc::new((
-            Mutex::new(VecDeque::<ImageAnalysisJob>::new()),
-            Condvar::new(),
-        ));
+        let queue = Arc::new((Mutex::new(VecDeque::<AnalysisJob>::new()), Condvar::new()));
         let running = Arc::new(AtomicBool::new(true));
         let worker_queue = queue.clone();
         let worker_running = running.clone();
@@ -62,6 +60,9 @@ impl ImageAnalysisWorker {
                     break;
                 };
 
+                if job.do_links {
+                    run_link_analysis(&job, &needs_refresh);
+                }
                 if job.do_qr {
                     run_qr_analysis(&job, &needs_refresh);
                 }
@@ -78,27 +79,28 @@ impl ImageAnalysisWorker {
         }
     }
 
-    fn enqueue(&self, job: ImageAnalysisJob) {
+    fn enqueue(&self, job: AnalysisJob) {
         let (lock, condvar) = &*self.queue;
         let mut jobs = lock.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = jobs
             .iter_mut()
             .find(|existing| existing.content_hash == job.content_hash)
         {
+            existing.do_links |= job.do_links;
             existing.do_qr |= job.do_qr;
             existing.do_ocr |= job.do_ocr;
             return;
         }
-        if jobs.len() >= MAX_IMAGE_ANALYSIS_QUEUE {
+        if jobs.len() >= MAX_ANALYSIS_QUEUE {
             jobs.pop_front();
-            log::warn!("Image analysis queue is full; dropped the oldest pending job");
+            log::warn!("Clipboard analysis queue is full; dropped the oldest pending job");
         }
         jobs.push_back(job);
         condvar.notify_one();
     }
 }
 
-impl Drop for ImageAnalysisWorker {
+impl Drop for AnalysisWorker {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
         self.queue.1.notify_one();
@@ -114,7 +116,8 @@ pub struct GpuiClipboardService {
     /// Set to true by async OCR threads when results are written to DB.
     /// Checked at the start of each poll cycle to trigger a UI refresh.
     needs_refresh: Arc<AtomicBool>,
-    image_analysis: ImageAnalysisWorker,
+    image_analysis: AnalysisWorker,
+    link_analysis: AnalysisWorker,
 }
 
 impl GpuiClipboardService {
@@ -137,13 +140,15 @@ impl GpuiClipboardService {
             log::error!("Failed to start clipboard listener: {err}");
         }
         let needs_refresh = Arc::new(AtomicBool::new(false));
-        let image_analysis = ImageAnalysisWorker::new(needs_refresh.clone());
+        let image_analysis = AnalysisWorker::new(needs_refresh.clone());
+        let link_analysis = AnalysisWorker::new(needs_refresh.clone());
 
         Self {
             shared,
             listener,
             needs_refresh,
             image_analysis,
+            link_analysis,
         }
     }
 
@@ -320,6 +325,23 @@ impl GpuiClipboardService {
             }
             changed = true;
 
+            // Independent bounded worker: OCR cannot delay text recognition.
+            if state.settings.auto_detect_links
+                && matches!(
+                    item.content_type,
+                    ContentType::PlainText | ContentType::RichText
+                )
+            {
+                self.link_analysis.enqueue(AnalysisJob {
+                    img_path: String::new(),
+                    content_hash: item.content_hash,
+                    db_path: db_path.clone(),
+                    do_qr: false,
+                    do_ocr: false,
+                    do_links: true,
+                });
+            }
+
             // ── Post-upsert: run detection for items that need it ──
             if need_qr || need_ocr {
                 self.process_image_analysis(&item, &db_path, need_qr, need_ocr);
@@ -355,12 +377,13 @@ impl GpuiClipboardService {
         do_qr: bool,
         do_ocr: bool,
     ) {
-        self.image_analysis.enqueue(ImageAnalysisJob {
+        self.image_analysis.enqueue(AnalysisJob {
             img_path: item.image_path.clone(),
             content_hash: item.content_hash,
             db_path: db_path.to_string(),
             do_qr,
             do_ocr,
+            do_links: false,
         });
     }
 }
@@ -399,7 +422,7 @@ fn compute_size(item: &ClipboardItem) -> i64 {
     }
 }
 
-fn run_qr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
+fn run_qr_analysis(job: &AnalysisJob, needs_refresh: &AtomicBool) {
     let path = std::path::Path::new(&job.img_path);
     // Ready-only push guarantees the cache file exists before this job is
     // enqueued; this check is a protocol assertion, not a retry loop.
@@ -430,7 +453,7 @@ fn run_qr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
     }
 }
 
-fn run_ocr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
+fn run_ocr_analysis(job: &AnalysisJob, needs_refresh: &AtomicBool) {
     let path = std::path::Path::new(&job.img_path);
     if !path.is_file() {
         log::error!(
@@ -457,5 +480,85 @@ fn run_ocr_analysis(job: &ImageAnalysisJob, needs_refresh: &AtomicBool) {
         }
         Ok(_) => { /* empty result, skip */ }
         Err(e) => log::error!("OCR error: {e}"),
+    }
+}
+
+/// Full extraction and URL validation are deferred until the user clicks.
+fn run_link_analysis(job: &AnalysisJob, needs_refresh: &AtomicBool) {
+    let path = crate::core::paths::resolve_db_path(&job.db_path);
+    let Ok(db) = crate::core::db::Database::open(&path.to_string_lossy()) else {
+        return;
+    };
+    let Ok(Some(item)) = db.get_by_hash(job.content_hash) else {
+        return;
+    };
+    if !matches!(
+        item.content_type,
+        ContentType::PlainText | ContentType::RichText
+    ) {
+        return;
+    }
+    let rich = RichData::from_json(&item.rich_data);
+    let found = crate::core::links::has_candidate(&item.full_text)
+        || rich
+            .html
+            .as_deref()
+            .is_some_and(crate::core::links::has_candidate);
+    if rich.has_links != Some(found) {
+        match db.update_link_detection(&item, found) {
+            Ok(()) => needs_refresh.store(true, Ordering::SeqCst),
+            Err(e) => log::error!("Link detection: {e}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+    #[test]
+    fn backfill_preserves_content_timestamps_and_other_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("links.db").to_string_lossy().to_string();
+        let db = crate::core::db::Database::open(&path).unwrap();
+        let rich = RichData {
+            html: Some("<a href=\"https://example.com\">标签</a>".into()),
+            ..Default::default()
+        };
+        let item = ClipboardItem::new_text(0, "标签", ContentType::RichText, None, Some(&rich));
+        db.upsert(&item).unwrap();
+        let before = db.get_by_hash(item.content_hash).unwrap().unwrap();
+        let refresh = AtomicBool::new(false);
+        run_link_analysis(
+            &AnalysisJob {
+                img_path: String::new(),
+                content_hash: item.content_hash,
+                db_path: path,
+                do_qr: false,
+                do_ocr: false,
+                do_links: true,
+            },
+            &refresh,
+        );
+        let after = db.get_by_hash(item.content_hash).unwrap().unwrap();
+        assert_eq!(after.full_text, before.full_text);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(RichData::from_json(&after.rich_data).html, rich.html);
+        assert_eq!(RichData::from_json(&after.rich_data).has_links, Some(true));
+        assert!(refresh.load(Ordering::SeqCst));
+        let listed = db
+            .load_filtered_list(
+                &crate::core::filters::ClipboardFilters::default(),
+                10,
+                "updated_at",
+            )
+            .unwrap();
+        assert_eq!(
+            RichData::from_json(&listed[0].rich_data).has_links,
+            Some(true)
+        );
+        // A stale analysis must not overwrite concurrent rich-text edits.
+        db.update_rich_data(after.id, "{}").unwrap();
+        db.update_link_detection(&after, true).unwrap();
+        assert_eq!(db.get_by_id(after.id).unwrap().unwrap().rich_data, "{}");
     }
 }

@@ -40,6 +40,8 @@ impl SettingsPanel {
         let show_original_on_hover = app.settings.show_original_on_hover;
         let ocr_enabled = app.settings.ocr_enabled;
         let qr_enabled = app.settings.qr_enabled;
+        let auto_detect_links = app.settings.auto_detect_links;
+        let delete_link_source = app.settings.delete_source_after_link_extraction;
         let auto_focus_search = app.settings.auto_focus_search;
         let clear_search_on_show = app.settings.clear_search_on_show;
         let auto_fetch_url_title = app.settings.auto_fetch_url_title;
@@ -397,7 +399,22 @@ impl SettingsPanel {
             container.child(self.settings_group(I18nKey::GroupCopyPaste.text(), paste_rows));
 
         // --- Content detection ---
-        let detect_rows: Vec<AnyElement> = vec![
+        let mut detect_rows: Vec<AnyElement> = vec![
+            self.render_toggle_row(
+                I18nKey::SettingDetectLinks,
+                I18nKey::DescDetectLinksOn,
+                I18nKey::DescDetectLinksOff,
+                auto_detect_links,
+                window,
+                cx,
+                |state, _this, _window, cx| {
+                    state.update(cx, |s, _cx| {
+                        s.settings.auto_detect_links = !s.settings.auto_detect_links;
+                        s.settings.save();
+                    });
+                },
+            )
+            .into_any_element(),
             self.render_toggle_row(
                 I18nKey::SettingOcr,
                 I18nKey::DescOcrOn,
@@ -450,6 +467,27 @@ impl SettingsPanel {
             )
             .into_any_element(),
         ];
+        if auto_detect_links {
+            detect_rows.insert(
+                1,
+                self.render_toggle_row(
+                    I18nKey::SettingDeleteLinkSource,
+                    I18nKey::DescDeleteLinkSourceOn,
+                    I18nKey::DescDeleteLinkSourceOff,
+                    delete_link_source,
+                    window,
+                    cx,
+                    |state, _this, _window, cx| {
+                        state.update(cx, |s, _| {
+                            s.settings.delete_source_after_link_extraction =
+                                !s.settings.delete_source_after_link_extraction;
+                            s.settings.save();
+                        });
+                    },
+                )
+                .into_any_element(),
+            );
+        }
         container =
             container.child(self.settings_group(I18nKey::GroupContentDetect.text(), detect_rows));
 

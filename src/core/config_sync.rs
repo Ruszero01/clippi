@@ -213,6 +213,18 @@ pub struct PortableSettingsV1 {
     // ── Clipboard Features ──
     pub ocr_enabled: bool,
     pub qr_enabled: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_detect_links: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub delete_source_after_link_extraction: Option<bool>,
     pub auto_fetch_url_title: bool,
     pub copy_sound_enabled: bool,
     pub copy_sound_file: String,
@@ -369,6 +381,8 @@ impl PortableSettingsV1 {
 
             ocr_enabled: settings.ocr_enabled,
             qr_enabled: settings.qr_enabled,
+            auto_detect_links: Some(settings.auto_detect_links),
+            delete_source_after_link_extraction: Some(settings.delete_source_after_link_extraction),
             auto_fetch_url_title: settings.auto_fetch_url_title,
             copy_sound_enabled: settings.copy_sound_enabled,
             copy_sound_file: settings.copy_sound_file.clone(),
@@ -443,8 +457,14 @@ impl PortableSettingsV1 {
         }
 
         // ── Clipboard Features ──
+        if let Some(enabled) = self.delete_source_after_link_extraction {
+            result.delete_source_after_link_extraction = enabled;
+        }
         result.ocr_enabled = self.ocr_enabled;
         result.qr_enabled = self.qr_enabled;
+        if let Some(enabled) = self.auto_detect_links {
+            result.auto_detect_links = enabled;
+        }
         result.auto_fetch_url_title = self.auto_fetch_url_title;
         result.copy_sound_enabled = self.copy_sound_enabled;
         result.copy_sound_file = self.copy_sound_file.clone();
