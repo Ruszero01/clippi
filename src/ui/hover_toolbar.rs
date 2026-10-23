@@ -413,7 +413,13 @@ impl RenderOnce for HoverToolbar {
             .gap(sc(2.))
             // The tabs overlap the preceding row. Own their hit area so mouse
             // movement cannot select that row or clear the active toolbar.
-            .occlude()
+            // `block_mouse_except_scroll` (not `occlude`): GPUI's `occlude`
+            // makes every hitbox behind this one report `should_handle_scroll()
+            // == false`, which includes the list's scroll container — wheel
+            // scrolling would die while the pointer is on the tabs. This keeps
+            // the hover/click isolation and lets wheel deltas through, so the
+            // list keeps scrolling under a stationary pointer.
+            .block_mouse_except_scroll()
             .on_mouse_move(|_event, _window, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation()
