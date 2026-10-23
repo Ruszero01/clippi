@@ -591,15 +591,25 @@ impl RootView {
         let _activation_subscription =
             cx.observe_window_activation(window, move |this, window, cx| {
                 let enabled = this.state.read(cx).settings.alt_shortcuts_enabled;
-                let pressed = window.is_window_active() && enabled && window.modifiers().alt;
-                if this.state.read(cx).alt_pressed != pressed {
-                    // Notify on the `AppState` context too: the views that paint
-                    // the badges observe that entity, so they must be marked
-                    // dirty (same as the settings toggle path).
-                    this.state.update(cx, |state, cx| {
-                        state.set_alt_pressed(pressed);
+                // gpui refreshes the window's modifier snapshot from the live
+                // keyboard right before this observer runs, so a still-held Alt
+                // appears here even though the window never saw its press. Feed
+                // it through the gate: the hold that summoned the panel (or that
+                // was already down when focus returned) must not reveal the
+                // badges, while a release still clears them.
+                let active = window.is_window_active();
+                let observed = enabled && active && window.modifiers().alt;
+                let changed = this.state.update(cx, |state, cx| {
+                    state.main_window_active = active;
+                    let changed = state.observe_alt(observed);
+                    if changed {
+                        // The views that paint the badges observe `AppState`, so
+                        // they must be marked dirty (same as the settings path).
                         cx.notify();
-                    });
+                    }
+                    changed
+                });
+                if changed {
                     cx.notify();
                 }
             });
@@ -1509,14 +1519,19 @@ impl Render for RootView {
                     // Track the Alt modifier for floating shortcut badges and
                     // Alt+key dispatch. The modifiers event only fires when a
                     // modifier key actually changes state, so this is cheap and
-                    // fires on both press and release of Alt.
+                    // fires on both press and release of Alt. Observations made
+                    // while the one-shot gate is armed (the Alt that summoned
+                    // the panel) are ignored; its release clears the gate.
                     let enabled = state_handle.read(cx).settings.alt_shortcuts_enabled;
-                    let pressed = enabled && event.modifiers.alt;
-                    if state_handle.read(cx).alt_pressed != pressed {
-                        state_handle.update(cx, |state, cx| {
-                            state.set_alt_pressed(pressed);
+                    let down = enabled && event.modifiers.alt;
+                    let changed = state_handle.update(cx, |state, cx| {
+                        let changed = state.observe_alt(down);
+                        if changed {
                             cx.notify();
-                        });
+                        }
+                        changed
+                    });
+                    if changed {
                         notify_this.update(cx, |_, cx| cx.notify());
                     }
                 }

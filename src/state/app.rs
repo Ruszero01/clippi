@@ -146,6 +146,35 @@ pub struct AppState {
     /// Updated from the window's modifiers-changed callback; drives the
     /// floating shortcut badges and Alt+key dispatch.
     pub alt_pressed: bool,
+    /// Whether the main window currently owns the keyboard focus.
+    ///
+    /// Tracked from the window's activation observer. The live-keyboard
+    /// reconciliation of the hint badges (`WindowManager::poll_alt_hint`)
+    /// only runs while this is true: a panel that is visible but not focused
+    /// must not light up because Alt was pressed in another window.
+    pub main_window_active: bool,
+    /// One-shot gate for the Alt hints: while set, an Alt that is already held
+    /// does not reveal the badges.
+    ///
+    /// The panel is usually summoned with an Alt+key hotkey, and both
+    /// platforms refresh the window's modifier snapshot from the physical
+    /// keyboard the moment it gains focus. Without the gate the badges would
+    /// light up for the summoning gesture itself — a gesture aimed at opening
+    /// the panel, not at asking for hints — and then stick, because the
+    /// release that follows is routinely delivered before the window owns the
+    /// keyboard (and Windows then suppresses the redundant
+    /// `ModifiersChanged`). The gate is cleared as soon as Alt is observed
+    /// released, so the next press reveals the hints normally.
+    pub alt_hint_gated: bool,
+    /// Bumped when the window hides, so the hint fade transitions restart
+    /// instead of resuming the previous session's progress.
+    ///
+    /// Hiding the window does not render a final frame: a hint that was
+    /// visible when the user closed the panel is left at the end of its
+    /// fade-in. Without a fresh key the next show would paint that hint at
+    /// full brightness and only then fade it out over the freshly opened
+    /// panel. The views that own the transitions key them with this value.
+    pub alt_hint_generation: u64,
     /// Whether any persisted item currently has a custom hotkey.
     pub has_hotkey_items: bool,
     /// Whether any persisted item is currently favorited.
@@ -492,6 +521,9 @@ impl AppState {
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
             alt_pressed: false,
+            main_window_active: false,
+            alt_hint_gated: false,
+            alt_hint_generation: 0,
             last_usage_touched_ids: Vec::new(),
             usage_sync_requires_full_reload: false,
             has_hotkey_items: stats.has_hotkey_items,
@@ -1080,8 +1112,47 @@ impl AppState {
     /// Alt+key shortcuts in the root view. Persisting the pressed state in
     /// the app state (instead of a render-local variable) lets child views
     /// re-render consistently when the modifier changes.
+    ///
+    /// This is the forced/reset entry point (hide, turning the feature off,
+    /// tests); live keyboard observations go through [`Self::observe_alt`].
     pub fn set_alt_pressed(&mut self, pressed: bool) {
+        if !pressed {
+            // A stale gate must not survive a hide/reset: the next show decides
+            // afresh whether the summoning gesture left Alt held.
+            self.alt_hint_gated = false;
+        }
         self.alt_pressed = pressed;
+    }
+
+    /// Feed an observed Alt state into the hint badges.
+    ///
+    /// While [`Self::alt_hint_gated`] is set, a held Alt is ignored: it is
+    /// still the key that summoned the panel. Observing the release clears the
+    /// gate, so the next press is honoured. Returns whether the *visible* hint
+    /// state changed (the gate itself flips without needing a repaint).
+    pub fn observe_alt(&mut self, down: bool) -> bool {
+        if down {
+            if self.alt_hint_gated {
+                return false;
+            }
+        } else {
+            self.alt_hint_gated = false;
+        }
+        if self.alt_pressed == down {
+            return false;
+        }
+        self.alt_pressed = down;
+        true
+    }
+
+    /// Hide the hints and keep them hidden until Alt is released once.
+    ///
+    /// Used when the panel gains focus while Alt is already down — the
+    /// summoning Alt+key gesture. Returns whether the visible hint state
+    /// changed.
+    pub fn arm_alt_hint_gate(&mut self) -> bool {
+        self.alt_hint_gated = true;
+        std::mem::take(&mut self.alt_pressed)
     }
 
     /// Toggle a tag filter and reload visible items.
@@ -3967,6 +4038,9 @@ mod tests {
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
             alt_pressed: false,
+            main_window_active: false,
+            alt_hint_gated: false,
+            alt_hint_generation: 0,
             has_hotkey_items: false,
             has_favorite_items: false,
             clearable_history_count: 0,
@@ -7217,5 +7291,48 @@ mod tests {
         assert_eq!(state.items[0].updated_at, before_updated);
         assert!(!dirty.load(Ordering::SeqCst));
         assert!(state.last_usage_touched_ids.is_empty());
+    }
+
+    #[test]
+    fn alt_hints_ignore_the_hold_that_summoned_the_panel() {
+        let (mut state, _dirty) = test_state();
+
+        // The summoning Alt+key gesture is still holding Alt when the panel
+        // takes focus: arm the gate before that held state is observed, so the
+        // badges never light up for the gesture.
+        assert!(!state.arm_alt_hint_gate());
+        assert!(!state.alt_pressed);
+
+        // Repeats of the same hold (key auto-repeat, activation snapshots) and
+        // the polled physical state must all stay gated.
+        assert!(!state.observe_alt(true));
+        assert!(!state.alt_pressed);
+
+        // The release clears the gate without showing anything...
+        assert!(!state.observe_alt(false));
+        assert!(!state.alt_hint_gated);
+        assert!(!state.alt_pressed);
+
+        // ...so the next press reveals the hints normally.
+        assert!(state.observe_alt(true));
+        assert!(state.alt_pressed);
+        assert!(state.observe_alt(false));
+        assert!(!state.alt_pressed);
+    }
+
+    #[test]
+    fn alt_hint_gate_does_not_survive_a_reset() {
+        let (mut state, _dirty) = test_state();
+        state.observe_alt(true);
+        state.arm_alt_hint_gate();
+        assert!(state.alt_hint_gated);
+
+        // Hiding the window (or turning the feature off) resets both the
+        // badges and the gate, so the next show decides afresh.
+        state.set_alt_pressed(false);
+        assert!(!state.alt_hint_gated);
+        assert!(!state.alt_pressed);
+        assert!(state.observe_alt(true));
+        assert!(state.alt_pressed);
     }
 }

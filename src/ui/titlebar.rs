@@ -135,14 +135,18 @@ impl Render for Titlebar {
         let state = self.state.read(cx);
         let alt_pressed = state.alt_pressed && state.settings.alt_shortcuts_enabled;
         let emoji_enabled = state.settings.emoji_panel_enabled;
+        // Hiding the window leaves the fade transitions mid-flight (no final
+        // frame is rendered), so key them by the hide generation: the next
+        // show starts from settled instead of flashing a stale hint.
+        let hint_generation = state.alt_hint_generation;
         let favorite_hint_progress = shortcut_progress(
-            "titlebar-favorites-shortcut",
+            ("titlebar-favorites-shortcut", hint_generation),
             alt_pressed && self.alt_shortcuts_available && show_favorites_filter,
             window,
             cx,
         );
         let emoji_hint_progress = shortcut_progress(
-            "titlebar-emoji-shortcut",
+            ("titlebar-emoji-shortcut", hint_generation),
             alt_pressed && self.emoji_shortcut_available && emoji_enabled,
             window,
             cx,
@@ -155,13 +159,13 @@ impl Render for Titlebar {
             )
         };
         let hotkeys_hint_progress = shortcut_progress(
-            "titlebar-hotkeys-shortcut",
+            ("titlebar-hotkeys-shortcut", hint_generation),
             alt_pressed && self.hotkeys_shortcut_available && show_hotkeys_filter,
             window,
             cx,
         );
         let transfer_hint_progress = shortcut_progress(
-            "titlebar-transfer-shortcut",
+            ("titlebar-transfer-shortcut", hint_generation),
             alt_pressed && self.transfer_shortcut_available && show_transfer_filter,
             window,
             cx,

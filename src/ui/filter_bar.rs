@@ -371,6 +371,10 @@ impl Render for FilterBar {
         let alt_pressed = self.alt_shortcuts_available
             && state_snapshot.alt_pressed
             && state_snapshot.settings.alt_shortcuts_enabled;
+        // Hiding the window leaves the fade transitions mid-flight (no final
+        // frame is rendered), so key them by the hide generation: the next
+        // show starts from settled instead of flashing a stale hint.
+        let alt_hint_generation = state_snapshot.alt_hint_generation;
         let source_enabled = state_snapshot.settings.show_source_app_filter();
         let has_tag_filter = !state_snapshot.filters.tag_ids.is_empty();
         let viewport = window.viewport_size();
@@ -521,7 +525,7 @@ impl Render for FilterBar {
                                             .child(content);
                                     external_shortcut(
                                         SharedString::from(format!(
-                                            "filter-shortcut-external-{key}"
+                                            "filter-shortcut-external-{key}-{alt_hint_generation}"
                                         )),
                                         (index + 1).to_string(),
                                         alt_pressed && index < 9,

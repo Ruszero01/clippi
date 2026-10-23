@@ -535,6 +535,23 @@ pub(crate) fn is_protected_single_hotkey(hotkey: HotKey) -> bool {
     hotkey.mods.is_empty() && is_protected_single_key(hotkey.key)
 }
 
+/// Whether Alt/Option is physically down right now.
+///
+/// Unlike the window's cached modifier snapshot this queries the live
+/// keyboard. A window summoned by an Alt+key hotkey never received the press
+/// that is still being held when it appears, and the release that follows can
+/// land before it owns the keyboard — the floating shortcut badges use this to
+/// tell a carried-over Alt apart from a deliberate press.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub(crate) fn alt_is_down() -> bool {
+    platform_input::alt_is_down()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(crate) fn alt_is_down() -> bool {
+    false
+}
+
 fn format_recorded_hotkey(modifiers: Modifiers, code: Code) -> Option<HotkeyRecordingPress> {
     if code == Code::Escape {
         return Some(HotkeyRecordingPress::Cancel);
@@ -1859,6 +1876,12 @@ mod platform_input {
         })
     }
 
+    pub fn alt_is_down() -> bool {
+        // SAFETY: `GetAsyncKeyState` is a read-only query safe from any thread.
+        // `VK_MENU` covers both Alt keys; a negative high bit means down.
+        unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x12) < 0 }
+    }
+
     pub fn code_for_vk(vk: u32) -> Option<Code> {
         let key_map: &[(i32, Code)] = &[
             (0x41, Code::KeyA),
@@ -1973,6 +1996,12 @@ mod platform_input {
             modifiers |= Modifiers::SHIFT;
         }
         modifiers
+    }
+
+    pub fn alt_is_down() -> bool {
+        // `pressed_modifiers` only samples the left Option; the badges care
+        // about either key. 0x3D is `kVK_RightOption`.
+        is_key_pressed(KVK_OPTION) || is_key_pressed(0x3D)
     }
 
     pub fn pressed_key() -> Option<Code> {

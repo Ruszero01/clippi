@@ -1993,6 +1993,10 @@ impl WindowManager {
 
         let is_self_fg = self.is_self_foreground();
 
+        // Keep the Alt hint badges in step with the live keyboard even when a
+        // modifier event never reaches the window (`poll_alt_hint`).
+        self.poll_alt_hint(cx);
+
         // --- Auto-hide logic for main window ---
         // --- Guard conditions: any true → skip auto-hide ---
         // Only a pending Alt/Win gesture temporarily suspends focus-loss hiding.
@@ -2013,6 +2017,95 @@ impl WindowManager {
         }
 
         self.hide(cx);
+    }
+
+    /// Hide the shortcut badges for the Alt that is still held by the gesture
+    /// that summoned this window, and watch for its release.
+    ///
+    /// The gate itself lives in `AppState`; the watcher only exists so the
+    /// release is noticed within a frame. [`Self::poll_alt_hint`] reconciles the
+    /// state too, but a release immediately followed by the next press would
+    /// fall between two 200 ms poll ticks and leave the gate armed — the press
+    /// would then be ignored exactly when the user expects the hints.
+    fn arm_alt_hint_gate(&mut self, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            if state.arm_alt_hint_gate() {
+                cx.notify();
+            }
+        });
+        // Detached: the task ends on its own once the gate is disarmed or the
+        // window hides. A stale instance from a previous show can linger for a
+        // single tick, which is harmless — it polls the same gate.
+        cx.spawn(async move |weak_self, cx| loop {
+            Timer::after(Duration::from_millis(16)).await;
+            let Some(this) = weak_self.upgrade() else {
+                break;
+            };
+            let keep_watching = this
+                .update(cx, |wm, cx| wm.poll_alt_hint_gate(cx))
+                .unwrap_or(false);
+            if !keep_watching {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// Disarm the gate once the carried-over Alt is released.
+    ///
+    /// Returns whether the release watcher should keep polling.
+    fn poll_alt_hint_gate(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.visible || !self.state.read(cx).alt_hint_gated {
+            return false;
+        }
+        if crate::platform::hotkey::alt_is_down() {
+            return true;
+        }
+        self.apply_alt_hint(false, cx);
+        false
+    }
+
+    /// Reconcile the hint badges with the live keyboard once per poll tick.
+    ///
+    /// Modifier events are the normal path. This is the fallback for events
+    /// the window never sees: the release of the Alt that summoned the panel
+    /// (delivered before the window owns the keyboard, after which Windows
+    /// suppresses the redundant `ModifiersChanged`), or a later press whose
+    /// event was suppressed for the same reason. Without it a missed release
+    /// would leave the badges stuck on and a missed press would keep them
+    /// hidden.
+    fn poll_alt_hint(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+        let (active, enabled) = {
+            let state = self.state.read(cx);
+            (
+                state.main_window_active,
+                state.settings.alt_shortcuts_enabled,
+            )
+        };
+        // A visible but unfocused panel must not light up for Alt pressed in
+        // the window (or application) that does have the focus.
+        if !active || !enabled {
+            return;
+        }
+        let down = crate::platform::hotkey::alt_is_down();
+        // A still-held Alt behind an armed gate is the summoning gesture; the
+        // release watcher owns that transition.
+        if down && self.state.read(cx).alt_hint_gated {
+            return;
+        }
+        self.apply_alt_hint(down, cx);
+    }
+
+    /// Push an observed Alt state into the badges, repainting on change.
+    fn apply_alt_hint(&mut self, down: bool, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            if state.observe_alt(down) {
+                cx.notify();
+            }
+        });
     }
 
     /// Hide the quick window if the user clicks outside its bounds.
@@ -3012,6 +3105,17 @@ impl WindowManager {
 
         let was_already_visible = self.visible;
         self.visible = true;
+        // A summoning Alt+key hotkey is still holding Alt while the panel
+        // appears, and the window takes that live modifier state in the moment
+        // it gains focus. Gate the badges so the summoning gesture does not
+        // light them up — and leave them stuck once its release is missed —
+        // so only a fresh press on the focused panel reveals the hints.
+        if !was_already_visible
+            && self.state.read(cx).settings.alt_shortcuts_enabled
+            && crate::platform::hotkey::alt_is_down()
+        {
+            self.arm_alt_hint_gate(cx);
+        }
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.set_sidebar_allowed(self.sidebar_allowed);
 
@@ -3551,8 +3655,14 @@ impl WindowManager {
         }
         // The hidden window stops receiving key events, so an Alt held at
         // hide time would otherwise leave the badge state stuck on next show.
-        self.state
-            .update(cx, |state, _cx| state.set_alt_pressed(false));
+        // The hint transitions are keyed by a generation that also moves on
+        // here: no frame is rendered after this point, so without a fresh key
+        // the next show would first paint whatever hint was frozen mid-fade
+        // and only then animate it away.
+        self.state.update(cx, |state, _cx| {
+            state.set_alt_pressed(false);
+            state.alt_hint_generation = state.alt_hint_generation.wrapping_add(1);
+        });
         self.dismiss_ui(cx);
         self.release_memory(cx);
         cx.emit(WindowManagerEvent::WindowHidden);

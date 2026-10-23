@@ -11,6 +11,11 @@ use crate::ui::{font, theme::ClippiTheme};
 const TRANSITION_MS: u64 = 160;
 
 /// Stable keys preserve the current value when Alt is released mid-animation.
+///
+/// Callers that can hide their window must fold a per-hide generation into the
+/// key: no frame is rendered after a hide, so a hint that was fully shown at
+/// that moment would otherwise be painted at full brightness on the next show
+/// and only then fade out.
 pub fn shortcut_progress(
     id: impl Into<ElementId>,
     visible: bool,
