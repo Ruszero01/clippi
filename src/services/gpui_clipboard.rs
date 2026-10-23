@@ -118,6 +118,8 @@ pub struct GpuiClipboardService {
     needs_refresh: Arc<AtomicBool>,
     image_analysis: AnalysisWorker,
     link_analysis: AnalysisWorker,
+    /// Log-dedup for "reload deferred because both windows are hidden".
+    deferred_reload_logged: bool,
 }
 
 impl GpuiClipboardService {
@@ -149,6 +151,7 @@ impl GpuiClipboardService {
             needs_refresh,
             image_analysis,
             link_analysis,
+            deferred_reload_logged: false,
         }
     }
 
@@ -186,7 +189,14 @@ impl GpuiClipboardService {
         self.shared.skip_next.clone()
     }
 
-    pub fn poll_state(&mut self, state: &mut AppState) -> bool {
+    /// Poll for clipboard changes and publish them to `state`.
+    ///
+    /// `windows_visible` tells whether any Clippi window is on screen. While
+    /// both are hidden the in-memory list is empty by design and the next show
+    /// reloads it, so the UI reload is deferred instead of paying for a
+    /// (possibly slow) keyword scan with nothing to display. Database side
+    /// effects — upserts, OCR/QR enqueueing, pruning — still run.
+    pub fn poll_state(&mut self, state: &mut AppState, windows_visible: bool) -> bool {
         // --- ── Handle async OCR completion ── ---
         let needs_reload = self.needs_refresh.swap(false, Ordering::SeqCst)
             || state.needs_reload.swap(false, Ordering::SeqCst)
@@ -224,6 +234,13 @@ impl GpuiClipboardService {
 
         if pending.is_empty() {
             if needs_reload || pending_images_changed {
+                if !windows_visible {
+                    // Nothing to repaint: re-arm and let the next show reload.
+                    state.needs_reload.store(true, Ordering::SeqCst);
+                    self.log_deferred_reload();
+                    return false;
+                }
+                self.deferred_reload_logged = false;
                 state.reload_items();
                 return true;
             }
@@ -359,15 +376,31 @@ impl GpuiClipboardService {
         }
 
         if changed || needs_reload {
+            // Pruning is a database side effect and must keep running while the
+            // windows are hidden; only the UI reload is deferred.
             if state.settings.max_items > 0 {
                 if let Err(err) = state.db.prune_items_over_limit(state.settings.max_items) {
                     log::error!("Failed to prune clipboard items: {err}");
                 }
             }
-            state.reload_items();
+            if windows_visible {
+                self.deferred_reload_logged = false;
+                state.reload_items();
+            } else {
+                state.needs_reload.store(true, Ordering::SeqCst);
+                self.log_deferred_reload();
+            }
         }
 
-        changed || needs_reload || pending_images_changed
+        (changed || needs_reload || pending_images_changed) && windows_visible
+    }
+
+    /// Log once per hidden episode that the UI reload was deferred.
+    fn log_deferred_reload(&mut self) {
+        if !self.deferred_reload_logged {
+            self.deferred_reload_logged = true;
+            log::info!("wm clipboard reload deferred: windows hidden");
+        }
     }
 
     fn process_image_analysis(

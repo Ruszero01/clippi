@@ -15,6 +15,11 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 /// Trim the process working set so the OS reclaims idle pages.
 /// This is a hint — it resets WS limits and lets Windows evict pages
 /// that are no longer actively used. Safe to call at any time.
+///
+/// Closing the panel calls this (through [`crate::ui::window_manager`]), which
+/// is what brings the process back down to a few MB in Task Manager. The
+/// silent-start release deliberately does *not* call it: trimming right after
+/// launch evicts pages the first summon immediately needs again.
 #[cfg(target_os = "windows")]
 pub fn trim_process_working_set() {
     // SAFETY: `SetProcessWorkingSetSizeEx` with `SIZE_T(-1, -1)` and no-flags
@@ -45,6 +50,25 @@ pub fn trim_process_working_set() {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn trim_process_working_set() {
     // --- no-op on unsupported platforms ---
+}
+
+/// Set when a background WAL checkpoint finished and the process should trim
+/// its working set once that thread is gone.
+///
+/// The trim must not run inside the checkpoint thread: that thread's stack and
+/// its SQLite buffers are still mapped at that moment, so the working set only
+/// settles a few MB higher than it should. The UI poll loop picks the request
+/// up on its next tick (≤200 ms), after the thread has exited.
+static WORKING_SET_TRIM_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn request_working_set_trim() {
+    WORKING_SET_TRIM_PENDING.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Take the pending trim request, if any.
+pub fn take_working_set_trim_request() -> bool {
+    WORKING_SET_TRIM_PENDING.swap(false, std::sync::atomic::Ordering::AcqRel)
 }
 
 /// Render an HICON to a 32x32 BGRA DIB, convert to RGBA PNG, and base64-encode.

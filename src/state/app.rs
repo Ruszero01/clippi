@@ -16,7 +16,6 @@ use crate::core::transfer_types::{
 use crate::core::types::next_tag_color;
 use crate::core::types::ClipboardItem;
 use crate::core::types::ContentType;
-use crate::core::types::DisplayKind;
 use crate::core::types::FileData;
 use crate::core::types::RichData;
 use crate::core::types::TagInfo;
@@ -141,6 +140,14 @@ pub struct AppState {
     /// Page the quick popup renders while the filters are separate. Always empty
     /// while they are shared, because the popup renders `items` directly then.
     quick_items: Vec<ClipboardItem>,
+    /// Whether the quick popup is on screen.
+    ///
+    /// The popup keeps its own page only while its filters are separate, and
+    /// `reload_items()` used to rebuild that page on every keystroke — a full
+    /// second list query for a window the user was not even looking at. The
+    /// popup reloads itself whenever it opens (`WindowManager::show_quick_window`),
+    /// so a hidden page can stay stale and the rebuild is skipped.
+    pub quick_window_visible: bool,
     /// Whether the Alt modifier is currently held down.
     ///
     /// Updated from the window's modifiers-changed callback; drives the
@@ -285,45 +292,22 @@ pub struct AppState {
     pub update_phase: UpdatePhase,
 }
 
-/// Pinyin-aware matching now lives in `core::search::text_matches_term` —
-/// the single implementation shared with the transfer-station search and the
-/// highlight renderer. This keeps filtering and highlighting in lockstep.
-fn item_matches_keyword(item: &crate::core::types::ClipboardItem, keyword: &str) -> bool {
-    let matches = |text: &str| crate::core::search::text_matches_term(text, keyword);
-    let full_text_matches = if matches!(item.display_kind(), DisplayKind::Html) {
-        html_text::has_visible_match(&item.full_text, matches)
-    } else {
-        matches(&item.full_text)
-    };
-    if full_text_matches {
-        return true;
-    }
-
-    if !item.rich_data.is_empty() {
-        let rich = RichData::from_json(&item.rich_data);
-
-        if let Some(html) = rich.html.as_deref() {
-            if html_text::has_visible_match(html, matches) {
-                return true;
-            }
-        }
-
-        let rich_texts = [
-            rich.rtf.as_deref(),
-            rich.ocr_text.as_deref(),
-            rich.qr_text.as_deref(),
-            rich.page_title.as_deref(),
-        ];
-        if rich_texts.into_iter().flatten().any(matches) {
-            return true;
+/// Whether an item renders through the HTML branch of `display_kind()`.
+///
+/// `display_kind()` parses `rich_data`; the keyword filter already parses the
+/// payload once per row, so it derives the same decision from that parse
+/// instead of parsing a second time.
+fn item_is_html_display(item: &ClipboardItem, rich: Option<&RichData>) -> bool {
+    match item.meta_type.as_str() {
+        "html" => true,
+        "markdown" | "rtf" | "email" | "phone" | "link" | "path" | "color" | "secret" => false,
+        _ => {
+            item.content_type == ContentType::RichText
+                && rich
+                    .and_then(|rich| rich.html.as_deref())
+                    .is_some_and(|html| !html.trim().is_empty())
         }
     }
-
-    if !item.note.is_empty() && matches(&item.note) {
-        return true;
-    }
-
-    item.tags.iter().any(|tag| matches(&tag.name))
 }
 
 /// Whether `item` matches every keyword term (AND semantics) — the same
@@ -333,9 +317,93 @@ pub(crate) fn item_matches_keywords(
     item: &crate::core::types::ClipboardItem,
     keywords: &[String],
 ) -> bool {
-    keywords
+    if keywords.is_empty() {
+        return true;
+    }
+    let terms = crate::core::search::normalize_terms(keywords);
+    // A term that normalizes to nothing matches nothing (AND semantics).
+    if terms.len() != keywords.len() {
+        return false;
+    }
+    item_matches_normalized_terms(item, &terms)
+}
+
+/// [`item_matches_keywords`] for terms the caller already normalized.
+///
+/// This is the per-row hot path: every candidate text is prepared once per row
+/// and then reused by every term. The previous implementation re-parsed
+/// `rich_data` (twice: once through `display_kind()` and once explicitly) and
+/// re-extracted the visible HTML text for each term, which is what made a
+/// keyword scan over large rich entries cost hundreds of milliseconds.
+fn item_matches_normalized_terms(item: &ClipboardItem, terms: &[String]) -> bool {
+    // One payload parse for the whole row.
+    let rich = if item.rich_data.is_empty() {
+        None
+    } else {
+        Some(RichData::from_json(&item.rich_data))
+    };
+
+    // HTML entries match their visible text; every other kind matches the
+    // stored text directly. Prepared once per row, not once per term.
+    let full_visible = if item_is_html_display(item, rich.as_ref()) {
+        Some(html_text::visible_text(&item.full_text))
+    } else {
+        None
+    };
+    let full_field =
+        crate::core::search::TextField::new(full_visible.as_deref().unwrap_or(&item.full_text));
+
+    // The HTML payload's visible text is the expensive field: materialize it
+    // only when a term gets past `full_text`, and keep it for the later terms.
+    let html_source = rich.as_ref().and_then(|rich| rich.html.as_deref());
+    let mut html_field: Option<crate::core::search::TextField<'_>> = None;
+
+    let mut rich_fields: Vec<crate::core::search::TextField<'_>> = Vec::new();
+    if let Some(rich) = rich.as_ref() {
+        for text in [
+            rich.rtf.as_deref(),
+            rich.ocr_text.as_deref(),
+            rich.qr_text.as_deref(),
+            rich.page_title.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !text.is_empty() {
+                rich_fields.push(crate::core::search::TextField::new(text));
+            }
+        }
+    }
+
+    let note_field =
+        (!item.note.is_empty()).then(|| crate::core::search::TextField::new(item.note.as_str()));
+    let tag_fields: Vec<crate::core::search::TextField<'_>> = item
+        .tags
         .iter()
-        .all(|keyword| item_matches_keyword(item, keyword))
+        .filter(|tag| !tag.name.is_empty())
+        .map(|tag| crate::core::search::TextField::new(tag.name.as_str()))
+        .collect();
+
+    terms.iter().all(|term| {
+        if full_field.matches(term) {
+            return true;
+        }
+        if let Some(source) = html_source {
+            let field = html_field.get_or_insert_with(|| {
+                crate::core::search::TextField::new(html_text::visible_text(source))
+            });
+            if field.matches(term) {
+                return true;
+            }
+        }
+        if rich_fields.iter().any(|field| field.matches(term)) {
+            return true;
+        }
+        if note_field.as_ref().is_some_and(|field| field.matches(term)) {
+            return true;
+        }
+        tag_fields.iter().any(|field| field.matches(term))
+    })
 }
 
 fn truncate_chars(text: &mut String, limit: usize) {
@@ -520,6 +588,7 @@ impl AppState {
             filters: ClipboardFilters::default(),
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
+            quick_window_visible: false,
             alt_pressed: false,
             main_window_active: false,
             alt_hint_gated: false,
@@ -614,8 +683,19 @@ impl AppState {
     }
 
     /// Reload items from database with current filters.
+    ///
+    /// This runs on the UI thread for every keystroke, on every summon and on
+    /// every background reload, so the per-call work is kept to what the
+    /// current window can actually show and a slow pass leaves a log line.
     pub fn reload_items(&mut self) {
+        let started = Instant::now();
+        // A full reload satisfies any background "the list needs refreshing"
+        // signal. Clearing it here keeps a reload deferred while the windows
+        // were hidden from turning into a second reload right after a show.
+        self.needs_reload.store(false, Ordering::SeqCst);
+        let source_started = Instant::now();
         self.refresh_source_apps();
+        let source_apps = source_started.elapsed();
         let result = if self.filters.has_keyword() {
             self.load_keyword_filtered_items()
         } else {
@@ -645,12 +725,39 @@ impl AppState {
             }
             Err(e) => log::error!("Failed to reload items: {e}"),
         }
+        let titlebar_started = Instant::now();
         self.refresh_titlebar_filter_availability();
+        let titlebar = titlebar_started.elapsed();
         // Whenever the popup does not render the main list as it is, it renders
         // a page of its own, and every reason to reload here — a fresh capture, a
-        // periodic cleanup, an edit — applies to that page as well.
-        if !self.quick_items_share_main_list() {
+        // periodic cleanup, an edit — applies to that page as well. A hidden
+        // popup, however, rebuilds that page when it next opens, so reloading it
+        // here would query a second full page for a window nobody is looking at
+        // (a cost every keyword keystroke used to pay, because an active
+        // keyword always ends the "shared page" mode).
+        let quick_started = Instant::now();
+        let quick_page_skipped = if self.quick_items_share_main_list() {
+            false
+        } else if self.quick_window_visible {
             self.quick_items = self.load_quick_items();
+            false
+        } else {
+            true
+        };
+        let quick_page = quick_started.elapsed();
+
+        let elapsed = started.elapsed();
+        if elapsed >= KEYWORD_SEARCH_SLOW_LOG {
+            log::info!(
+                "reload: {}ms items={} keyword_terms={} source_apps={}ms titlebar={}ms quick_page={}ms quick_skipped={}",
+                elapsed.as_millis(),
+                self.items.len(),
+                self.filters.keyword_terms().len(),
+                source_apps.as_millis(),
+                titlebar.as_millis(),
+                quick_page.as_millis(),
+                quick_page_skipped
+            );
         }
     }
 
@@ -900,6 +1007,14 @@ impl AppState {
                 self.order_by(),
             );
         }
+        // Normalize once per search: the per-row matcher then reuses these
+        // terms for every candidate instead of re-trimming and re-lowercasing
+        // (and, before, re-encoding the pinyin of every field) per term.
+        let terms = crate::core::search::normalize_terms(&keywords);
+        if terms.len() != keywords.len() {
+            // An all-whitespace term matches nothing, so the AND never holds.
+            return Ok(Vec::new());
+        }
 
         let result_limit = self.query_limit();
         let scan_limit = result_limit
@@ -920,7 +1035,7 @@ impl AppState {
 
             while offset < scan_limit && matches.len() < result_limit {
                 let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
-                let page = self.load_keyword_page(&keywords, page_limit, offset)?;
+                let page = self.load_keyword_page(&terms, page_limit, offset)?;
                 if page.exhausted {
                     break;
                 }
@@ -943,7 +1058,7 @@ impl AppState {
 
         'pages: while offset < scan_limit && favorite_matches.len() < result_limit {
             let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
-            let page = self.load_keyword_page(&keywords, page_limit, offset)?;
+            let page = self.load_keyword_page(&terms, page_limit, offset)?;
             if page.exhausted {
                 break;
             }
@@ -980,12 +1095,15 @@ impl AppState {
     /// rules. Both the single-bucket and the favorites-first search paths reuse
     /// this so their candidate semantics stay in lockstep.
     ///
+    /// `terms` are already normalized (see [`crate::core::search::normalize_terms`]),
+    /// so every candidate row is matched without re-normalizing them.
+    ///
     /// `KeywordPage::exhausted` reflects the raw database page, so an
     /// all-non-matching page advances the scan instead of being mistaken for
     /// the end of data.
     fn load_keyword_page(
         &self,
-        keywords: &[String],
+        terms: &[String],
         page_limit: usize,
         offset: usize,
     ) -> rusqlite::Result<KeywordPage> {
@@ -1001,7 +1119,7 @@ impl AppState {
                 item.meta_type != "path" || crate::core::types::path_is_native(&item.full_text)
             });
         }
-        page.retain(|item| item_matches_keywords(item, keywords));
+        page.retain(|item| item_matches_normalized_terms(item, terms));
         for item in &mut page {
             shrink_item_for_list(item);
         }
@@ -1022,6 +1140,24 @@ impl AppState {
         self.selected_ids.clear();
     }
 
+    /// Record whether the quick popup is on screen.
+    ///
+    /// The popup rebuilds its own page when it opens, so while it is hidden a
+    /// stale page is harmless and `reload_items()` can skip that second query.
+    pub fn set_quick_window_visible(&mut self, visible: bool) {
+        self.quick_window_visible = visible;
+    }
+
+    /// Drop the active keyword without reloading; the caller reloads next.
+    ///
+    /// The show path uses this when `clear_search_on_show` is enabled: the
+    /// search box is emptied on the first frame anyway, so paying for the
+    /// keyword scan in `show_and_focus()` first would be wasted work.
+    pub fn clear_keyword_filters(&mut self) {
+        self.filters.set_keyword("");
+        self.selected_ids.clear();
+    }
+
     /// Update keyword filter and reload visible items.
     pub fn set_keyword(&mut self, keyword: &str) {
         self.filters.set_keyword(keyword);
@@ -1039,8 +1175,9 @@ impl AppState {
         // that a user's next report can be diagnosed from `clippi.log` alone.
         if elapsed >= KEYWORD_SEARCH_SLOW_LOG {
             log::warn!(
-                "search: keyword {:?} filtered in {elapsed:?} ({} items)",
-                keyword,
+                "search: keyword {} ascii={} filtered in {elapsed:?} ({} items)",
+                keyword.chars().count(),
+                keyword.is_ascii(),
                 self.items.len()
             );
         }
@@ -4037,6 +4174,7 @@ mod tests {
             filters: ClipboardFilters::default(),
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
+            quick_window_visible: false,
             alt_pressed: false,
             main_window_active: false,
             alt_hint_gated: false,
@@ -5941,6 +6079,9 @@ mod tests {
     #[test]
     fn switching_windows_keeps_source_type_and_favorites_but_not_main_search() {
         let (mut state, _) = test_state();
+        // The quick popup is on screen in this scenario, which is what makes
+        // `reload_items()` keep its own page current.
+        state.set_quick_window_visible(true);
         state.settings.show_source_app = true;
         state.settings.source_app_filter_enabled = true;
         for (id, app, kind, text, favorite) in [
@@ -6051,6 +6192,9 @@ mod tests {
     #[test]
     fn disabling_source_controls_clears_both_windows_filters() {
         let mut state = source_filter_state();
+        // Keep the popup's own page current across the main-window reloads this
+        // test drives, the way an open popup does in production.
+        state.set_quick_window_visible(true);
         state.set_source_app_filter(Some("Browser"));
         state.set_quick_window_sync_filters(false);
         state.quick_set_source_app_filter(Some("Editor"));
@@ -6168,6 +6312,8 @@ mod tests {
     #[test]
     fn hiding_a_type_filter_leaves_neither_window_filtering_by_it() {
         let (mut state, _dirty) = test_state();
+        // The popup is open: a main-window reload must keep its page current.
+        state.set_quick_window_visible(true);
         insert_item_at_age(&mut state, 1, false, "alpha", 1);
         state.set_quick_window_sync_filters(false);
         state.quick_toggle_type_filter("image");
@@ -6184,6 +6330,9 @@ mod tests {
     #[test]
     fn a_main_window_keyword_stays_out_of_the_quick_window() {
         let (mut state, _dirty) = test_state();
+        // An open popup owns a separate page; that page is what this test
+        // checks stays unfiltered by the main window's keyword.
+        state.set_quick_window_visible(true);
         insert_item_at_age(&mut state, 1, false, "alpha", 1);
         insert_item_at_age(&mut state, 2, false, "beta", 2);
         state.filters.set_keyword("alpha");
@@ -6202,6 +6351,8 @@ mod tests {
     #[test]
     fn a_main_window_hotkeys_filter_stays_out_of_the_quick_window() {
         let (mut state, _dirty) = test_state();
+        // The popup is open, so a main-window reload refreshes its page.
+        state.set_quick_window_visible(true);
         insert_item_at_age(&mut state, 1, false, "alpha", 1);
         state.filters.toggle_hotkeys_only();
         state.reload_items();

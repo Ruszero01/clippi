@@ -24,6 +24,8 @@
 //! term paid for a full pinyin encode it could never use.
 
 use pinyin::ToPinyin;
+use std::borrow::Cow;
+use std::cell::OnceCell;
 
 /// Split user-entered search text into normalized keyword terms.
 ///
@@ -39,6 +41,47 @@ pub fn split_keyword_terms(keyword: &str) -> Vec<String> {
     terms
 }
 
+/// One candidate text prepared for matching several normalized terms.
+///
+/// The clipboard keyword filter evaluates the same fields (visible text of the
+/// HTML payload, plain text, note, tag names, …) against every term. Preparing
+/// each field once means the expensive parts are paid once per row instead of
+/// once per `(row, term)` pair: `visible_text` is materialized by the caller,
+/// and the pinyin index is encoded lazily and shared by all ASCII terms.
+pub struct TextField<'a> {
+    text: Cow<'a, str>,
+    pinyin: OnceCell<Option<PinyinIndex>>,
+}
+
+impl<'a> TextField<'a> {
+    pub fn new(text: impl Into<Cow<'a, str>>) -> Self {
+        Self {
+            text: text.into(),
+            pinyin: OnceCell::new(),
+        }
+    }
+
+    /// Whether one normalized term (trimmed, lowercased, non-empty) matches.
+    pub fn matches(&self, term: &str) -> bool {
+        if self.text.is_empty() || term.is_empty() {
+            return false;
+        }
+        if find_next_direct_match_term(&self.text, term).is_some() {
+            return true;
+        }
+        // Same reachability rule as `pinyin_index_if_reachable`: pinyin forms
+        // are plain ASCII, so a non-ASCII term can never hit them and an
+        // ASCII-only text has nothing to encode.
+        if !term.is_ascii() || self.text.is_ascii() {
+            return false;
+        }
+        self.pinyin
+            .get_or_init(|| Some(PinyinIndex::encode(&self.text)))
+            .as_ref()
+            .is_some_and(|index| index.matches(term))
+    }
+}
+
 /// Whether `text` matches a single keyword term: case-insensitive substring,
 /// full pinyin or pinyin initials.
 pub fn text_matches_term(text: &str, term: &str) -> bool {
@@ -46,11 +89,7 @@ pub fn text_matches_term(text: &str, term: &str) -> bool {
     if term.is_empty() {
         return false;
     }
-    if find_next_direct_match(text, std::slice::from_ref(&term), 0).is_some() {
-        return true;
-    }
-    pinyin_index_if_reachable(text, std::slice::from_ref(&term))
-        .is_some_and(|index| index.matches(&term))
+    TextField::new(text).matches(&term)
 }
 
 /// Whether `text` matches every keyword term (AND semantics).
@@ -59,7 +98,7 @@ pub fn text_matches_all_terms(text: &str, terms: &[String]) -> bool {
     if terms.is_empty() {
         return true;
     }
-    let lower_terms = lowercase_terms(terms);
+    let lower_terms = normalize_terms(terms);
     if lower_terms.len() != terms.len() {
         // An all-whitespace term normalizes to nothing and matches nothing.
         return false;
@@ -79,7 +118,7 @@ pub struct HighlightSegment {
 
 /// Whether any keyword term matches anywhere in `text`.
 pub fn contains_match(text: &str, terms: &[String]) -> bool {
-    let lower_terms = lowercase_terms(terms);
+    let lower_terms = normalize_terms(terms);
     if lower_terms.is_empty() {
         return false;
     }
@@ -92,7 +131,7 @@ pub fn contains_match(text: &str, terms: &[String]) -> bool {
 
 /// Byte range of the first keyword match in `text`, if any.
 pub fn first_match_range(text: &str, terms: &[String]) -> Option<(usize, usize)> {
-    let lower_terms = lowercase_terms(terms);
+    let lower_terms = normalize_terms(terms);
     if lower_terms.is_empty() || text.is_empty() {
         return None;
     }
@@ -115,7 +154,7 @@ pub fn match_ranges(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
     if text.is_empty() || terms.is_empty() {
         return Vec::new();
     }
-    let lower_terms = lowercase_terms(terms);
+    let lower_terms = normalize_terms(terms);
     if lower_terms.is_empty() {
         return Vec::new();
     }
@@ -146,7 +185,7 @@ pub fn highlight_segments(text: &str, terms: &[String]) -> Vec<HighlightSegment>
             highlighted: false,
         }];
     }
-    let lower_terms = lowercase_terms(terms);
+    let lower_terms = normalize_terms(terms);
     if lower_terms.is_empty() {
         return vec![HighlightSegment {
             text: text.to_string(),
@@ -182,7 +221,10 @@ pub fn highlight_segments(text: &str, terms: &[String]) -> Vec<HighlightSegment>
     out
 }
 
-fn lowercase_terms<T: AsRef<str>>(terms: &[T]) -> Vec<String> {
+/// Trim and lowercase keyword terms, dropping the ones that normalize to
+/// nothing. Public so callers can normalize once and then reuse the result
+/// across many candidate rows.
+pub fn normalize_terms<T: AsRef<str>>(terms: &[T]) -> Vec<String> {
     terms
         .iter()
         .map(|term| term.as_ref().trim().to_lowercase())
@@ -291,6 +333,20 @@ fn find_next_direct_match(
     best
 }
 
+/// First direct (case-insensitive substring) match of one term, if any.
+///
+/// The single-term form of [`find_next_direct_match`]. It exists so a caller
+/// holding one pre-normalized term can run the direct check without allocating
+/// a one-element `String` slice per call.
+fn find_next_direct_match_term(text: &str, lower_term: &str) -> Option<usize> {
+    for (rel_idx, _) in text.char_indices() {
+        if let Some(end) = term_end_at(text, rel_idx, lower_term) {
+            return Some(end);
+        }
+    }
+    None
+}
+
 fn choose_better_match(
     current: Option<(usize, usize)>,
     candidate: (usize, usize),
@@ -306,18 +362,31 @@ fn choose_better_match(
     }
 }
 
+/// End of `lower_term` if it starts at byte `start` of `text`, comparing
+/// character-by-character instead of materializing the folded prefix.
+///
+/// `text[start..]` is lowercased one character at a time (a char may fold to
+/// several chars). The term only matches when the whole folded text so far is a
+/// prefix of it and the term is exhausted exactly at the end of a text
+/// character — the same rule the previous `String`-building version applied.
 fn term_end_at(text: &str, start: usize, lower_term: &str) -> Option<usize> {
-    let mut folded = String::new();
     let mut end = start;
+    let mut consumed = 0usize;
 
     for ch in text[start..].chars() {
-        folded.extend(ch.to_lowercase());
         end += ch.len_utf8();
-
-        if !lower_term.starts_with(&folded) {
-            return None;
+        for folded in ch.to_lowercase() {
+            let Some(expected) = lower_term[consumed..].chars().next() else {
+                // The folded text is now longer than the term: the term is not
+                // a prefix of it, so this position cannot match.
+                return None;
+            };
+            if folded != expected {
+                return None;
+            }
+            consumed += expected.len_utf8();
         }
-        if folded == lower_term {
+        if consumed == lower_term.len() {
             return Some(end);
         }
     }
@@ -523,6 +592,91 @@ mod tests {
     #[test]
     fn text_matches_term_ignores_non_matching_plain_terms() {
         assert!(!text_matches_term("报告.pdf", "DESKTOP-A"));
+    }
+
+    /// The allocation-free direct matcher must answer exactly like the
+    /// `String`-building implementation it replaced, including for characters
+    /// whose lowercase form is more than one char (`İ`) and for every byte
+    /// offset that is a char boundary.
+    #[test]
+    fn term_end_at_matches_the_reference_implementation() {
+        fn reference(text: &str, start: usize, lower_term: &str) -> Option<usize> {
+            let mut folded = String::new();
+            let mut end = start;
+            for ch in text[start..].chars() {
+                folded.extend(ch.to_lowercase());
+                end += ch.len_utf8();
+                if !lower_term.starts_with(&folded) {
+                    return None;
+                }
+                if folded == lower_term {
+                    return Some(end);
+                }
+            }
+            None
+        }
+
+        let texts = [
+            "",
+            "a",
+            "A",
+            "İstanbul",
+            "i̇stanbul",
+            "ẞtraße",
+            "Straße",
+            "工作 计划",
+            "Railway-Order.pdf",
+            "ＡＢＣ",
+            "mixed 工作 Railway",
+        ];
+        let terms = [
+            "a", "i", "i̇", "s", "ss", "ß", "工作", "gzjh", "railway", "order", "pdf", "ａ",
+        ];
+        for text in texts {
+            for term in terms {
+                for start in 0..=text.len() {
+                    if !text.is_char_boundary(start) {
+                        continue;
+                    }
+                    assert_eq!(
+                        super::term_end_at(text, start, term),
+                        reference(text, start, term),
+                        "text={text:?} term={term:?} start={start}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A field prepared for several terms answers each term exactly like the
+    /// single-shot `text_matches_term` it replaced.
+    #[test]
+    fn text_field_matches_each_term_like_the_single_shot_matcher() {
+        let texts = [
+            "工作计划",
+            "工作计划.docx",
+            "Railway ticket order",
+            "报告.pdf",
+            "İstanbul 123",
+            "ＡＢＣ",
+        ];
+        let terms = [
+            "gzjh", "gongzuo", "工作", "rail", "ORDER", "pdf", "i", "123", "zzz",
+        ];
+        for text in texts {
+            let normalized: Vec<String> = super::normalize_terms(&terms);
+            let field = super::TextField::new(text);
+            for (raw, term) in terms.iter().zip(normalized.iter()) {
+                if term.is_empty() {
+                    continue;
+                }
+                assert_eq!(
+                    field.matches(term),
+                    text_matches_term(text, raw),
+                    "text={text:?} term={term:?}"
+                );
+            }
+        }
     }
 
     #[test]

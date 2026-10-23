@@ -134,6 +134,47 @@ fn visibility_guard_should_hide(state_visible: bool, hwnd_valid: bool, hwnd_visi
     hwnd_valid && !state_visible && hwnd_visible
 }
 
+/// Retry bringing the just-shown main window to the foreground.
+///
+/// The summoning hotkey normally grants the activation, but Windows can still
+/// refuse it (foreground lock, an elevated foreground window, another app that
+/// keeps the focus). A panel that is visible but never focused looks exactly
+/// like "the hotkey did nothing", and `auto_hide` used to dismiss it a moment
+/// later. This is the documented `AttachThreadInput` activation workaround: it
+/// briefly shares the foreground thread's input state so `SetForegroundWindow`
+/// is allowed, then detaches.
+#[cfg(target_os = "windows")]
+fn retry_main_window_activation(hwnd: isize) {
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+    };
+    // SAFETY: foreground queries are read-only; `AttachThreadInput` /
+    // `SetForegroundWindow` only affect this session's input focus and are
+    // paired (attach is always detached).
+    unsafe {
+        let raw = hwnd as *mut std::ffi::c_void;
+        let foreground = GetForegroundWindow();
+        let mut foreground_pid = 0u32;
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, &mut foreground_pid)
+        };
+        let current_thread = GetCurrentThreadId();
+        let attached = foreground_thread != 0
+            && foreground_thread != current_thread
+            && AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+        let activated = SetForegroundWindow(raw) != 0;
+        if attached {
+            AttachThreadInput(current_thread, foreground_thread, 0);
+        }
+        log::info!(
+            "wm show activation retry hwnd=0x{hwnd:X} attached={attached} activated={activated}"
+        );
+    }
+}
+
 pub struct WebDavBackendForm {
     pub name: String,
     pub root_url: String,
@@ -577,6 +618,23 @@ pub struct WindowManager {
     /// Same log-dedup bookkeeping for the quick window (issue-75 v2 G5).
     #[cfg(target_os = "windows")]
     quick_guard_episode_logged: bool,
+    /// Log-dedup for the *inverse* desync episode (state bit says visible while
+    /// the HWND is hidden). Logging only — it never decides anything.
+    #[cfg(target_os = "windows")]
+    main_inverse_guard_logged: bool,
+    /// Consecutive poll ticks in which the main panel was visible, dismissible
+    /// and not foreground.
+    ///
+    /// A single tick is too eager: activation can be in flight, or another
+    /// Clippi window (quick popup, tag sidebar) can hold the focus for a moment.
+    /// Auto-hide only fires once the loss persists, which is what "hide when the
+    /// user left" means.
+    main_focus_lost_ticks: u8,
+    /// Whether the panel has been the foreground window at least once since the
+    /// current show. Auto-hide is a focus-*loss* behaviour; a panel that never
+    /// gained focus (activation refused by the OS) must not be dismissed as if
+    /// the user had moved on — that made the panel flash and vanish.
+    main_foreground_since_show: bool,
     // --- System tray ---
     tray: Option<TrayManager>,
 
@@ -586,6 +644,15 @@ pub struct WindowManager {
     /// app/entity update so synchronous DPI (Windows) and `windowDidMove:`
     /// (macOS) callbacks can re-borrow GPUI.
     _main_show_task: Option<Task<()>>,
+    /// True from the moment the main-window show task is spawned until the
+    /// window has actually been shown (and its post-show reload finished).
+    ///
+    /// The hotkey toggle and the inverse visibility guard need to tell "already
+    /// on screen" apart from "show in flight": `_main_show_task` cannot do that
+    /// because the slot keeps its `Some` after the task has run to completion.
+    /// Cleared by the task itself on every exit path and by `hide()` (which
+    /// cancels the task).
+    main_show_pending: bool,
     /// Fast poll for quick-action hotkeys when quick window is visible (16ms ≈ 60fps).
     _quick_poll_task: Option<Task<()>>,
     /// One-shot native positioning task. On Windows this must run outside an
@@ -608,6 +675,8 @@ pub struct WindowManager {
     update_check_running: Arc<AtomicBool>,
     /// Set by background cleanup when expired rows were removed and AppState should reload.
     pending_cleanup_refresh: Arc<AtomicBool>,
+    /// Log-dedup for "cleanup refresh deferred because both windows are hidden".
+    cleanup_refresh_deferred_logged: bool,
     /// Custom hotkeys deleted by background cleanup and waiting to be unregistered.
     pending_cleanup_hotkey_unregister: Arc<Mutex<Vec<i64>>>,
     /// If Some, a background maintenance job is running.
@@ -742,8 +811,13 @@ impl WindowManager {
             main_guard_episode_logged: false,
             #[cfg(target_os = "windows")]
             quick_guard_episode_logged: false,
+            #[cfg(target_os = "windows")]
+            main_inverse_guard_logged: false,
+            main_focus_lost_ticks: 0,
+            main_foreground_since_show: false,
             _poll_task: None,
             _main_show_task: None,
+            main_show_pending: false,
             _quick_poll_task: None,
             #[cfg(target_os = "windows")]
             _quick_position_task: None,
@@ -754,6 +828,7 @@ impl WindowManager {
             pending_restart_result: Arc::new(Mutex::new(None)),
             update_check_running: Arc::new(AtomicBool::new(false)),
             pending_cleanup_refresh: Arc::new(AtomicBool::new(false)),
+            cleanup_refresh_deferred_logged: false,
             pending_cleanup_hotkey_unregister: Arc::new(Mutex::new(Vec::new())),
             maintenance_job_running: false,
             data_operation: DataOperationState::default(),
@@ -991,6 +1066,14 @@ impl WindowManager {
 
         // --- 14. Config sync results ---
         self.poll_config_sync(cx);
+
+        // --- 15. Working-set trim requested by a finished background checkpoint ---
+        // Runs here, on the UI thread and after the checkpoint thread is gone,
+        // so the process settles at the lowest working set the OS allows.
+        if crate::platform::util::take_working_set_trim_request() {
+            crate::platform::util::trim_process_working_set();
+            log::info!("wm working set trim applied at=+{}ms", crate::startup_ms());
+        }
     }
 
     fn poll_cleanup_refresh(&mut self, cx: &mut Context<Self>) {
@@ -1007,11 +1090,26 @@ impl WindowManager {
             }
         }
         if self.pending_cleanup_refresh.swap(false, Ordering::AcqRel) {
-            self.state.update(cx, |state, _cx| {
-                state.reload_items();
-                state.reload_tags();
-            });
-            cx.emit(WindowManagerEvent::ClipboardChanged);
+            // A show in flight reloads right after it paints, so leaving the
+            // refresh for it avoids a duplicate scan in the same tick.
+            if (self.visible && !self.main_show_pending) || self.quick_visible {
+                self.cleanup_refresh_deferred_logged = false;
+                self.state.update(cx, |state, _cx| {
+                    state.reload_items();
+                    state.reload_tags();
+                });
+                cx.emit(WindowManagerEvent::ClipboardChanged);
+            } else {
+                // Both windows are hidden, so the in-memory list is empty by
+                // design and the next show reloads it anyway. Reloading here
+                // would pay for the (possibly slow) keyword scan with nothing
+                // on screen to show for it.
+                self.pending_cleanup_refresh.store(true, Ordering::Release);
+                if !self.cleanup_refresh_deferred_logged {
+                    self.cleanup_refresh_deferred_logged = true;
+                    log::info!("wm cleanup refresh deferred: windows hidden");
+                }
+            }
         }
     }
 
@@ -1511,23 +1609,32 @@ impl WindowManager {
     }
 
     fn poll_hotkey(&mut self, cx: &mut Context<Self>) {
+        // A run of buffered `Main` presses means the user pressed the hotkey
+        // again because the panel had not answered yet. Toggling once per press
+        // would leave the panel in the opposite state from the one asked for,
+        // and a toggle-hide cancels a show task that has not painted yet (the
+        // `visible` bit is set before `ShowWindow` runs). Drain the queue first
+        // and apply the whole burst as a single intent.
+        let mut main_presses = 0usize;
         loop {
             let event = self.hotkey.as_mut().and_then(|hk| hk.poll_event());
             let Some(event) = event else {
                 break;
             };
+            if matches!(event, HotkeyEvent::Main) {
+                // Collapse a consecutive run of the same key into one intent,
+                // but keep it in order relative to other hotkeys: a different
+                // event flushes the run first.
+                main_presses = main_presses.saturating_add(1);
+                continue;
+            }
+            if main_presses > 0 {
+                self.flush_main_presses(main_presses, cx);
+                main_presses = 0;
+            }
             match event {
-                HotkeyEvent::Main => {
-                    if self.visible {
-                        // Ignore duplicate events from the gesture that opened
-                        // the window, just like the quick-window toggle.
-                        if !self.is_suppressed() {
-                            self.hide(cx);
-                        }
-                    } else {
-                        self.show_and_focus(cx);
-                    }
-                }
+                // Consumed above so a run of presses collapses to one intent.
+                HotkeyEvent::Main => {}
                 HotkeyEvent::Quick => {
                     if self.quick_visible {
                         // Debounce: ignore toggle-hide if the window was just
@@ -1587,6 +1694,57 @@ impl WindowManager {
                 }
             }
         }
+
+        if main_presses > 0 {
+            self.flush_main_presses(main_presses, cx);
+        }
+    }
+
+    /// Apply a run of `Main` presses as a single toggle.
+    fn flush_main_presses(&mut self, n: usize, cx: &mut Context<Self>) {
+        if n > 1 {
+            log::info!(
+                "wm hotkey drained n={n} visible={} suppress_left_ms={} show_pending={}",
+                self.visible,
+                self.suppress_remaining_ms(),
+                self.main_show_pending
+            );
+        }
+        self.apply_main_toggle(cx);
+    }
+
+    /// Apply the summed `Main` intent of one poll tick.
+    fn apply_main_toggle(&mut self, cx: &mut Context<Self>) {
+        if self.visible {
+            // A show that has not reached the screen yet must never be toggled
+            // off: `hide()` cancels `_main_show_task`, so the panel would never
+            // paint even though the hotkey was pressed.
+            if self.main_show_pending {
+                log::info!("wm hotkey ignored: show in flight");
+                return;
+            }
+            // Ignore duplicate events from the gesture that opened the window,
+            // just like the quick-window toggle. Logged so a report where a
+            // press appears to do nothing can be told apart from a press that
+            // never arrived.
+            if self.is_suppressed() {
+                log::info!(
+                    "wm hotkey ignored: suppressed suppress_left_ms={}",
+                    self.suppress_remaining_ms()
+                );
+                return;
+            }
+            self.hide_with_reason("hotkey", cx);
+        } else {
+            self.show_and_focus(cx);
+        }
+    }
+
+    /// Milliseconds left in the post-show suppression window (0 when unarmed).
+    fn suppress_remaining_ms(&self) -> u128 {
+        self.suppress_until
+            .map(|until| until.saturating_duration_since(Instant::now()).as_millis())
+            .unwrap_or(0)
     }
 
     /// 「快捷粘贴纯文本」触发（spec §3）：读取当前系统剪贴板 → §4 映射 →
@@ -1935,9 +2093,13 @@ impl WindowManager {
     }
 
     fn poll_clipboard(&mut self, cx: &mut Context<Self>) {
-        let changed = self
-            .state
-            .update(cx, |state, _cx| self.clipboard_service.poll_state(state));
+        // A show that has not painted yet already has a reload queued in
+        // `after_main_window_shown`; reloading here in the same tick would run
+        // the (possibly slow) scan twice.
+        let ui_present = (self.visible && !self.main_show_pending) || self.quick_visible;
+        let changed = self.state.update(cx, |state, _cx| {
+            self.clipboard_service.poll_state(state, ui_present)
+        });
         if changed {
             cx.emit(WindowManagerEvent::ClipboardChanged);
             // Async thumbnail generation completed — the main list refreshes
@@ -1991,7 +2153,13 @@ impl WindowManager {
         // Update foreground app name for blacklist
         self.update_foreground_app_name(cx);
 
-        let is_self_fg = self.is_self_foreground();
+        // Any Clippi-owned window counts as "still in Clippi": the tag sidebar
+        // and native dialogs are separate windows, and losing focus to them must
+        // not close the panel.
+        let is_own_fg = self.is_own_window_foreground();
+        if is_own_fg {
+            self.main_foreground_since_show = true;
+        }
 
         // Keep the Alt hint badges in step with the live keyboard even when a
         // modifier event never reaches the window (`poll_alt_hint`).
@@ -2006,17 +2174,35 @@ impl WindowManager {
             .hotkey
             .as_ref()
             .is_some_and(|hotkey| hotkey.recording_system_menu_gesture());
+        // A panel that has never held the foreground has not *lost* it: Windows
+        // can refuse the activation (foreground lock, an elevated foreground
+        // window), and treating that as "the user left" made the panel vanish a
+        // moment after appearing — reported as "the panel will not stay open".
+        // In that state it stays until the hotkey (or a click elsewhere after it
+        // gains focus) closes it.
         if !self.auto_hide
             || self.pinned
             || !self.visible
             || self.is_suppressed()
-            || is_self_fg
+            || is_own_fg
+            || !self.main_foreground_since_show
             || recording_system_menu
         {
+            self.main_focus_lost_ticks = 0;
             return;
         }
 
-        self.hide(cx);
+        // Require the loss to persist across poll ticks. A single sample right
+        // after a show can be an activation still in flight (or a transient
+        // owner switch), and hiding on that looks like "the panel flashed and
+        // vanished". Two consecutive ticks (≈400 ms) mean the user really moved
+        // on.
+        self.main_focus_lost_ticks = self.main_focus_lost_ticks.saturating_add(1);
+        if self.main_focus_lost_ticks < 2 {
+            return;
+        }
+        self.main_focus_lost_ticks = 0;
+        self.hide_with_reason("auto_hide", cx);
     }
 
     /// Hide the shortcut badges for the Alt that is still held by the gesture
@@ -2591,6 +2777,32 @@ impl WindowManager {
             self.main_guard_episode_logged = false;
         }
 
+        // Inverse desync (the direction no other path repairs): the state bit
+        // says visible but the HWND is hidden, so the next hotkey press would be
+        // consumed as a toggle-hide and the user could not summon the panel
+        // again without pressing twice. Repairing the state bit makes the next
+        // press a summon; the window is never force-shown here.
+        //
+        // A show in flight (`main_show_pending`) is expected to be transient and
+        // a fresh show is protected by the suppression window, so neither can
+        // trip this.
+        let inverse_desync = self.visible
+            && main_hwnd != 0
+            && !main_hwnd_visible
+            && !self.main_show_pending
+            && !self.is_suppressed();
+        if inverse_desync {
+            if !self.main_inverse_guard_logged {
+                self.main_inverse_guard_logged = true;
+                log::warn!(
+                    "wm desync: main visible=true but IsWindowVisible=false (hwnd=0x{main_hwnd:X}); repairing state bit so the next hotkey summons"
+                );
+            }
+            self.visible = false;
+        } else {
+            self.main_inverse_guard_logged = false;
+        }
+
         // --- Quick window ---
         let quick_hwnd = self.quick_hwnd;
         let quick_hwnd_visible =
@@ -2930,6 +3142,55 @@ impl WindowManager {
         }
     }
 
+    /// Whether any window owned by this process is the foreground window.
+    ///
+    /// Auto-hide must not read "focus moved to another Clippi window" — the tag
+    /// sidebar, a native dialog, or a quick popup on platforms where it can take
+    /// focus — as "the user left and the panel should close".
+    fn is_own_window_foreground(&self) -> bool {
+        if self.is_self_foreground() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetForegroundWindow, GetWindowThreadProcessId,
+            };
+            // SAFETY: read-only Win32 queries on the current foreground window.
+            unsafe {
+                let fg = GetForegroundWindow();
+                if fg.is_null() {
+                    return false;
+                }
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(fg, &mut pid);
+                pid == std::process::id()
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            crate::platform::blacklist::is_clippi_foreground()
+        }
+    }
+
+    /// Foreground window handle + owning application, for log diagnostics only.
+    fn foreground_debug(&self) -> String {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+            // SAFETY: read-only query.
+            let fg = unsafe { GetForegroundWindow() } as isize;
+            let app = crate::platform::focus::get_foreground_app_info()
+                .map(|info| info.app_name)
+                .unwrap_or_default();
+            format!("0x{fg:X}/{app}")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            String::new()
+        }
+    }
+
     // --- Foreground tracking ---
 
     fn update_foreground_app_name(&mut self, cx: &mut Context<Self>) {
@@ -3101,10 +3362,17 @@ impl WindowManager {
         if self.quick_visible {
             self.hide_quick_window(cx);
         }
+        // Armed at the state-bit flip *and* again once the window is really on
+        // screen (`after_main_window_shown`). This first copy only has to cover
+        // the sub-millisecond gap until the show task runs; keeping it also
+        // stops `poll_focus` from auto-hiding a window whose show is in flight.
         self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
 
         let was_already_visible = self.visible;
         self.visible = true;
+        // A fresh summon starts a fresh focus-loss count.
+        self.main_focus_lost_ticks = 0;
+        self.main_foreground_since_show = false;
         // A summoning Alt+key hotkey is still holding Alt while the panel
         // appears, and the window takes that live modifier state in the moment
         // it gains focus. Gate the badges so the summoning gesture does not
@@ -3149,21 +3417,45 @@ impl WindowManager {
         if reset_source {
             cx.emit(WindowManagerEvent::ResetSourceFilter);
         }
-        // --- Reload items from DB (they were cleared on hide) ---
-        self.state.update(cx, |state, _cx| state.reload_items());
-        cx.emit(WindowManagerEvent::ClipboardChanged);
+
+        // `clear_search_on_show` empties the search box on the first frame
+        // anyway, so drop the keyword BEFORE the reload: paying for the
+        // (possibly slow) keyword scan and then discarding its result is what
+        // made a summon take as long as the search did.
+        if self.state.read(cx).settings.clear_search_on_show {
+            self.state
+                .update(cx, |state, _cx| state.clear_keyword_filters());
+        }
 
         // When enabled, reset to clipboard history on every "show" action.
         // Skip when tray_triggered is true — those are directed navigations
         // (OpenSettings / OpenVersionSettings) that emit their own events after.
-        if !self.tray_triggered && self.state.read(cx).settings.always_reset_to_clipboard {
+        // Read synchronously: `tray_triggered` is cleared as soon as this
+        // function returns, so the spawned task must not look at it.
+        let reset_to_clipboard =
+            !self.tray_triggered && self.state.read(cx).settings.always_reset_to_clipboard;
+
+        // NOTE: no `reload_items()` here. It used to run before the show task
+        // was even spawned, so the panel could only appear after the whole scan.
+        // It now runs in `after_main_window_shown()`, i.e. after `ShowWindow`.
+        let keyword_active = self.state.read(cx).filters.has_keyword();
+        if reset_to_clipboard {
             cx.emit(WindowManagerEvent::ResetToClipboard);
         }
+        log::info!(
+            "wm show begin hwnd=0x{:X} quick_visible={} keyword={} suppress_left_ms={} reset_clipboard={}",
+            self.hwnd,
+            self.quick_visible,
+            keyword_active,
+            self.suppress_remaining_ms(),
+            reset_to_clipboard
+        );
 
         #[cfg(target_os = "windows")]
         {
             let hwnd = self.hwnd;
             let position = self.calculate_position();
+            self.main_show_pending = true;
             self._main_show_task = Some(cx.spawn(async move |weak_self, cx| {
                 // Yield until the WindowManager update that handled the hotkey
                 // or tray action has released GPUI's AppCell borrow.
@@ -3172,27 +3464,73 @@ impl WindowManager {
                 let Some(this) = weak_self.upgrade() else {
                     return;
                 };
-                let should_show = this
-                    .update(cx, |wm, _cx| wm.visible && wm.hwnd == hwnd)
+                let proceed = this
+                    .update(cx, |wm, _cx| {
+                        if wm.hwnd == 0 {
+                            log::info!("wm show aborted reason=hwnd_zero");
+                            wm.main_show_pending = false;
+                            return false;
+                        }
+                        if !(wm.visible && wm.hwnd == hwnd) {
+                            log::info!(
+                                "wm show aborted reason=state_changed visible={} hwnd=0x{:X} want=0x{hwnd:X}",
+                                wm.visible,
+                                wm.hwnd
+                            );
+                            wm.main_show_pending = false;
+                            // Never leave the state bit claiming "visible" while
+                            // this show never reached ShowWindow: the next hotkey
+                            // press would be consumed as a toggle-hide.
+                            wm.visible = false;
+                            return false;
+                        }
+                        true
+                    })
                     .unwrap_or(false);
-                if !should_show || hwnd == 0 {
+                if !proceed {
                     return;
                 }
 
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE,
-                    SWP_NOSIZE, SW_SHOW,
+                    GetForegroundWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+                    ShowWindow, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOW,
                 };
-                let hwnd = hwnd as *mut std::ffi::c_void;
+                let raw = hwnd as *mut std::ffi::c_void;
                 if let Some((x, y)) = position {
                     unsafe {
-                        SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
+                        SetWindowPos(raw, HWND_TOP, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
                     }
                 }
-                unsafe {
-                    ShowWindow(hwnd, SW_SHOW);
-                    SetForegroundWindow(hwnd);
+                let (set_fg, is_visible, fg_self) = unsafe {
+                    ShowWindow(raw, SW_SHOW);
+                    let set_fg = SetForegroundWindow(raw) != 0;
+                    (
+                        set_fg,
+                        IsWindowVisible(raw) != 0,
+                        GetForegroundWindow() as isize == hwnd,
+                    )
+                };
+                log::info!(
+                    "wm show done hwnd=0x{hwnd:X} set_fg={set_fg} is_visible={is_visible} fg_self={fg_self}"
+                );
+                if !fg_self {
+                    // The panel is on screen but another window kept the focus;
+                    // retry the activation once before the first paint wait.
+                    retry_main_window_activation(hwnd);
                 }
+
+                // Protect the freshly shown window while the first frame and the
+                // reload are still to come, then give the message loop one turn
+                // so WM_PAINT lands before the (possibly slow) reload blocks it.
+                let _ = this.update(cx, |wm, _cx| {
+                    wm.suppress_until =
+                        Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+                });
+                Timer::after(Duration::from_millis(1)).await;
+
+                // Pixels are up: only now pay for the reload, and only after it
+                // start the suppression window the panel is entitled to.
+                let _ = this.update(cx, |wm, cx| wm.after_main_window_shown(cx));
             }));
         }
 
@@ -3209,6 +3547,9 @@ impl WindowManager {
                 // Restore the full size before making the window visible to
                 // avoid a 1×1 flash (doc §3.3).
                 self.restore_main_macos_window(cx);
+                // The window is ordered front now, so the reload can no longer
+                // delay the first frame.
+                self.after_main_window_shown(cx);
             } else {
                 // Position and order front from a task, the way the Windows
                 // branch below and `show_quick_macos_window_deferred` do: the
@@ -3217,6 +3558,7 @@ impl WindowManager {
                 // keeps the window from appearing at the stale position first.
                 let position = self.calculate_position();
                 let ns_window = self.ns_window;
+                self.main_show_pending = true;
                 self._main_show_task = Some(cx.spawn(async move |weak_self, cx| {
                     // Yield until the WindowManager update that handled the
                     // hotkey or tray action has released GPUI's app borrow.
@@ -3225,10 +3567,28 @@ impl WindowManager {
                     let Some(this) = weak_self.upgrade() else {
                         return;
                     };
-                    let should_show = this
-                        .update(cx, |wm, _cx| wm.visible && wm.ns_window == ns_window)
+                    let proceed = this
+                        .update(cx, |wm, _cx| {
+                            if ns_window == 0 {
+                                log::info!("wm show aborted reason=ns_window_zero");
+                                wm.main_show_pending = false;
+                                return false;
+                            }
+                            if !(wm.visible && wm.ns_window == ns_window) {
+                                log::info!(
+                                    "wm show aborted reason=state_changed visible={}",
+                                    wm.visible
+                                );
+                                wm.main_show_pending = false;
+                                // See the Windows branch: never keep a "visible"
+                                // state bit for a window that was not ordered front.
+                                wm.visible = false;
+                                return false;
+                            }
+                            true
+                        })
                         .unwrap_or(false);
-                    if !should_show || ns_window == 0 {
+                    if !proceed {
                         return;
                     }
                     if let Some((x, y)) = position {
@@ -3238,11 +3598,59 @@ impl WindowManager {
                     // keyboard events keep going to the previous app (doc §3.3).
                     let _ = cx.update(|cx| cx.activate(true));
                     WindowManager::activate_ns_window(ns_window);
+                    // Same two-step as the Windows branch: protect the window,
+                    // let the first frame land, then reload.
+                    let _ = this.update(cx, |wm, _cx| {
+                        wm.suppress_until =
+                            Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+                    });
+                    Timer::after(Duration::from_millis(1)).await;
+                    let _ = this.update(cx, |wm, cx| wm.after_main_window_shown(cx));
                 }));
             }
         }
 
         cx.notify();
+    }
+
+    /// Finish a fresh show once the window is actually on screen.
+    ///
+    /// Everything here used to run *before* the window was shown, which made the
+    /// panel wait for the whole (possibly slow) item reload and burned the
+    /// suppression window before the window existed. Called by the show task
+    /// after `ShowWindow` on Windows and after the window is ordered front on
+    /// macOS.
+    fn after_main_window_shown(&mut self, cx: &mut Context<Self>) {
+        let started = Instant::now();
+        self.state.update(cx, |state, _cx| state.reload_items());
+        let elapsed = started.elapsed();
+        // The suppression window starts *after* the reload: the reload runs on
+        // the UI thread, so nothing can consult the window while it happens, and
+        // a press buffered during it must not toggle the panel off the moment it
+        // becomes usable.
+        self.suppress_until = Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+        // A refused activation is not a focus loss: auto-hide stays disarmed
+        // until the panel has actually held the foreground (`poll_focus`).
+        self.main_foreground_since_show = self.is_own_window_foreground();
+        if !self.main_foreground_since_show {
+            log::info!(
+                "wm show not foreground; auto-hide disarmed until the panel gains focus fg_self=false"
+            );
+        }
+        self.main_show_pending = false;
+
+        let (items, keyword) = {
+            let state = self.state.read(cx);
+            (state.items.len(), state.filters.has_keyword())
+        };
+        log::info!(
+            "wm reload after show ms={} items={items} keyword={keyword} visible={} quick_visible={}",
+            elapsed.as_millis(),
+            self.visible,
+            self.quick_visible
+        );
+
+        cx.emit(WindowManagerEvent::ClipboardChanged);
     }
 
     #[allow(dead_code)]
@@ -3341,6 +3749,14 @@ impl WindowManager {
 
         // After fallback hotkey is registered, attempt Win+V takeover if enabled.
         self.init_win_v_takeover(cx);
+
+        log::info!(
+            "startup: hotkeys ready at +{}ms listener={} main={:?} quick_enabled={}",
+            crate::startup_ms(),
+            self.hotkey.is_some(),
+            hotkey_str,
+            enabled
+        );
     }
 
     // ── Win+V takeover (Windows only) ──
@@ -3611,35 +4027,78 @@ impl WindowManager {
     /// the process working set.
     ///
     /// Cleanup order matters: live objects (items, image caches) must be
-    /// dropped *before* `malloc_zone_pressure_relief` runs, otherwise the
-    /// allocator cannot return their pages. Subscribers release their
-    /// objects synchronously on `ReleaseUiResources`, and the pressure
-    /// relief is deferred to the next app update to also cover any
-    /// render-side drops.
+    /// dropped *before* the working-set trim runs, otherwise the pages cannot be
+    /// returned. Subscribers release their objects synchronously on
+    /// `ReleaseUiResources`, and the trim runs at the end of the background
+    /// checkpoint — after the SQLite page cache is gone too.
     ///
     /// With macOS surface compaction the compaction confirmation task runs a
     /// *second* trim strictly after the hidden window's renderer has
     /// processed the 1×1 resize (doc §3.5, `compact_main_macos_window` /
-    /// `compact_quick_macos_window`). The deferred trim here stays as a
-    /// fallback so paths that never compact (silent start, compaction
-    /// disabled) still release allocator pages. The two calls are not in the
-    /// same call stack and both are idempotent hints.
-    pub fn release_memory(&mut self, cx: &mut Context<Self>) {
+    /// `compact_quick_macos_window`). Both are idempotent hints.
+    ///
+    /// `trim_working_set` controls the last step: the OS working-set trim is
+    /// what brings Task Manager back down to a few MB after the panel is
+    /// closed, but doing it during the silent-start release forces every page of
+    /// the binary to be faulted back in by the first summon (much worse on a
+    /// large debug build), so startup skips it and hide keeps it.
+    pub fn release_memory(&mut self, trim_working_set: bool, cx: &mut Context<Self>) {
+        let started = Instant::now();
         self.state.update(cx, |state, _cx| state.clear_items());
         // Synchronously release list items + image caches in subscribers.
         cx.emit(WindowManagerEvent::ReleaseUiResources);
-        self.state.update(cx, |state, _cx| {
-            if let Err(e) = state.db.checkpoint() {
-                log::error!("WAL checkpoint failed (clipboard changed): {e}");
-            }
-        });
-        // Pressure relief must run after the objects above are dropped;
-        // defer it to the next app update so render-side drops also land.
-        cx.defer(|_cx| crate::platform::util::trim_process_working_set());
+        // The WAL checkpoint is off the UI thread: `wal_checkpoint(TRUNCATE)`
+        // waits for every reader and touches the disk, which turned hide (and
+        // the silent-start release) into multi-second freezes in a user log.
+        // The working-set trim runs on that same background thread after the
+        // checkpoint, so it cannot race a still-open SQLite page cache.
+        let db_path = self
+            .state
+            .read(cx)
+            .settings
+            .resolve_db_path()
+            .to_string_lossy()
+            .into_owned();
+        crate::core::db::Database::spawn_background_checkpoint(
+            &db_path,
+            "release_memory",
+            trim_working_set,
+        );
+        log::info!(
+            "wm release memory ms={} trim={trim_working_set} at=+{}ms",
+            started.elapsed().as_millis(),
+            crate::startup_ms()
+        );
     }
 
     /// Hide the window to background — does NOT exit the process.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
+        self.hide_with_reason("external", cx);
+    }
+
+    /// Hide the window and record why.
+    ///
+    /// The reason is diagnostic only — it never changes behaviour. Every hide
+    /// runs a synchronous WAL checkpoint and a settings write, so a slow hide is
+    /// itself worth seeing in a user's log.
+    pub fn hide_with_reason(&mut self, reason: &str, cx: &mut Context<Self>) {
+        let started = Instant::now();
+        let (keyword_active, items_before) = {
+            let state = self.state.read(cx);
+            (state.filters.has_keyword(), state.items.len())
+        };
+        log::info!(
+            "wm hide begin reason={reason} visible={} quick_visible={} show_pending={} show_task_set={} suppressed={} fg_self={} fg_own={} fg={} keyword={keyword_active} items={items_before}",
+            self.visible,
+            self.quick_visible,
+            self.main_show_pending,
+            self._main_show_task.is_some(),
+            self.is_suppressed(),
+            self.is_self_foreground(),
+            self.is_own_window_foreground(),
+            self.foreground_debug()
+        );
+
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         if let Some(attachment) = &self.sidebar_attachment {
             attachment.set_enabled(false);
@@ -3650,6 +4109,8 @@ impl WindowManager {
             self._main_show_task = None;
             self._main_monitor_migration_task = None;
         }
+        // The task above is cancelled, so no post-show work can run for it.
+        self.main_show_pending = false;
         if self.quick_visible {
             self.hide_quick_window(cx);
         }
@@ -3664,7 +4125,9 @@ impl WindowManager {
             state.alt_hint_generation = state.alt_hint_generation.wrapping_add(1);
         });
         self.dismiss_ui(cx);
-        self.release_memory(cx);
+        let release_started = Instant::now();
+        self.release_memory(true, cx);
+        let release_ms = release_started.elapsed().as_millis();
         cx.emit(WindowManagerEvent::WindowHidden);
 
         #[cfg(target_os = "windows")]
@@ -3707,8 +4170,17 @@ impl WindowManager {
         }
 
         self.visible = false;
+        self.main_focus_lost_ticks = 0;
+        self.main_foreground_since_show = false;
         // Persist the final geometry immediately on hide (bypass debounce).
+        let geometry_started = Instant::now();
         self.flush_geometry_now(cx);
+        let geometry_ms = geometry_started.elapsed().as_millis();
+        log::info!(
+            "wm hide done reason={reason} ms={} release_ms={release_ms} geometry_ms={geometry_ms} items_after={}",
+            started.elapsed().as_millis(),
+            self.state.read(cx).items.len()
+        );
     }
 
     fn show_quick_window(&mut self, cx: &mut Context<Self>) {
@@ -3724,7 +4196,7 @@ impl WindowManager {
 
         // Main and quick window are never shown simultaneously.
         if switching_from_main {
-            self.hide(cx);
+            self.hide_with_reason("quick_switch", cx);
             // Windows chooses the successor when the main window hides. The
             // quick popup must not force-activate even a remembered paste target:
             // it may be stale or may own a transient launcher/search panel.
@@ -3738,6 +4210,11 @@ impl WindowManager {
         crate::platform::focus::sample_paste_target();
 
         self.state.update(cx, |state, cx| {
+            // Announce the popup before rebuilding its page: with this flag set,
+            // `reload_items()` still keeps the popup's own page current (see
+            // `AppState::reload_items`), and while the popup is hidden that
+            // second query is skipped.
+            state.set_quick_window_visible(true);
             state.reset_quick_source_filter_for_show();
             state.reload_quick_items();
             cx.notify();
@@ -3889,6 +4366,12 @@ impl WindowManager {
         if !self.visible {
             self.cancel_active_hotkey_recording(cx);
         }
+        // The popup is hidden from here on, so `reload_items()` may skip
+        // rebuilding its page until it opens again.
+        if self.quick_visible {
+            self.state
+                .update(cx, |state, _cx| state.set_quick_window_visible(false));
+        }
         // Release the keyboard hook together with the popup: keystrokes belong
         // to the application the user is typing in again.
         keyboard_hook::set_enabled(false);
@@ -3937,7 +4420,7 @@ impl WindowManager {
     /// directly and manage memory themselves.
     fn dismiss_quick_window(&mut self, cx: &mut Context<Self>) {
         self.hide_quick_window(cx);
-        self.release_memory(cx);
+        self.release_memory(true, cx);
     }
 
     // `return` avoids rust-analyzer false E0308 with #[cfg] arms.

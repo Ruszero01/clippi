@@ -25,6 +25,22 @@ use ui::quick_paste::{quick_window_height, QuickPasteView, QUICK_WINDOW_WIDTH};
 use ui::root::RootView;
 use ui::window_manager::WindowManager;
 
+/// When the process started, for startup phase timings in `clippi.log`.
+///
+/// The reported "the first ~30 s after launch are laggy / the panel does not
+/// answer" could not be measured from the old log, which had no timing at all.
+/// Every startup milestone now prints `+Nms`, so a slow phase is identifiable
+/// without a profiler on the user's machine.
+static STARTUP_AT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Milliseconds since the process started (0 if called before `main`).
+pub(crate) fn startup_ms() -> u128 {
+    STARTUP_AT
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+}
+
 fn is_restart() -> bool {
     std::env::args().any(|arg| arg == "--restart")
 }
@@ -56,12 +72,28 @@ fn init_logging() {
         }
     }
     if let Ok(file) = std::fs::File::create(&log_path) {
-        let _ = simplelog::WriteLogger::init(
-            simplelog::LevelFilter::Info,
-            simplelog::Config::default(),
-            file,
-        );
+        // Local time in the log: the previous timestamps were UTC, which made
+        // "when did this happen" impossible to line up with the wall clock next
+        // to it (a 20:51 launch appeared as 12:51 in clippi.log).
+        let mut config = simplelog::ConfigBuilder::new();
+        let _ = config.set_time_offset_to_local();
+        let _ = simplelog::WriteLogger::init(simplelog::LevelFilter::Info, config.build(), file);
     }
+}
+
+/// Local wall-clock time the binary was built, from the epoch embedded by
+/// `build.rs`; `unknown` when the build script could not determine it.
+fn build_time_local() -> String {
+    option_env!("CLIPPI_BUILD_EPOCH")
+        .and_then(|epoch| epoch.parse::<i64>().ok())
+        .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
+        .map(|built| {
+            built
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S %:z")
+                .to_string()
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Send panics to the log file as well as stderr.
@@ -179,7 +211,53 @@ fn load_icon_from_embedded_bytes(ico_data: &[u8]) -> Option<isize> {
     }
 }
 
+/// Log one line describing the data shape that predicts keyword-search cost.
+///
+/// The reported "typing is laggy / the panel stops appearing" bug could not be
+/// reproduced, and `clippi.log` carried no record of the history size or of the
+/// settings that multiply the per-keystroke work. On a large history one
+/// keyword filter pass reads `keyword_scan_limit` full rows, so these values
+/// are what turn a future report into a diagnosis.
+///
+/// `query_limit`/`keyword_scan_limit` mirror `AppState::query_limit()` and the
+/// `KEYWORD_SEARCH_*` constants in `state::app` (private there); they are
+/// computed for the log only and change no behaviour. Nothing here may abort
+/// startup: a missing database file reports 0 bytes and metadata errors are
+/// ignored.
+fn log_startup_data_shape(cx: &mut App, state: &Entity<AppState>) {
+    let app = state.read(cx);
+    let settings = &app.settings;
+    let db_path = settings.resolve_db_path();
+    let db_bytes = std::fs::metadata(&db_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    // Same aggregate `AppState::new` loaded for the titlebar: non-transfer
+    // history rows (transfer backing rows are internal, not user history).
+    let history_rows = app.clearable_history_count();
+    let query_limit = if settings.max_items == 0 {
+        200usize
+    } else {
+        (settings.max_items as usize).saturating_mul(2).max(200)
+    };
+    let keyword_scan_limit = query_limit.saturating_mul(8).clamp(1_000, 10_000);
+    log::info!(
+        "startup: data db=\"{}\" db_bytes={} history_rows={} max_items={} card_height_mode={} auto_detect_links={} search_favorites_first={} source_app_filter={} quick_hotkey_enabled={} query_limit={} keyword_scan_limit={}",
+        db_path.display(),
+        db_bytes,
+        history_rows,
+        settings.max_items,
+        settings.card_height_mode,
+        settings.auto_detect_links,
+        settings.search_favorites_first,
+        settings.show_source_app && settings.source_app_filter_enabled,
+        settings.quick_hotkey_enabled,
+        query_limit,
+        keyword_scan_limit,
+    );
+}
+
 fn main() {
+    let _ = STARTUP_AT.set(std::time::Instant::now());
     // --- Detect portable mode before loading any settings (so config/log paths ---
     // --- are resolved correctly). Must run before init_logging() and ---
     // --- AppSettings::load(). ---
@@ -190,6 +268,21 @@ fn main() {
     core::paths::migrate_portable_data();
     init_logging();
     install_panic_hook();
+
+    // Build identity + wall clock, first thing in the log: a report and its log
+    // can then be tied to an exact binary (locally rebuilt debug vs shipped
+    // release) and to the local time the run started.
+    log::info!(
+        "startup: clippi {} build={} built={} started={} pid={} exe={}",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("CLIPPI_BUILD_ID").unwrap_or("unknown"),
+        build_time_local(),
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f %:z"),
+        std::process::id(),
+        std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    );
 
     // --restart: 跳过单实例检测（旧进程 TCP 端口尚未被 OS 回收）
     // Below init_logging() so a rejected launch still leaves a line in the log.
@@ -374,7 +467,10 @@ fn main() {
                 let silent_start = settings.silent_start;
                 let auto_check = settings.auto_check_updates;
                 let state = cx.new(|_cx| AppState::new(settings));
+                log_startup_data_shape(cx, &state);
+                log::info!("startup: state ready at +{}ms", startup_ms());
                 let window_manager = cx.new(|cx| WindowManager::new(state.clone(), cx));
+                log::info!("startup: window manager ready at +{}ms", startup_ms());
 
                 // --- ── Store raw window handle + set initial position/size ── ---
                 #[cfg(target_os = "windows")]
@@ -600,6 +696,7 @@ fn main() {
                 }) {
                     log::error!("Failed to create quick paste window: {err}");
                 }
+                log::info!("startup: quick window ready at +{}ms", startup_ms());
 
                 // Defer startup actions until GPUI has completed the first render.
                 // Hotkey registration must happen on every desktop platform after
@@ -611,7 +708,15 @@ fn main() {
                             wm.update(cx, |wm, cx| wm.init_hotkey(cx));
                         }
                         DeferredStartupAction::ReleaseMemory => {
-                            wm.update(cx, |wm, cx| wm.release_memory(cx));
+                            // Trim the working set at startup in release builds
+                            // (the old low-memory idle behaviour). Debug builds
+                            // skip it: an 826 MB unoptimized binary would fault
+                            // most of itself back in on the first summon, which
+                            // is exactly the "the panel is slow right after
+                            // launch" complaint.
+                            wm.update(cx, |wm, cx| {
+                                wm.release_memory(!cfg!(debug_assertions), cx)
+                            });
                         }
                     });
                 }
@@ -625,6 +730,7 @@ fn main() {
                     false
                 });
 
+                log::info!("startup: main view ready at +{}ms", startup_ms());
                 cx.new(|cx| gpui_component::Root::new(view, window, cx))
             },
         )
@@ -635,6 +741,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{deferred_startup_actions, DeferredStartupAction};
+
+    /// The startup line must be able to identify the binary: a user report and
+    /// its log are only comparable when the log carries the build.
+    #[test]
+    fn startup_log_carries_a_build_identity_and_wall_clock() {
+        let build = option_env!("CLIPPI_BUILD_ID").unwrap_or_default();
+        assert!(!build.is_empty(), "build identity must not be empty");
+        assert!(
+            option_env!("CLIPPI_BUILD_EPOCH").is_some(),
+            "build.rs embeds the compile time"
+        );
+        assert_ne!(
+            super::build_time_local(),
+            "unknown",
+            "the embedded compile time must format as a local date"
+        );
+    }
 
     #[test]
     fn startup_always_initializes_hotkey_after_window_setup() {

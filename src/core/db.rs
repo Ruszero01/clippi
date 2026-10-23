@@ -35,11 +35,28 @@ pub struct TitlebarStats {
 pub struct Database {
     conn: Connection,
     source_app_cache: RefCell<Option<SourceAppCache>>,
+    titlebar_stats_cache: RefCell<Option<TitlebarStatsCache>>,
 }
 
 struct SourceAppCache {
     revision: (u64, i64),
     apps: Arc<SourceApps>,
+}
+
+/// Cached [`TitlebarStats`] keyed by the [`Database::change_revision`] it was
+/// computed from. The aggregate only depends on the table contents, so it can
+/// be reused for as long as no write has landed.
+struct TitlebarStatsCache {
+    revision: (u64, i64),
+    stats: TitlebarStats,
+}
+
+// Cache misses of [`Database::load_titlebar_stats`], per thread. Test-only so
+// the cache test can tell a served-from-cache read from a re-query without
+// exposing internals to production callers.
+#[cfg(test)]
+thread_local! {
+    static TITLEBAR_STATS_QUERIES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Default)]
@@ -195,6 +212,7 @@ impl Database {
         let db = Self {
             conn,
             source_app_cache: RefCell::new(None),
+            titlebar_stats_cache: RefCell::new(None),
         };
         db.init_schema()?;
         db.prune_oversized_source_icons()?;
@@ -204,6 +222,67 @@ impl Database {
     /// Flush WAL to main database file before copy/migration.
     pub fn checkpoint(&self) -> SqlResult<()> {
         self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    /// Fold the WAL back into the main file on a background thread.
+    ///
+    /// `wal_checkpoint(TRUNCATE)` waits for every reader to finish (the
+    /// connection's `busy_timeout` bounds the wait) and touches the disk, so
+    /// running it on the UI thread turns any concurrent reader — an analysis
+    /// worker, the sync service — into a freeze. One user's log showed a 3.3 s
+    /// `wm hide`, and the silent-start release runs the same code in the first
+    /// seconds after launch. Hiding a window only needs the WAL folded back
+    /// eventually, so this opens its own short-lived connection, never blocks
+    /// the caller, and logs how long it took.
+    ///
+    /// Best-effort: a busy database is reported and left for the next attempt.
+    /// `trim_working_set_after` only *requests* the working-set trim; the UI
+    /// poll loop performs it after this thread has exited (see
+    /// [`crate::platform::util::request_working_set_trim`]).
+    pub fn spawn_background_checkpoint(
+        db_path: &str,
+        reason: &'static str,
+        trim_working_set_after: bool,
+    ) {
+        let path = db_path.to_string();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let result = {
+                rusqlite::Connection::open(&path).and_then(|conn| {
+                    // Short timeout: a hidden panel never needs the WAL folded
+                    // back synchronously, and a long wait here just keeps this
+                    // thread (and its memory) alive.
+                    conn.busy_timeout(std::time::Duration::from_millis(500))?;
+                    let mut statement = conn.prepare("PRAGMA wal_checkpoint(TRUNCATE);")?;
+                    // `wal_checkpoint` reports contention in a result row
+                    // (busy, log, checkpointed) instead of failing the call.
+                    let (busy, log_frames, checkpointed): (i64, i64, i64) =
+                        statement.query_row([], |row| {
+                            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                        })?;
+                    if busy != 0 {
+                        log::info!(
+                            "db checkpoint busy reason={reason} (readers active; log={log_frames} checkpointed={checkpointed})"
+                        );
+                    }
+                    Ok(())
+                })
+            };
+            let elapsed = started.elapsed().as_millis();
+            match result {
+                Ok(()) => log::info!("db checkpoint done reason={reason} ms={elapsed}"),
+                Err(error) => {
+                    log::warn!("db checkpoint failed reason={reason} ms={elapsed} err={error}")
+                }
+            }
+            if trim_working_set_after {
+                // Deferred to the UI thread deliberately: trimming from inside
+                // this thread keeps its own stack and buffers in the working
+                // set, which leaves the process a few MB higher than it needs
+                // to be.
+                crate::platform::util::request_working_set_trim();
+            }
+        });
     }
 
     fn init_schema(&self) -> SqlResult<()> {
@@ -380,14 +459,23 @@ impl Database {
         }
     }
 
-    fn source_apps(&self) -> SqlResult<Arc<SourceApps>> {
-        // total_changes covers this connection; data_version covers background
-        // connections (sync, cleanup, imports). Reads and keyword changes reuse it.
-        let revision = (
+    /// Revision of this connection's view of the database contents.
+    ///
+    /// Any write through this connection bumps `total_changes()`; a commit from
+    /// another connection (sync, cleanup, imports) bumps `PRAGMA data_version`.
+    /// Reads bump neither. Values derived purely from table contents can
+    /// therefore be cached for as long as this pair is unchanged — and only
+    /// for that long, since every path that can change the contents moves it.
+    fn change_revision(&self) -> SqlResult<(u64, i64)> {
+        Ok((
             self.conn.total_changes(),
             self.conn
                 .pragma_query_value(None, "data_version", |row| row.get(0))?,
-        );
+        ))
+    }
+
+    fn source_apps(&self) -> SqlResult<Arc<SourceApps>> {
+        let revision = self.change_revision()?;
         if let Some(cache) = self.source_app_cache.borrow().as_ref() {
             if cache.revision == revision {
                 return Ok(cache.apps.clone());
@@ -592,8 +680,27 @@ impl Database {
         Ok(())
     }
 
+    /// Titlebar filter availability + the clearable history count, both derived
+    /// from the whole `clipboard_items` table.
+    ///
+    /// Cached on [`Self::change_revision`]: the result is a pure function of the
+    /// table contents, and every way the contents can change moves that key
+    /// (writes through this connection bump `total_changes`, commits from other
+    /// connections bump `data_version`; reads move neither). `AppState` calls
+    /// this from `reload_items()` — i.e. on every keystroke while a keyword is
+    /// active — so without the cache each keystroke paid a whole-table
+    /// `COUNT`/`MAX` scan.
     pub fn load_titlebar_stats(&self) -> SqlResult<TitlebarStats> {
-        self.conn.query_row(
+        let revision = self.change_revision()?;
+        if let Some(cache) = self.titlebar_stats_cache.borrow().as_ref() {
+            if cache.revision == revision {
+                return Ok(cache.stats);
+            }
+        }
+        // Counted so the cache test can prove a cache hit skipped the query.
+        #[cfg(test)]
+        TITLEBAR_STATS_QUERIES.with(|count| count.set(count.get() + 1));
+        let stats = self.conn.query_row(
             "SELECT
                 COALESCE(MAX(custom_hotkey <> ''), 0),
                 COALESCE(MAX(is_favorite = 1), 0),
@@ -607,7 +714,9 @@ impl Database {
                     clearable_history_count: row.get::<_, i64>(2)? as u32,
                 })
             },
-        )
+        )?;
+        *self.titlebar_stats_cache.borrow_mut() = Some(TitlebarStatsCache { revision, stats });
+        Ok(stats)
     }
 
     /// Number of non-transfer rows `clear_clipboard_history` would delete for
@@ -3526,6 +3635,58 @@ mod tests {
         assert!(!stats.has_hotkey_items);
         assert!(!stats.has_favorite_items);
         assert_eq!(stats.clearable_history_count, 0);
+    }
+
+    #[test]
+    fn titlebar_stats_reuse_the_revision_cache_until_a_write_lands() {
+        let (path, db) = temp_db("titlebar-stats-cache");
+        TITLEBAR_STATS_QUERIES.with(|count| count.set(0));
+        let query_count = || TITLEBAR_STATS_QUERIES.with(|count| count.get());
+
+        let empty = db.load_titlebar_stats().unwrap();
+        assert_eq!(empty.clearable_history_count, 0);
+        assert_eq!(query_count(), 1, "first read must query");
+
+        // A read (here: the list load that precedes every keystroke) does not
+        // move the revision, so the aggregate stays cached.
+        db.load_filtered(&ClipboardFilters::default(), 200, "updated_at")
+            .unwrap();
+        assert_eq!(db.load_titlebar_stats().unwrap().clearable_history_count, 0);
+        assert_eq!(query_count(), 1, "a read must be served from the cache");
+
+        // A write on this connection bumps `total_changes` and must invalidate.
+        insert_item(&db, 1, "one", "2026-01-01T00:00:00Z");
+        assert_eq!(db.load_titlebar_stats().unwrap().clearable_history_count, 1);
+        assert_eq!(query_count(), 2, "a write must invalidate the cache");
+
+        // Favorite and hotkey flags are part of the same aggregate.
+        db.set_favorite(item_id(&db, 1), true).unwrap();
+        let favorited = db.load_titlebar_stats().unwrap();
+        assert!(favorited.has_favorite_items);
+        assert_eq!(favorited.clearable_history_count, 1);
+        assert_eq!(query_count(), 3);
+
+        db.set_item_hotkey(item_id(&db, 1), "Ctrl+Alt+1", "text")
+            .unwrap();
+        assert!(db.load_titlebar_stats().unwrap().has_hotkey_items);
+        assert_eq!(query_count(), 4);
+
+        // A commit from another connection (sync, cleanup, import) moves
+        // `PRAGMA data_version` and must invalidate as well.
+        let other = Connection::open(&path).unwrap();
+        other
+            .execute(
+                "INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at, meta_type)
+                 VALUES ('plain_text', 'two', 2, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', '')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(db.load_titlebar_stats().unwrap().clearable_history_count, 2);
+        assert_eq!(
+            query_count(),
+            5,
+            "a commit from another connection must invalidate the cache"
+        );
     }
 
     #[test]

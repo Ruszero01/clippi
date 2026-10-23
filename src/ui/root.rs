@@ -718,7 +718,7 @@ impl RootView {
                     }
                     ClipboardListEvent::RequestHide => {
                         this.window_manager.update(cx, |wm, cx| {
-                            wm.hide(cx);
+                            wm.hide_with_reason("list_request", cx);
                         });
                     }
                 },
@@ -1657,7 +1657,8 @@ impl Render for RootView {
                         root_list.update(cx, |list, cx| !list.handle_escape_from_root(cx));
                     if should_hide {
                         root_this.update(cx, |this, cx| {
-                            this.window_manager.update(cx, |wm, cx| wm.hide(cx));
+                            this.window_manager
+                                .update(cx, |wm, cx| wm.hide_with_reason("escape", cx));
                         });
                     } else {
                         // Panels were dismissed by ESC — return focus to the list

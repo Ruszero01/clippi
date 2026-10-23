@@ -570,11 +570,6 @@ fn normalize_spreadsheet_cell(value: &str) -> String {
         .join("\n")
 }
 
-pub fn has_visible_match(html: &str, predicate: impl Fn(&str) -> bool) -> bool {
-    let text = visible_text(html);
-    !text.is_empty() && predicate(&text)
-}
-
 fn is_block_break_tag(tag: &str) -> bool {
     tag.starts_with("br")
         || tag.starts_with("/p")
