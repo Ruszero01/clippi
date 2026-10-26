@@ -20,7 +20,7 @@
 //! fallback chain, so a Latin-only font still shows CJK and vice versa.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 use gpui::{px, App, Pixels, SharedString, Window};
 
@@ -74,6 +74,46 @@ const REM_BASE: f32 = 16.0;
 
 /// gpui's special family name for the platform UI font.
 pub const SYSTEM_UI_FONT: &str = ".SystemUIFont";
+
+/// The family Clippi actually hands gpui wherever it means "the system font".
+static SYSTEM_FAMILY: OnceLock<SharedString> = OnceLock::new();
+
+/// gpui resolves `SYSTEM_UI_FONT` from the Windows icon-title `LOGFONT`, which
+/// carries a *GDI* family name. Fonts that publish a typographic family register
+/// with DirectWrite under that family instead — the MiSans build that many
+/// Chinese users install reports the GDI name "MiSans Normal" while DirectWrite
+/// only knows "MiSans" — so gpui matches zero faces, unwraps the resulting `None`
+/// in `select_font`, and the process dies before drawing a single frame. Asking
+/// DirectWrite whether the name resolves lets us keep the sentinel where it works
+/// (every stock machine, so no one's font choice changes) and pin a family that
+/// exists where it does not.
+#[cfg(target_os = "windows")]
+fn resolve_system_family() -> SharedString {
+    let shell_font = crate::platform::system_font::shell_ui_font_name();
+    if shell_font
+        .as_deref()
+        .is_some_and(crate::platform::system_font::family_is_registered)
+    {
+        return SYSTEM_UI_FONT.into();
+    }
+    log::warn!(
+        "System UI font {shell_font:?} is not a DirectWrite family; pinning \"Segoe UI\" instead."
+    );
+    // gpui's own fallback when it cannot read the icon-title font, and the UI
+    // family shipped with every Windows release since Vista.
+    "Segoe UI".into()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_system_family() -> SharedString {
+    // CoreText resolves the sentinel itself, so there is nothing to work around.
+    SYSTEM_UI_FONT.into()
+}
+
+/// The family to pass gpui for "system default" text.
+pub fn system_family() -> SharedString {
+    SYSTEM_FAMILY.get_or_init(resolve_system_family).clone()
+}
 
 /// Monospace family for the styled rich-text preview.
 ///
@@ -158,10 +198,11 @@ pub fn rem_base() -> Pixels {
 /// `Theme::change` rebuild (a rebuild resets these fields to defaults).
 pub fn apply_to_global_theme(cx: &mut App) {
     let current = family();
-    let resolved: SharedString = if current.trim().is_empty() {
-        SYSTEM_UI_FONT.into()
+    let current = current.trim();
+    let resolved: SharedString = if current.is_empty() || current == SYSTEM_UI_FONT {
+        system_family()
     } else {
-        current.trim().to_string().into()
+        current.to_string().into()
     };
     let theme = gpui_component::Theme::global_mut(cx);
     theme.font_size = rem_base();
@@ -176,9 +217,16 @@ pub fn sync_window_rem_size(window: &mut Window) {
 }
 
 /// The system's installed font family names, de-duplicated and sorted, for the
-/// font picker. Always includes the system-default sentinel at the front.
+/// font picker. gpui appends its own `.SystemUIFont` sentinel to the list; the
+/// picker has a labelled "system default" row of its own, so the raw sentinel is
+/// dropped instead of being offered as a second, untranslatable choice.
 pub fn available_families(cx: &App) -> Vec<String> {
-    let mut names = cx.text_system().all_font_names();
+    let mut names: Vec<String> = cx
+        .text_system()
+        .all_font_names()
+        .into_iter()
+        .filter(|n| n != SYSTEM_UI_FONT)
+        .collect();
     names.sort_by_key(|n| n.to_lowercase());
     names.dedup();
     names
