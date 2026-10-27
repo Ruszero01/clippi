@@ -16,6 +16,8 @@ pub mod paste;
 pub mod quick_window;
 pub mod remote_path;
 pub mod source;
+#[cfg(target_os = "windows")]
+pub mod system_font;
 pub mod tag_window;
 pub mod text_input;
 pub mod tray;

@@ -1444,7 +1444,7 @@ impl SettingsPanel {
         let entries: Vec<AnyElement> = std::iter::once(mk_entry(
             String::new(),
             system_label.to_string(),
-            crate::ui::font::SYSTEM_UI_FONT.into(),
+            crate::ui::font::system_family(),
         ))
         .chain(
             fonts

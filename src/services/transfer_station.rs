@@ -1550,7 +1550,7 @@ mod tests {
         ) -> Result<String, ManifestWriteError> {
             if self
                 .conflicts_remaining
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                     if remaining > 0 {
                         Some(remaining - 1)
                     } else {

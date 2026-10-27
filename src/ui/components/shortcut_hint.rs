@@ -79,7 +79,7 @@ fn keycap(key: SharedString, geometry: HintGeometry, theme: &ClippiTheme) -> Div
         .h(px(geometry.height))
         .rounded(px(3.))
         .bg(theme.accent)
-        .font_family(font::SYSTEM_UI_FONT)
+        .font_family(font::system_family())
         .text_size(px(geometry.font_size))
         .line_height(px(geometry.height - 2.0))
         .font_weight(FontWeight::SEMIBOLD)
