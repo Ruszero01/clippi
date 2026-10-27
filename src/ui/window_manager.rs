@@ -644,14 +644,14 @@ pub struct WindowManager {
     /// app/entity update so synchronous DPI (Windows) and `windowDidMove:`
     /// (macOS) callbacks can re-borrow GPUI.
     _main_show_task: Option<Task<()>>,
-    /// True from the moment the main-window show task is spawned until the
-    /// window has actually been shown (and its post-show reload finished).
+    /// True while the main-window show or macOS surface restore is in flight,
+    /// until the window is shown and its post-show reload has finished.
     ///
     /// The hotkey toggle and the inverse visibility guard need to tell "already
     /// on screen" apart from "show in flight": `_main_show_task` cannot do that
     /// because the slot keeps its `Some` after the task has run to completion.
     /// Cleared by the task itself on every exit path and by `hide()` (which
-    /// cancels the task).
+    /// cancels both show and restore tasks).
     main_show_pending: bool,
     /// Fast poll for quick-action hotkeys when quick window is visible (16ms ≈ 60fps).
     _quick_poll_task: Option<Task<()>>,
@@ -3547,9 +3547,6 @@ impl WindowManager {
                 // Restore the full size before making the window visible to
                 // avoid a 1×1 flash (doc §3.3).
                 self.restore_main_macos_window(cx);
-                // The window is ordered front now, so the reload can no longer
-                // delay the first frame.
-                self.after_main_window_shown(cx);
             } else {
                 // Position and order front from a task, the way the Windows
                 // branch below and `show_quick_macos_window_deferred` do: the
@@ -4104,10 +4101,14 @@ impl WindowManager {
             attachment.set_enabled(false);
         }
         self.cancel_active_hotkey_recording(cx);
+        self._main_show_task = None;
         #[cfg(target_os = "windows")]
         {
-            self._main_show_task = None;
             self._main_monitor_migration_task = None;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self._main_restore_task = None;
         }
         // The task above is cancelled, so no post-show work can run for it.
         self.main_show_pending = false;
@@ -5060,11 +5061,13 @@ impl WindowManager {
         let ns_window = self.ns_window;
         if ns_window == 0 {
             self.macos_compaction_disabled = true;
+            self.visible = false;
             log::warn!("surface restore: main NSWindow unavailable; compaction disabled");
             return;
         }
         let Some(_mtm) = objc2::MainThreadMarker::new() else {
             self.macos_compaction_disabled = true;
+            self.visible = false;
             log::warn!("surface restore: main-thread marker unavailable; compaction disabled");
             return;
         };
@@ -5094,6 +5097,9 @@ impl WindowManager {
         }
         log::debug!("surface restore: main → {target_w:.0}×{target_h:.0}");
 
+        // Keep hotkey toggles and background reloads out until the restored
+        // window is on screen and its first page has been loaded.
+        self.main_show_pending = true;
         self._main_restore_task = Some(cx.spawn(async move |weak_self, cx| {
             let deadline = Instant::now() + Duration::from_millis(100);
             loop {
@@ -5187,6 +5193,16 @@ impl WindowManager {
                 let _ = cx.update(|cx| cx.activate(true));
                 Self::activate_ns_window(ns_window);
                 log::debug!("surface restore: main window shown");
+                let _ = this.update(cx, |wm, _cx| {
+                    wm.suppress_until =
+                        Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS));
+                });
+                Timer::after(Duration::from_millis(1)).await;
+                let _ = this.update(cx, |wm, cx| {
+                    if wm.visible && wm.surface_generation == restore_generation {
+                        wm.after_main_window_shown(cx);
+                    }
+                });
             }
         }));
     }

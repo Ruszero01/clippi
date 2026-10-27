@@ -3406,7 +3406,7 @@ impl AppState {
         }
 
         // --- Remove from in-memory items ---
-        let ids: Vec<i64> = self.selected_ids.drain(..).collect();
+        let ids = std::mem::take(&mut self.selected_ids);
         self.items.retain(|it| !ids.contains(&it.id));
         self.refresh_titlebar_filter_availability();
     }
