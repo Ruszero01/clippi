@@ -1748,13 +1748,29 @@ impl Render for RootView {
                         panel.child(bottom)
                     }),
             )
+            // Settings dialogs must be rooted here so their scrims cover the
+            // header and bottom bar as well as the settings content.
+            .when(is_settings, |root| {
+                root.child(self.settings_panel.update(cx, |panel, cx| {
+                    panel.render_reset_data_dialog(window, cx).into_any_element()
+                }))
+                .child(self.settings_panel.update(cx, |panel, cx| {
+                    panel.render_config_sync_dialogs(window, cx).into_any_element()
+                }))
+                .child(self.settings_panel.update(cx, |panel, cx| {
+                    panel.render_delete_backend_dialog(window, cx).into_any_element()
+                }))
+                .child(self.settings_panel.update(cx, |panel, cx| {
+                    panel.render_font_picker(window, cx).into_any_element()
+                }))
+            })
             // --- Tag filter panel — ConfirmDialog pattern: ---
             // --- full-screen backdrop that closes on click outside, ---
             // --- panel positioned top-right, occlude prevents click-through. ---
             .when(tag_panel_visible, |root| {
                 let search_for_backdrop = filter_bar.clone();
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                    crate::ui::components::modal_overlay::modal_overlay()
                         .rounded(px(panel_radius))
                         .opacity(tag_panel_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -1775,7 +1791,7 @@ impl Render for RootView {
                 let search_for_backdrop = filter_bar.clone();
                 let config_panel = self.type_filter_config_panel.clone();
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                    crate::ui::components::modal_overlay::modal_overlay()
                         .rounded(px(panel_radius))
                         .opacity(filter_config_opacity)
                         .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
@@ -1791,7 +1807,7 @@ impl Render for RootView {
                         ),
                 )
             })
-            // --- Tag edit overlay — centered in main panel area (left:36px) ---
+            // --- Tag edit overlay — centered in the window ---
             .when(editing_tag_visible, |root| {
                 let app_state = self.state.read(cx);
                 let editing_tag_id = app_state.editing_tag_id;
@@ -1800,7 +1816,7 @@ impl Render for RootView {
                 let tag_filter = self.tag_filter_panel.clone();
 
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                    crate::ui::components::modal_overlay::modal_overlay()
                         .rounded(px(panel_radius))
                         .opacity(edit_tag_opacity)
                         .flex()
@@ -1853,7 +1869,7 @@ impl Render for RootView {
 
                 // --- Backdrop — click / scroll to dismiss ---
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                    crate::ui::components::modal_overlay::modal_overlay()
                         .on_mouse_down(MouseButton::Left, {
                             let l = list.clone();
                             move |_ev, _window, cx| {
@@ -1993,7 +2009,7 @@ impl Render for RootView {
                 let clamped_y = base_y + tag_picker_offset;
 
                 root.child(
-                    crate::ui::components::modal_overlay::modal_overlay(PANEL_OFFSET_X)
+                    crate::ui::components::modal_overlay::modal_overlay()
                         .rounded(px(panel_radius))
                         .opacity(tag_picker_opacity)
                         .on_mouse_down(MouseButton::Left, {
@@ -2163,10 +2179,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(PANEL_OFFSET_X))
-                        .right(px(0.))
-                        .top(px(0.))
-                        .bottom(px(0.))
+                        .inset_0()
                         .child(dialog_element),
                 )
             })
@@ -2241,10 +2254,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(PANEL_OFFSET_X))
-                        .right(px(0.))
-                        .top(px(0.))
-                        .bottom(px(0.))
+                        .inset_0()
                         .child(dialog_element),
                 )
             })
@@ -2644,10 +2654,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(PANEL_OFFSET_X))
-                        .right(px(0.))
-                        .top(px(0.))
-                        .bottom(px(0.))
+                        .inset_0()
                         .child(
                             ConfirmDialog::new()
                                 .title(I18nKey::ConfirmClearDataTitle.text())
@@ -3072,10 +3079,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(PANEL_OFFSET_X))
-                        .right(px(0.))
-                        .top(px(0.))
-                        .bottom(px(0.))
+                        .inset_0()
                         .child(dialog_element),
                 )
             })
@@ -3083,10 +3087,7 @@ impl Render for RootView {
                 root.child(
                     div()
                         .absolute()
-                        .left(px(PANEL_OFFSET_X))
-                        .right(px(0.))
-                        .top(px(0.))
-                        .bottom(px(0.))
+                        .inset_0()
                         .opacity(backend_panel_opacity)
                         .child(backend_panel),
                 )
@@ -3324,6 +3325,7 @@ impl RootView {
         (self.current_view == "emoji" || !self.list_view.read(cx).has_any_panel_or_editing())
             && !self.filter_bar.read(cx).tag_panel_open()
             && !self.filter_bar.read(cx).filter_config_open()
+            && self.settings_panel.read(cx).hotkey_confirm.is_none()
             && self.pending_tag_delete.is_none()
             && !self.clear_data_confirm
     }

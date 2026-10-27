@@ -436,7 +436,7 @@ impl SettingsPanel {
         let (opacity, scale, offset, viewport_width, viewport_height) = layout;
         let popup_width = LATEST_HOTKEY_POPUP_WIDTH * scale;
         let popup_height = LATEST_HOTKEY_POPUP_HEIGHT * scale;
-        let main_width = (viewport_width - 36.).max(popup_width);
+        let main_width = viewport_width.max(popup_width);
         let popup_left = ((main_width - popup_width) * 0.5).max(8.);
         let popup_top = ((viewport_height - popup_height) * 0.5).max(8.) + offset;
         let configured = latest
@@ -445,7 +445,7 @@ impl SettingsPanel {
             .count();
         let close_panel = panel_entity.clone();
 
-        crate::ui::components::modal_overlay::modal_overlay(36.)
+        crate::ui::components::modal_overlay::modal_overlay()
             .rounded(px(12.))
             .opacity(opacity)
             .cursor(CursorStyle::PointingHand)

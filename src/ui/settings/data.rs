@@ -1520,7 +1520,7 @@ impl SettingsPanel {
 
         let this = cx.entity().clone();
 
-        crate::ui::components::modal_overlay::modal_overlay(0.)
+        crate::ui::components::modal_overlay::modal_overlay()
             .flex()
             .items_center()
             .justify_center()

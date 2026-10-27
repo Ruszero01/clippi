@@ -149,7 +149,7 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
     let add_section_height = if has_add { ADD_BUTTON_HEIGHT + 10. } else { 0. };
     let popup_height = ((72. + list_content_height + add_section_height) * scale)
         .clamp(MIN_DIALOG_HEIGHT * scale, MAX_DIALOG_HEIGHT * scale);
-    let main_width = (viewport_width - 36.).max(popup_width);
+    let main_width = viewport_width.max(popup_width);
     let popup_left = ((main_width - popup_width) * 0.5).max(8.);
     let popup_top = ((viewport_height - popup_height) * 0.5).max(8.) + offset;
     let close = params.on_close.clone();
@@ -179,7 +179,7 @@ pub fn render_app_list_dialog(params: AppListDialogParams) -> impl IntoElement {
         theme.surface_press
     };
 
-    crate::ui::components::modal_overlay::modal_overlay(36.)
+    crate::ui::components::modal_overlay::modal_overlay()
         .rounded(px(12.))
         .opacity(opacity)
         .cursor(CursorStyle::PointingHand)

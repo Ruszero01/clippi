@@ -276,7 +276,7 @@ impl ConfirmDialog {
             handle.focus(window);
         }
 
-        crate::ui::components::modal_overlay::modal_overlay(0.)
+        crate::ui::components::modal_overlay::modal_overlay()
             .rounded(px(12.))
             .flex()
             .items_center()

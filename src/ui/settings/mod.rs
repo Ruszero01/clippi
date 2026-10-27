@@ -344,7 +344,7 @@ impl SettingsPanel {
 
     /// Render config-sync confirmation dialogs as absolute-positioned overlays
     /// on the settings panel root. This avoids clipping from the scroll container.
-    fn render_config_sync_dialogs(
+    pub(crate) fn render_config_sync_dialogs(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -470,7 +470,7 @@ impl SettingsPanel {
     }
 
     /// Render delete-backend confirmation dialog as an absolute overlay.
-    fn render_delete_backend_dialog(
+    pub(crate) fn render_delete_backend_dialog(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -730,22 +730,8 @@ impl Render for SettingsPanel {
                                             .scrollbar_show(ScrollbarShow::Scrolling),
                                     ),
                             ),
-                    )
-                    // --- Reset data directory dialog (overlay) ---
-                    .child(self.render_reset_data_dialog(window, cx).into_any_element()),
+                    ),
             )
-            // --- Config sync dialogs (absolute overlay on root) ---
-            .child(
-                self.render_config_sync_dialogs(window, cx)
-                    .into_any_element(),
-            )
-            // --- Delete backend dialog (absolute overlay on root) ---
-            .child(
-                self.render_delete_backend_dialog(window, cx)
-                    .into_any_element(),
-            )
-            // --- Font family picker (absolute overlay on root) ---
-            .child(self.render_font_picker(window, cx).into_any_element())
     }
 }
 
@@ -1316,10 +1302,10 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    /// Absolute overlay covering the settings panel: a dim, inset backdrop with
+    /// Absolute overlay covering the settings panel: a dim backdrop with
     /// a centered, size-capped card holding a scrollable (with scrollbar) list
     /// of font families, each previewed in its own typeface.
-    fn render_font_picker(
+    pub(crate) fn render_font_picker(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1453,7 +1439,7 @@ impl SettingsPanel {
         )
         .collect();
 
-        crate::ui::components::modal_overlay::modal_overlay(0.)
+        crate::ui::components::modal_overlay::modal_overlay()
             .p(px(16.))
             .flex()
             .items_center()
