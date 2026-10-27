@@ -115,6 +115,21 @@ pub fn system_family() -> SharedString {
     SYSTEM_FAMILY.get_or_init(resolve_system_family).clone()
 }
 
+/// Can gpui resolve this family?
+///
+/// gpui's Windows text system logs its fallback and then unwraps it, so a name
+/// DirectWrite does not know is fatal at the first frame that draws text —
+/// including one restored from a config written when the font was installed.
+#[cfg(target_os = "windows")]
+fn family_is_usable(name: &str) -> bool {
+    crate::platform::system_font::family_is_registered(name)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn family_is_usable(_name: &str) -> bool {
+    true
+}
+
 /// Monospace family for the styled rich-text preview.
 ///
 /// The preview deliberately opts out of the UI family so extracted document
@@ -201,6 +216,9 @@ pub fn apply_to_global_theme(cx: &mut App) {
     let current = current.trim();
     let resolved: SharedString = if current.is_empty() || current == SYSTEM_UI_FONT {
         system_family()
+    } else if !family_is_usable(current) {
+        log::warn!("Font family {current:?} is not resolvable; using the system UI font.");
+        system_family()
     } else {
         current.to_string().into()
     };
@@ -217,16 +235,27 @@ pub fn sync_window_rem_size(window: &mut Window) {
 }
 
 /// The system's installed font family names, de-duplicated and sorted, for the
-/// font picker. gpui appends its own `.SystemUIFont` sentinel to the list; the
-/// picker has a labelled "system default" row of its own, so the raw sentinel is
-/// dropped instead of being offered as a second, untranslatable choice.
+/// font picker.
+///
+/// gpui appends two kinds of name that are *not* installed fonts: its
+/// `.SystemUIFont` sentinel and the members of its internal fallback stack
+/// (`.ZedMono`, `.ZedSans`, `Helvetica`, `Ubuntu`, …), which it adds to
+/// `all_font_names` wholesale. Handing any unresolvable one to gpui kills the
+/// process on Windows — `select_font` unwraps its own fallback — and a picker
+/// row previewed in a typeface the machine does not have is a lie anyway, so the
+/// list keeps only families DirectWrite actually resolves. The picker's own
+/// labelled "system default" row covers the sentinel.
 pub fn available_families(cx: &App) -> Vec<String> {
     let mut names: Vec<String> = cx
         .text_system()
         .all_font_names()
         .into_iter()
-        .filter(|n| n != SYSTEM_UI_FONT)
+        .filter(|n| !n.starts_with('.'))
         .collect();
+    #[cfg(target_os = "windows")]
+    {
+        names = crate::platform::system_font::retain_registered(names);
+    }
     names.sort_by_key(|n| n.to_lowercase());
     names.dedup();
     names
