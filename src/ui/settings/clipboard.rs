@@ -44,6 +44,7 @@ impl SettingsPanel {
         let delete_link_source = app.settings.delete_source_after_link_extraction;
         let auto_focus_search = app.settings.auto_focus_search;
         let clear_search_on_show = app.settings.clear_search_on_show;
+        let confirm_delete = app.settings.confirm_delete;
         let auto_fetch_url_title = app.settings.auto_fetch_url_title;
         let filter_foreign_paths = app.settings.filter_foreign_paths;
         let copy_sound_enabled = app.settings.copy_sound_enabled;
@@ -266,6 +267,21 @@ impl SettingsPanel {
                 |state, _this, _window, _cx| {
                     state.update(_cx, |s, _cx| {
                         s.settings.auto_focus_search = !s.settings.auto_focus_search;
+                        s.settings.save();
+                    });
+                },
+            )
+            .into_any_element(),
+            self.render_toggle_row(
+                I18nKey::SettingConfirmDelete,
+                I18nKey::DescConfirmDeleteOn,
+                I18nKey::DescConfirmDeleteOff,
+                confirm_delete,
+                window,
+                cx,
+                |state, _this, _window, cx| {
+                    state.update(cx, |s, _cx| {
+                        s.settings.confirm_delete = !s.settings.confirm_delete;
                         s.settings.save();
                     });
                 },

@@ -226,6 +226,8 @@ pub struct AppSettings {
     pub auto_focus_search: bool, // auto-focus search bar when the window opens
     #[serde(default)]
     pub clear_search_on_show: bool, // clear search bar text when the window opens
+    #[serde(default = "default_confirm_delete")]
+    pub confirm_delete: bool,
     #[serde(default)]
     pub type_filter_config: Vec<TypeFilterEntry>, // custom type filter visibility & order
     #[serde(default)]
@@ -336,6 +338,10 @@ fn default_latest_hotkeys() -> Vec<LatestHotkeyEntry> {
         .collect()
 }
 
+fn default_confirm_delete() -> bool {
+    true
+}
+
 /// 快速窗口默认与主窗口共用筛选状态，与引入该开关之前的行为一致。
 fn default_quick_sync_filters() -> bool {
     true
@@ -423,6 +429,7 @@ impl Default for AppSettings {
             block_system_window_behaviors: false,
             auto_focus_search: false,
             clear_search_on_show: false,
+            confirm_delete: true,
             type_filter_config: Vec::new(),
             paste_shortcuts: Vec::new(),
             latest_hotkeys: default_latest_hotkeys(),
@@ -1548,6 +1555,21 @@ pub fn capture_gate(source_app_name: &str, blacklist: &[String], startup_done: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirm_delete_defaults_on_for_legacy_settings_and_persists_off() {
+        let defaults = AppSettings::default();
+        assert!(defaults.confirm_delete);
+        let mut legacy = toml::Value::try_from(&defaults).unwrap();
+        legacy.as_table_mut().unwrap().remove("confirm_delete");
+        let loaded: AppSettings = legacy.try_into().unwrap();
+        assert!(loaded.confirm_delete);
+
+        let mut disabled = defaults;
+        disabled.confirm_delete = false;
+        let loaded: AppSettings = toml::from_str(&toml::to_string(&disabled).unwrap()).unwrap();
+        assert!(!loaded.confirm_delete);
+    }
 
     #[test]
     fn edit_auto_save_defaults_off_for_old_configs_and_round_trips() {

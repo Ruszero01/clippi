@@ -163,6 +163,12 @@ pub struct PortableSettingsV1 {
     pub card_height_mode: String,
     pub auto_focus_search: bool,
     pub clear_search_on_show: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub confirm_delete: Option<bool>,
     pub always_reset_to_clipboard: bool,
     #[serde(
         default,
@@ -364,6 +370,7 @@ impl PortableSettingsV1 {
             card_height_mode: settings.card_height_mode.clone(),
             auto_focus_search: settings.auto_focus_search,
             clear_search_on_show: settings.clear_search_on_show,
+            confirm_delete: Some(settings.confirm_delete),
             always_reset_to_clipboard: settings.always_reset_to_clipboard,
             quick_window_sync_filters: Some(settings.quick_window_sync_filters),
             font_size_scale: Some(settings.font_size_scale),
@@ -428,6 +435,9 @@ impl PortableSettingsV1 {
         result.card_height_mode = self.card_height_mode.clone();
         result.auto_focus_search = self.auto_focus_search;
         result.clear_search_on_show = self.clear_search_on_show;
+        if let Some(value) = self.confirm_delete {
+            result.confirm_delete = value;
+        }
         result.always_reset_to_clipboard = self.always_reset_to_clipboard;
         if let Some(value) = self.quick_window_sync_filters {
             result.quick_window_sync_filters = value;
@@ -664,6 +674,19 @@ impl PortableSettingsV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirm_delete_syncs_and_old_snapshots_preserve_local_value() {
+        let mut source = AppSettings::default();
+        source.confirm_delete = false;
+        let portable = PortableSettingsV1::from_local(&source);
+        assert!(!portable.apply_to(&AppSettings::default()).confirm_delete);
+
+        let mut old = serde_json::to_value(&portable).unwrap();
+        old.as_object_mut().unwrap().remove("confirm_delete");
+        let old: PortableSettingsV1 = serde_json::from_value(old).unwrap();
+        assert!(old.apply_to(&AppSettings::default()).confirm_delete);
+    }
 
     fn test_settings() -> AppSettings {
         AppSettings::default()

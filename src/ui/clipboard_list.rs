@@ -1560,37 +1560,67 @@ impl ClipboardListView {
             .collect()
     }
 
+    fn request_delete(&mut self, target: ConfirmDialogState, cx: &mut Context<Self>) {
+        if self.state.read(cx).settings.confirm_delete {
+            self.confirm_dialog = Some(target);
+        } else {
+            match target {
+                ConfirmDialogState::Single { id } => {
+                    self.state.update(cx, |state, _| state.delete_item(id));
+                    self.sync_items_from_state(cx);
+                }
+                ConfirmDialogState::Batch { .. } => {
+                    self.state.update(cx, |state, _| state.batch_delete());
+                    self.sync_items_from_state(cx);
+                }
+                ConfirmDialogState::Transfer { hash } => {
+                    self.state
+                        .update(cx, |state, _| state.delete_transfer_entry(&hash));
+                }
+                ConfirmDialogState::TransferBatch { hashes } => {
+                    self.state
+                        .update(cx, |state, _| state.delete_transfer_entries(&hashes));
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn show_transfer_batch_delete_confirm(&mut self, cx: &mut Context<Self>) {
         let hashes = self.selected_transfer_hashes();
         if hashes.is_empty() {
             return;
         }
-        self.confirm_dialog = Some(ConfirmDialogState::TransferBatch { hashes });
-        cx.notify();
+        self.request_delete(ConfirmDialogState::TransferBatch { hashes }, cx);
     }
 
-    /// Show the delete confirmation dialog for selected item(s).
+    /// Delete selected item(s), asking for confirmation when enabled.
     pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) {
         let transfer_hashes = self.selected_transfer_hashes();
-        if !transfer_hashes.is_empty() && transfer_hashes.len() == self.selected_ids.len() {
-            if transfer_hashes.len() == 1 {
-                self.confirm_dialog = Some(ConfirmDialogState::Transfer {
-                    hash: transfer_hashes[0].clone(),
-                });
+        let target =
+            if !transfer_hashes.is_empty() && transfer_hashes.len() == self.selected_ids.len() {
+                if transfer_hashes.len() == 1 {
+                    Some(ConfirmDialogState::Transfer {
+                        hash: transfer_hashes[0].clone(),
+                    })
+                } else {
+                    Some(ConfirmDialogState::TransferBatch {
+                        hashes: transfer_hashes,
+                    })
+                }
+            } else if self.selected_count > 1 {
+                let count = self.selected_ids.len();
+                Some(ConfirmDialogState::Batch { count })
+            } else if let Some(idx) = self.selected_index {
+                self.items
+                    .get(idx)
+                    .map(|item| ConfirmDialogState::Single { id: item.id })
             } else {
-                self.confirm_dialog = Some(ConfirmDialogState::TransferBatch {
-                    hashes: transfer_hashes,
-                });
-            }
-        } else if self.selected_count > 1 {
-            let count = self.selected_ids.len();
-            self.confirm_dialog = Some(ConfirmDialogState::Batch { count });
-        } else if let Some(idx) = self.selected_index {
-            if let Some(item) = self.items.get(idx) {
-                self.confirm_dialog = Some(ConfirmDialogState::Single { id: item.id });
-            }
+                None
+            };
+        if let Some(target) = target {
+            self.request_delete(target, cx);
         }
-        cx.notify();
     }
 
     /// Reduce multi-selection to single selection, keeping only the first selected item.
@@ -2098,7 +2128,7 @@ impl ClipboardListView {
                 if let Some(ref item) = self.context_menu_item {
                     let id = item.id;
                     self.hide_context_menu(cx);
-                    self.confirm_dialog = Some(ConfirmDialogState::Single { id });
+                    self.request_delete(ConfirmDialogState::Single { id }, cx);
                     return; // Don't call hide_context_menu again at end
                 }
             }
@@ -2109,8 +2139,7 @@ impl ClipboardListView {
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
-                self.confirm_dialog = Some(ConfirmDialogState::Batch { count });
-                cx.notify();
+                self.request_delete(ConfirmDialogState::Batch { count }, cx);
             }
             "batch_delete_transfer" => {
                 self.show_transfer_batch_delete_confirm(cx);
@@ -2156,10 +2185,12 @@ impl ClipboardListView {
             "delete_transfer" => {
                 if let Some(ref item) = self.context_menu_item {
                     let fd = crate::core::types::FileData::from_json(&item.file_data);
-                    self.confirm_dialog = Some(ConfirmDialogState::Transfer {
-                        hash: fd.remote_hash,
-                    });
-                    cx.notify();
+                    self.request_delete(
+                        ConfirmDialogState::Transfer {
+                            hash: fd.remote_hash,
+                        },
+                        cx,
+                    );
                 }
             }
             "toggle_transfer_pin" => {
@@ -2285,10 +2316,12 @@ impl ClipboardListView {
             "delete_transfer" => {
                 if let Some(item) = self.hovered_index.and_then(|index| self.items.get(index)) {
                     let file_data = crate::core::types::FileData::from_json(&item.file_data);
-                    self.confirm_dialog = Some(ConfirmDialogState::Transfer {
-                        hash: file_data.remote_hash,
-                    });
-                    cx.notify();
+                    self.request_delete(
+                        ConfirmDialogState::Transfer {
+                            hash: file_data.remote_hash,
+                        },
+                        cx,
+                    );
                 }
             }
             "open_transfer_location" => {
@@ -2373,8 +2406,8 @@ impl ClipboardListView {
             "delete" => {
                 if let Some(index) = self.hovered_index {
                     if let Some(item) = self.items.get(index) {
-                        self.confirm_dialog = Some(ConfirmDialogState::Single { id: item.id });
-                        cx.notify();
+                        let id = item.id;
+                        self.request_delete(ConfirmDialogState::Single { id }, cx);
                     }
                 }
             }
@@ -2385,8 +2418,7 @@ impl ClipboardListView {
             }
             "batch_delete" => {
                 let count = self.selected_ids.len();
-                self.confirm_dialog = Some(ConfirmDialogState::Batch { count });
-                cx.notify();
+                self.request_delete(ConfirmDialogState::Batch { count }, cx);
             }
             "batch_delete_transfer" => {
                 self.show_transfer_batch_delete_confirm(cx);
