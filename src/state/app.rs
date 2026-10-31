@@ -1795,19 +1795,48 @@ impl AppState {
         let mark_dirty = items.iter().any(|item| self.should_mark_sync_dirty(item));
         let now = chrono::Utc::now().to_rfc3339();
         let ids = dedupe_ids(&items.iter().map(|item| item.id).collect::<Vec<_>>());
-        match self.db.touch_items(&ids, &now) {
+        if let Some(path) = self.db.file_path().filter(|path| !path.is_empty()) {
+            let identities = ids
+                .iter()
+                .filter_map(|id| {
+                    items
+                        .iter()
+                        .find(|item| item.id == *id)
+                        .map(|item| (*id, item.content_hash as i64))
+                })
+                .collect();
+            if crate::services::usage_touch::enqueue(
+                path.to_owned(),
+                identities,
+                now.clone(),
+                mark_dirty,
+                self.sync_dirty.clone(),
+                self.needs_reload.clone(),
+            ) {
+                self.record_usage_in_memory(&ids, &now);
+            } else {
+                log::error!("background usage update worker is unavailable");
+            }
+            return;
+        }
+        let touch_result = self.db.touch_items(&ids, &now);
+        match touch_result {
             Ok(_) => {
                 if mark_dirty {
                     self.sync_dirty.store(true, Ordering::SeqCst);
                 }
-                self.apply_usage_touch_in_memory(&ids, &now);
-                for id in ids {
-                    if !self.last_usage_touched_ids.contains(&id) {
-                        self.last_usage_touched_ids.push(id);
-                    }
-                }
+                self.record_usage_in_memory(&ids, &now);
             }
             Err(e) => log::error!("touch_items_usage: {e}"),
+        }
+    }
+
+    fn record_usage_in_memory(&mut self, ids: &[i64], now: &str) {
+        self.apply_usage_touch_in_memory(ids, now);
+        for &id in ids {
+            if !self.last_usage_touched_ids.contains(&id) {
+                self.last_usage_touched_ids.push(id);
+            }
         }
     }
 
@@ -2894,7 +2923,9 @@ impl AppState {
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 restore_paste_target();
                 let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
-                paste_sync(shortcuts);
+                if !paste_sync(shortcuts) {
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(60));
             }
 
@@ -2926,7 +2957,9 @@ impl AppState {
 
             if i < n - 1 {
                 let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
-                paste_sync(shortcuts);
+                if !paste_sync(shortcuts) {
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             } else {
                 let shortcuts = std::sync::Arc::new(self.settings.paste_shortcuts.clone());
@@ -7233,6 +7266,34 @@ mod tests {
     }
 
     // ── Usage-path incremental updates (P1/P2) ─────────────────────
+
+    #[test]
+    fn usage_touch_on_file_db_remains_responsive_while_another_writer_holds_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.db");
+        let (mut state, dirty) = test_state();
+        state.db = Database::open(path.to_str().unwrap()).unwrap();
+        state.settings.sync_favorites_only = false;
+        let id = insert_item_at_age(&mut state, 1, false, "old", 100);
+        state.reload_items();
+        let item = state.db.get_by_id(id).unwrap().unwrap();
+        let other = rusqlite::Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = std::time::Instant::now();
+        state.touch_item_usage(&item);
+        assert!(started.elapsed() < std::time::Duration::from_millis(250));
+        assert!(state.items[0].updated_at > item.updated_at);
+        other.execute_batch("COMMIT").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while !dirty.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(dirty.load(Ordering::SeqCst));
+        assert_eq!(
+            state.items[0].updated_at,
+            state.db.get_by_id(id).unwrap().unwrap().updated_at
+        );
+    }
 
     #[test]
     fn usage_touch_moves_item_to_front_in_updated_at_order() {

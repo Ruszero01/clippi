@@ -538,10 +538,11 @@ pub fn restore_paste_target() -> bool {
 /// Resolve per-process shortcuts in the worker using the current input owner.
 #[cfg(target_os = "windows")]
 pub fn paste_after_delay(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {
+    let focus_snapshot = crate::platform::focus_restore::take();
     std::thread::spawn(move || {
         let target = crate::platform::focus::resolve_paste_target().map(|hwnd| hwnd as usize);
         let shortcut = resolve_paste_shortcut(target, &paste_shortcuts);
-        wait_for_focus_and_send_paste(target, shortcut);
+        wait_for_focus_and_send_paste(target, shortcut, focus_snapshot);
     });
 }
 
@@ -551,14 +552,19 @@ pub fn paste_after_delay(paste_shortcuts: Arc<Vec<crate::core::settings::PasteSh
 /// between the separator write and the next item write.
 /// Caller must call `restore_paste_target()` before invoking.
 #[cfg(target_os = "windows")]
-pub fn paste_sync(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {
+pub fn paste_sync(paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) -> bool {
+    let focus_snapshot = crate::platform::focus_restore::take();
     let target_hwnd = crate::platform::focus::resolve_paste_target().map(|hwnd| hwnd as usize);
     let shortcut = resolve_paste_shortcut(target_hwnd, &paste_shortcuts);
-    wait_for_focus_and_send_paste(target_hwnd, shortcut);
+    wait_for_focus_and_send_paste(target_hwnd, shortcut, focus_snapshot)
 }
 
 #[cfg(target_os = "windows")]
-fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShortcut) {
+fn wait_for_focus_and_send_paste(
+    target_hwnd: Option<usize>,
+    shortcut: PasteShortcut,
+    focus_snapshot: Option<crate::platform::focus_restore::Snapshot>,
+) -> bool {
     use crate::platform::focus::{
         describe_input_context, paste_would_hit_clippi, paste_would_reach, resolve_paste_target,
     };
@@ -579,7 +585,7 @@ fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShor
     // instead of injecting blindly.
     let Some(target_hwnd) = target_hwnd else {
         log::warn!("Paste target unavailable; skipping paste keystroke");
-        return;
+        return false;
     };
     let hwnd = target_hwnd as windows_sys::Win32::Foundation::HWND;
 
@@ -594,7 +600,7 @@ fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShor
              restart Clippi elevated (the auto-start logon task does this) \
              to paste into elevated applications"
         );
-        return;
+        return false;
     }
 
     // Verify target window is actually foreground before pasting.
@@ -603,7 +609,7 @@ fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShor
     // which is always valid or null-safe.
     if unsafe { IsWindow(hwnd) } == 0 {
         log::warn!("Paste target window no longer exists; skipping paste");
-        return;
+        return false;
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(FOCUS_TIMEOUT_MS);
     while !paste_would_reach(hwnd) {
@@ -618,7 +624,7 @@ fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShor
                      skipping paste ({})",
                     describe_input_context(Some(hwnd))
                 );
-                return;
+                return false;
             }
             log::warn!(
                 "Paste target never took the input; sending to the live input instead ({})",
@@ -629,7 +635,14 @@ fn wait_for_focus_and_send_paste(target_hwnd: Option<usize>, shortcut: PasteShor
         std::thread::sleep(std::time::Duration::from_millis(FOCUS_CHECK_INTERVAL_MS));
     }
 
+    if let Some(snapshot) = focus_snapshot {
+        if !crate::platform::focus_restore::restore(snapshot, hwnd) || !paste_would_reach(hwnd) {
+            log::warn!("Focus restoration could not safely complete; skipping paste keystroke");
+            return false;
+        }
+    }
     send_paste_keystroke(&shortcut);
+    true
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -806,8 +819,9 @@ pub fn paste_after_delay(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteS
 /// Synchronous paste — blocks until Cmd+V is sent (used for batch paste separators).
 /// Caller must call `restore_paste_target()` before invoking.
 #[cfg(target_os = "macos")]
-pub fn paste_sync(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {
+pub fn paste_sync(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) -> bool {
     send_cmd_v();
+    true
 }
 
 /// Send Cmd+V keyboard events to the HID event stream.
@@ -935,7 +949,9 @@ pub fn restore_paste_target() -> bool {
 pub fn paste_after_delay(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {}
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn paste_sync(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) {}
+pub fn paste_sync(_paste_shortcuts: Arc<Vec<crate::core::settings::PasteShortcutEntry>>) -> bool {
+    false
+}
 
 #[cfg(test)]
 mod tests {

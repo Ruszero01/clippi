@@ -267,7 +267,7 @@ fn is_own_process_window(hwnd: HWND) -> bool {
 /// Win32 activates — and `SetForegroundWindow` accepts — only top-level
 /// windows, so every recorded target is normalised through here.
 #[cfg(target_os = "windows")]
-fn root_window(hwnd: HWND) -> HWND {
+pub(crate) fn root_window(hwnd: HWND) -> HWND {
     if hwnd.is_null() {
         return hwnd;
     }

@@ -18,3 +18,4 @@ pub mod update;
 pub mod updater;
 pub mod url_assets;
 pub mod url_title;
+pub mod usage_touch;

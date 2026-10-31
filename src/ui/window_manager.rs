@@ -3355,6 +3355,10 @@ impl WindowManager {
     /// period and brings the window to foreground — it skips repositioning
     /// and item reload to avoid disrupting the current view.
     pub fn show_and_focus(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        if !self.visible {
+            crate::platform::focus_restore::capture();
+        }
         // Sample immediately before taking focus; the event-driven record may
         // still refer to a tray window or the application behind a restored one.
         #[cfg(target_os = "windows")]
@@ -3503,16 +3507,34 @@ impl WindowManager {
                 }
                 let (set_fg, is_visible, fg_self) = unsafe {
                     ShowWindow(raw, SW_SHOW);
-                    let set_fg = SetForegroundWindow(raw) != 0;
+                    // A launcher can supply STARTUPINFO(SW_HIDE), which Windows
+                    // applies instead of the first ShowWindow argument. Retry
+                    // only when the window is still hidden; subsequent calls
+                    // honor SW_SHOW and do not require a second hotkey.
+                    if IsWindowVisible(raw) == 0 {
+                        ShowWindow(raw, SW_SHOW);
+                    }
+                    let is_visible = IsWindowVisible(raw) != 0;
+                    let set_fg = is_visible && SetForegroundWindow(raw) != 0;
                     (
                         set_fg,
-                        IsWindowVisible(raw) != 0,
+                        is_visible,
                         GetForegroundWindow() as isize == hwnd,
                     )
                 };
                 log::info!(
                     "wm show done hwnd=0x{hwnd:X} set_fg={set_fg} is_visible={is_visible} fg_self={fg_self}"
                 );
+                if !is_visible {
+                    log::warn!("wm show failed: window is still hidden after retry");
+                    let _ = this.update(cx, |wm, _cx| {
+                        if wm.hwnd == hwnd {
+                            wm.main_show_pending = false;
+                            wm.visible = false;
+                        }
+                    });
+                    return;
+                }
                 if !fg_self {
                     // The panel is on screen but another window kept the focus;
                     // retry the activation once before the first paint wait.
@@ -4079,6 +4101,8 @@ impl WindowManager {
     /// runs a synchronous WAL checkpoint and a settings write, so a slow hide is
     /// itself worth seeing in a user's log.
     pub fn hide_with_reason(&mut self, reason: &str, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        crate::platform::focus_restore::clear();
         let started = Instant::now();
         let (keyword_active, items_before) = {
             let state = self.state.read(cx);
@@ -4185,6 +4209,8 @@ impl WindowManager {
     }
 
     fn show_quick_window(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        crate::platform::focus_restore::cancel();
         #[cfg(target_os = "windows")]
         if self.quick_hwnd == 0 {
             return;

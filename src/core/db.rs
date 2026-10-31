@@ -203,6 +203,11 @@ fn list_item_select_columns() -> String {
 }
 
 impl Database {
+    /// The actual SQLite file, or None for an in-memory database.
+    pub fn file_path(&self) -> Option<&str> {
+        self.conn.path()
+    }
+
     pub fn open(path: &str) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
         // Wait up to 5s if the database is locked (e.g. previous process still exiting).
