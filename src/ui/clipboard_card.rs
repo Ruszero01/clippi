@@ -2846,10 +2846,8 @@ impl RenderOnce for ClipboardCard {
             .iter()
             .map(|tag| info_pill_width(&tag.name, INFO_PILL_PADDING_X, window))
             .collect::<Vec<_>>();
-        let show_link_pill = detect_links
-            && meta_type != "link"
-            && matches!(content_type, ContentType::PlainText | ContentType::RichText)
-            && RichData::from_json(&item.rich_data).has_links == Some(true);
+        let show_link_pill =
+            detect_links && super::hover_toolbar::item_has_extractable_links(&item);
         let mut fixed_widths = Vec::with_capacity(6);
         if show_link_pill {
             fixed_widths.push(18.);

@@ -38,6 +38,16 @@ pub struct HoverToolbarProps {
     pub transfer_pinned: bool,
 }
 
+/// Link entries already represent a URL; extraction is for text containing links.
+pub fn item_has_extractable_links(item: &crate::core::types::ClipboardItem) -> bool {
+    item.meta_type != "link"
+        && matches!(
+            item.content_type,
+            ContentType::PlainText | ContentType::RichText
+        )
+        && RichData::from_json(&item.rich_data).has_links == Some(true)
+}
+
 impl HoverToolbarProps {
     /// Derive from a ClipboardItem with external selection context.
     pub fn from_item(
@@ -68,7 +78,7 @@ impl HoverToolbarProps {
                 let rich = RichData::from_json(&item.rich_data);
                 rich.qr_text.is_some()
             },
-            has_links: RichData::from_json(&item.rich_data).has_links == Some(true),
+            has_links: item_has_extractable_links(item),
             is_favorite: item.is_favorite,
             selected_count,
             is_selected,
@@ -559,7 +569,7 @@ impl RenderOnce for HoverToolbar {
 
 #[cfg(test)]
 mod open_action_tests {
-    use super::{single_open_action, HoverToolbarProps};
+    use super::{item_has_extractable_links, single_open_action, HoverToolbarProps};
     use crate::core::types::{ClipboardItem, ContentType, RichData};
 
     fn props_for(item: &ClipboardItem) -> HoverToolbarProps {
@@ -570,6 +580,31 @@ mod open_action_tests {
         let mut item = ClipboardItem::new_text(id, "content", ContentType::PlainText, None, None);
         item.meta_type = meta_type.to_string();
         item
+    }
+
+    #[test]
+    fn extraction_is_offered_for_text_containing_links_but_not_link_entries() {
+        let mut item = ClipboardItem::new_text(
+            1,
+            "https://www.bilibili.com/video/BV1s6xB6SE52?t=2114.5",
+            ContentType::PlainText,
+            None,
+            Some(&RichData {
+                has_links: Some(true),
+                ..Default::default()
+            }),
+        );
+        item.meta_type = "link".into();
+        assert!(!item_has_extractable_links(&item));
+        assert!(!props_for(&item).has_links);
+
+        item.meta_type.clear();
+        assert!(item_has_extractable_links(&item));
+        assert!(props_for(&item).has_links);
+        item.content_type = ContentType::RichText;
+        assert!(item_has_extractable_links(&item));
+        item.content_type = ContentType::File;
+        assert!(!item_has_extractable_links(&item));
     }
 
     #[test]
