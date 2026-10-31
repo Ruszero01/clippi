@@ -1065,6 +1065,7 @@ dependencies = [
  "cc",
  "chrono",
  "clipboard-rs",
+ "clipboard-win",
  "core-foundation 0.10.0",
  "core-graphics 0.25.0",
  "coreaudio-rs",

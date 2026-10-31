@@ -1347,15 +1347,16 @@ fn write_thumbnail(img: &image::DynamicImage, img_dir: &std::path::Path, hash: u
 }
 
 // ============================================================================
-// --- Generic Polling Listener (used by both Windows and macOS) ---
+// --- Windows event listener and macOS polling listener ---
 // ============================================================================
 
-/// Generic clipboard listener that polls at a fixed interval.
-/// Works on any platform supported by `clipboard-rs`.
+/// Uses Windows clipboard notifications and polls the macOS pasteboard.
 struct PollingClipboardListener {
     running: Arc<AtomicBool>,
     startup_end: Arc<Mutex<Option<Instant>>>,
     handle: Option<thread::JoinHandle<()>>,
+    #[cfg(target_os = "windows")]
+    shutdown: Option<clipboard_win::monitor::Shutdown>,
 }
 
 impl PollingClipboardListener {
@@ -1364,13 +1365,14 @@ impl PollingClipboardListener {
             running: Arc::new(AtomicBool::new(false)),
             startup_end: Arc::new(Mutex::new(None)),
             handle: None,
+            #[cfg(target_os = "windows")]
+            shutdown: None,
         }
     }
 
     fn capture_baseline(&self) -> u64 {
         // Do NOT read clipboard content at startup.
-        // - Windows: record the sequence number; the grace-period gate handles the
-        //   first real detection after startup.
+        // - Windows: the grace-period gate handles the first notification.
         // - macOS: frontmostApplication() returns Clippi itself at startup, so the
         //   original clipboard source is unknowable.  If we called content detection
         //   here, images from a blacklisted app would be written to disk before any
@@ -1428,8 +1430,34 @@ fn current_clipboard_seq() -> u32 {
     0
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_process_clipboard_sequence<T: Eq>(startup_done: bool, current: &T, previous: &T) -> bool {
     startup_done && current != previous
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn retry_windows_capture<T>(
+    mut capture: impl FnMut() -> Option<T>,
+    mut still_current: impl FnMut() -> bool,
+    mut wait: impl FnMut(Duration),
+) -> Option<T> {
+    const DELAYS_MS: [u64; 6] = [40, 80, 140, 220, 360, 560];
+    if !still_current() {
+        return None;
+    }
+    if let Some(value) = capture() {
+        return Some(value);
+    }
+    for delay in DELAYS_MS {
+        wait(Duration::from_millis(delay));
+        if !still_current() {
+            return None;
+        }
+        if let Some(value) = capture() {
+            return Some(value);
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -1526,14 +1554,8 @@ impl ClipboardListener for PollingClipboardListener {
         let record_images = shared.record_images.clone();
         let record_files = shared.record_files.clone();
 
-        // Windows: use cheap sequence-number check to avoid opening the clipboard
-        // --- and encoding large bitmaps to PNG every 50ms when nothing changed. ---
         #[cfg(target_os = "windows")]
-        let last_seq = Arc::new(Mutex::new(
-            // SAFETY: `GetClipboardSequenceNumber` is a stateless query that
-            // returns a DWORD; callable from any thread at any time.
-            unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() },
-        ));
+        let (monitor_tx, monitor_rx) = std::sync::mpsc::sync_channel(1);
 
         // macOS: use NSPasteboard.changeCount for the same fast-path purpose.
         // --- changeCount increments on every pasteboard write, giving an efficient ---
@@ -1546,6 +1568,17 @@ impl ClipboardListener for PollingClipboardListener {
         let macos_retry = Arc::new(Mutex::new(None::<MacosPasteboardRetry>));
 
         self.handle = Some(thread::spawn(move || {
+            #[cfg(target_os = "windows")]
+            let mut monitor = match clipboard_win::Monitor::new() {
+                Ok(monitor) => {
+                    let _ = monitor_tx.send(Ok(monitor.shutdown_channel()));
+                    monitor
+                }
+                Err(error) => {
+                    let _ = monitor_tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
             // One poll cycle, extracted so the macOS branch can run inside an
             // autorelease pool: NSPasteboard/NSImage/NSWorkspace calls on this
             // self-managed thread can otherwise leave autoreleased Objective-C
@@ -1559,15 +1592,8 @@ impl ClipboardListener for PollingClipboardListener {
                 }
 
                 // --- Internal copy: caller already pushed to pending, listener skips this cycle ---
-                // --- Also update last_seq/last_cc to prevent detecting internal writes next cycle ---
+                // --- Also update last_cc to prevent detecting internal writes next cycle ---
                 if skip_next.swap(false, Ordering::SeqCst) {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let seq = unsafe {
-                            windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-                        };
-                        *last_seq.lock().unwrap_or_else(|e| e.into_inner()) = seq;
-                    }
                     #[cfg(target_os = "macos")]
                     {
                         let cc = with_clipboard_access(|| {
@@ -1580,27 +1606,14 @@ impl ClipboardListener for PollingClipboardListener {
                     return;
                 }
 
-                // Do not consume a real clipboard change during startup. The
-                // platform sequence baseline remains unchanged, so a copy made
-                // during the grace period is processed on the first later poll.
+                // Defer processing a real clipboard change during startup.
                 let startup_done = startup_end
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .is_none_or(|end| end.elapsed().as_millis() > 500);
-                // Fast-path: if the clipboard sequence number hasn't changed,
-                // --- skip the expensive clipboard open + image encoding entirely. ---
                 #[cfg(target_os = "windows")]
-                {
-                    let seq = unsafe {
-                        windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-                    };
-                    let mut last = last_seq.lock().unwrap_or_else(|e| e.into_inner());
-                    if !should_process_clipboard_sequence(startup_done, &seq, &*last) {
-                        drop(last);
-                        thread::sleep(Duration::from_millis(50));
-                        return;
-                    }
-                    *last = seq;
+                if !startup_done {
+                    return;
                 }
 
                 // --- macOS equivalent: NSPasteboard.changeCount increments on every ---
@@ -1634,6 +1647,8 @@ impl ClipboardListener for PollingClipboardListener {
                 }
 
                 // ── Capture source identity once (before opening clipboard) ──
+                #[cfg(target_os = "windows")]
+                let (sequence, owner) = (current_clipboard_seq(), current_clipboard_owner());
                 let source_info = source::get_clipboard_owner_info();
 
                 // ── Clone blacklist snapshot and release the read-lock ──
@@ -1644,7 +1659,7 @@ impl ClipboardListener for PollingClipboardListener {
                     .read()
                     .unwrap_or_else(|e| e.into_inner())
                     .clone();
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
                 let capture_allowed = capture_gate(
                     source_info
                         .as_ref()
@@ -1655,22 +1670,61 @@ impl ClipboardListener for PollingClipboardListener {
                 );
 
                 // ── Unified gate + content detection ──
-                let detection = detect_if_allowed(
-                    &source_info,
-                    &blacklist_snapshot,
-                    true, // startup_done already checked above
-                    || {
-                        with_clipboard_context(|ctx| {
-                            detect_clipboard_content(
-                                ctx,
-                                &source_info,
-                                record_images.load(Ordering::SeqCst),
-                                record_files.load(Ordering::SeqCst),
-                            )
-                        })
-                        .unwrap_or(DetectionResult::None)
-                    },
-                );
+                let capture = || {
+                    detect_if_allowed(
+                        &source_info,
+                        &blacklist_snapshot,
+                        true, // startup_done already checked above
+                        || {
+                            with_clipboard_context(|ctx| {
+                                detect_clipboard_content(
+                                    ctx,
+                                    &source_info,
+                                    record_images.load(Ordering::SeqCst),
+                                    record_files.load(Ordering::SeqCst),
+                                )
+                            })
+                            .unwrap_or(DetectionResult::None)
+                        },
+                    )
+                };
+                #[cfg(target_os = "windows")]
+                let detection = if capture_allowed {
+                    retry_windows_capture(
+                        || match capture() {
+                            DetectionResult::None => None,
+                            result => Some(result),
+                        },
+                        || {
+                            running.load(Ordering::SeqCst)
+                                && !batch_pasting.load(Ordering::SeqCst)
+                                && !skip_next.load(Ordering::SeqCst)
+                                && current_clipboard_seq() == sequence
+                                && current_clipboard_owner() == owner
+                        },
+                        |duration| {
+                            let deadline = Instant::now() + duration;
+                            while Instant::now() < deadline
+                                && running.load(Ordering::SeqCst)
+                                && !batch_pasting.load(Ordering::SeqCst)
+                                && !skip_next.load(Ordering::SeqCst)
+                                && current_clipboard_seq() == sequence
+                                && current_clipboard_owner() == owner
+                            {
+                                thread::sleep(
+                                    deadline
+                                        .saturating_duration_since(Instant::now())
+                                        .min(Duration::from_millis(10)),
+                                );
+                            }
+                        },
+                    )
+                    .unwrap_or(DetectionResult::None)
+                } else {
+                    DetectionResult::None
+                };
+                #[cfg(not(target_os = "windows"))]
+                let detection = capture();
 
                 // `clearContents()` increments AppKit's change count before a
                 // writer necessarily supplies its representations. Commit the
@@ -1744,6 +1798,38 @@ impl ClipboardListener for PollingClipboardListener {
             };
 
             while running.load(Ordering::SeqCst) {
+                #[cfg(target_os = "windows")]
+                {
+                    match monitor.recv() {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(error) => {
+                            log::error!("clipboard notification failed: {error}");
+                            break;
+                        }
+                    }
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    while batch_pasting.load(Ordering::SeqCst) && running.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    // Coalesce notifications generated by one multi-format write.
+                    while matches!(monitor.try_recv(), Ok(true)) {}
+                    // Preserve a notification received during the startup grace period.
+                    let remaining = startup_end
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .map(|start| Duration::from_millis(501).saturating_sub(start.elapsed()))
+                        .unwrap_or_default();
+                    thread::sleep(remaining);
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                }
                 #[cfg(target_os = "macos")]
                 objc2::rc::autoreleasepool(|_| cycle());
                 #[cfg(not(target_os = "macos"))]
@@ -1751,11 +1837,30 @@ impl ClipboardListener for PollingClipboardListener {
             }
         }));
 
+        #[cfg(target_os = "windows")]
+        match monitor_rx.recv() {
+            Ok(Ok(shutdown)) => self.shutdown = Some(shutdown),
+            result => {
+                let error = match result {
+                    Ok(Err(error)) => error,
+                    Err(error) => error.to_string(),
+                    Ok(Ok(_)) => unreachable!(),
+                };
+                self.running.store(false, Ordering::SeqCst);
+                if let Some(handle) = self.handle.take() {
+                    let _ = handle.join();
+                }
+                return Err(format!("failed to start clipboard notifications: {error}").into());
+            }
+        }
+
         Ok(())
     }
 
     fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        #[cfg(target_os = "windows")]
+        drop(self.shutdown.take());
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -1847,6 +1952,78 @@ mod access_tests {
 
         first.join().unwrap();
         second.join().unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_capture_retry_tests {
+    use super::retry_windows_capture;
+    use std::cell::Cell;
+
+    #[test]
+    fn windows_notification_listener_can_stop_while_idle() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let mut monitor = clipboard_win::Monitor::new().expect("register clipboard listener");
+            sender.send(monitor.shutdown_channel()).unwrap();
+            loop {
+                if !monitor.recv().expect("receive clipboard notification") {
+                    break;
+                }
+            }
+        });
+        let shutdown = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        drop(shutdown);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn retries_empty_capture_until_content_is_ready() {
+        let attempts = Cell::new(0);
+        let mut waits = Vec::new();
+        let result = retry_windows_capture(
+            || {
+                attempts.set(attempts.get() + 1);
+                (attempts.get() == 3).then_some("ready")
+            },
+            || true,
+            |delay| waits.push(delay.as_millis()),
+        );
+        assert_eq!(result, Some("ready"));
+        assert_eq!(waits, [40, 80]);
+    }
+
+    #[test]
+    fn stops_when_clipboard_changes_during_retry() {
+        let current = Cell::new(true);
+        let attempts = Cell::new(0);
+        let result = retry_windows_capture::<()>(
+            || {
+                attempts.set(attempts.get() + 1);
+                None
+            },
+            || current.get(),
+            |_| current.set(false),
+        );
+        assert_eq!(result, None);
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn retry_count_is_bounded() {
+        let attempts = Cell::new(0);
+        let result = retry_windows_capture::<()>(
+            || {
+                attempts.set(attempts.get() + 1);
+                None
+            },
+            || true,
+            |_| {},
+        );
+        assert_eq!(result, None);
+        assert_eq!(attempts.get(), 7);
     }
 }
 
