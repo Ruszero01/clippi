@@ -2646,7 +2646,7 @@ impl AppState {
     ) -> T {
         batch_pasting.store(true, Ordering::SeqCst);
         let result = operation();
-        skip_next.store(true, Ordering::SeqCst);
+        crate::platform::clipboard::mark_internal_clipboard_write(skip_next);
         batch_pasting.store(false, Ordering::SeqCst);
         result
     }
@@ -2967,8 +2967,7 @@ impl AppState {
             }
         }
         // --- Restore clipboard recording — batch paste is complete. ---
-        self.skip_next
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        crate::platform::clipboard::mark_internal_clipboard_write(&self.skip_next);
         self.batch_pasting
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }

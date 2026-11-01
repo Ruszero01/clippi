@@ -1417,6 +1417,39 @@ fn current_clipboard_seq() -> u32 {
     unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
 }
 
+#[cfg(target_os = "windows")]
+static INTERNAL_CLIPBOARD_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Mark the clipboard version produced by an internal write before releasing
+/// the listener. A later external version must still be captured.
+pub(crate) fn mark_internal_clipboard_write(skip_next: &AtomicBool) {
+    #[cfg(target_os = "windows")]
+    INTERNAL_CLIPBOARD_SEQUENCE.store(u64::from(current_clipboard_seq()) + 1, Ordering::SeqCst);
+    skip_next.store(true, Ordering::SeqCst);
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn is_internal_clipboard_sequence(marked: u64, current: u32) -> bool {
+    marked != 0 && marked == u64::from(current) + 1
+}
+
+#[cfg(test)]
+mod internal_sequence_tests {
+    use super::is_internal_clipboard_sequence;
+
+    #[test]
+    fn external_write_after_internal_write_is_not_suppressed() {
+        assert!(is_internal_clipboard_sequence(101, 100));
+        assert!(!is_internal_clipboard_sequence(101, 101));
+        assert!(!is_internal_clipboard_sequence(0, u32::MAX));
+        assert!(is_internal_clipboard_sequence(
+            u64::from(u32::MAX) + 1,
+            u32::MAX
+        ));
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn current_clipboard_seq() -> u32 {
     // `changeCount` doesn't require opening the pasteboard — no
@@ -1435,7 +1468,7 @@ fn should_process_clipboard_sequence<T: Eq>(startup_done: bool, current: &T, pre
     startup_done && current != previous
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn retry_windows_capture<T>(
     mut capture: impl FnMut() -> Option<T>,
     mut still_current: impl FnMut() -> bool,
@@ -1594,6 +1627,15 @@ impl ClipboardListener for PollingClipboardListener {
                 // --- Internal copy: caller already pushed to pending, listener skips this cycle ---
                 // --- Also update last_cc to prevent detecting internal writes next cycle ---
                 if skip_next.swap(false, Ordering::SeqCst) {
+                    #[cfg(target_os = "windows")]
+                    if is_internal_clipboard_sequence(
+                        INTERNAL_CLIPBOARD_SEQUENCE.load(Ordering::SeqCst),
+                        current_clipboard_seq(),
+                    ) {
+                        thread::sleep(Duration::from_millis(50));
+                        return;
+                    }
+                    // A newer external write superseded our own write.
                     #[cfg(target_os = "macos")]
                     {
                         let cc = with_clipboard_access(|| {
@@ -1601,9 +1643,14 @@ impl ClipboardListener for PollingClipboardListener {
                         });
                         *last_cc.lock().unwrap_or_else(|e| e.into_inner()) = cc;
                         *macos_retry.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        thread::sleep(Duration::from_millis(50));
+                        return;
                     }
-                    thread::sleep(Duration::from_millis(50));
-                    return;
+                    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                    {
+                        thread::sleep(Duration::from_millis(50));
+                        return;
+                    }
                 }
 
                 // Defer processing a real clipboard change during startup.

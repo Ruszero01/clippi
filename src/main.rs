@@ -297,6 +297,10 @@ fn main() {
     log::info!("Starting Clippi (GPUI experiment)");
 
     Application::new().with_assets(ui::assets::PickerAssets).run(|cx: &mut App| {
+        cx.on_app_quit(|_| {
+            crate::services::usage_touch::flush();
+            async {}
+        }).detach();
         gpui_component::init(cx);
         // --- iconfont.ttf has an 'm' glyph added (mapped to first icon ---
         // --- glyph) because GPUI's load_family skips any font without ---

@@ -677,8 +677,10 @@ mod tests {
 
     #[test]
     fn confirm_delete_syncs_and_old_snapshots_preserve_local_value() {
-        let mut source = AppSettings::default();
-        source.confirm_delete = false;
+        let source = AppSettings {
+            confirm_delete: false,
+            ..AppSettings::default()
+        };
         let portable = PortableSettingsV1::from_local(&source);
         assert!(!portable.apply_to(&AppSettings::default()).confirm_delete);
 
