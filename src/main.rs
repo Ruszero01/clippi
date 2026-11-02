@@ -298,7 +298,9 @@ fn main() {
 
     Application::new().with_assets(ui::assets::PickerAssets).run(|cx: &mut App| {
         cx.on_app_quit(|_| {
-            crate::services::usage_touch::flush();
+            if !crate::services::usage_touch::flush() {
+                log::warn!("Quitting before all usage timestamps could be saved");
+            }
             async {}
         }).detach();
         gpui_component::init(cx);

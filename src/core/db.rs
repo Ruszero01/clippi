@@ -229,6 +229,20 @@ impl Database {
         self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
+    /// A file copy requires a complete checkpoint, including its busy status.
+    pub fn checkpoint_for_migration(&self) -> SqlResult<()> {
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        if busy != 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                Some("database checkpoint did not complete".into()),
+            ));
+        }
+        Ok(())
+    }
+
     /// Fold the WAL back into the main file on a background thread.
     ///
     /// `wal_checkpoint(TRUNCATE)` waits for every reader to finish (the
@@ -2867,6 +2881,26 @@ mod tests {
             rusqlite::params![text, hash as i64, updated, updated],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn migration_checkpoint_rejects_busy_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let db = Database::open(path.to_str().unwrap()).unwrap();
+        db.conn
+            .busy_timeout(std::time::Duration::from_millis(50))
+            .unwrap();
+        insert_item(&db, 1, "first", "2026-01-01T00:00:00Z");
+        let reader = rusqlite::Connection::open(&path).unwrap();
+        reader.execute_batch("BEGIN").unwrap();
+        let _: i64 = reader
+            .query_row("SELECT count(*) FROM clipboard_items", [], |row| row.get(0))
+            .unwrap();
+        insert_item(&db, 2, "second", "2026-01-02T00:00:00Z");
+        assert!(db.checkpoint_for_migration().is_err());
+        reader.execute_batch("COMMIT").unwrap();
+        db.checkpoint_for_migration().unwrap();
     }
 
     fn insert_tag(db: &Database, name: &str, color: &str, updated: &str) -> i64 {

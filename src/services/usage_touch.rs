@@ -14,7 +14,7 @@ struct Job {
 
 enum Message {
     Touch(Job),
-    Flush(mpsc::Sender<()>),
+    Flush(mpsc::Sender<bool>),
 }
 
 fn sender() -> &'static mpsc::Sender<Message> {
@@ -22,11 +22,14 @@ fn sender() -> &'static mpsc::Sender<Message> {
     SENDER.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Message>();
         std::thread::spawn(move || {
+            let mut failed = false;
             for message in rx {
                 let job = match message {
                     Message::Touch(job) => job,
                     Message::Flush(done) => {
-                        let _ = done.send(());
+                        if done.send(!failed).is_ok() {
+                            failed = false;
+                        }
                         continue;
                     }
                 };
@@ -41,6 +44,7 @@ fn sender() -> &'static mpsc::Sender<Message> {
                     }
                     Err(error) => {
                         log::error!("background usage update failed: {error}");
+                        failed = true;
                         job.needs_reload.store(true, Ordering::SeqCst);
                     }
                 }
@@ -66,11 +70,27 @@ fn retry_locked<T>(mut operation: impl FnMut() -> rusqlite::Result<T>) -> rusqli
     }
 }
 
-/// Wait for all previously queued writes before a graceful application exit.
-pub fn flush() {
+/// Wait for previously queued writes, without hanging shutdown on a locked DB.
+pub fn flush() -> bool {
+    flush_timeout(Duration::from_secs(3))
+}
+
+fn flush_timeout(timeout: Duration) -> bool {
     let (done, completed) = mpsc::channel();
-    if sender().send(Message::Flush(done)).is_err() || completed.recv().is_err() {
+    if sender().send(Message::Flush(done)).is_err() {
         log::error!("background usage update worker stopped before flush");
+        return false;
+    }
+    match completed.recv_timeout(timeout) {
+        Ok(true) => true,
+        Ok(false) => {
+            log::error!("a background usage update failed before flush");
+            false
+        }
+        Err(error) => {
+            log::error!("background usage update flush did not complete: {error}");
+            false
+        }
     }
 }
 
@@ -220,6 +240,67 @@ mod tests {
             .query_row(
                 "SELECT updated_at FROM clipboard_items WHERE id = 1",
                 [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(timestamp, "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn flush_timeout_allows_exit_while_worker_keeps_retrying() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("locked.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE clipboard_items (id INTEGER PRIMARY KEY, content_hash INTEGER, updated_at TEXT); INSERT INTO clipboard_items VALUES (1, 42, '2020-01-01T00:00:00Z'); BEGIN IMMEDIATE;").unwrap();
+        assert!(enqueue(
+            path.to_string_lossy().into_owned(),
+            vec![(1, 42)],
+            "2026-01-01T00:00:00Z".into(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        let start = Instant::now();
+        assert!(!flush_timeout(Duration::from_millis(100)));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        db.execute_batch("COMMIT").unwrap();
+        let _ = flush();
+        let timestamp: String = db
+            .query_row(
+                "SELECT updated_at FROM clipboard_items WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(timestamp, "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn migration_copy_after_flush_includes_queued_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        let target = dir.path().join("target.db");
+        let db = crate::core::db::Database::open(source.to_str().unwrap()).unwrap();
+        // Build a real history row through the database's normal schema.
+        let conn = rusqlite::Connection::open(&source).unwrap();
+        conn.execute("INSERT INTO clipboard_items (content_type, full_text, content_hash, created_at, updated_at) VALUES ('plain_text', 'example', 42, '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')", []).unwrap();
+        let id = conn.last_insert_rowid();
+        assert!(enqueue(
+            source.to_string_lossy().into_owned(),
+            vec![(id, 42)],
+            "2026-01-01T00:00:00Z".into(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false))
+        ));
+        let _ = flush();
+        db.checkpoint_for_migration().unwrap();
+        crate::core::settings::migrate_database(&source, &target).unwrap();
+        let copy = rusqlite::Connection::open(target).unwrap();
+        let timestamp: String = copy
+            .query_row(
+                "SELECT updated_at FROM clipboard_items WHERE id = ?1",
+                [id],
                 |row| row.get(0),
             )
             .unwrap();

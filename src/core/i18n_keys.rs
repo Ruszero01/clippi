@@ -568,6 +568,7 @@ define_i18n! {
 
     // ─── Data operation ───
     ErrDataOp:              ("数据操作失败", "Data operation failed"),
+    ErrUsagePending:        ("使用记录尚未保存，请稍后重试", "Usage history could not be saved; please try again"),
 
     // ─── Transfer station ───
     TransferStation:         ("文件中转站", "Transfer Station"),

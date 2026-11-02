@@ -534,12 +534,30 @@ impl SettingsPanel {
                                         if old == new_path {
                                             return;
                                         }
-                                        // --- Checkpoint DB before migration ---
-                                        match cx.read_entity(&state, |s, _cx| s.db.checkpoint()) {
+                                        // AppState mutations run on this thread; drain usage jobs
+                                        // before checkpointing and copying, with no await in between.
+                                        if !crate::services::usage_touch::flush() {
+                                            let _ = task_panel.update(cx, |_panel, cx| {
+                                                cx.emit(SettingsEvent::DataError(
+                                                    I18nKey::ErrUsagePending.text().into(),
+                                                ));
+                                            });
+                                            return;
+                                        }
+                                        match cx.read_entity(&state, |s, _cx| {
+                                            s.db.checkpoint_for_migration()
+                                        }) {
                                             Ok(Err(e)) => {
                                                 log::error!(
                                                     "checkpoint failed before migration: {e}"
                                                 );
+                                                let _ = task_panel.update(cx, |_panel, cx| {
+                                                    cx.emit(SettingsEvent::DataError(format!(
+                                                        "{}: {e}",
+                                                        I18nKey::ErrDataOp.text()
+                                                    )));
+                                                });
+                                                return;
                                             }
                                             Err(e) => {
                                                 log::error!("failed to read database: {e}");
@@ -1339,11 +1357,24 @@ impl SettingsPanel {
             return;
         }
 
+        // Drain usage writes before checkpointing. This handler runs on the UI
+        // thread without yielding until the migration and restart are requested.
+        if !crate::services::usage_touch::flush() {
+            cx.emit(SettingsEvent::DataError(
+                I18nKey::ErrUsagePending.text().into(),
+            ));
+            return;
+        }
         // Checkpoint the current WAL so we have a consistent DB file to work with.
         {
             let s = self.state.read(cx);
-            if let Err(e) = s.db.checkpoint() {
+            if let Err(e) = s.db.checkpoint_for_migration() {
                 log::error!("checkpoint failed before reset: {e}");
+                cx.emit(SettingsEvent::DataError(format!(
+                    "{}: {e}",
+                    I18nKey::ErrDataOp.text()
+                )));
+                return;
             }
         }
 
