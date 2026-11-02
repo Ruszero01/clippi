@@ -99,28 +99,33 @@ impl TagFilterPanel {
     }
 
     pub(crate) fn update_tag(&self, tag_id: i64, name: &str, color: &str, cx: &mut App) {
-        self.state
-            .update(cx, |s, _cx| s.update_tag(tag_id, name, color));
+        self.state.update(cx, |s, cx| {
+            s.update_tag(tag_id, name, color);
+            cx.notify();
+        });
         self.refresh_list(cx);
     }
 
     fn toggle_filter(&self, tag_id: i64, cx: &mut App) {
-        self.state.update(cx, |s, _cx| {
+        self.state.update(cx, |s, cx| {
             s.toggle_tag_filter(tag_id);
+            cx.notify();
         });
         self.refresh_list(cx);
     }
 
     fn clear_filters(&self, cx: &mut App) {
-        self.state.update(cx, |s, _cx| {
+        self.state.update(cx, |s, cx| {
             s.clear_tag_filters();
+            cx.notify();
         });
         self.refresh_list(cx);
     }
 
     fn toggle_mode(&self, cx: &mut App) {
-        self.state.update(cx, |s, _cx| {
+        self.state.update(cx, |s, cx| {
             s.toggle_tag_match_mode();
+            cx.notify();
         });
         self.refresh_list(cx);
     }
@@ -131,7 +136,10 @@ impl TagFilterPanel {
     }
 
     fn create_tag(&self, name: &str, cx: &mut App) {
-        self.state.update(cx, |s, _cx| s.create_tag(name));
+        self.state.update(cx, |s, cx| {
+            s.create_tag(name);
+            cx.notify();
+        });
         self.refresh_list(cx);
     }
 
