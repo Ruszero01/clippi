@@ -1172,10 +1172,6 @@ fn quick_action_hotkeys() -> Vec<(QuickAction, HotKey)> {
         Code::Digit3,
         Code::Digit4,
         Code::Digit5,
-        Code::Digit6,
-        Code::Digit7,
-        Code::Digit8,
-        Code::Digit9,
     ]
     .into_iter()
     .enumerate()

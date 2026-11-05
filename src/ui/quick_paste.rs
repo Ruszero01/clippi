@@ -18,13 +18,17 @@ use crate::core::types::{
 use crate::services::favicon::favicon_cache_path;
 use crate::state::app::AppState;
 use crate::ui::clipboard_card::image_preview_path;
-use crate::ui::filter_bar::{filter_type_display, source_app_chip_width, source_app_filter_bar};
+use crate::ui::filter_bar::{
+    filter_type_display, source_app_chip_width, source_app_filter_bar, visible_filter_types,
+};
 use crate::ui::theme::ClippiTheme;
 use gpui_component::tooltip::Tooltip;
 use gpui_transitions::WindowUseTransition;
 
 const VISIBLE_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 44.0;
+/// Pixel distance per advanced-menu step for precise touchpad scrolling.
+const ADVANCED_SCROLL_STEP: f32 = 56.0;
 pub const QUICK_WINDOW_WIDTH: f32 = 430.0;
 // Dynamic height is computed by calc_quick_window_height().
 
@@ -60,6 +64,7 @@ const QUICK_HIGHLIGHT_LEADING_CHARS: usize = 12;
 const QUICK_HIGHLIGHT_SUBTITLE_LEADING_CHARS: usize = 3;
 const TOOLTIP_ITEM_HEIGHT: f32 = 28.0;
 const TOOLTIP_PADDING: f32 = 6.0;
+const TOOLTIP_SEPARATOR_HEIGHT: f32 = 5.0;
 
 fn advanced_modifier_pressed(modifiers: Modifiers) -> bool {
     #[cfg(target_os = "macos")]
@@ -81,6 +86,34 @@ fn advanced_modifier_label() -> &'static str {
     {
         "Ctrl"
     }
+}
+
+/// Treat discrete mouse-wheel notches as one step and accumulate precise
+/// touchpad movement. At most one step is emitted per event so coalesced or
+/// inertial events cannot skip through the whole menu at once.
+fn advanced_scroll_step(accumulator: &mut f32, delta: ScrollDelta) -> i32 {
+    let (x, y) = match delta {
+        ScrollDelta::Pixels(point) => (f32::from(point.x), f32::from(point.y)),
+        // Windows reports high-resolution touchpad movement in fractional lines.
+        ScrollDelta::Lines(point) => (
+            point.x * ADVANCED_SCROLL_STEP,
+            point.y * ADVANCED_SCROLL_STEP,
+        ),
+    };
+    let amount = if x.abs() > y.abs() { x } else { y };
+    if !amount.is_finite() || amount == 0.0 {
+        return 0;
+    }
+    if *accumulator != 0.0 && amount.signum() != accumulator.signum() {
+        *accumulator = 0.0;
+    }
+    *accumulator += amount;
+    if accumulator.abs() < ADVANCED_SCROLL_STEP {
+        return 0;
+    }
+    let direction = if *accumulator < 0.0 { 1 } else { -1 };
+    *accumulator %= ADVANCED_SCROLL_STEP;
+    direction
 }
 
 fn quick_tag_indicator_ease(delta: f32) -> f32 {
@@ -138,25 +171,6 @@ where
         .enumerate()
         .filter(|(_, item)| is_quick_item_available(item, &path_exists))
         .map(|(index, _)| index)
-        .collect()
-}
-
-/// 快速窗口显示序列：先按条目可用性过滤，再按搜索词过滤，返回源下标。
-///
-/// 搜索词复用剪贴板主列表的匹配实现（`item_matches_keywords`），使快速窗口
-/// 与主列表的搜索语义完全一致：大小写不敏感、支持拼音全拼与拼音首字母、
-/// 多个词之间为 AND。搜索词为空时全部命中。
-fn collect_quick_display_indices<F>(
-    items: &[ClipboardItem],
-    terms: &[String],
-    path_exists: F,
-) -> Vec<usize>
-where
-    F: Fn(&std::path::Path) -> bool,
-{
-    collect_quick_item_indices(items, &path_exists)
-        .into_iter()
-        .filter(|&index| crate::state::app::item_matches_keywords(&items[index], terms))
         .collect()
 }
 
@@ -239,6 +253,50 @@ fn compute_alt_modes(
     }
 }
 
+/// Keep the menu order the same regardless of the item's favorite state.
+fn compute_advanced_actions(item: &ClipboardItem, image_alt_mode: &str) -> (Vec<String>, usize) {
+    let (mut modes, default_index, _) = compute_alt_modes(item, image_alt_mode)
+        .unwrap_or_else(|| (vec!["default".to_string()], 0, "default".to_string()));
+    modes.push("favorite".to_string());
+    modes.push("delete".to_string());
+    (modes, default_index)
+}
+
+/// Resolve a stable item after a refresh that may reorder or remove rows.
+fn selected_index_after_refresh(
+    snapshot: &[(usize, i64)],
+    previous_id: i64,
+    fallback: usize,
+) -> usize {
+    snapshot
+        .iter()
+        .position(|(_, id)| *id == previous_id)
+        .unwrap_or_else(|| fallback.min(snapshot.len().saturating_sub(1)))
+}
+
+/// Only image paste formats are saved as the default across menu sessions.
+fn remembered_image_paste_mode(mode: &str) -> Option<&str> {
+    match mode {
+        "bitmap" | "path" | "ocr" => Some(mode),
+        _ => None,
+    }
+}
+
+/// A second activation of the same item's delete action confirms it.
+fn confirm_quick_delete(pending: &mut Option<i64>, id: i64, confirmation_enabled: bool) -> bool {
+    if !confirmation_enabled {
+        *pending = None;
+        return true;
+    }
+    if *pending == Some(id) {
+        *pending = None;
+        true
+    } else {
+        *pending = Some(id);
+        false
+    }
+}
+
 /// Calculate the quick window height based on visible bars.
 /// Used by window_manager for positioning and main.rs for initial window size.
 fn quick_bars_height(has_tag_row: bool, has_type_bar: bool, has_source_bar: bool) -> f32 {
@@ -278,10 +336,11 @@ pub fn quick_window_height(state: &AppState) -> f32 {
     )
 }
 
-/// (slot, id, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, preview_img_path, favicon_path, file_icon_path, path_color, styled_first_line)
+/// (slot, id, is_favorite, icon, color_swatch, preview_text, preview_subtitle, note, relative_time, preview_img_path, favicon_path, file_icon_path, path_color, styled_first_line)
 type RowData = (
     usize,
     i64,
+    bool,
     &'static str,
     Option<Rgba>,
     String,
@@ -329,6 +388,9 @@ pub struct QuickPasteView {
     /// 最近一次计算高级粘贴模式时对应的条目 ID。
     /// render 归一化改变选中身份后据此决定是否刷新浮层模式。
     alt_mode_item_id: Option<i64>,
+    advanced_favorite: bool,
+    pending_delete: Option<i64>,
+    mutation_blocked: bool,
     /// Per-view image cache so thumbnails/favicons/file icons are released
     /// when the popup hides instead of living forever in the global asset cache.
     image_cache: Entity<RetainAllImageCache>,
@@ -342,6 +404,7 @@ pub struct QuickPasteView {
     pub(crate) available_alt_modes: Vec<String>,
     /// Accumulated scroll delta for page-flip threshold (prevents touchpad over-scroll).
     scroll_accumulator: f32,
+    advanced_scroll_accumulator: f32,
     source_scroll: ScrollHandle,
     source_scroll_left: std::cell::Cell<bool>,
 }
@@ -365,6 +428,9 @@ impl QuickPasteView {
             _cursor_blink_task: None,
             display_indices: Vec::new(),
             alt_mode_item_id: None,
+            advanced_favorite: false,
+            pending_delete: None,
+            mutation_blocked: false,
             image_cache: RetainAllImageCache::new(cx),
             _appearance_subscription: appearance_subscription,
             shift_held: false,
@@ -373,6 +439,7 @@ impl QuickPasteView {
             current_alt_mode: image_alt_mode,
             available_alt_modes: Vec::new(),
             scroll_accumulator: 0.0,
+            advanced_scroll_accumulator: 0.0,
             source_scroll: ScrollHandle::new(),
             source_scroll_left: std::cell::Cell::new(false),
         }
@@ -405,16 +472,13 @@ impl QuickPasteView {
 
     /// 当前搜索词命中的 `(源下标, 稳定 ID)` 快照。
     ///
-    /// 先按搜索词过滤（`AppState` 的 `item_matches_keywords`，与剪贴板主列表
-    /// 搜索同一套分词与拼音匹配），再套用快速窗口的条目可用性规则，保证两条
-    /// 路径的过滤语义不会各自漂移。搜索词为空时全部命中。
+    /// 搜索结果由 AppState 的共用数据库查询提供；这里过滤不可用条目。
     fn quick_display_snapshot(&self, cx: &Context<Self>) -> Vec<(usize, i64)> {
         let state = self.state.read(cx);
-        let terms = crate::core::search::split_keyword_terms(&self.query);
         // 渲染与快照取自同一个列表（`quick_items()`：共用筛选时是主列表，独立时是
         // 快速窗口自身的一页），源下标因此始终指向本条快照对应的条目。
         let items = state.quick_items();
-        collect_quick_display_indices(items, &terms, std::path::Path::exists)
+        collect_quick_item_indices(items, std::path::Path::exists)
             .into_iter()
             .map(|source_index| (source_index, items[source_index].id))
             .collect()
@@ -517,6 +581,8 @@ impl QuickPasteView {
             return;
         }
         self.query = query;
+        self.state
+            .update(cx, |state, _cx| state.set_quick_keyword(&self.query));
         crate::platform::keyboard_hook::set_query_empty(self.query.is_empty());
         // 回到列表顶部并按新搜索词立即重建快照：一次轮询可能整批处理
         // 「连续输入字符 + 回车」，随后的粘贴必须已经看到过滤后的列表。
@@ -633,6 +699,9 @@ impl QuickPasteView {
         if len == 0 {
             return None;
         }
+        if slot >= VISIBLE_ROWS {
+            return None;
+        }
         let index = self.first_visible + slot;
         if index >= len {
             return None;
@@ -689,6 +758,8 @@ impl QuickPasteView {
         self.selected_index = 0;
         self.first_visible = 0;
         self.alt_mode_item_id = None;
+        self.pending_delete = None;
+        self.advanced_scroll_accumulator = 0.0;
         // 立即按当前搜索词和最新列表重建快照。上一会话的快照源下标已失效
         // （窗口打开时 `state.items` 会先重载），而推迟到下一帧重建会让
         // 「刚打开就回车」「刚改完过滤条件就回车」读到空快照而丢失按键。
@@ -790,6 +861,7 @@ impl QuickPasteView {
                 (
                     slot,
                     item.id,
+                    item.is_favorite,
                     type_icon(item),
                     color_swatch,
                     preview_label,
@@ -811,44 +883,129 @@ impl QuickPasteView {
     /// Update modifier key state from external poll.
     pub fn set_modifiers(&mut self, shift: bool, ctrl: bool, cx: &mut Context<Self>) {
         let changed = self.shift_held != shift || self.ctrl_held != ctrl;
+        if self.ctrl_held != ctrl {
+            self.advanced_scroll_accumulator = 0.0;
+        }
         self.shift_held = shift;
         self.ctrl_held = ctrl;
         if changed {
             if ctrl {
                 self.update_alt_modes_for_selection(cx);
+            } else {
+                // Remember a paste choice only when the menu closes on one;
+                // passing over paste modes to reach another action does not count.
+                let mode = self.current_alt_mode.clone();
+                self.remember_image_paste_mode(&mode, cx);
+                self.pending_delete = None;
+                self.mutation_blocked = false;
+                self.alt_mode_item_id = None;
+                self.available_alt_modes.clear();
+                self.current_alt_mode.clear();
+                self.current_alt_index = 0;
             }
             cx.notify();
         }
     }
 
-    /// Refresh available_alt_modes and current_alt_index based on the currently
-    /// selected item's type. Only images, files and colors have advanced modes.
+    /// Rebuild the actions for the selected stable ID, preserving the chosen
+    /// action only while the same item remains selected.
     fn update_alt_modes_for_selection(&mut self, cx: &Context<Self>) {
-        self.available_alt_modes.clear();
-        self.current_alt_index = 0;
-        self.alt_mode_item_id = None;
-
+        let previous_id = self.alt_mode_item_id;
+        let previous_mode = self.current_alt_mode.clone();
         let state = self.state.read(cx);
-        // 基于画面快照解析选中条目 ID，与 selected_item_id 同源；
-        // 下标按当次快照钳制，窗口打开期间选中项失效时回退到最后一个有效条目。
-        let Some(&(_, item_id)) = self.display_indices.get(
-            self.selected_index
-                .min(self.display_indices.len().saturating_sub(1)),
-        ) else {
+        let item_id = snapshot_selected_id(&self.display_indices, self.selected_index);
+        let item = item_id.and_then(|id| state.quick_items().iter().find(|item| item.id == id));
+        let Some(item) = item else {
+            self.available_alt_modes.clear();
+            self.alt_mode_item_id = None;
+            self.pending_delete = None;
             return;
         };
-        // 按稳定 ID 在当前 items 中查找：列表重载/重排后源下标会指向其他条目。
-        let Some(item) = state.quick_items().iter().find(|it| it.id == item_id) else {
-            return;
+        if previous_id != Some(item.id) {
+            self.pending_delete = None;
+            self.advanced_scroll_accumulator = 0.0;
+        }
+        let (modes, default_index) = compute_advanced_actions(item, &state.settings.image_alt_mode);
+        let index = if previous_id == Some(item.id) {
+            modes
+                .iter()
+                .position(|mode| *mode == previous_mode)
+                .unwrap_or(default_index)
+        } else {
+            default_index
         };
-        let Some((modes, index, mode)) = compute_alt_modes(item, &state.settings.image_alt_mode)
-        else {
-            return;
-        };
-        self.available_alt_modes = modes;
+        self.advanced_favorite = item.is_favorite;
+        self.alt_mode_item_id = Some(item.id);
+        self.current_alt_mode = modes[index].clone();
         self.current_alt_index = index;
-        self.current_alt_mode = mode;
-        self.alt_mode_item_id = Some(item_id);
+        self.available_alt_modes = modes;
+    }
+
+    /// Resolve an advanced action against the current snapshot. Deletion needs
+    /// a separate confirmation action so key repeat cannot delete an item.
+    pub(crate) fn resolve_advanced_action(
+        &mut self,
+        mode: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<(i64, String)> {
+        if self.mutation_blocked {
+            return None;
+        }
+        let id = self.selected_item_id(cx)?;
+        self.update_alt_modes_for_selection(cx);
+        if !self
+            .available_alt_modes
+            .iter()
+            .any(|candidate| candidate == mode)
+        {
+            return None;
+        }
+        if mode == "delete" {
+            // Keep confirmation on the same action and stable item.
+            if let Some(index) = self.available_alt_modes.iter().position(|m| m == mode) {
+                self.current_alt_index = index;
+                self.current_alt_mode = mode.to_string();
+            }
+            let confirmation_enabled = self.state.read(cx).settings.confirm_delete;
+            if confirm_quick_delete(&mut self.pending_delete, id, confirmation_enabled) {
+                return Some((id, mode.to_string()));
+            }
+            cx.notify();
+            return None;
+        }
+        self.pending_delete = None;
+        self.remember_image_paste_mode(mode, cx);
+        Some((id, mode.to_string()))
+    }
+
+    /// Image entries have multiple advanced paste choices. Other content types
+    /// currently expose a single choice determined by the item itself.
+    fn remember_image_paste_mode(&self, mode: &str, cx: &mut Context<Self>) {
+        if let Some(mode) = remembered_image_paste_mode(mode) {
+            self.state.update(cx, |state, _cx| {
+                if state.settings.image_alt_mode != mode {
+                    state.settings.image_alt_mode = mode.to_string();
+                    state.settings.save();
+                }
+            });
+        }
+    }
+
+    pub(crate) fn refresh_after_advanced_action(&mut self, item_id: i64, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        self.mutation_blocked = self.ctrl_held;
+        self.alt_mode_item_id = None;
+        self.advanced_scroll_accumulator = 0.0;
+        self.display_indices = self.quick_display_snapshot(cx);
+        self.selected_index =
+            selected_index_after_refresh(&self.display_indices, item_id, self.selected_index);
+        self.normalize_with_display_snapshot(cx);
+        self.ensure_selected_visible();
+        self.hovered_index = None;
+        if self.ctrl_held {
+            self.update_alt_modes_for_selection(cx);
+        }
+        cx.notify();
     }
 
     pub(crate) fn ensure_alt_modes_for_selection(&mut self, cx: &Context<Self>) -> bool {
@@ -861,11 +1018,12 @@ impl QuickPasteView {
         !self.available_alt_modes.is_empty()
     }
 
-    /// Cycle the current alt mode and persist the new default.
+    /// Cycle the current action; paste choices are remembered on use or exit.
     pub fn cycle_alt_mode(&mut self, delta: i32, cx: &mut Context<Self>) {
-        if self.available_alt_modes.is_empty() {
-            self.update_alt_modes_for_selection(cx);
+        if self.mutation_blocked {
+            return;
         }
+        self.update_alt_modes_for_selection(cx);
         if self.available_alt_modes.is_empty() {
             return;
         }
@@ -873,20 +1031,17 @@ impl QuickPasteView {
         let new_index = (self.current_alt_index as i32 + delta).rem_euclid(len) as usize;
         self.current_alt_index = new_index;
         self.current_alt_mode = self.available_alt_modes[new_index].clone();
-
-        // Persist image-specific alt mode to settings (skip "plain").
-        let mode = self.current_alt_mode.clone();
-        if matches!(mode.as_str(), "bitmap" | "path" | "ocr") {
-            self.state.update(cx, |state, _cx| {
-                state.settings.image_alt_mode = mode;
-                state.settings.save();
-            });
+        if self.current_alt_mode != "delete" {
+            self.pending_delete = None;
         }
         cx.notify();
     }
 
     /// Items for the floating tooltip menu: (label, mode, is_selected).
     fn tooltip_items(&self) -> Vec<(&'static str, String, bool)> {
+        if self.ctrl_held && self.mutation_blocked {
+            return vec![("松开按键后继续", "blocked".to_string(), false)];
+        }
         if self.ctrl_held && !self.available_alt_modes.is_empty() {
             return self
                 .available_alt_modes
@@ -900,6 +1055,11 @@ impl QuickPasteView {
                         "rgb" => "粘贴为RGB",
                         "hex" => "粘贴为HEX",
                         "file_path" => "粘贴文件路径",
+                        "default" => "粘贴",
+                        "favorite" if self.advanced_favorite => "取消收藏",
+                        "favorite" => "收藏",
+                        "delete" if self.pending_delete == self.alt_mode_item_id => "确认删除",
+                        "delete" => "删除",
                         _ => "高级粘贴",
                     };
                     (label, mode.clone(), i == self.current_alt_index)
@@ -929,7 +1089,13 @@ impl QuickPasteView {
         if items.is_empty() {
             return None;
         }
-        let tooltip_h = items.len() as f32 * TOOLTIP_ITEM_HEIGHT + TOOLTIP_PADDING * 2.0;
+        let separator_h = if items.iter().any(|(_, mode, _)| mode == "favorite") {
+            TOOLTIP_SEPARATOR_HEIGHT
+        } else {
+            0.0
+        };
+        let tooltip_h =
+            items.len() as f32 * TOOLTIP_ITEM_HEIGHT + TOOLTIP_PADDING * 2.0 + separator_h;
         // Hint bar is always present now
         let content_h = VISIBLE_ROWS as f32 * ROW_HEIGHT + LIST_INSET * 2.0 + bars_offset;
 
@@ -1078,8 +1244,7 @@ impl Render for QuickPasteView {
         let tag_compact = (total_est + gaps) > tag_avail * 0.88;
 
         // ── Dynamic type filter sizing ──
-        let visible_type_entries: Vec<&crate::core::settings::TypeFilterEntry> =
-            type_config.iter().filter(|e| e.visible).collect();
+        let visible_type_entries = visible_filter_types(&type_config);
         let visible_count = visible_type_entries.len().max(1) as f32;
         // Use design width constant so sizing is deterministic — viewport
         // may vary on first paint before SetWindowPos enforces correct size.
@@ -1149,13 +1314,17 @@ impl Render for QuickPasteView {
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _window, cx| {
                 let pixel = ev.delta.pixel_delta(px(16.0));
                 if advanced_modifier_pressed(ev.modifiers) {
-                    // Advanced modifier + scroll → cycle advanced mode
-                    let delta = if pixel.y < px(0.0) || pixel.x < px(0.0) {
-                        1
-                    } else {
-                        -1
-                    };
-                    this.cycle_alt_mode(delta, cx);
+                    if matches!(ev.touch_phase, TouchPhase::Started) {
+                        this.advanced_scroll_accumulator = 0.0;
+                    }
+                    let step =
+                        advanced_scroll_step(&mut this.advanced_scroll_accumulator, ev.delta);
+                    if step != 0 {
+                        this.cycle_alt_mode(step, cx);
+                    }
+                    if matches!(ev.touch_phase, TouchPhase::Ended) {
+                        this.advanced_scroll_accumulator = 0.0;
+                    }
                 } else {
                     // Extract f32 from Pixels via Div (Pixels / Pixels = f32).
                     let dy = pixel.y / px(1.0);
@@ -1195,10 +1364,10 @@ impl Render for QuickPasteView {
                                 .items_center()
                                 .gap(px(filter_gap))
                                 .children(visible_type_entries.iter().map(|entry| {
-                                    let active = filters.is_type_active(&entry.key);
-                                    let (icon, label) = filter_type_display(&entry.key)
+                                    let active = filters.is_type_active(entry.key);
+                                    let (icon, label) = filter_type_display(entry.key)
                                         .unwrap_or(("\u{e606}", "".into()));
-                                    let key = entry.key.clone();
+                                    let key = entry.key;
                                     let t = theme.clone();
                                     let app_state = self.state.clone();
                                     let filter_text = if active { rgb(0xffffff) } else { t.text_2 };
@@ -1222,11 +1391,11 @@ impl Render for QuickPasteView {
                                         .cursor(CursorStyle::PointingHand)
                                         .on_mouse_down(MouseButton::Left, {
                                             let s = app_state.clone();
-                                            let k = key.clone();
+                                            let k = key;
                                             let v = view_entity.clone();
                                             move |_, _window, cx| {
                                                 s.update(cx, |s, _cx| {
-                                                    s.quick_toggle_type_filter(&k);
+                                                    s.quick_toggle_type_filter(k);
                                                 });
                                                 v.update(cx, |view, cx| view.reset_scroll(cx));
                                             }
@@ -1449,6 +1618,7 @@ impl Render for QuickPasteView {
                                 move |(
                                     slot,
                                     _item_id,
+                                    is_favorite,
                                     icon,
                                     color_swatch,
                                     preview,
@@ -1611,6 +1781,7 @@ impl Render for QuickPasteView {
                                     };
 
                                     div()
+                                        .relative()
                                         .h(px(ROW_HEIGHT))
                                         .flex_shrink_0()
                                         .px(px(HORIZONTAL_PADDING - LIST_INSET))
@@ -1622,6 +1793,18 @@ impl Render for QuickPasteView {
                                             t.accent_overlay()
                                         } else {
                                             rgba(0x00000000)
+                                        })
+                                        .when(is_favorite, |row| {
+                                            row.child(
+                                                div()
+                                                    .absolute()
+                                                    .left(px(0.0))
+                                                    .top(px(4.0))
+                                                    .bottom(px(4.0))
+                                                    .w(px(3.0))
+                                                    .rounded(px(2.0))
+                                                    .bg(t.fav_color),
+                                            )
                                         })
                                         .on_mouse_move({
                                             let ve_hover = ve.clone();
@@ -1664,21 +1847,17 @@ impl Render for QuickPasteView {
                                                     } else if advanced_modifier_pressed(
                                                         ev.modifiers,
                                                     ) {
-                                                        let mode = ve2.update(cx, |view, cx| {
-                                                            view.ensure_alt_modes_for_selection(cx)
-                                                                .then(|| {
-                                                                    view.current_alt_mode.clone()
-                                                                })
+                                                        let result = ve2.update(cx, |view, cx| {
+                                                            view.ensure_alt_modes_for_selection(cx);
+                                                            let mode =
+                                                                view.current_alt_mode.clone();
+                                                            view.resolve_advanced_action(&mode, cx)
                                                         });
-                                                        if let Some(mode) = mode {
+                                                        if let Some((id, mode)) = result {
                                                             ve3.update(cx, |_, cx| {
                                                                 cx.emit(QuickPasteEvent::PasteAlt(
                                                                     id, mode,
                                                                 ));
-                                                            });
-                                                        } else {
-                                                            ve3.update(cx, |_, cx| {
-                                                                cx.emit(QuickPasteEvent::Paste(id));
                                                             });
                                                         }
                                                     } else {
@@ -1786,7 +1965,6 @@ impl Render for QuickPasteView {
                     return parent;
                 };
                 let t = theme.clone();
-                let view_entity = cx.entity();
                 parent.child(
                     div()
                         .absolute()
@@ -1801,59 +1979,49 @@ impl Render for QuickPasteView {
                         .flex()
                         .flex_col()
                         .children(items.iter().map(move |(label, mode, selected)| {
-                            let mode = mode.clone();
                             let selected = *selected;
-                            let ve = view_entity.clone();
+                            let text_color = match mode.as_str() {
+                                "favorite" => t.fav_color,
+                                "delete" => t.danger,
+                                _ if selected => t.accent,
+                                _ => t.text_1,
+                            };
                             div()
-                                .h(px(TOOLTIP_ITEM_HEIGHT))
-                                .px(px(8.0))
-                                .rounded(px(4.0))
                                 .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .bg(if selected {
-                                    t.accent_overlay()
-                                } else {
-                                    rgba(0x00000000)
-                                })
-                                .text_color(if selected { t.accent } else { t.text_1 })
-                                .text_size(fs(12.0))
-                                .cursor(CursorStyle::PointingHand)
-                                .on_mouse_down(MouseButton::Left, {
-                                    let m = mode.clone();
-                                    let ve2 = ve.clone();
-                                    let ve3 = ve.clone();
-                                    move |_ev, _window, cx| {
-                                        // 点击时经视图基于画面快照解析选中 ID 并复验，
-                                        // 再以目标条目重算高级模式并校验本次点击的模式：
-                                        // 若选中身份在渲染后变化（如图片失效改选文本），
-                                        // 模式不匹配则取消动作并刷新画面。
-                                        let result = ve2.update(cx, |view, cx| {
-                                            let id = view.selected_item_id(cx)?;
-                                            if view.ensure_alt_modes_for_selection(cx)
-                                                && view.available_alt_modes.contains(&m)
-                                            {
-                                                Some((id, m.clone()))
-                                            } else {
-                                                None
-                                            }
-                                        });
-                                        if let Some((id, mode)) = result {
-                                            ve3.update(cx, |_, cx| {
-                                                cx.emit(QuickPasteEvent::PasteAlt(id, mode));
-                                            });
-                                        }
-                                    }
+                                .flex_col()
+                                .when(mode == "favorite", |group| {
+                                    group.child(
+                                        div()
+                                            .h(px(1.0))
+                                            .my(px((TOOLTIP_SEPARATOR_HEIGHT - 1.0) / 2.0))
+                                            .bg(t.divider),
+                                    )
                                 })
                                 .child(
                                     div()
-                                        .w(px(14.0))
+                                        .h(px(TOOLTIP_ITEM_HEIGHT))
+                                        .px(px(8.0))
+                                        .rounded(px(4.0))
                                         .flex()
                                         .items_center()
-                                        .justify_center()
-                                        .child(if selected { "●" } else { "" }),
+                                        .gap(px(6.0))
+                                        .bg(if selected {
+                                            t.accent_overlay()
+                                        } else {
+                                            rgba(0x00000000)
+                                        })
+                                        .text_color(text_color)
+                                        .text_size(fs(12.0))
+                                        .child(
+                                            div()
+                                                .w(px(14.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(if selected { "●" } else { "" }),
+                                        )
+                                        .child(*label),
                                 )
-                                .child(*label)
                         })),
                 )
             })
@@ -1878,7 +2046,7 @@ impl Render for QuickPasteView {
                             .min_w(px(0.0))
                             .flex()
                             .items_center()
-                            .gap(px(12.0))
+                            .gap(px(6.0))
                             .overflow_hidden()
                             .child(
                                 div()
@@ -1910,9 +2078,9 @@ impl Render for QuickPasteView {
                                             .text_color(theme.accent)
                                     })
                                     .child(if self.ctrl_held {
-                                        format!("{} 高级粘贴", advanced_modifier_label())
+                                        format!("{} 高级功能", advanced_modifier_label())
                                     } else {
-                                        format!("{} 高级", advanced_modifier_label())
+                                        format!("{} 高级功能", advanced_modifier_label())
                                     }),
                             ),
                     )
@@ -2205,11 +2373,10 @@ mod tests {
     // 注意：不使用 `use super::*`——quick_paste.rs 顶层 `use gpui::*` 会带入
     // gpui 的 `test` 属性宏，与 `#[test]` 冲突导致递归展开错误。
     use super::{
-        collect_quick_display_indices, collect_quick_item_indices, compute_alt_modes,
-        is_quick_item_available, normalize_quick_selection, quick_item_available_by_id,
-        shows_note_preview, snapshot_selected_id, VISIBLE_ROWS,
+        collect_quick_item_indices, compute_alt_modes, is_quick_item_available,
+        normalize_quick_selection, quick_item_available_by_id, shows_note_preview,
+        snapshot_selected_id, VISIBLE_ROWS,
     };
-    use crate::core::search::split_keyword_terms;
     use crate::core::types::FileInfo;
     use crate::core::types::{ClipboardItem, ContentType, FileData, RichData};
     use std::path::Path;
@@ -2462,6 +2629,121 @@ mod tests {
     }
 
     #[test]
+    fn advanced_scroll_accumulates_precise_deltas_and_keeps_wheel_notches() {
+        use gpui::{point, px, ScrollDelta};
+        let mut accumulated = 0.0;
+        let pixels = |x, y| ScrollDelta::Pixels(point(px(x), px(y)));
+        let lines = |x, y| ScrollDelta::Lines(point(x, y));
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(0.0, -20.0)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(0.0, -20.0)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(0.0, -16.0)),
+            1
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(0.0, 0.0)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(-20.0, 2.0)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(20.0, 0.0)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(36.0, 0.0)),
+            -1
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, pixels(0.0, -500.0)),
+            1
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, lines(0.0, 3.0)),
+            -1
+        );
+        assert_eq!(accumulated, 0.0);
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, lines(0.0, -0.25)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, lines(0.0, -0.25)),
+            0
+        );
+        assert_eq!(
+            super::advanced_scroll_step(&mut accumulated, lines(0.0, -0.5)),
+            1
+        );
+    }
+
+    #[test]
+    fn advanced_menu_keeps_favorite_between_paste_and_delete_after_unfavorite() {
+        let mut item = text_item(42);
+        item.is_favorite = true;
+        let (before, _) = super::compute_advanced_actions(&item, "bitmap");
+        item.is_favorite = false;
+        let (after, default) = super::compute_advanced_actions(&item, "bitmap");
+        assert_eq!(before, after);
+        assert_eq!(after, ["default", "favorite", "delete"]);
+        assert_eq!(after[(default + 1) % after.len()], "favorite");
+        assert_eq!(after[(2 + after.len() - 1) % after.len()], "favorite");
+    }
+
+    #[test]
+    fn advanced_action_refresh_tracks_item_through_reorder_or_removal() {
+        let reordered = [(0, 42), (1, 10), (2, 11)];
+        assert_eq!(super::selected_index_after_refresh(&reordered, 42, 2), 0);
+        assert_eq!(super::selected_index_after_refresh(&reordered, 99, 2), 2);
+        assert_eq!(
+            super::selected_index_after_refresh(&reordered[..1], 99, 2),
+            0
+        );
+        assert_eq!(super::selected_index_after_refresh(&[], 99, 2), 0);
+    }
+
+    #[test]
+    fn only_image_paste_formats_are_remembered() {
+        for mode in ["bitmap", "path", "ocr"] {
+            assert_eq!(super::remembered_image_paste_mode(mode), Some(mode));
+        }
+        for mode in [
+            "favorite",
+            "delete",
+            "confirm_delete",
+            "default",
+            "file_path",
+            "rgb",
+            "hex",
+        ] {
+            assert_eq!(super::remembered_image_paste_mode(mode), None);
+        }
+    }
+
+    #[test]
+    fn deleting_requires_two_activations_for_the_same_item() {
+        let mut pending = None;
+        assert!(!super::confirm_quick_delete(&mut pending, 1, true));
+        assert!(!super::confirm_quick_delete(&mut pending, 2, true));
+        assert!(super::confirm_quick_delete(&mut pending, 2, true));
+        assert!(!super::confirm_quick_delete(&mut pending, 2, true));
+        assert!(super::confirm_quick_delete(&mut pending, 2, true));
+        assert!(super::confirm_quick_delete(&mut pending, 1, false));
+        assert_eq!(pending, None);
+        assert!(!super::confirm_quick_delete(&mut pending, 1, true));
+        assert!(super::confirm_quick_delete(&mut pending, 1, false));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
     fn test_compute_alt_modes_for_item_types() {
         // 图片：默认模式来自设置，模式列表固定。
         let image = local_image(1, "/exists/1.png");
@@ -2499,62 +2781,6 @@ mod tests {
         assert_eq!(normalize_quick_selection(5, 0, 7), (5, 1));
         // 选中在视口上方 → 视口跟随上移。
         assert_eq!(normalize_quick_selection(2, 4, 7), (2, 2));
-    }
-
-    #[test]
-    fn test_query_filter_applies_after_availability_filter() {
-        // 可用性过滤：图片/单文件路径不存在 → 剔除；文本条目始终保留。
-        let mut items = vec![
-            text_item(1),
-            local_image(2, "/missing/2.png"),
-            single_file(3, "/missing/3.txt"),
-            make_item(4, ContentType::PlainText, "", "", ""),
-        ];
-        items[3].full_text = "GitHub issue 98".to_string();
-
-        // 空搜索词：语义等价于原来的可用性过滤，源顺序不变。
-        assert_eq!(
-            collect_quick_display_indices(&items, &[], |_| false),
-            vec![0, 3]
-        );
-
-        // 命中：只保留匹配条目，且不可用条目不会因为搜索词失效而回来。
-        assert_eq!(
-            collect_quick_display_indices(&items, &split_keyword_terms("issue"), |_| false),
-            vec![3]
-        );
-
-        // 多个词按 AND 语义（与主列表一致）。
-        assert_eq!(
-            collect_quick_display_indices(&items, &split_keyword_terms("issue 98"), |_| false),
-            vec![3]
-        );
-        assert!(
-            collect_quick_display_indices(&items, &split_keyword_terms("issue 99"), |_| false)
-                .is_empty()
-        );
-
-        // 拼音首字母与全拼同样命中。
-        items[3].full_text = "工作计划".to_string();
-        assert_eq!(
-            collect_quick_display_indices(&items, &split_keyword_terms("gzjh"), |_| false),
-            vec![3]
-        );
-        assert_eq!(
-            collect_quick_display_indices(&items, &split_keyword_terms("gongzuo"), |_| false),
-            vec![3]
-        );
-
-        // 路径存在的图片条目在命中搜索词后仍保留可用性判定结果。
-        let images = vec![local_image(7, "/exists/7.png")];
-        assert_eq!(
-            collect_quick_display_indices(&images, &split_keyword_terms("item 7"), |_| true),
-            vec![0]
-        );
-        assert!(
-            collect_quick_display_indices(&images, &split_keyword_terms("item 7"), |_| false)
-                .is_empty()
-        );
     }
 
     #[test]

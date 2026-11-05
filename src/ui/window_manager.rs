@@ -889,6 +889,7 @@ impl WindowManager {
             if this
                 .update(cx, |wm, cx| {
                     wm.poll_hotkey(cx);
+                    wm.update_quick_type_shortcuts(cx);
                     // Runs before the key batch so the Shift/Ctrl state the keys
                     // are matched against is the freshest one in this tick.
                     wm.poll_quick_click_outside(cx);
@@ -917,6 +918,16 @@ impl WindowManager {
         }
     }
 
+    fn update_quick_type_shortcuts(&self, cx: &Context<Self>) {
+        let state = self.state.read(cx);
+        let count = if state.settings.alt_shortcuts_enabled {
+            super::filter_bar::visible_filter_types(&state.settings.type_filter_config).len()
+        } else {
+            0
+        };
+        keyboard_hook::set_type_shortcut_count(count);
+    }
+
     /// Apply one claimed key to the quick popup.
     fn handle_quick_key(&mut self, key: QuickKey, cx: &mut Context<Self>) {
         if !self.quick_visible {
@@ -930,8 +941,31 @@ impl WindowManager {
             QuickKey::Next => self.handle_quick_action(QuickAction::Next, cx),
             QuickKey::PreviousPage => self.handle_quick_action(QuickAction::PreviousPage, cx),
             QuickKey::NextPage => self.handle_quick_action(QuickAction::NextPage, cx),
+            QuickKey::PreviousAltMode => self.handle_quick_action(QuickAction::PreviousAltMode, cx),
+            QuickKey::NextAltMode => self.handle_quick_action(QuickAction::NextAltMode, cx),
             QuickKey::Paste => self.handle_quick_action(QuickAction::Paste, cx),
+            QuickKey::PastePlain => self.handle_quick_action(QuickAction::PasteShift, cx),
+            QuickKey::PasteAdvanced => self.handle_quick_action(QuickAction::PasteCtrl, cx),
             QuickKey::Pick(slot) => self.handle_quick_action(QuickAction::Pick(slot), cx),
+            QuickKey::PickPlain(slot) => {
+                let id = view.update(cx, |view, cx| view.select_visible_slot(slot, cx));
+                if let Some(id) = id {
+                    self.quick_paste_plain(id, cx);
+                }
+            }
+            QuickKey::ToggleTypeFilter(slot) => {
+                let state = self.state.read(cx);
+                let key = super::filter_bar::type_filter_for_shortcut(
+                    &state.settings.type_filter_config,
+                    state.settings.alt_shortcuts_enabled,
+                    slot,
+                );
+                if let Some(key) = key {
+                    self.state
+                        .update(cx, |state, _cx| state.quick_toggle_type_filter(key));
+                    view.update(cx, |view, cx| view.reset_scroll(cx));
+                }
+            }
             QuickKey::Close => {
                 // Esc first clears a half-typed query; only an empty search box
                 // closes the popup, so a search is never dismissed by accident.
@@ -2301,12 +2335,9 @@ impl WindowManager {
         }
         // Debounce: ignore click-outside during the suppress window right after
         // show, before the async positioning task has completed.
-        if self
+        let suppressed = self
             .quick_suppress_until
-            .is_some_and(|until| Instant::now() <= until)
-        {
-            return;
-        }
+            .is_some_and(|until| Instant::now() <= until);
 
         #[cfg(target_os = "windows")]
         {
@@ -2340,7 +2371,7 @@ impl WindowManager {
                     });
                 }
 
-                if pressed {
+                if pressed && !suppressed {
                     // Button activity since last poll — check cursor position.
                     let mut cursor = POINT { x: 0, y: 0 };
                     if GetCursorPos(&mut cursor) != 0 {
@@ -2386,7 +2417,7 @@ impl WindowManager {
                 }
             }
 
-            if !pressed || self.quick_ns_window == 0 {
+            if suppressed || !pressed || self.quick_ns_window == 0 {
                 return;
             }
 
@@ -4253,9 +4284,6 @@ impl WindowManager {
         // show. This absorbs double hotkey events and lets async positioning
         // complete before the window is dismissible.
         self.quick_suppress_until = Some(Instant::now() + Duration::from_millis(400));
-        if let Some(ref mut hotkey) = self.hotkey {
-            hotkey.set_quick_actions_enabled(true);
-        }
         // Auto-focus search reaches the popup too: the setting puts the search
         // box into its text-entry state as soon as the popup is up, so the user
         // never has to click it — and the click that would dismiss a launcher
@@ -4266,16 +4294,22 @@ impl WindowManager {
         }
 
         // Route keystrokes to the popup for this session. The hook claims the
-        // keys the popup owns (navigation, paste, search text) and lets
-        // everything else — modified shortcuts and input method composition —
-        // through to the application underneath.
+        // keys the popup owns (navigation, paste, search text) and lets other
+        // shortcuts through. Windows also passes through active IME composition.
         #[cfg(target_os = "macos")]
         if !keyboard_hook::is_available() {
             if let Err(error) = keyboard_hook::install() {
                 log::warn!("quick paste keyboard hook unavailable: {error}");
             }
         }
-        if keyboard_hook::is_available() {
+        let hook_available = keyboard_hook::is_available();
+        // Do not register the fallback global navigation keys when the hook is
+        // active: they can consume keys the hook deliberately passes to an IME.
+        if let Some(ref mut hotkey) = self.hotkey {
+            hotkey.set_quick_actions_enabled(!hook_available);
+        }
+        if hook_available {
+            self.update_quick_type_shortcuts(cx);
             keyboard_hook::set_enabled(true);
         }
 
@@ -4507,8 +4541,7 @@ impl WindowManager {
                     if shift {
                         self.quick_paste_plain(id, cx);
                     } else if ctrl && has_alt {
-                        let alt_mode = view.read(cx).current_alt_mode.clone();
-                        self.quick_paste_alt(id, &alt_mode, cx);
+                        self.quick_execute_selected_advanced(cx);
                     } else {
                         self.quick_paste_item(id, cx);
                     }
@@ -4521,19 +4554,7 @@ impl WindowManager {
                 }
             }
             QuickAction::PasteCtrl => {
-                let (id, has_alt, alt_mode) = view.update(cx, |view, vcx| {
-                    let id = view.selected_item_id(vcx);
-                    let has_alt = view.ensure_alt_modes_for_selection(vcx);
-                    let alt_mode = view.current_alt_mode.clone();
-                    (id, has_alt, alt_mode)
-                });
-                if let Some(id) = id {
-                    if has_alt {
-                        self.quick_paste_alt(id, &alt_mode, cx);
-                    } else {
-                        self.quick_paste_item(id, cx);
-                    }
-                }
+                self.quick_execute_selected_advanced(cx);
             }
             QuickAction::Close => {
                 self.dismiss_quick_window(cx);
@@ -4554,8 +4575,7 @@ impl WindowManager {
                     if shift {
                         self.quick_paste_plain(id, cx);
                     } else if ctrl && has_alt {
-                        let alt_mode = view.read(cx).current_alt_mode.clone();
-                        self.quick_paste_alt(id, &alt_mode, cx);
+                        self.quick_execute_selected_advanced(cx);
                     } else {
                         self.quick_paste_item(id, cx);
                     }
@@ -4567,6 +4587,22 @@ impl WindowManager {
             QuickAction::NextAltMode => {
                 view.update(cx, |view, cx| view.cycle_alt_mode(1, cx));
             }
+        }
+    }
+
+    fn quick_execute_selected_advanced(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.quick_view.clone() else {
+            return;
+        };
+        let result = view.update(cx, |view, cx| {
+            if !view.ensure_alt_modes_for_selection(cx) {
+                return None;
+            }
+            let mode = view.current_alt_mode.clone();
+            view.resolve_advanced_action(&mode, cx)
+        });
+        if let Some((id, mode)) = result {
+            self.quick_paste_alt(id, &mode, cx);
         }
     }
 
@@ -4586,6 +4622,20 @@ impl WindowManager {
     }
 
     pub fn quick_paste_alt(&mut self, id: i64, mode: &str, cx: &mut Context<Self>) {
+        if matches!(mode, "favorite" | "delete") {
+            self.state.update(cx, |state, cx| {
+                if mode == "favorite" {
+                    state.quick_toggle_item_favorite(id);
+                } else {
+                    state.quick_delete_item(id);
+                }
+                cx.notify();
+            });
+            if let Some(view) = self.quick_view.clone() {
+                view.update(cx, |view, cx| view.refresh_after_advanced_action(id, cx));
+            }
+            return;
+        }
         match mode {
             "bitmap" => {
                 self.state.update(cx, |s, _cx| s.paste_image_as_bitmap(id));

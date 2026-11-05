@@ -5,8 +5,9 @@
 //! receive keyboard input the normal way. While the popup is visible a
 //! `WH_KEYBOARD_LL` hook observes keystrokes before any window sees them, claims
 //! the ones that belong to the popup (navigation, paste, digits, plain text,
-//! backspace) and lets everything else through — modified shortcuts, and above
-//! all anything an input method is composing.
+//! backspace) and lets unrelated modified shortcuts through. On Windows an
+//! active IME composition also keeps its keys; macOS cannot currently make the
+//! same guarantee for every foreground application.
 //!
 //! Claimed keys are queued here and drained by the window manager's fast poll on
 //! the GPUI thread; this module never touches GPUI state.
@@ -18,11 +19,11 @@
 //!
 //! The popup never owns an input method or borrows another thread's input
 //! queue. Search characters are translated here; Chinese items can be found
-//! using full pinyin or initials. A composition already running in the target
-//! application keeps its keys, and modified shortcuts remain with that app.
+//! using full pinyin or initials. Windows passes keys through during an active
+//! target composition. Modified shortcuts generally remain with that app,
+//! except for the explicit quick-popup commands.
 
 use std::collections::VecDeque;
-#[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -35,11 +36,17 @@ pub enum QuickKey {
     Next,
     PreviousPage,
     NextPage,
+    PreviousAltMode,
+    NextAltMode,
     /// Shift pastes as plain text, Ctrl opens the advanced paste modes.
     Paste,
+    PastePlain,
+    PasteAdvanced,
     Close,
-    /// 0-based slot for the digit keys `1`–`9`.
+    /// 0-based visible slot for the digit keys `1`–`5`.
     Pick(usize),
+    PickPlain(usize),
+    ToggleTypeFilter(usize),
     /// Turn the search box on, or off again: the state that takes the typing
     /// away from the application underneath and turns the slot digits into
     /// search text.
@@ -58,6 +65,8 @@ static QUERY_EMPTY: AtomicBool = AtomicBool::new(true);
 /// `auto_focus_search` setting). Held without the keyboard focus, because the
 /// keys the search box needs are translated here.
 static SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
+/// Number of visible type shortcuts currently owned by the popup.
+static TYPE_SHORTCUT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static EVENTS: OnceLock<Mutex<VecDeque<QuickKey>>> = OnceLock::new();
 
 fn events() -> &'static Mutex<VecDeque<QuickKey>> {
@@ -79,6 +88,15 @@ pub fn set_enabled(enabled: bool) {
             queue.clear();
         }
     }
+}
+
+/// Limit interception to visible filters while the setting is enabled.
+pub fn set_type_shortcut_count(count: usize) {
+    TYPE_SHORTCUT_COUNT.store(count.min(9), Ordering::SeqCst);
+}
+
+fn is_type_shortcut_available(slot: usize, count: usize) -> bool {
+    slot < count.min(9)
 }
 
 /// Whether the hook is currently claiming keys.
@@ -142,6 +160,12 @@ mod windows_impl {
 
     fn claimed() -> &'static Mutex<Vec<u32>> {
         CLAIMED.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    /// Filter shortcuts stay claimed through release even if Alt is released first.
+    static FILTER_CLAIMED: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+    fn filter_claimed() -> &'static Mutex<Vec<u32>> {
+        FILTER_CLAIMED.get_or_init(|| Mutex::new(Vec::new()))
     }
 
     pub fn install() -> Result<(), String> {
@@ -350,6 +374,15 @@ mod windows_impl {
     fn claim(vk: u32, key: QuickKey) -> LRESULT {
         crate::platform::hotkey::observe_claimed_key(vk, false);
         if let Ok(mut keys) = claimed().lock() {
+            if keys.contains(&vk)
+                && matches!(
+                    key,
+                    QuickKey::Paste | QuickKey::PastePlain | QuickKey::PasteAdvanced
+                )
+            {
+                // A held Enter is one activation, including delete confirmation.
+                return 1;
+            }
             if !keys.contains(&vk) {
                 keys.push(vk);
             }
@@ -372,6 +405,17 @@ mod windows_impl {
             return pass_through();
         }
         let key_up = info.flags & LLKHF_UP != 0;
+        if key_up {
+            if let Ok(mut keys) = filter_claimed().lock() {
+                keys.retain(|&key| key != info.vkCode);
+            }
+        } else if is_enabled()
+            && filter_claimed()
+                .lock()
+                .is_ok_and(|keys| keys.contains(&info.vkCode))
+        {
+            return 1;
+        }
 
         if !is_enabled() {
             // A disabled hook still swallows the release of a key it claimed:
@@ -412,13 +456,40 @@ mod windows_impl {
         let alt = is_down(VK_MENU);
         let win = is_down(VK_LWIN) || is_down(VK_RWIN);
 
+        // Only claim valid Alt+digit shortcuts, and only once per key press.
+        // Unmapped combinations continue to the foreground application.
+        if alt && !ctrl && !win && !is_down(VK_SHIFT) && (0x31..=0x39).contains(&vk) {
+            let slot = (vk - 0x31) as usize;
+            if is_type_shortcut_available(slot, TYPE_SHORTCUT_COUNT.load(Ordering::SeqCst)) {
+                crate::platform::hotkey::observe_claimed_key(info.vkCode, false);
+                if let Ok(mut keys) = claimed().lock() {
+                    if !keys.contains(&info.vkCode) {
+                        let Ok(mut filters) = filter_claimed().lock() else {
+                            return pass_through();
+                        };
+                        filters.push(info.vkCode);
+                        keys.push(info.vkCode);
+                        push(QuickKey::ToggleTypeFilter(slot));
+                    }
+                    return 1;
+                }
+                return pass_through();
+            }
+        }
+
         let action = match vk {
+            VK_UP if ctrl && !alt && !win => Some(QuickKey::PreviousAltMode),
+            VK_DOWN if ctrl && !alt && !win => Some(QuickKey::NextAltMode),
             VK_UP => Some(QuickKey::Previous),
             VK_DOWN => Some(QuickKey::Next),
             VK_PRIOR => Some(QuickKey::PreviousPage),
             VK_NEXT => Some(QuickKey::NextPage),
             VK_LEFT if !alt && !win => Some(QuickKey::PreviousPage),
             VK_RIGHT if !alt && !win => Some(QuickKey::NextPage),
+            VK_RETURN if is_down(VK_SHIFT) && !alt && !win => Some(QuickKey::PastePlain),
+            VK_RETURN if ctrl && !alt && !win && !is_down(VK_SHIFT) => {
+                Some(QuickKey::PasteAdvanced)
+            }
             VK_RETURN if !win => Some(QuickKey::Paste),
             VK_ESCAPE if !ctrl && !alt && !win => Some(QuickKey::Close),
             VK_BACK if !ctrl && !alt && !win => Some(QuickKey::Backspace),
@@ -432,9 +503,9 @@ mod windows_impl {
             // typing into the search box; in a search box that is taking the
             // typing they are search input like any other character (handled by
             // the character arm below), so a digit can never dismiss a search
-            // under way. The numpad behaves like the main row so "1 presses the
-            // first entry" holds for both digit clusters.
-            0x31..=0x39 | 0x61..=0x69
+            // under way. Only the five visible slots are mapped; the numpad
+            // behaves like the main row.
+            0x31..=0x35 | 0x61..=0x65
                 if !ctrl
                     && !alt
                     && !win
@@ -442,7 +513,12 @@ mod windows_impl {
                     && QUERY_EMPTY.load(Ordering::SeqCst) =>
             {
                 let first_digit = if vk >= 0x61 { 0x61 } else { 0x31 };
-                Some(QuickKey::Pick((vk - first_digit) as usize))
+                let slot = (vk - first_digit) as usize;
+                Some(if is_down(VK_SHIFT) {
+                    QuickKey::PickPlain(slot)
+                } else {
+                    QuickKey::Pick(slot)
+                })
             }
             // Search text is translated by the hook, never by a focused widget.
             _ if search_editing && !ctrl && !alt && !win => {
@@ -489,6 +565,10 @@ mod macos_impl {
     static REENABLE: AtomicBool = AtomicBool::new(false);
     static THREAD: OnceLock<Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
     static CLAIMED: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+    static FILTER_CLAIMED: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+    fn filter_claimed() -> &'static Mutex<HashSet<u16>> {
+        FILTER_CLAIMED.get_or_init(|| Mutex::new(HashSet::new()))
+    }
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
@@ -520,6 +600,20 @@ mod macos_impl {
         CLAIMED.get_or_init(|| Mutex::new(HashSet::new()))
     }
 
+    fn modified_advanced_key(keycode: u16, flags: CGEventFlags) -> Option<QuickKey> {
+        if !flags.intersects(CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagCommand)
+            || flags.intersects(CGEventFlags::CGEventFlagAlternate | CGEventFlags::CGEventFlagShift)
+        {
+            return None;
+        }
+        match keycode {
+            KeyCode::UP_ARROW => Some(QuickKey::PreviousAltMode),
+            KeyCode::DOWN_ARROW => Some(QuickKey::NextAltMode),
+            KeyCode::RETURN | KeyCode::ANSI_KEYPAD_ENTER => Some(QuickKey::PasteAdvanced),
+            _ => None,
+        }
+    }
+
     fn process(event_type: CGEventType, event: &CGEvent) -> CallbackResult {
         if matches!(
             event_type,
@@ -530,6 +624,9 @@ mod macos_impl {
         }
         let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
         if matches!(event_type, CGEventType::KeyUp) {
+            if let Ok(mut keys) = filter_claimed().lock() {
+                keys.remove(&keycode);
+            }
             return if claimed_keys()
                 .lock()
                 .is_ok_and(|mut keys| keys.remove(&keycode))
@@ -542,6 +639,12 @@ mod macos_impl {
         if !matches!(event_type, CGEventType::KeyDown) || !is_enabled() {
             return CallbackResult::Keep;
         }
+        if filter_claimed()
+            .lock()
+            .is_ok_and(|keys| keys.contains(&keycode))
+        {
+            return CallbackResult::Drop;
+        }
         if event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)
             == std::process::id() as i64
         {
@@ -549,7 +652,73 @@ mod macos_impl {
             return CallbackResult::Keep;
         }
 
+        // A press that began as Enter stays a single action even if the
+        // modifier is released before the key itself.
+        if matches!(keycode, KeyCode::RETURN | KeyCode::ANSI_KEYPAD_ENTER)
+            && claimed_keys()
+                .lock()
+                .is_ok_and(|keys| keys.contains(&keycode))
+        {
+            return CallbackResult::Drop;
+        }
+
         let flags = event.get_flags();
+        // Option changes the produced character, so identify digits by their
+        // physical keycode. Other modified keys continue to the foreground app.
+        let filter_slot = match keycode {
+            KeyCode::ANSI_1 => Some(0),
+            KeyCode::ANSI_2 => Some(1),
+            KeyCode::ANSI_3 => Some(2),
+            KeyCode::ANSI_4 => Some(3),
+            KeyCode::ANSI_5 => Some(4),
+            KeyCode::ANSI_6 => Some(5),
+            KeyCode::ANSI_7 => Some(6),
+            KeyCode::ANSI_8 => Some(7),
+            KeyCode::ANSI_9 => Some(8),
+            _ => None,
+        };
+        if flags.contains(CGEventFlags::CGEventFlagAlternate)
+            && !flags.intersects(
+                CGEventFlags::CGEventFlagControl
+                    | CGEventFlags::CGEventFlagCommand
+                    | CGEventFlags::CGEventFlagShift,
+            )
+        {
+            if let Some(slot) = filter_slot.filter(|&slot| {
+                is_type_shortcut_available(slot, TYPE_SHORTCUT_COUNT.load(Ordering::SeqCst))
+            }) {
+                let Ok(mut claimed) = claimed_keys().lock() else {
+                    return CallbackResult::Keep;
+                };
+                if !claimed.contains(&keycode) {
+                    let Ok(mut queue) = events().lock() else {
+                        return CallbackResult::Keep;
+                    };
+                    let Ok(mut filters) = filter_claimed().lock() else {
+                        return CallbackResult::Keep;
+                    };
+                    queue.push_back(QuickKey::ToggleTypeFilter(slot));
+                    filters.insert(keycode);
+                    claimed.insert(keycode);
+                }
+                return CallbackResult::Drop;
+            }
+        }
+        // Modified advanced actions must work without the fallback hotkeys.
+        // Repeated Enter is one activation; arrows may continue to repeat.
+        if let Some(action) = modified_advanced_key(keycode, flags) {
+            let Ok(mut claimed) = claimed_keys().lock() else {
+                return CallbackResult::Keep;
+            };
+            if action != QuickKey::PasteAdvanced || !claimed.contains(&keycode) {
+                let Ok(mut queue) = events().lock() else {
+                    return CallbackResult::Keep;
+                };
+                queue.push_back(action);
+                claimed.insert(keycode);
+            }
+            return CallbackResult::Drop;
+        }
         if flags.intersects(
             CGEventFlags::CGEventFlagControl
                 | CGEventFlags::CGEventFlagAlternate
@@ -563,6 +732,11 @@ mod macos_impl {
             KeyCode::DOWN_ARROW => Some(QuickKey::Next),
             KeyCode::LEFT_ARROW => Some(QuickKey::PreviousPage),
             KeyCode::RIGHT_ARROW => Some(QuickKey::NextPage),
+            KeyCode::RETURN | KeyCode::ANSI_KEYPAD_ENTER
+                if flags.contains(CGEventFlags::CGEventFlagShift) =>
+            {
+                Some(QuickKey::PastePlain)
+            }
             KeyCode::RETURN | KeyCode::ANSI_KEYPAD_ENTER => Some(QuickKey::Paste),
             KeyCode::ESCAPE => Some(QuickKey::Close),
             KeyCode::TAB => Some(QuickKey::SearchToggle),
@@ -582,8 +756,7 @@ mod macos_impl {
             } else if !is_search_armed()
                 && QUERY_EMPTY.load(Ordering::SeqCst)
                 && value.len() == 1
-                && value.as_bytes()[0].is_ascii_digit()
-                && value != "0"
+                && (b'1'..=b'5').contains(&value.as_bytes()[0])
             {
                 vec![QuickKey::Pick((value.as_bytes()[0] - b'1') as usize)]
             } else {
@@ -672,6 +845,50 @@ mod macos_impl {
     pub fn is_installed() -> bool {
         INSTALLED.load(Ordering::SeqCst)
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn advanced_keys_use_command_or_control_without_other_modifiers() {
+            for flags in [
+                CGEventFlags::CGEventFlagCommand,
+                CGEventFlags::CGEventFlagControl,
+            ] {
+                assert_eq!(
+                    modified_advanced_key(KeyCode::UP_ARROW, flags),
+                    Some(QuickKey::PreviousAltMode)
+                );
+                assert_eq!(
+                    modified_advanced_key(KeyCode::DOWN_ARROW, flags),
+                    Some(QuickKey::NextAltMode)
+                );
+                assert_eq!(
+                    modified_advanced_key(KeyCode::RETURN, flags),
+                    Some(QuickKey::PasteAdvanced)
+                );
+                assert_eq!(
+                    modified_advanced_key(
+                        KeyCode::UP_ARROW,
+                        flags | CGEventFlags::CGEventFlagShift
+                    ),
+                    None
+                );
+                assert_eq!(
+                    modified_advanced_key(
+                        KeyCode::UP_ARROW,
+                        flags | CGEventFlags::CGEventFlagAlternate
+                    ),
+                    None
+                );
+            }
+            assert_eq!(
+                modified_advanced_key(KeyCode::UP_ARROW, CGEventFlags::empty()),
+                None
+            );
+        }
+    }
 }
 
 /// Install the desktop-wide keyboard hook used by the quick popup.
@@ -722,6 +939,15 @@ pub fn is_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn type_shortcuts_only_claim_visible_slots() {
+        assert!(!is_type_shortcut_available(0, 0));
+        assert!(is_type_shortcut_available(0, 2));
+        assert!(is_type_shortcut_available(1, 2));
+        assert!(!is_type_shortcut_available(2, 2));
+        assert!(!is_type_shortcut_available(9, 20));
+    }
 
     #[test]
     fn queue_is_empty_until_a_key_is_claimed() {

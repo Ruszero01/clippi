@@ -137,9 +137,10 @@ pub struct AppState {
     /// list. The type filter configuration and the pinned tags are settings, not
     /// filter state, and stay shared either way.
     pub quick_filters: ClipboardFilters,
-    /// Page the quick popup renders while the filters are separate. Always empty
-    /// while they are shared, because the popup renders `items` directly then.
+    /// Page used when the quick popup cannot share the main list, including
+    /// when either window has its own search query.
     quick_items: Vec<ClipboardItem>,
+    quick_keyword: String,
     /// Whether the quick popup is on screen.
     ///
     /// The popup keeps its own page only while its filters are separate, and
@@ -588,6 +589,7 @@ impl AppState {
             filters: ClipboardFilters::default(),
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
+            quick_keyword: String::new(),
             quick_window_visible: false,
             alt_pressed: false,
             main_window_active: false,
@@ -697,7 +699,7 @@ impl AppState {
         self.refresh_source_apps();
         let source_apps = source_started.elapsed();
         let result = if self.filters.has_keyword() {
-            self.load_keyword_filtered_items()
+            self.load_keyword_filtered_items(&self.filters)
         } else {
             self.db
                 .load_filtered_list_with_tags(&self.filters, self.query_limit(), self.order_by())
@@ -777,6 +779,7 @@ impl AppState {
     /// clear it. The popup builds its own page out of the visible dimensions then.
     fn quick_items_share_main_list(&self) -> bool {
         !self.quick_filters_independent()
+            && self.quick_keyword.trim().is_empty()
             && !self.filters.has_keyword()
             && !self.filters.is_hotkeys_active()
     }
@@ -820,18 +823,19 @@ impl AppState {
 
     /// The popup's own filtered page.
     ///
-    /// Only the dimensions the popup actually shows go in: its keyword lives in
-    /// its own search box (`QuickPasteView::query`) and is matched in memory over
-    /// this page, and 「仅热键」 has no control there at all. The rest mirrors
-    /// `reload_items`, the foreign-path setting included.
+    /// The popup has its own keyword and no hotkeys-only control. Keyword
+    /// searches use the same full-content paginated query as the main list.
     fn load_quick_items(&self) -> Vec<ClipboardItem> {
         let mut filters = self.quick_filters().clone();
-        filters.set_keyword("");
+        filters.set_keyword(&self.quick_keyword);
         filters.clear_hotkeys_only();
-        match self
-            .db
-            .load_filtered_list_with_tags(&filters, self.query_limit(), self.order_by())
-        {
+        let result = if filters.has_keyword() {
+            self.load_keyword_filtered_items(&filters)
+        } else {
+            self.db
+                .load_filtered_list_with_tags(&filters, self.query_limit(), self.order_by())
+        };
+        match result {
             Ok(mut items) => {
                 if self.settings.filter_foreign_paths {
                     items.retain(|item| {
@@ -845,6 +849,17 @@ impl AppState {
                 log::error!("Failed to reload quick window items: {e}");
                 Vec::new()
             }
+        }
+    }
+
+    /// Update the popup query independently of the main search box.
+    pub fn set_quick_keyword(&mut self, keyword: &str) {
+        if self.quick_keyword == keyword {
+            return;
+        }
+        self.quick_keyword = keyword.to_string();
+        if !self.quick_items_share_main_list() {
+            self.quick_items = self.load_quick_items();
         }
     }
 
@@ -912,8 +927,10 @@ impl AppState {
         self.settings.quick_window_sync_filters = sync;
         self.settings.save();
         if !self.quick_filters_independent() {
-            // Turning sharing back on needs no handover: the popup reads the
-            // main list again and its own copy simply waits.
+            // An active query still needs its own page with the newly shared filters.
+            if !self.quick_items_share_main_list() {
+                self.quick_items = self.load_quick_items();
+            }
             return;
         }
         // The popup's copy carries only what it can show and toggle: a keyword or
@@ -998,14 +1015,15 @@ impl AppState {
         }
     }
 
-    fn load_keyword_filtered_items(&self) -> rusqlite::Result<Vec<ClipboardItem>> {
-        let keywords = self.filters.keyword_terms();
+    fn load_keyword_filtered_items(
+        &self,
+        filters: &ClipboardFilters,
+    ) -> rusqlite::Result<Vec<ClipboardItem>> {
+        let keywords = filters.keyword_terms();
         if keywords.is_empty() {
-            return self.db.load_filtered_with_tags(
-                &self.filters,
-                self.query_limit(),
-                self.order_by(),
-            );
+            return self
+                .db
+                .load_filtered_with_tags(filters, self.query_limit(), self.order_by());
         }
         // Normalize once per search: the per-row matcher then reuses these
         // terms for every candidate instead of re-trimming and re-lowercasing
@@ -1024,8 +1042,7 @@ impl AppState {
         // Favorites-first only reorders keyword searches. With the favorites-only
         // filter every result is already a favorite, so the single-bucket path
         // below stays active and unchanged.
-        let prioritize =
-            self.settings.search_favorites_first && !self.filters.is_favorites_active();
+        let prioritize = self.settings.search_favorites_first && !filters.is_favorites_active();
 
         if !prioritize {
             // Single-bucket path (existing behavior): stop as soon as the result
@@ -1035,7 +1052,7 @@ impl AppState {
 
             while offset < scan_limit && matches.len() < result_limit {
                 let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
-                let page = self.load_keyword_page(&terms, page_limit, offset)?;
+                let page = self.load_keyword_page(filters, &terms, page_limit, offset)?;
                 if page.exhausted {
                     break;
                 }
@@ -1058,7 +1075,7 @@ impl AppState {
 
         'pages: while offset < scan_limit && favorite_matches.len() < result_limit {
             let page_limit = KEYWORD_SEARCH_PAGE_SIZE.min(scan_limit - offset);
-            let page = self.load_keyword_page(&terms, page_limit, offset)?;
+            let page = self.load_keyword_page(filters, &terms, page_limit, offset)?;
             if page.exhausted {
                 break;
             }
@@ -1103,16 +1120,14 @@ impl AppState {
     /// the end of data.
     fn load_keyword_page(
         &self,
+        filters: &ClipboardFilters,
         terms: &[String],
         page_limit: usize,
         offset: usize,
     ) -> rusqlite::Result<KeywordPage> {
-        let mut page = self.db.load_filtered_page_with_tags(
-            &self.filters,
-            page_limit,
-            offset,
-            self.order_by(),
-        )?;
+        let mut page =
+            self.db
+                .load_filtered_page_with_tags(filters, page_limit, offset, self.order_by())?;
         let exhausted = page.is_empty();
         if self.settings.filter_foreign_paths {
             page.retain(|item| {
@@ -1146,6 +1161,9 @@ impl AppState {
     /// stale page is harmless and `reload_items()` can skip that second query.
     pub fn set_quick_window_visible(&mut self, visible: bool) {
         self.quick_window_visible = visible;
+        if !visible {
+            self.quick_keyword.clear();
+        }
     }
 
     /// Drop the active keyword without reloading; the caller reloads next.
@@ -3292,6 +3310,18 @@ impl AppState {
         }
     }
 
+    /// Apply quick-window mutations to both list views, including an active
+    /// independent filter or keyword search.
+    pub fn quick_toggle_item_favorite(&mut self, id: i64) {
+        self.toggle_favorite(id);
+        self.reload_items();
+    }
+
+    pub fn quick_delete_item(&mut self, id: i64) {
+        self.delete_item(id);
+        self.reload_items();
+    }
+
     /// Delete a single item and record deletion tombstone for sync.
     ///
     /// # Tombstones (sync)
@@ -4206,6 +4236,7 @@ mod tests {
             filters: ClipboardFilters::default(),
             quick_filters: ClipboardFilters::default(),
             quick_items: Vec::new(),
+            quick_keyword: String::new(),
             quick_window_visible: false,
             alt_pressed: false,
             main_window_active: false,
@@ -6356,6 +6387,155 @@ mod tests {
         assert!(!state.quick_filters().is_type_active("image"));
         assert!(!state.filters.is_type_active("image"));
         assert_eq!(state.quick_items().len(), 1);
+    }
+
+    #[test]
+    fn quick_search_uses_full_content_and_scans_past_initial_page() {
+        let (mut state, _dirty) = test_state();
+        state.settings.max_items = 0;
+        let text = format!("{} hiddenneedle", "x".repeat(12_000));
+        let older_id = insert_item_at_age(&mut state, 1, false, &text, 1000);
+        for id in 2..=206 {
+            insert_item_at_age(&mut state, id, false, &format!("recent {id}"), id);
+        }
+        state.set_quick_window_visible(true);
+        state.reload_quick_items();
+        assert!(!state.quick_items().iter().any(|item| item.id == older_id));
+        state.set_quick_keyword("hiddenneedle");
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![older_id]
+        );
+        state.set_keyword("hiddenneedle");
+        assert_eq!(
+            state.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![older_id]
+        );
+        state.set_quick_keyword("");
+        assert_eq!(state.quick_items().len(), 200);
+    }
+
+    #[test]
+    fn quick_type_toggle_keeps_search_and_independent_main_filters() {
+        let (mut state, _dirty) = test_state();
+        insert_item_at_age(&mut state, 1, false, "needle plain", 1);
+        let mut image = make_item(2, ContentType::Image, false, "needle image");
+        image.created_at = chrono::Utc::now();
+        image.updated_at = image.created_at;
+        state.db.upsert(&image).unwrap();
+        state.set_quick_window_visible(true);
+        state.reload_quick_items();
+        state.set_quick_window_sync_filters(false);
+        state.set_quick_keyword("needle");
+        state.quick_toggle_type_filter("plain_text");
+        assert!(state.quick_filters().is_type_active("plain_text"));
+        assert!(!state.filters.is_type_active("plain_text"));
+        assert_eq!(state.quick_items().len(), 1);
+        assert_eq!(state.quick_items()[0].full_text, "needle plain");
+        state.quick_toggle_type_filter("plain_text");
+        assert_eq!(state.quick_items().len(), 2);
+        assert_eq!(state.quick_keyword, "needle");
+    }
+
+    #[test]
+    fn quick_unfavorite_reloads_the_updated_sort_order() {
+        let (mut state, _dirty) = test_state();
+        let recent = insert_item_at_age(&mut state, 1, false, "recent", 5);
+        let favorite = insert_item_at_age(&mut state, 2, true, "older favorite", 10);
+        state.set_quick_window_visible(true);
+        state.reload_quick_items();
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![recent, favorite]
+        );
+        state.quick_toggle_item_favorite(favorite);
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![favorite, recent]
+        );
+        assert!(!state.quick_items()[0].is_favorite);
+    }
+
+    #[test]
+    fn quick_item_mutations_refresh_independent_search_and_favorites() {
+        let (mut state, _dirty) = test_state();
+        let first = insert_item_at_age(&mut state, 1, false, "needle one", 1);
+        let second = insert_item_at_age(&mut state, 2, false, "needle two", 2);
+        state.set_quick_window_visible(true);
+        state.reload_quick_items();
+        state.set_quick_window_sync_filters(false);
+        state.set_quick_keyword("needle");
+        state.quick_toggle_favorites_filter();
+        assert!(state.quick_items().is_empty());
+        state.quick_toggle_item_favorite(first);
+        state.quick_toggle_item_favorite(second);
+        assert_eq!(state.quick_items().len(), 2);
+        state.quick_toggle_item_favorite(first);
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![second]
+        );
+        state.quick_delete_item(second);
+        assert!(state.quick_items().is_empty());
+        assert!(state.db.get_by_id(second).unwrap().is_none());
+        assert!(!state.items.iter().any(|item| item.id == second));
+    }
+
+    #[test]
+    fn quick_search_respects_favorites_order_and_independent_filters() {
+        let (mut state, _dirty) = test_state();
+        state.settings.search_favorites_first = true;
+        let regular = insert_item_at_age(&mut state, 1, false, "needle regular", 1);
+        let favorite = insert_item_at_age(&mut state, 2, true, "needle favorite", 2);
+        state.set_quick_window_visible(true);
+        state.reload_quick_items();
+        state.set_quick_keyword("needle");
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![favorite, regular]
+        );
+        state.set_quick_window_sync_filters(false);
+        state.quick_toggle_favorites_filter();
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![favorite]
+        );
+        state.set_quick_window_sync_filters(true);
+        assert_eq!(
+            state
+                .quick_items()
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![favorite, regular]
+        );
+        state.set_quick_window_visible(false);
+        state.reload_quick_items();
+        assert_eq!(state.quick_items().len(), 2);
     }
 
     /// 关键词归属各自的搜索框：主窗口的搜索词不进入快速窗口。

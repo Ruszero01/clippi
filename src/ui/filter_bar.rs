@@ -92,6 +92,20 @@ pub(crate) fn visible_filter_types(
         .collect()
 }
 
+/// Resolve a numbered shortcut against the same ordered filters the bars render.
+pub(crate) fn type_filter_for_shortcut(
+    config: &[crate::core::settings::TypeFilterEntry],
+    enabled: bool,
+    slot: usize,
+) -> Option<&'static str> {
+    if !enabled || slot >= 9 {
+        return None;
+    }
+    visible_filter_types(config)
+        .get(slot)
+        .map(|filter| filter.key)
+}
+
 fn filter_label_width(label: &'static str, window: &Window) -> f32 {
     let text: SharedString = label.into();
     let mut style = window.text_style();
@@ -664,6 +678,32 @@ mod tests {
             .map(|filter| filter.key)
             .collect();
         assert_eq!(keys, ["plain_text", "file", "link"]);
+    }
+
+    #[test]
+    fn shortcuts_follow_visible_order_and_respect_the_setting() {
+        let config = [
+            ("file", true),
+            ("obsolete", true),
+            ("image", false),
+            ("plain_text", true),
+        ]
+        .into_iter()
+        .map(|(key, visible)| TypeFilterEntry {
+            key: key.into(),
+            visible,
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(
+            super::type_filter_for_shortcut(&config, true, 0),
+            Some("file")
+        );
+        assert_eq!(
+            super::type_filter_for_shortcut(&config, true, 1),
+            Some("plain_text")
+        );
+        assert_eq!(super::type_filter_for_shortcut(&config, true, 2), None);
+        assert_eq!(super::type_filter_for_shortcut(&config, false, 0), None);
     }
 
     #[test]
