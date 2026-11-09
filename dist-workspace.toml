@@ -13,3 +13,8 @@ installers = []
 targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]
 # Allow customized CI workflow
 allow-dirty = ["ci"]
+
+# Pin supported macOS images instead of cargo-dist's retired defaults.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+x86_64-apple-darwin = "macos-15-intel"
